@@ -158,6 +158,8 @@ pub enum BuiltinScalarFunction {
     Now,
     ///current_date
     CurrentDate,
+    /// current_time
+    CurrentTime,
     /// translate
     Translate,
     /// trim
@@ -181,6 +183,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Random
                 | BuiltinScalarFunction::Now
                 | BuiltinScalarFunction::CurrentDate
+                | BuiltinScalarFunction::CurrentTime
         )
     }
     /// Returns the [Volatility] of the builtin function.
@@ -259,6 +262,7 @@ impl BuiltinScalarFunction {
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
             BuiltinScalarFunction::CurrentDate => Volatility::Stable,
+            BuiltinScalarFunction::CurrentTime => Volatility::Stable,
 
             // Volatile builtin functions
             BuiltinScalarFunction::Random => Volatility::Volatile,
@@ -315,6 +319,7 @@ impl FromStr for BuiltinScalarFunction {
             "concat_ws" => BuiltinScalarFunction::ConcatWithSeparator,
             "chr" => BuiltinScalarFunction::Chr,
             "current_date" => BuiltinScalarFunction::CurrentDate,
+            "current_time" => BuiltinScalarFunction::CurrentTime,
             "date_part" | "datepart" => BuiltinScalarFunction::DatePart,
             "date_trunc" | "datetrunc" => BuiltinScalarFunction::DateTrunc,
             "date_bin" => BuiltinScalarFunction::DateBin,
