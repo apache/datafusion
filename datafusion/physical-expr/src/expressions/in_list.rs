@@ -36,12 +36,6 @@ use datafusion_expr::ColumnarValue;
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
 
-/// Size at which to use a Set rather than Vec for `IN` / `NOT IN`
-/// Value chosen by the benchmark at
-/// https://github.com/apache/arrow-datafusion/pull/2156#discussion_r845198369
-/// TODO: add switch codeGen in In_List
-static OPTIMIZER_INSET_THRESHOLD: usize = 10;
-
 /// InList
 pub struct InListExpr {
     expr: Arc<dyn PhysicalExpr>,
@@ -77,14 +71,14 @@ struct ArrayHashSet {
 
 struct ArraySet<T> {
     array: T,
-    hash_set: Option<ArrayHashSet>,
+    hash_set: ArrayHashSet,
 }
 
 impl<T> ArraySet<T>
 where
     T: Array + From<ArrayData>,
 {
-    fn new(array: &T, hash_set: Option<ArrayHashSet>) -> Self {
+    fn new(array: &T, hash_set: ArrayHashSet) -> Self {
         Self {
             array: T::from(array.data().clone()),
             hash_set,
@@ -104,34 +98,24 @@ where
         let in_array = &self.array;
         let has_nulls = in_data.null_count() != 0;
 
-        match &self.hash_set {
-            Some(hash_set) => ArrayIter::new(v)
-                .map(|v| {
-                    v.and_then(|v| {
-                        let hash = v.hash_one(&hash_set.state);
-                        let contains = hash_set
-                            .map
-                            .raw_entry()
-                            .from_hash(hash, |idx| in_array.value(*idx) == v)
-                            .is_some();
+        ArrayIter::new(v)
+            .map(|v| {
+                v.and_then(|v| {
+                    let hash = v.hash_one(&self.hash_set.state);
+                    let contains = self.hash_set
+                        .map
+                        .raw_entry()
+                        .from_hash(hash, |idx| in_array.value(*idx) == v)
+                        .is_some();
 
-                        match contains {
-                            true => Some(!negated),
-                            false if has_nulls => None,
-                            false => Some(negated),
-                        }
-                    })
+                    match contains {
+                        true => Some(!negated),
+                        false if has_nulls => None,
+                        false => Some(negated),
+                    }
                 })
-                .collect(),
-            None => ArrayIter::new(v)
-                .map(|v| {
-                    v.map(|v| {
-                        let contains = (0..in_data.len()).any(|x| in_array.value(x) == v);
-                        contains != negated
-                    })
-                })
-                .collect(),
-        }
+            })
+            .collect()
     }
 }
 
@@ -140,15 +124,11 @@ where
 ///
 /// Note: This is split into a separate function as higher-rank trait bounds currently
 /// cause type inference to misbehave
-fn make_hash_set<T>(array: T) -> Option<ArrayHashSet>
+fn make_hash_set<T>(array: T) -> ArrayHashSet
 where
     T: ArrayAccessor,
     T::Item: PartialEq + HashValue,
 {
-    let use_hashset = array.null_count() != 0 || array.len() >= OPTIMIZER_INSET_THRESHOLD;
-    if !use_hashset {
-        return None;
-    }
     let data = array.data();
 
     let state = RandomState::new();
@@ -172,7 +152,7 @@ where
         None => (0..data.len()).for_each(insert_value),
     }
 
-    Some(ArrayHashSet { state, map })
+    ArrayHashSet { state, map }
 }
 
 /// Creates a `Box<dyn Set>` for the given list of `IN` expressions and `batch`
@@ -952,232 +932,6 @@ mod tests {
     }
 
     #[test]
-    fn in_list_set_bool() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
-        let a = BooleanArray::from(vec![Some(true), None, Some(false)]);
-        let col_a = col("a", &schema)?;
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
-
-        // expression: "a in (true,null,true.....)"
-        let mut list = vec![
-            lit(ScalarValue::Boolean(Some(true))),
-            lit(ScalarValue::Boolean(None)),
-        ];
-        for _ in 0..OPTIMIZER_INSET_THRESHOLD {
-            list.push(lit(ScalarValue::Boolean(Some(true))));
-        }
-        in_list!(
-            batch,
-            list.clone(),
-            &false,
-            vec![Some(true), None, None],
-            col_a.clone(),
-            &schema
-        );
-        in_list!(
-            batch,
-            list,
-            &true,
-            vec![Some(false), None, None],
-            col_a.clone(),
-            &schema
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn in_list_set_int64() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
-        let a = Int64Array::from(vec![Some(0), Some(2), None]);
-        let col_a = col("a", &schema)?;
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
-
-        // expression: "a in (0,NULL,3,4....)"
-        let mut list = vec![
-            lit(ScalarValue::Int64(Some(0))),
-            lit(ScalarValue::Int64(None)),
-            lit(ScalarValue::Int64(Some(3))),
-        ];
-        for v in 4..(OPTIMIZER_INSET_THRESHOLD + 4) {
-            list.push(lit(ScalarValue::Int64(Some(v as i64))));
-        }
-
-        in_list!(
-            batch,
-            list.clone(),
-            &false,
-            vec![Some(true), None, None],
-            col_a.clone(),
-            &schema
-        );
-
-        in_list!(
-            batch,
-            list.clone(),
-            &true,
-            vec![Some(false), None, None],
-            col_a.clone(),
-            &schema
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn in_list_set_float64() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
-        let a = Float64Array::from(vec![Some(0.0), Some(2.0), None]);
-        let col_a = col("a", &schema)?;
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
-
-        // expression: "a in (0.0,NULL,3.0,4.0 ....)"
-        let mut list = vec![
-            lit(ScalarValue::Float64(Some(0.0))),
-            lit(ScalarValue::Float64(None)),
-            lit(ScalarValue::Float64(Some(3.0))),
-        ];
-        for v in 4..(OPTIMIZER_INSET_THRESHOLD + 4) {
-            list.push(lit(ScalarValue::Float64(Some(v as f64))));
-        }
-
-        in_list!(
-            batch,
-            list.clone(),
-            &false,
-            vec![Some(true), None, None],
-            col_a.clone(),
-            &schema
-        );
-
-        in_list!(
-            batch,
-            list.clone(),
-            &true,
-            vec![Some(false), None, None],
-            col_a.clone(),
-            &schema
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn in_list_set_utf8() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
-        let a = StringArray::from(vec![Some("a"), Some("b"), None]);
-        let col_a = col("a", &schema)?;
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
-
-        // expression: "a in ("a", NULL, "4c", "5c", ....)"
-        let mut list = vec![
-            lit(ScalarValue::Utf8(Some("a".to_string()))),
-            lit(ScalarValue::Utf8(None)),
-        ];
-        for v in 4..(OPTIMIZER_INSET_THRESHOLD + 4) {
-            let value = v.to_string() + "c";
-            list.push(lit(ScalarValue::Utf8(Some(value))));
-        }
-        in_list!(
-            batch,
-            list.clone(),
-            &false,
-            vec![Some(true), None, None],
-            col_a.clone(),
-            &schema
-        );
-
-        in_list!(
-            batch,
-            list.clone(),
-            &true,
-            vec![Some(false), None, None],
-            col_a.clone(),
-            &schema
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn in_list_set_binary() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Binary, true)]);
-        let a = BinaryArray::from(vec![
-            Some([1, 2, 3].as_slice()),
-            Some([3, 2, 1].as_slice()),
-            None,
-        ]);
-        let col_a = col("a", &schema)?;
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
-
-        let mut list = vec![lit([1, 2, 3].as_slice()), lit(ScalarValue::Binary(None))];
-        for v in 0..OPTIMIZER_INSET_THRESHOLD {
-            list.push(lit([v as u8].as_slice()));
-        }
-
-        in_list!(
-            batch,
-            list.clone(),
-            &false,
-            vec![Some(true), None, None],
-            col_a.clone(),
-            &schema
-        );
-
-        in_list!(
-            batch,
-            list.clone(),
-            &true,
-            vec![Some(false), None, None],
-            col_a.clone(),
-            &schema
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn in_list_set_decimal() -> Result<()> {
-        let schema =
-            Schema::new(vec![Field::new("a", DataType::Decimal128(13, 4), true)]);
-        let array = vec![Some(100_0000_i128), Some(200_5000_i128), None]
-            .into_iter()
-            .collect::<Decimal128Array>();
-        let array = array.with_precision_and_scale(13, 4).unwrap();
-        let col_a = col("a", &schema)?;
-        let batch =
-            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(array)])?;
-
-        // expression: "a in (100.0000, Null, 100.0004, 100.0005...)
-        let mut list = vec![
-            lit(ScalarValue::Decimal128(Some(100_0000_i128), 13, 4)),
-            lit(ScalarValue::Decimal128(None, 13, 4)),
-        ];
-        for v in 4..(OPTIMIZER_INSET_THRESHOLD + 4) {
-            let value = 100_0000_i128 + v as i128;
-            list.push(lit(ScalarValue::Decimal128(Some(value), 13, 4)));
-        }
-
-        in_list!(
-            batch,
-            list.clone(),
-            &false,
-            vec![Some(true), None, None],
-            col_a.clone(),
-            &schema
-        );
-
-        in_list!(
-            batch,
-            list,
-            &true,
-            vec![Some(false), None, None],
-            col_a.clone(),
-            &schema
-        );
-        Ok(())
-    }
-
-    #[test]
     fn test_cast_static_filter_to_set() -> Result<()> {
         // random schema
         let schema =
@@ -1217,58 +971,6 @@ mod tests {
         // column
         phy_exprs.push(expressions::col("a", &schema)?);
         assert!(try_cast_static_filter_to_set(&phy_exprs, &schema).is_err());
-
-        Ok(())
-    }
-
-    #[test]
-    fn in_list_set_timestamp() -> Result<()> {
-        let schema = Schema::new(vec![Field::new(
-            "a",
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-            true,
-        )]);
-        let a = TimestampMicrosecondArray::from(vec![
-            Some(1388588401000000000),
-            Some(1288588501000000000),
-            None,
-        ]);
-        let col_a = col("a", &schema)?;
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
-
-        let mut list = vec![
-            lit(ScalarValue::TimestampMicrosecond(
-                Some(1388588401000000000),
-                None,
-            )),
-            lit(ScalarValue::TimestampMicrosecond(None, None)),
-            lit(ScalarValue::TimestampMicrosecond(
-                Some(1388588401000000001),
-                None,
-            )),
-        ];
-        let start_ts = 1388588401000000001;
-        for v in start_ts..(start_ts + OPTIMIZER_INSET_THRESHOLD + 4) {
-            list.push(lit(ScalarValue::TimestampMicrosecond(Some(v as i64), None)));
-        }
-
-        in_list!(
-            batch,
-            list.clone(),
-            &false,
-            vec![Some(true), None, None],
-            col_a.clone(),
-            &schema
-        );
-
-        in_list!(
-            batch,
-            list.clone(),
-            &true,
-            vec![Some(false), None, None],
-            col_a.clone(),
-            &schema
-        );
 
         Ok(())
     }
