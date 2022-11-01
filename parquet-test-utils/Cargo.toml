@@ -15,38 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-exclude = ["datafusion-cli"]
-members = [
-    "datafusion/common",
-    "datafusion/core",
-    "datafusion/expr",
-    "datafusion/jit",
-    "datafusion/optimizer",
-    "datafusion/physical-expr",
-    "datafusion/proto",
-    "datafusion/row",
-    "datafusion/sql",
-    "datafusion-examples",
-    "test-utils",
-    "parquet-test-utils",
-    "benchmarks",
-]
+[package]
+name = "parquet-test-utils"
+version = "0.1.0"
+edition = "2021"
 
-[profile.release]
-codegen-units = 1
-lto = true
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-# the release profile takes a long time to build so we can use this profile during development to save time
-# cargo build --profile release-nonlto
-[profile.release-nonlto]
-codegen-units = 16
-debug = false
-debug-assertions = false
-incremental = false
-inherits = "release"
-lto = false
-opt-level = 3
-overflow-checks = false
-panic = 'unwind'
-rpath = false
+[dependencies]
+datafusion = { path = "../datafusion/core" }
+object_store = "0.5.0"
+parquet = "25.0.0"
