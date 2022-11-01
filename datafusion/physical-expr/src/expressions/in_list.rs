@@ -102,7 +102,8 @@ where
             .map(|v| {
                 v.and_then(|v| {
                     let hash = v.hash_one(&self.hash_set.state);
-                    let contains = self.hash_set
+                    let contains = self
+                        .hash_set
                         .map
                         .raw_entry()
                         .from_hash(hash, |idx| in_array.value(*idx) == v)
