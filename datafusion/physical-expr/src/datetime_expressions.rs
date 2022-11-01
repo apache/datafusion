@@ -210,7 +210,7 @@ pub fn make_current_time(
     now_ts: DateTime<Utc>,
 ) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
     let nano =
-        Duration::seconds(now_ts.num_seconds_from_midnight() as i64).num_nanoseconds();
+        Some(now_ts.timestamp_nanos() % 86400000000000);
     move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Time64(nano)))
 }
 
