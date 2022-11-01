@@ -44,7 +44,7 @@ use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
     build_join_schema, check_join_is_valid, join_equivalence_properties,
-    join_output_partitioning, JoinOn,
+    partitioned_join_output_partitioning, JoinOn,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::physical_plan::{
@@ -238,7 +238,7 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn output_partitioning(&self) -> Partitioning {
         let left_columns_len = self.left.schema().fields.len();
-        join_output_partitioning(
+        partitioned_join_output_partitioning(
             self.join_type,
             self.left.output_partitioning(),
             self.right.output_partitioning(),

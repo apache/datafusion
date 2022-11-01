@@ -87,8 +87,8 @@ fn check_join_set_is_valid(
     Ok(())
 }
 
-/// Calculate the OutputPartitioning for Join Node
-pub fn join_output_partitioning(
+/// Calculate the OutputPartitioning for Partitioned Join
+pub fn partitioned_join_output_partitioning(
     join_type: JoinType,
     left_partitioning: Partitioning,
     right_partitioning: Partitioning,
@@ -98,11 +98,11 @@ pub fn join_output_partitioning(
         JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
             left_partitioning
         }
-        JoinType::RightSemi => right_partitioning,
+        JoinType::RightSemi | JoinType::RightAnti => right_partitioning,
         JoinType::Right => {
             adjust_right_output_partitioning(right_partitioning, left_columns_len)
         }
-        _ => Partitioning::UnknownPartitioning(right_partitioning.partition_count()),
+        JoinType::Full => Partitioning::UnknownPartitioning(right_partitioning.partition_count()),
     }
 }
 

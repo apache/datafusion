@@ -62,9 +62,9 @@ use crate::physical_plan::{
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
     joins::utils::{
-        build_join_schema, check_join_is_valid, estimate_join_statistics,
-        join_equivalence_properties, join_output_partitioning, ColumnIndex, JoinFilter,
-        JoinOn, JoinSide,
+        adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
+        estimate_join_statistics, join_equivalence_properties,
+        partitioned_join_output_partitioning, ColumnIndex, JoinFilter, JoinOn, JoinSide,
     },
     metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
@@ -298,12 +298,29 @@ impl ExecutionPlan for HashJoinExec {
 
     fn output_partitioning(&self) -> Partitioning {
         let left_columns_len = self.left.schema().fields.len();
-        join_output_partitioning(
-            self.join_type,
-            self.left.output_partitioning(),
-            self.right.output_partitioning(),
-            left_columns_len,
-        )
+        match self.mode {
+            PartitionMode::CollectLeft => match join_type {
+                JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
+                    self.right.output_partitioning(),
+                    left_columns_len,
+                ),
+                JoinType::RightSemi | JoinType::RightAnti => {
+                    self.right.output_partitioning()
+                }
+                JoinType::Left
+                | JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::Full => Partitioning::UnknownPartitioning(
+                    self.right.output_partitioning().partition_count(),
+                ),
+            },
+            PartitionMode::Partitioned => partitioned_join_output_partitioning(
+                self.join_type,
+                self.left.output_partitioning(),
+                self.right.output_partitioning(),
+                left_columns_len,
+            ),
+        }
     }
 
     // TODO Output ordering might be kept for some cases.
