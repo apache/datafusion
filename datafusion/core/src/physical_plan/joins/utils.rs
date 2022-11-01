@@ -102,7 +102,9 @@ pub fn partitioned_join_output_partitioning(
         JoinType::Right => {
             adjust_right_output_partitioning(right_partitioning, left_columns_len)
         }
-        JoinType::Full => Partitioning::UnknownPartitioning(right_partitioning.partition_count()),
+        JoinType::Full => {
+            Partitioning::UnknownPartitioning(right_partitioning.partition_count())
+        }
     }
 }
 
