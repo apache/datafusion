@@ -290,14 +290,14 @@ async fn execute_query(
     debug: bool,
 ) -> Result<Vec<RecordBatch>> {
     let plan = ctx.sql(sql).await?;
-    let plan = plan.to_logical_plan()?;
+    let plan = plan.to_unoptimized_plan();
 
     if debug {
         println!("=== Logical plan ===\n{:?}\n", plan);
     }
 
+    let plan = ctx.optimize(&plan)?;
     if debug {
-        let plan = ctx.optimize(&plan)?;
         println!("=== Optimized logical plan ===\n{:?}\n", plan);
     }
     let physical_plan = ctx.create_physical_plan(&plan).await?;
