@@ -97,18 +97,16 @@ fn hash_array<T>(
                 *hash = array.value(i).hash_one(random_state);
             }
         }
-    } else {
-        if multi_col {
-            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                if !array.is_null(i) {
-                    *hash = combine_hashes(array.value(i).hash_one(random_state), *hash);
-                }
+    } else if multi_col {
+        for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+            if !array.is_null(i) {
+                *hash = combine_hashes(array.value(i).hash_one(random_state), *hash);
             }
-        } else {
-            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
-                if !array.is_null(i) {
-                    *hash = array.value(i).hash_one(random_state);
-                }
+        }
+    } else {
+        for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+            if !array.is_null(i) {
+                *hash = array.value(i).hash_one(random_state);
             }
         }
     }
