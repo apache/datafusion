@@ -2529,7 +2529,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        // need to set config here
         Ok(LogicalPlan::SetVariable(SetVariable {
             variable: variable_lower,
             value: value_string,
