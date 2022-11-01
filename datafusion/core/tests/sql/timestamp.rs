@@ -1668,18 +1668,5 @@ async fn test_current_time() -> Result<()> {
         DataType::Time64(TimeUnit::Nanosecond)
     );
 
-    let sql = "select case when current_time() = cast(now() as time) then 'OK' else 'FAIL' end result";
-    let results = execute_to_batches(&ctx, sql).await;
-
-    let expected = vec![
-        "+--------+",
-        "| result |",
-        "+--------+",
-        "| OK     |",
-        "+--------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-
     Ok(())
 }
