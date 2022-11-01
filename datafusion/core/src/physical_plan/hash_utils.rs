@@ -19,10 +19,10 @@
 
 use crate::error::{DataFusionError, Result};
 use ahash::RandomState;
-use arrow_buffer::i256;
 use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
+use arrow_buffer::i256;
 use std::sync::Arc;
 
 // Combines two hashes into one hash
@@ -64,7 +64,8 @@ macro_rules! hash_value {
         })+
     };
 }
-hash_value!(bool, i8, i16, i32, i64, i128, i256, u8, u16, u32, u64, str, [u8]);
+hash_value!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64);
+hash_value!(bool, str, [u8]);
 
 macro_rules! hash_float_value {
     ($($t:ty),+) => {
