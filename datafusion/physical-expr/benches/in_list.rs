@@ -92,7 +92,7 @@ fn do_benches(
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    for in_list_length in [1, 10, 100] {
+    for in_list_length in [1, 3, 10, 100] {
         for null_percent in [0., 0.2] {
             do_benches(c, 1024, in_list_length, null_percent)
         }
