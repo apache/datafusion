@@ -17,12 +17,12 @@
 
 //! Functionality used both on logical and physical plans
 
-use crate::error::{DataFusionError, Result};
 use ahash::RandomState;
 use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use arrow_buffer::i256;
+use datafusion_common::{DataFusionError, Result};
 use std::sync::Arc;
 
 // Combines two hashes into one hash
@@ -45,7 +45,7 @@ fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: 
     }
 }
 
-trait HashValue {
+pub(crate) trait HashValue {
     fn hash_one(&self, state: &RandomState) -> u64;
 }
 
