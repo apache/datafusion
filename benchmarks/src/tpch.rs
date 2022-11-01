@@ -16,8 +16,7 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, Date32Array, Decimal128Array, Float64Array, Int32Array, Int64Array,
-    StringArray,
+    Array, ArrayRef, Decimal128Array, Float64Array, Int32Array, Int64Array, StringArray,
 };
 use arrow::record_batch::RecordBatch;
 use datafusion::common::cast::as_date32_array;
@@ -440,9 +439,9 @@ fn col_to_scalar(column: &ArrayRef, row_index: usize) -> ScalarValue {
             ScalarValue::Decimal128(Some(array.value(row_index)), *p, *s)
         }
         DataType::Date32 => {
-            let array = match as_date32_array(column){
+            let array = match as_date32_array(column) {
                 Ok(array) => array,
-                Err(e) => panic!("{}", e)
+                Err(e) => panic!("{}", e),
             };
             ScalarValue::Date32(Some(array.value(row_index)))
         }
