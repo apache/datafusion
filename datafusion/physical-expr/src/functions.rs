@@ -433,6 +433,12 @@ pub fn create_physical_fun(
                 execution_props.query_execution_start_time,
             ))
         }
+        BuiltinScalarFunction::CurrentTime => {
+            // bind value for current_time at plan time
+            Arc::new(datetime_expressions::make_current_time(
+                execution_props.query_execution_start_time,
+            ))
+        }
         BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function(string_expressions::initcap::<i32>)(args)

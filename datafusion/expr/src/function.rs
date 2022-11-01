@@ -222,6 +222,7 @@ pub fn return_type(
             Some("UTC".to_owned()),
         )),
         BuiltinScalarFunction::CurrentDate => Ok(DataType::Date32),
+        BuiltinScalarFunction::CurrentTime => Ok(DataType::Time64(TimeUnit::Nanosecond)),
         BuiltinScalarFunction::Translate => {
             utf8_to_str_type(&input_expr_types[0], "translate")
         }

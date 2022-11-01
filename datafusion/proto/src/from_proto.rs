@@ -430,6 +430,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
             ScalarFunction::Now => Self::Now,
             ScalarFunction::CurrentDate => Self::CurrentDate,
+            ScalarFunction::CurrentTime => Self::CurrentTime,
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::Coalesce => Self::Coalesce,

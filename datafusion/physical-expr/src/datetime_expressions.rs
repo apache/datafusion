@@ -200,6 +200,20 @@ pub fn make_current_date(
     move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Date32(days)))
 }
 
+/// Create an implementation of `current_time()` that always returns the
+/// specified current time.
+///
+/// The semantics of `current_time()` require it to return the same value
+/// wherever it appears within a single statement. This value is
+/// chosen during planning time.
+pub fn make_current_time(
+    now_ts: DateTime<Utc>,
+) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
+    let nano =
+        Duration::seconds(now_ts.num_seconds_from_midnight() as i64).num_nanoseconds();
+    move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Time64(nano)))
+}
+
 fn quarter_month(date: &NaiveDateTime) -> u32 {
     1 + 3 * ((date.month() - 1) / 3)
 }
