@@ -27,7 +27,7 @@ use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
     DropTable, DropView, Explain, JoinType, LogicalPlan, LogicalPlanBuilder,
-    Partitioning, PlanType, ToStringifiedPlan,
+    Partitioning, PlanType, SetVariable, ToStringifiedPlan,
 };
 use datafusion_expr::utils::{
     can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
@@ -161,6 +161,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } => self.explain_statement_to_plan(verbose, analyze, *statement),
             Statement::Query(query) => self.query_to_plan(*query, &mut HashMap::new()),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
+            Statement::SetVariable {
+                local,
+                hivevar,
+                variable,
+                value,
+            } => self.set_variable_to_plan(local, hivevar, &variable, value),
+
             Statement::CreateTable {
                 query: Some(query),
                 name,
@@ -2449,6 +2456,85 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         assert_eq!(rewrite.len(), 1);
 
         self.statement_to_plan(rewrite.pop_front().unwrap())
+    }
+
+    fn set_variable_to_plan(
+        &self,
+        local: bool,
+        hivevar: bool,
+        variable: &ObjectName,
+        value: Vec<sqlparser::ast::Expr>,
+    ) -> Result<LogicalPlan> {
+        if local {
+            return Err(DataFusionError::NotImplemented(
+                "LOCAL is not supported".to_string(),
+            ));
+        }
+
+        if hivevar {
+            return Err(DataFusionError::NotImplemented(
+                "HIVEVAR is not supported".to_string(),
+            ));
+        }
+
+        let variable = variable.to_string();
+        let mut variable_lower = variable.to_lowercase();
+
+        if variable_lower == "timezone" || variable_lower == "time.zone" {
+            // we could introduce alias in OptionDefinition if this string matching thing grows
+            variable_lower = "datafusion.execution.time_zone".to_string();
+        }
+
+        // we don't support change time zone until we complete time zone related implementation
+        if variable_lower == "datafusion.execution.time_zone" {
+            return Err(DataFusionError::Plan(
+                "Changing Time Zone isn't supported yet".to_string(),
+            ));
+        }
+
+        // parse value string from Expr
+        let value_string = match &value[0] {
+            SQLExpr::Identifier(i) => i.to_string(),
+            SQLExpr::Value(v) => match v {
+                Value::SingleQuotedString(s) => s.to_string(),
+                Value::Number(_, _) | Value::Boolean(_) => v.to_string(),
+                Value::DoubleQuotedString(_)
+                | Value::EscapedStringLiteral(_)
+                | Value::NationalStringLiteral(_)
+                | Value::HexStringLiteral(_)
+                | Value::Null
+                | Value::Placeholder(_) => {
+                    return Err(DataFusionError::Plan(format!(
+                        "Unspported Value {}",
+                        value[0]
+                    )))
+                }
+            },
+            // for capture signed number e.g. +8, -8
+            SQLExpr::UnaryOp { op, expr } => match op {
+                UnaryOperator::Plus => format!("+{}", expr),
+                UnaryOperator::Minus => format!("-{}", expr),
+                _ => {
+                    return Err(DataFusionError::Plan(format!(
+                        "Unspported Value {}",
+                        value[0]
+                    )))
+                }
+            },
+            _ => {
+                return Err(DataFusionError::Plan(format!(
+                    "Unspported Value {}",
+                    value[0]
+                )))
+            }
+        };
+
+        // need to set config here
+        Ok(LogicalPlan::SetVariable(SetVariable {
+            variable: variable_lower,
+            value: value_string,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        }))
     }
 
     fn show_columns_to_plan(

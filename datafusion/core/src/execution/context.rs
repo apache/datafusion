@@ -67,7 +67,7 @@ use crate::error::{DataFusionError, Result};
 use crate::logical_expr::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     CreateView, DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder,
-    TableSource, TableType, UNNAMED_TABLE,
+    SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
 use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion_sql::{ResolvedTableReference, TableReference};
@@ -341,6 +341,60 @@ impl SessionContext {
                     ))),
                 }
             }
+
+            LogicalPlan::SetVariable(SetVariable {
+                variable, value, ..
+            }) => {
+                let config_options = &self.state.write().config.config_options;
+
+                let old_value =
+                    config_options.read().get(&variable).ok_or_else(|| {
+                        DataFusionError::Execution(format!(
+                            "Unknown Variable {}",
+                            variable
+                        ))
+                    })?;
+
+                match old_value {
+                    ScalarValue::Boolean(_) => {
+                        let new_value = value.parse::<bool>().map_err(|_| {
+                            DataFusionError::Execution(format!(
+                                "Failed to parse {} as bool",
+                                value,
+                            ))
+                        })?;
+                        config_options.write().set_bool(&variable, new_value);
+                    }
+
+                    ScalarValue::UInt64(_) => {
+                        let new_value = value.parse::<u64>().map_err(|_| {
+                            DataFusionError::Execution(format!(
+                                "Failed to parse {} as u64",
+                                value,
+                            ))
+                        })?;
+                        config_options.write().set_u64(&variable, new_value);
+                    }
+
+                    ScalarValue::Utf8(_) => {
+                        let new_value = value.parse::<String>().map_err(|_| {
+                            DataFusionError::Execution(format!(
+                                "Failed to parse {} as String",
+                                value,
+                            ))
+                        })?;
+                        config_options.write().set_string(&variable, new_value);
+                    }
+
+                    _ => {
+                        return Err(DataFusionError::Execution(
+                            "Unsupported Scalar Value Type".to_string(),
+                        ))
+                    }
+                }
+                self.return_empty_dataframe()
+            }
+
             LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
                 schema_name,
                 if_not_exists,

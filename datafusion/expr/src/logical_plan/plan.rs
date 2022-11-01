@@ -106,6 +106,8 @@ pub enum LogicalPlan {
     Extension(Extension),
     /// Remove duplicate rows from the input
     Distinct(Distinct),
+    /// Set a Varaible
+    SetVariable(SetVariable),
 }
 
 impl LogicalPlan {
@@ -144,6 +146,7 @@ impl LogicalPlan {
             LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => schema,
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
             LogicalPlan::DropView(DropView { schema, .. }) => schema,
+            LogicalPlan::SetVariable(SetVariable { schema, .. }) => schema,
         }
     }
 
@@ -200,7 +203,9 @@ impl LogicalPlan {
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::Distinct(Distinct { input, .. }) => input.all_schemas(),
-            LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) => vec![],
+            LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_)
+            | LogicalPlan::SetVariable(_) => vec![],
         }
     }
 
@@ -260,6 +265,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze { .. }
@@ -305,6 +311,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_) => vec![],
         }
     }
@@ -455,6 +462,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_) => true,
         };
         if !recurse {
@@ -939,6 +947,11 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "DropView: {:?} if not exist:={}", name, if_exists)
                     }
+                    LogicalPlan::SetVariable(SetVariable {
+                        variable, value, ..
+                    }) => {
+                        write!(f, "SetVariable: set {:?} to {:?}", variable, value)
+                    }
                     LogicalPlan::Distinct(Distinct { .. }) => {
                         write!(f, "Distinct:")
                     }
@@ -1051,6 +1064,17 @@ pub struct DropView {
     pub name: String,
     /// If the view exists
     pub if_exists: bool,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
+/// Set a Variable
+#[derive(Clone)]
+pub struct SetVariable {
+    /// The variable name
+    pub variable: String,
+    /// The value to set
+    pub value: String,
     /// Dummy schema
     pub schema: DFSchemaRef,
 }

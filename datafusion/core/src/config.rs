@@ -360,6 +360,11 @@ impl ConfigOptions {
         self.set(key, ScalarValue::UInt64(Some(value)))
     }
 
+    /// set a `String` configuration option
+    pub fn set_string(&mut self, key: &str, value: String) {
+        self.set(key, ScalarValue::Utf8(Some(value)))
+    }
+
     /// get a configuration option
     pub fn get(&self, key: &str) -> Option<ScalarValue> {
         self.options.get(key).cloned()
