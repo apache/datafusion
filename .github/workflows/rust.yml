@@ -91,6 +91,10 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Build tests
+        run: |
+          export PATH=$PATH:$HOME/d/protoc/bin
+          cargo test --features avro,jit,scheduler,json --no-run
       - name: Run tests
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
@@ -147,7 +151,7 @@ jobs:
           mkdir -p benchmarks/data/answers
           git clone https://github.com/databricks/tpch-dbgen.git
           cd tpch-dbgen
-          make  
+          make
           ./dbgen -f -s 1
           mv *.tbl ../benchmarks/data
           mv ./answers/* ../benchmarks/data/answers/
