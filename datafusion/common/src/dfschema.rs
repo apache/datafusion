@@ -23,7 +23,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result, SchemaError};
-use crate::{field_not_found, Column};
+use crate::{field_not_found, Column, TableReference};
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -206,8 +206,18 @@ impl DFSchema {
                 (Some(qq), None) => {
                     // the original field may now be aliased with a name that matches the
                     // original qualified name
-                    let qualified_name = format!("{}.{}", qq, name);
-                    field.name() == &qualified_name
+                    let table_ref: TableReference = field.name().as_str().into();
+                    match table_ref {
+                        TableReference::Partial { schema, table } => {
+                            schema == qq && table == name
+                        }
+                        TableReference::Full {
+                            catalog,
+                            schema,
+                            table,
+                        } if catalog.is_empty() => schema == qq && table == name,
+                        _ => false,
+                    }
                 }
                 // field to lookup is unqualified, no need to compare qualifier
                 (None, Some(_)) | (None, None) => field.name() == name,

@@ -46,8 +46,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
 
-use crate::table_reference::TableReference;
 use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
+use datafusion_common::TableReference;
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
