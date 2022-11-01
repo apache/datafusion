@@ -299,7 +299,7 @@ impl ExecutionPlan for HashJoinExec {
     fn output_partitioning(&self) -> Partitioning {
         let left_columns_len = self.left.schema().fields.len();
         match self.mode {
-            PartitionMode::CollectLeft => match join_type {
+            PartitionMode::CollectLeft => match self.join_type {
                 JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
                     self.right.output_partitioning(),
                     left_columns_len,
