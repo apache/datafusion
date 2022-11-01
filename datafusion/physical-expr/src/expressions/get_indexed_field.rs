@@ -19,7 +19,7 @@
 
 use crate::PhysicalExpr;
 use arrow::array::Array;
-use arrow::array::{ListArray, StructArray};
+use arrow::array::ListArray;
 use arrow::compute::concat;
 
 use crate::physical_expr::down_cast_any_ref;
@@ -27,6 +27,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+use datafusion_common::cast::as_struct_array;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
@@ -122,7 +123,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                 }
             }
             (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
-                let as_struct_array = array.as_any().downcast_ref::<StructArray>().unwrap();
+                let as_struct_array = as_struct_array(&array)?;
                 match as_struct_array.column_by_name(k) {
                     None => Err(DataFusionError::Execution(format!("get indexed field {} not found in struct", k))),
                     Some(col) => Ok(ColumnarValue::Array(col.clone()))
