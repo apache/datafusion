@@ -341,32 +341,33 @@ impl<'a> TestCase<'a> {
 
         assert_eq!(no_pushdown, pushdown_and_reordering);
 
-        // page index filtering is not correct:
-        // https://github.com/apache/arrow-datafusion/issues/4002
-        // when it is fixed we can add these tests too
+        let page_index_only = self
+            .read_with_options(
+                ParquetScanOptions {
+                    pushdown_filters: false,
+                    reorder_filters: false,
+                    enable_page_index: true,
+                },
+                // pushdown is off so no pushdown is expected
+                PushdownExpected::None,
+                filter,
+            )
+            .await;
+        assert_eq!(no_pushdown, page_index_only);
 
-        // let page_index_only = self
-        //     .read_with_options(
-        //         ParquetScanOptions {
-        //             pushdown_filters: false,
-        //             reorder_filters: false,
-        //             enable_page_index: true,
-        //         },
-        //     )
-        //     .await;
-        //assert_eq!(no_pushdown, page_index_only);
+        let pushdown_reordering_and_page_index = self
+            .read_with_options(
+                ParquetScanOptions {
+                    pushdown_filters: true,
+                    reorder_filters: true,
+                    enable_page_index: true,
+                },
+                self.pushdown_expected,
+                filter,
+            )
+            .await;
 
-        // let pushdown_reordering_and_page_index = self
-        //     .read_with_options(
-        //         ParquetScanOptions {
-        //             pushdown_filters: false,
-        //             reorder_filters: false,
-        //             enable_page_index: true,
-        //         },
-        //     )
-        //     .await;
-
-        //assert_eq!(no_pushdown, pushdown_reordering_and_page_index);
+        assert_eq!(no_pushdown, pushdown_reordering_and_page_index);
     }
 
     /// Reads data from a test parquet file using the specified scan options
