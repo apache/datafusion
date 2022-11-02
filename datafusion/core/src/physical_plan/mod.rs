@@ -525,7 +525,6 @@ pub mod empty;
 pub mod explain;
 pub mod file_format;
 pub mod filter;
-pub mod hash_utils;
 pub mod joins;
 pub mod limit;
 pub mod memory;
@@ -541,4 +540,6 @@ pub mod values;
 pub mod windows;
 
 use crate::execution::context::TaskContext;
-pub use datafusion_physical_expr::{expressions, functions, type_coercion, udf};
+pub use datafusion_physical_expr::{
+    expressions, functions, hash_utils, type_coercion, udf,
+};
