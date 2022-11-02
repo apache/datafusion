@@ -253,6 +253,34 @@ mod roundtrip_tests {
     }
 
     #[tokio::test]
+    async fn roundtrip_single_count_distinct() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Decimal128(15, 2), true),
+        ]);
+
+        ctx.register_csv(
+            "t1",
+            "testdata/test.csv",
+            CsvReadOptions::default().schema(&schema),
+        )
+        .await?;
+
+        let query = "SELECT a, COUNT(DISTINCT b) as b_cd FROM t1 GROUP BY a";
+        let plan = ctx.sql(query).await?.to_logical_plan()?;
+
+        println!("{:?}", plan);
+
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+        assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn roundtrip_logical_plan_with_extension() -> Result<(), DataFusionError> {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
