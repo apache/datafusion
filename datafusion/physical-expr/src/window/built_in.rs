@@ -99,8 +99,6 @@ impl WindowExpr for BuiltInWindowExpr {
             // Sort values, this will make the same partitions consecutive. Also, within the partition
             // range, values will be sorted.
             let order_bys = &order_columns[self.partition_by.len()..];
-
-            let mut ranges = vec![];
             let window_frame = if !order_bys.is_empty() && self.window_frame.is_none() {
                 // OVER (ORDER BY a) case
                 // We create an implicit window for ORDER BY.
@@ -108,13 +106,14 @@ impl WindowExpr for BuiltInWindowExpr {
             } else {
                 self.window_frame.clone()
             };
+            let mut row_wise_results = vec![];
             for partition_range in &partition_points {
                 let length = partition_range.end - partition_range.start;
                 let slice_order_bys = order_bys
                     .iter()
                     .map(|v| v.slice(partition_range.start, length))
                     .collect::<Vec<_>>();
-                // We iterate on each row to calculate window frame boundaries
+                // We iterate on each row to calculate window frame range and and window function result
                 for idx in 0..length {
                     let range = self.calculate_range(
                         &window_frame,
@@ -123,16 +122,16 @@ impl WindowExpr for BuiltInWindowExpr {
                         num_rows,
                         idx,
                     )?;
-                    ranges.push(Range {
+                    let range = Range {
                         start: partition_range.start + range.0,
                         end: partition_range.start + range.1,
-                    });
+                    };
+                    let value = evaluator.evaluate_inside_range(range);
+                    row_wise_results.push(value);
                 }
             }
-
-            ranges
+            row_wise_results
                 .into_iter()
-                .map(|elem| evaluator.evaluate_inside_range(elem))
                 .collect::<Result<Vec<ArrayRef>>>()?
         } else if evaluator.include_rank() {
             let columns = self.sort_columns(batch)?;

@@ -87,6 +87,8 @@ impl WindowExpr for AggregateWindowExpr {
             self.evaluate_partition_points(batch.num_rows(), &partition_columns)?;
         let values = self.evaluate_args(batch)?;
 
+        let sort_options: Vec<SortOptions> =
+            self.order_by.iter().map(|o| o.options).collect();
         let columns = self.sort_columns(batch)?;
         let order_columns: Vec<&ArrayRef> = columns.iter().map(|s| &s.values).collect();
         // Sort values, this will make the same partitions consecutive. Also, within the partition
@@ -99,70 +101,62 @@ impl WindowExpr for AggregateWindowExpr {
         } else {
             self.window_frame.clone()
         };
-        let results = partition_points
-            .iter()
-            .map(|partition_range| {
-                let mut accumulator = self.aggregate.create_accumulator()?;
-                let length = partition_range.end - partition_range.start;
-                let slice_order_bys = order_bys
-                    .iter()
-                    .map(|v| v.slice(partition_range.start, length))
-                    .collect::<Vec<_>>();
-                let sort_options: Vec<SortOptions> =
-                    self.order_by.iter().map(|o| o.options).collect();
-                let value_slice = values
-                    .iter()
-                    .map(|v| v.slice(partition_range.start, length))
-                    .collect::<Vec<_>>();
+        let mut row_wise_results: Vec<ScalarValue> = vec![];
+        for partition_range in &partition_points {
+            let mut accumulator = self.aggregate.create_accumulator()?;
+            let length = partition_range.end - partition_range.start;
+            let slice_order_bys = order_bys
+                .iter()
+                .map(|v| v.slice(partition_range.start, length))
+                .collect::<Vec<_>>();
+            let value_slice = values
+                .iter()
+                .map(|v| v.slice(partition_range.start, length))
+                .collect::<Vec<_>>();
 
-                let mut row_wise_results: Vec<ScalarValue> = vec![];
-                let mut last_range: (usize, usize) = (0, 0);
+            let mut last_range: (usize, usize) = (0, 0);
 
-                // We iterate on each row to perform a running calculation.
-                // First, cur_range is calculated, then it is compared with last_range.
-                for i in 0..length {
-                    let cur_range = self.calculate_range(
-                        &window_frame,
-                        &slice_order_bys,
-                        &sort_options,
-                        length,
-                        i,
-                    )?;
-                    let value = if cur_range.0 == cur_range.1 {
-                        // We produce None if the window is empty.
-                        ScalarValue::try_from(self.aggregate.field()?.data_type())?
-                    } else {
-                        // Accumulate any new rows that have entered the window:
-                        let update_bound = cur_range.1 - last_range.1;
-                        if update_bound > 0 {
-                            let update: Vec<ArrayRef> = value_slice
-                                .iter()
-                                .map(|v| v.slice(last_range.1, update_bound))
-                                .collect();
-                            accumulator.update_batch(&update)?
-                        }
-                        // Remove rows that have now left the window:
-                        let retract_bound = cur_range.0 - last_range.0;
-                        if retract_bound > 0 {
-                            let retract: Vec<ArrayRef> = value_slice
-                                .iter()
-                                .map(|v| v.slice(last_range.0, retract_bound))
-                                .collect();
-                            accumulator.retract_batch(&retract)?
-                        }
-                        accumulator.evaluate()?
-                    };
-                    row_wise_results.push(value);
-                    last_range = cur_range;
-                }
-                Ok(vec![ScalarValue::iter_to_array(
-                    row_wise_results.into_iter(),
-                )?])
-            })
-            .collect::<Result<Vec<Vec<ArrayRef>>>>()?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<ArrayRef>>();
+            // We iterate on each row to perform a running calculation.
+            // First, cur_range is calculated, then it is compared with last_range.
+            for i in 0..length {
+                let cur_range = self.calculate_range(
+                    &window_frame,
+                    &slice_order_bys,
+                    &sort_options,
+                    length,
+                    i,
+                )?;
+                let value = if cur_range.0 == cur_range.1 {
+                    // We produce None if the window is empty.
+                    ScalarValue::try_from(self.aggregate.field()?.data_type())?
+                } else {
+                    // Accumulate any new rows that have entered the window:
+                    let update_bound = cur_range.1 - last_range.1;
+                    if update_bound > 0 {
+                        let update: Vec<ArrayRef> = value_slice
+                            .iter()
+                            .map(|v| v.slice(last_range.1, update_bound))
+                            .collect();
+                        accumulator.update_batch(&update)?
+                    }
+                    // Remove rows that have now left the window:
+                    let retract_bound = cur_range.0 - last_range.0;
+                    if retract_bound > 0 {
+                        let retract: Vec<ArrayRef> = value_slice
+                            .iter()
+                            .map(|v| v.slice(last_range.0, retract_bound))
+                            .collect();
+                        accumulator.retract_batch(&retract)?
+                    }
+                    accumulator.evaluate()?
+                };
+                row_wise_results.push(value);
+                last_range = cur_range;
+            }
+        }
+
+        let results = vec![ScalarValue::iter_to_array(row_wise_results.into_iter())?];
+
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
         concat(&results).map_err(DataFusionError::ArrowError)
     }

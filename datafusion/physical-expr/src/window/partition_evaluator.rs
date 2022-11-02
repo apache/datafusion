@@ -88,7 +88,7 @@ pub trait PartitionEvaluator {
         ))
     }
 
-    /// evaluate the partition evaluator against the partition but with rank
+    /// evaluate window function result inside given range
     fn evaluate_inside_range(&self, _range: Range<usize>) -> Result<ArrayRef> {
         Err(DataFusionError::NotImplemented(
             "evaluate_inside_range is not implemented by default".into(),
