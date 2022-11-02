@@ -841,7 +841,7 @@ fn build_statistics_expr(expr_builder: &mut PruningExpressionBuilder) -> Result<
             }
             // other expressions are not supported
             _ => return Err(DataFusionError::Plan(
-                "expressions} other than (neq, eq, gt, gteq, lt, lteq) are not supported"
+                "expressions other than (neq, eq, gt, gteq, lt, lteq) are not supported"
                     .to_string(),
             )),
         };
