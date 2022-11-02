@@ -67,7 +67,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
     let error = ctx.create_logical_plan(sql).unwrap_err();
     assert_contains!(
         error.to_string(),
-        "No field named 'f1.c1'. Valid fields are 'test.f.c1', 'test.test.c2'"
+        "No field named 'f1'.'c1'. Valid fields are 'test'.'f.c1', 'test'.'test.c2'"
     );
 
     // however, enclosing it in double quotes is ok
