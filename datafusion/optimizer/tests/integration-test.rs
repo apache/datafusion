@@ -180,7 +180,7 @@ fn between_date32_plus_interval() -> Result<()> {
     WHERE col_date32 between '1998-03-18' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        "Projection: COUNT(Int64(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
         \n    Filter: test.col_date32 >= Date32(\"10303\") AND test.col_date32 <= Date32(\"10393\")\
         \n      TableScan: test projection=[col_date32]";
     assert_eq!(expected, format!("{:?}", plan));
@@ -193,7 +193,7 @@ fn between_date64_plus_interval() -> Result<()> {
     WHERE col_date64 between '1998-03-18T00:00:00' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Projection: COUNT(UInt8(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        "Projection: COUNT(Int64(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
         \n    Filter: test.col_date64 >= Date64(\"890179200000\") AND test.col_date64 <= Date64(\"897955200000\")\
         \n      TableScan: test projection=[col_date64]";
     assert_eq!(expected, format!("{:?}", plan));
