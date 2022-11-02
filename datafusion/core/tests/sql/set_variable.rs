@@ -108,7 +108,10 @@ async fn set_variable_unknown_variable() {
     let err = plan_and_collect(&ctx, "SET aabbcc to '1'")
         .await
         .unwrap_err();
-    assert_eq!(err.to_string(), "Execution error: Can not SET variable: Unknown Variable aabbcc");
+    assert_eq!(
+        err.to_string(),
+        "Execution error: Can not SET variable: Unknown Variable aabbcc"
+    );
 }
 
 #[tokio::test]
