@@ -126,13 +126,11 @@ impl WindowExpr for BuiltInWindowExpr {
                         start: partition_range.start + range.0,
                         end: partition_range.start + range.1,
                     };
-                    let value = evaluator.evaluate_inside_range(range);
+                    let value = evaluator.evaluate_inside_range(range)?;
                     row_wise_results.push(value);
                 }
             }
             row_wise_results
-                .into_iter()
-                .collect::<Result<Vec<ArrayRef>>>()?
         } else if evaluator.include_rank() {
             let columns = self.sort_columns(batch)?;
             let sort_partition_points =
