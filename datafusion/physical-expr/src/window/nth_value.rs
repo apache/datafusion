@@ -21,7 +21,7 @@
 use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
-use arrow::array::{new_null_array, ArrayRef};
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
@@ -148,27 +148,20 @@ impl PartitionEvaluator for NthValueEvaluator {
         unreachable!("first, last, and nth_value evaluation must be called with evaluate_partition_with_rank")
     }
 
-    fn evaluate_inside_range(&self, range: Range<usize>) -> Result<ArrayRef> {
+    fn evaluate_inside_range(&self, range: Range<usize>) -> Result<ScalarValue> {
         let arr = &self.values[0];
         let n_range = range.end - range.start;
         match self.kind {
-            NthValueKind::First => {
-                let value = ScalarValue::try_from_array(arr, range.start)?;
-                Ok(value.to_array_of_size(1))
-            }
-            NthValueKind::Last => {
-                let value = ScalarValue::try_from_array(arr, range.end - 1)?;
-                Ok(value.to_array_of_size(1))
-            }
+            NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
+            NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
             NthValueKind::Nth(n) => {
                 // We are certain that n > 0.
                 let index = (n as usize) - 1;
-                Ok(if index >= n_range {
-                    new_null_array(arr.data_type(), 1)
+                if index >= n_range {
+                    ScalarValue::try_from(arr.data_type())
                 } else {
-                    let value = ScalarValue::try_from_array(arr, range.start + index)?;
-                    value.to_array_of_size(1)
-                })
+                    ScalarValue::try_from_array(arr, range.start + index)
+                }
             }
         }
     }
@@ -178,7 +171,6 @@ impl PartitionEvaluator for NthValueEvaluator {
 mod tests {
     use super::*;
     use crate::expressions::Column;
-    use arrow::compute::concat;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
     use datafusion_common::Result;
@@ -200,9 +192,8 @@ mod tests {
             .into_iter()
             .map(|range| evaluator.evaluate_inside_range(range))
             .into_iter()
-            .collect::<Result<Vec<ArrayRef>>>()?;
-        let result = result.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        let result = concat(&result).map_err(DataFusionError::ArrowError)?;
+            .collect::<Result<Vec<ScalarValue>>>()?;
+        let result = ScalarValue::iter_to_array(result.into_iter())?;
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(expected, *result);
         Ok(())

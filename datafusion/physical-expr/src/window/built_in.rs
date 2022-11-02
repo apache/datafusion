@@ -24,8 +24,8 @@ use arrow::array::Array;
 use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::WindowFrame;
 use std::any::Any;
 use std::ops::Range;
@@ -130,7 +130,7 @@ impl WindowExpr for BuiltInWindowExpr {
                     row_wise_results.push(value);
                 }
             }
-            row_wise_results
+            vec![ScalarValue::iter_to_array(row_wise_results.into_iter())?]
         } else if evaluator.include_rank() {
             let columns = self.sort_columns(batch)?;
             let sort_partition_points =
