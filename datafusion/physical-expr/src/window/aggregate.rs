@@ -22,12 +22,12 @@ use std::iter::IntoIterator;
 use std::sync::Arc;
 
 use arrow::array::Array;
-use arrow::compute::{concat, SortOptions};
+use arrow::compute::SortOptions;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 
 use datafusion_common::Result;
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::ScalarValue;
 use datafusion_expr::WindowFrame;
 
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
@@ -154,11 +154,7 @@ impl WindowExpr for AggregateWindowExpr {
                 last_range = cur_range;
             }
         }
-
-        let results = vec![ScalarValue::iter_to_array(row_wise_results.into_iter())?];
-
-        let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        concat(&results).map_err(DataFusionError::ArrowError)
+        ScalarValue::iter_to_array(row_wise_results.into_iter())
     }
 
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>] {
