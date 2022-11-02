@@ -65,7 +65,7 @@ struct ArrayHashSet {
     /// Used to provide a lookup from value to in list index
     ///
     /// Note: usize::hash is not used, instead the raw entry
-    /// API is used to store entries w.r.t their value has
+    /// API is used to store entries w.r.t their value
     map: HashMap<usize, (), ()>,
 }
 
