@@ -500,63 +500,67 @@ impl FileOpener for ParquetOpener {
                 &file_metrics,
             );
 
-            let page_index_predicates = extract_page_index_push_down_predicates(
-                &pruning_predicate,
-                builder.schema().clone(),
-            )?;
-
-            if enable_page_index && !page_index_predicates.is_empty() {
-                let file_offset_indexes = file_metadata.offset_indexes();
-                let file_page_indexes = file_metadata.page_indexes();
-                if let (Some(file_offset_indexes), Some(file_page_indexes)) =
-                    (file_offset_indexes, file_page_indexes)
-                {
-                    let mut row_selections =
-                        VecDeque::with_capacity(page_index_predicates.len());
-                    for predicate in page_index_predicates {
-                        // `extract_page_index_push_down_predicates` only return predicate with one col.
-                        let col_id =
-                            *predicate.need_input_columns_ids().iter().next().unwrap();
-                        let mut selectors = Vec::with_capacity(row_groups.len());
-                        for r in &row_groups {
-                            let rg_offset_indexes = file_offset_indexes.get(*r);
-                            let rg_page_indexes = file_page_indexes.get(*r);
-                            if let (Some(rg_page_indexes), Some(rg_offset_indexes)) =
-                                (rg_page_indexes, rg_offset_indexes)
-                            {
-                                selectors.extend(
-                                    prune_pages_in_one_row_group(
-                                        &groups[*r],
-                                        &predicate,
-                                        rg_offset_indexes.get(col_id),
-                                        rg_page_indexes.get(col_id),
-                                        &file_metrics,
-                                    )
-                                    .map_err(|e| {
-                                        ArrowError::ParquetError(format!(
-                                            "Fail in prune_pages_in_one_row_group: {}",
-                                            e
-                                        ))
-                                    }),
-                                );
-                            } else {
-                                // fallback select all rows
-                                let all_selected = vec![RowSelector::select(
-                                    groups[*r].num_rows() as usize,
-                                )];
-                                selectors.push(all_selected);
+            if enable_page_index {
+                let page_index_predicates = extract_page_index_push_down_predicates(
+                    &pruning_predicate,
+                    builder.schema().clone(),
+                )?;
+                if !page_index_predicates.is_empty() {
+                    let file_offset_indexes = file_metadata.offset_indexes();
+                    let file_page_indexes = file_metadata.page_indexes();
+                    if let (Some(file_offset_indexes), Some(file_page_indexes)) =
+                        (file_offset_indexes, file_page_indexes)
+                    {
+                        let mut row_selections =
+                            VecDeque::with_capacity(page_index_predicates.len());
+                        for predicate in page_index_predicates {
+                            // `extract_page_index_push_down_predicates` only return predicate with one col.
+                            let col_id = *predicate
+                                .need_input_columns_ids()
+                                .iter()
+                                .next()
+                                .unwrap();
+                            let mut selectors = Vec::with_capacity(row_groups.len());
+                            for r in &row_groups {
+                                let rg_offset_indexes = file_offset_indexes.get(*r);
+                                let rg_page_indexes = file_page_indexes.get(*r);
+                                if let (Some(rg_page_indexes), Some(rg_offset_indexes)) =
+                                    (rg_page_indexes, rg_offset_indexes)
+                                {
+                                    selectors.extend(
+                                        prune_pages_in_one_row_group(
+                                            &groups[*r],
+                                            &predicate,
+                                            rg_offset_indexes.get(col_id),
+                                            rg_page_indexes.get(col_id),
+                                            &file_metrics,
+                                        )
+                                            .map_err(|e| {
+                                                ArrowError::ParquetError(format!(
+                                                    "Fail in prune_pages_in_one_row_group: {}",
+                                                    e
+                                                ))
+                                            }),
+                                    );
+                                } else {
+                                    // fallback select all rows
+                                    let all_selected = vec![RowSelector::select(
+                                        groups[*r].num_rows() as usize,
+                                    )];
+                                    selectors.push(all_selected);
+                                }
                             }
-                        }
-                        debug!(
+                            debug!(
                             "Use filter and page index create RowSelection {:?} from predicate:{:?}",
                             &selectors, predicate
                         );
-                        row_selections.push_back(
-                            selectors.into_iter().flatten().collect::<Vec<_>>(),
-                        );
+                            row_selections.push_back(
+                                selectors.into_iter().flatten().collect::<Vec<_>>(),
+                            );
+                        }
+                        let final_selection = combine_multi_col_selection(row_selections);
+                        builder = builder.with_row_selection(final_selection.into());
                     }
-                    let final_selection = combine_multi_col_selection(row_selections);
-                    builder = builder.with_row_selection(final_selection.into());
                 }
             }
 
