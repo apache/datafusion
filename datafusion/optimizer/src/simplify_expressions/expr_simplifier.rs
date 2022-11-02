@@ -40,6 +40,8 @@ pub struct ExprSimplifier<S> {
     info: S,
 }
 
+const THRESHOLD_INLINE_INLIST: usize = 3;
+
 impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// Create a new `ExprSimplifier` with the given `info` such as an
     /// instance of [`SimplifyContext`]. See
@@ -363,6 +365,32 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                     Some(true) => *left,
                     Some(false) => Expr::Not(left),
                     None => lit_bool_null(),
+                }
+            }
+            Expr::InList {
+                expr: _expr,
+                list,
+                negated,
+            } if list.is_empty() => lit(negated),
+
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } if list.len() <= THRESHOLD_INLINE_INLIST => {
+                let first_val = list[0].clone();
+                if negated {
+                    list.into_iter()
+                        .skip(1)
+                        .fold((*expr.clone()).not_eq(first_val), |acc, y| {
+                            (*expr.clone()).not_eq(y.clone()).and(acc)
+                        })
+                } else {
+                    list.into_iter()
+                        .skip(1)
+                        .fold((*expr.clone()).eq(first_val), |acc, y| {
+                            (*expr.clone()).eq(y.clone()).or(acc)
+                        })
                 }
             }
 
@@ -1747,6 +1775,30 @@ mod tests {
             lit_bool_null(),
         );
         assert_eq!(expected_expr, result);
+    }
+
+    #[test]
+    fn simplify_inlist() {
+        assert_eq!(simplify(in_list(col("c1"), vec![], false)), lit(false));
+        assert_eq!(simplify(in_list(col("c1"), vec![], true)), lit(true));
+
+        assert_eq!(
+            simplify(in_list(col("c1"), vec![lit(1)], false)),
+            col("c1").eq(lit(1))
+        );
+        assert_eq!(
+            simplify(in_list(col("c1"), vec![lit(1)], true)),
+            col("c1").not_eq(lit(1))
+        );
+
+        assert_eq!(
+            simplify(in_list(col("c1"), vec![lit(1), lit(2)], false)),
+            col("c1").eq(lit(2)).or(col("c1").eq(lit(1)))
+        );
+        assert_eq!(
+            simplify(in_list(col("c1"), vec![lit(1), lit(2)], true)),
+            col("c1").not_eq(lit(2)).and(col("c1").not_eq(lit(1)))
+        );
     }
 
     #[test]
