@@ -19,14 +19,18 @@ use arrow::datatypes::{DataType, Schema};
 
 use arrow::record_batch::RecordBatch;
 
-use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
+};
 use datafusion_expr::ColumnarValue;
+
+use std::cmp::Ordering;
+use std::fmt::{Debug, Display};
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
 
 use std::any::Any;
-use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 /// Expression that can be evaluated against a RecordBatch
@@ -62,10 +66,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
             Ok(tmp_result)
         }
     }
-    /// Return the expression statistics for this expression. This API is currently experimental.
-    fn expr_stats(&self) -> Arc<dyn PhysicalExprStats> {
-        Arc::new(BasicExpressionStats {})
-    }
+
     /// Get a list of child PhysicalExpr that provide the input for this expr.
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>>;
 
@@ -74,65 +75,117 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>>;
+
+    #[allow(unused_variables)]
+    /// Return the boundaries of this expression. This method (and all the
+    /// related APIs) are experimental and subject to change.
+    fn analyze(&self, context: &mut AnalysisContext) -> Option<ExprBoundaries> {
+        None
+    }
+
+    #[allow(unused_variables)]
+    /// Apply the given boundaries to this expression (and its child expressions,
+    /// if they are relevant to the boundaries).
+    fn apply(&self, context: &mut AnalysisContext, boundaries: &ExprBoundaries) {}
 }
 
-/// Statistics about the result of a single expression.
+/// A context for collecting and aggregating known boundaries of an expression
+/// tree.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnalysisContext {
+    /// A list of known column boundaries, ordered by column index
+    /// in the current schema.
+    pub column_boundaries: Vec<Option<ExprBoundaries>>,
+}
+
+impl AnalysisContext {
+    pub fn new(
+        input_schema: &Schema,
+        column_boundaries: Vec<Option<ExprBoundaries>>,
+    ) -> Self {
+        assert_eq!(input_schema.fields().len(), column_boundaries.len());
+        Self { column_boundaries }
+    }
+
+    /// Create a new analysis context from column statistics.
+    pub fn from_statistics(input_schema: &Schema, statistics: Statistics) -> Self {
+        // Even if the underlying statistics object doesn't have any column level statistics,
+        // we can still create an analysis context with the same number of columns and see whether
+        // we can infer it during the way.
+        let column_boundaries = match statistics.column_statistics {
+            Some(columns) => columns
+                .iter()
+                .map(ExprBoundaries::from_column)
+                .collect::<Vec<_>>(),
+            None => vec![None; input_schema.fields().len()],
+        };
+        Self::new(input_schema, column_boundaries)
+    }
+}
+
+/// Represents the boundaries of the resulting value from a physical expression,
+/// if it were to be an expression, if it were to be evaluated.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExprBoundaries {
-    /// Maximum value this expression's result can have.
-    pub max_value: ScalarValue,
     /// Minimum value this expression's result can have.
     pub min_value: ScalarValue,
+    /// Maximum value this expression's result can have.
+    pub max_value: ScalarValue,
     /// Maximum number of distinct values this expression can produce, if known.
     pub distinct_count: Option<usize>,
-    /// Selectivity of this expression if it were used as a predicate, as a
-    /// value between 0 and 1.
+    /// The estimated percantage of rows that this expression would select, if
+    /// it were to be used as a boolean predicate on a filter. The value will be
+    /// between 0.0 (selects nothing) and 1.0 (selects everything).
     pub selectivity: Option<f64>,
 }
 
 impl ExprBoundaries {
     /// Create a new `ExprBoundaries`.
     pub fn new(
-        max_value: ScalarValue,
         min_value: ScalarValue,
+        max_value: ScalarValue,
         distinct_count: Option<usize>,
     ) -> Self {
+        Self::new_with_selectivity(min_value, max_value, distinct_count, None)
+    }
+
+    /// Create a new `ExprBoundaries` with a selectivity value.
+    pub fn new_with_selectivity(
+        min_value: ScalarValue,
+        max_value: ScalarValue,
+        distinct_count: Option<usize>,
+        selectivity: Option<f64>,
+    ) -> Self {
+        assert!(!matches!(
+            min_value.partial_cmp(&max_value),
+            Some(Ordering::Greater)
+        ));
         Self {
-            max_value,
             min_value,
+            max_value,
             distinct_count,
-            selectivity: None,
+            selectivity,
         }
     }
 
-    /// Try to reduce the expression boundaries to a single value if possible.
+    /// Create a new `ExprBoundaries` from a column level statistics.
+    pub fn from_column(column: &ColumnStatistics) -> Option<Self> {
+        Some(Self {
+            min_value: column.min_value.clone()?,
+            max_value: column.max_value.clone()?,
+            distinct_count: column.distinct_count,
+            selectivity: None,
+        })
+    }
+
+    /// Try to reduce the boundaries into a single scalar value, if possible.
     pub fn reduce(&self) -> Option<ScalarValue> {
+        // TODO: should we check distinct_count is `Some(1) | None`?
         if self.min_value == self.max_value {
             Some(self.min_value.clone())
         } else {
             None
         }
-    }
-}
-
-/// A toolkit to work with physical expressions statistics. This API is currently experimental
-/// and might be subject to change.
-pub trait PhysicalExprStats: Send + Sync {
-    /// Return an estimate about the boundaries of this expression's result would have (in
-    /// terms of minimum and maximum values it can take as well the number of unique values
-    /// it can produce). The inputs are the column-level statistics from the current physical
-    /// plan.
-    fn boundaries(&self, columns: &[ColumnStatistics]) -> Option<ExprBoundaries>;
-}
-
-#[derive(Debug, Clone)]
-pub struct BasicExpressionStats {}
-
-/// A dummy implementation of [`ExpressionStats`] that does not provide any statistics.
-impl PhysicalExprStats for BasicExpressionStats {
-    #[allow(unused_variables)]
-    fn boundaries(&self, columns: &[ColumnStatistics]) -> Option<ExprBoundaries> {
-        None
     }
 }
 
