@@ -61,7 +61,7 @@ async fn csv_query_with_negated_predicate() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
-        "| COUNT(UInt8(1)) |",
+        "| COUNT(Int64(1)) |",
         "+-----------------+",
         "| 21              |",
         "+-----------------+",
@@ -78,7 +78,7 @@ async fn csv_query_with_is_not_null_predicate() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
-        "| COUNT(UInt8(1)) |",
+        "| COUNT(Int64(1)) |",
         "+-----------------+",
         "| 100             |",
         "+-----------------+",
@@ -95,7 +95,7 @@ async fn csv_query_with_is_null_predicate() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
-        "| COUNT(UInt8(1)) |",
+        "| COUNT(Int64(1)) |",
         "+-----------------+",
         "| 0               |",
         "+-----------------+",

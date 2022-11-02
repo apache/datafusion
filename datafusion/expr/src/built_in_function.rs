@@ -166,6 +166,8 @@ pub enum BuiltinScalarFunction {
     Trim,
     /// upper
     Upper,
+    /// uuid
+    Uuid,
     /// regexp_match
     RegexpMatch,
     /// struct
@@ -184,6 +186,7 @@ impl BuiltinScalarFunction {
                 | BuiltinScalarFunction::Now
                 | BuiltinScalarFunction::CurrentDate
                 | BuiltinScalarFunction::CurrentTime
+                | BuiltinScalarFunction::Uuid
         )
     }
     /// Returns the [Volatility] of the builtin function.
@@ -266,6 +269,7 @@ impl BuiltinScalarFunction {
 
             // Volatile builtin functions
             BuiltinScalarFunction::Random => Volatility::Volatile,
+            BuiltinScalarFunction::Uuid => Volatility::Volatile,
         }
     }
 }
@@ -358,6 +362,7 @@ impl FromStr for BuiltinScalarFunction {
             "translate" => BuiltinScalarFunction::Translate,
             "trim" => BuiltinScalarFunction::Trim,
             "upper" => BuiltinScalarFunction::Upper,
+            "uuid" => BuiltinScalarFunction::Uuid,
             "regexp_match" => BuiltinScalarFunction::RegexpMatch,
             "struct" => BuiltinScalarFunction::Struct,
             "from_unixtime" => BuiltinScalarFunction::FromUnixtime,

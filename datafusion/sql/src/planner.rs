@@ -2187,7 +2187,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         ) => {
                             let (aggregate_fun, args) = self.aggregate_fn_to_expr(
                                 aggregate_fun,
-                                function,
+                                function.args,
                                 schema,
                             )?;
 
@@ -2220,7 +2220,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // next, aggregate built-ins
                 if let Ok(fun) = AggregateFunction::from_str(&name) {
                     let distinct = function.distinct;
-                    let (fun, args) = self.aggregate_fn_to_expr(fun, function, schema)?;
+                    let (fun, args) = self.aggregate_fn_to_expr(fun, function.args, schema)?;
                     return Ok(Expr::AggregateFunction {
                         fun,
                         distinct,
@@ -2344,25 +2344,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn aggregate_fn_to_expr(
         &self,
         fun: AggregateFunction,
-        function: sqlparser::ast::Function,
+        args: Vec<FunctionArg>,
         schema: &DFSchema,
     ) -> Result<(AggregateFunction, Vec<Expr>)> {
         let args = match fun {
             // Special case rewrite COUNT(*) to COUNT(constant)
-            AggregateFunction::Count => function
-                .args
+            AggregateFunction::Count => args
                 .into_iter()
                 .map(|a| match a {
-                    FunctionArg::Unnamed(FunctionArgExpr::Expr(SQLExpr::Value(
-                        Value::Number(_, _),
-                    ))) => Ok(Expr::Literal(COUNT_STAR_EXPANSION.clone())),
                     FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
                         Ok(Expr::Literal(COUNT_STAR_EXPANSION.clone()))
                     }
                     _ => self.sql_fn_arg_to_logical_expr(a, schema, &mut HashMap::new()),
                 })
                 .collect::<Result<Vec<Expr>>>()?,
-            _ => self.function_args_to_expr(function.args, schema)?,
+            _ => self.function_args_to_expr(args, schema)?,
         };
 
         Ok((fun, args))
@@ -3662,14 +3658,14 @@ mod tests {
     fn select_simple_aggregate_with_groupby_can_use_positions() {
         quick_test(
             "SELECT state, age AS b, COUNT(1) FROM person GROUP BY 1, 2",
-            "Projection: person.state, person.age AS b, COUNT(UInt8(1))\
-             \n  Aggregate: groupBy=[[person.state, person.age]], aggr=[[COUNT(UInt8(1))]]\
+            "Projection: person.state, person.age AS b, COUNT(Int64(1))\
+             \n  Aggregate: groupBy=[[person.state, person.age]], aggr=[[COUNT(Int64(1))]]\
              \n    TableScan: person",
         );
         quick_test(
             "SELECT state, age AS b, COUNT(1) FROM person GROUP BY 2, 1",
-            "Projection: person.state, person.age AS b, COUNT(UInt8(1))\
-             \n  Aggregate: groupBy=[[person.age, person.state]], aggr=[[COUNT(UInt8(1))]]\
+            "Projection: person.state, person.age AS b, COUNT(Int64(1))\
+             \n  Aggregate: groupBy=[[person.age, person.state]], aggr=[[COUNT(Int64(1))]]\
              \n    TableScan: person",
         );
     }
@@ -3834,8 +3830,8 @@ mod tests {
     #[test]
     fn select_count_one() {
         let sql = "SELECT COUNT(1) FROM person";
-        let expected = "Projection: COUNT(UInt8(1))\
-                        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        let expected = "Projection: COUNT(Int64(1))\
+                        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
                         \n    TableScan: person";
         quick_test(sql, expected);
     }

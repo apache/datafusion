@@ -1164,6 +1164,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Left => Self::Left,
             BuiltinScalarFunction::Lpad => Self::Lpad,
             BuiltinScalarFunction::Random => Self::Random,
+            BuiltinScalarFunction::Uuid => Self::Uuid,
             BuiltinScalarFunction::RegexpReplace => Self::RegexpReplace,
             BuiltinScalarFunction::Repeat => Self::Repeat,
             BuiltinScalarFunction::Replace => Self::Replace,

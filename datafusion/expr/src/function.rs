@@ -157,6 +157,7 @@ pub fn return_type(
             utf8_to_int_type(&input_expr_types[0], "octet_length")
         }
         BuiltinScalarFunction::Random => Ok(DataType::Float64),
+        BuiltinScalarFunction::Uuid => Ok(DataType::Utf8),
         BuiltinScalarFunction::RegexpReplace => {
             utf8_to_str_type(&input_expr_types[0], "regex_replace")
         }
@@ -580,6 +581,7 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             fun.volatility(),
         ),
         BuiltinScalarFunction::Random => Signature::exact(vec![], fun.volatility()),
+        BuiltinScalarFunction::Uuid => Signature::exact(vec![], fun.volatility()),
         BuiltinScalarFunction::Power => Signature::one_of(
             vec![
                 TypeSignature::Exact(vec![DataType::Int64, DataType::Int64]),

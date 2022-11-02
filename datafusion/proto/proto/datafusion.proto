@@ -497,6 +497,7 @@ enum ScalarFunction {
   ArrowTypeof=69;
   CurrentDate=70;
   CurrentTime=71;
+  Uuid=72;
 }
 
 message ScalarFunctionNode {
