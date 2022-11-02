@@ -769,10 +769,7 @@ mod tests {
 #[cfg(feature = "ci")]
 mod ci {
     use super::*;
-    use datafusion::sql::TableReference;
     use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
-    use std::io::{BufRead, BufReader};
-    use std::sync::Arc;
 
     async fn serde_round_trip(query: usize) -> Result<()> {
         let ctx = SessionContext::default();
@@ -878,7 +875,6 @@ mod ci {
         serde_round_trip(15).await
     }
 
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/3820
     #[tokio::test]
     async fn serde_q16() -> Result<()> {
         serde_round_trip(16).await

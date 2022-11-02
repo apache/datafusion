@@ -19,6 +19,7 @@ use arrow::array::{
     Array, ArrayRef, Date32Array, Decimal128Array, Float64Array, Int32Array, Int64Array,
     StringArray,
 };
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use std::fs;
 use std::ops::{Div, Mul};
@@ -456,8 +457,28 @@ pub async fn transform_actual_result(
 ) -> Result<Vec<RecordBatch>> {
     // to compare the recorded answers to the answers we got back from running the query,
     // we need to round the decimal columns and trim the Utf8 columns
+    // we also need to rewrite the batches to use a compatible schema
     let ctx = SessionContext::new();
-    let result_schema = result[0].schema();
+    let fields = result[0]
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| {
+            let simple_name = match f.name().find('.') {
+                Some(i) => f.name()[i + 1..].to_string(),
+                _ => f.name().to_string(),
+            };
+            f.clone().with_name(simple_name)
+        })
+        .collect();
+    let result_schema = SchemaRef::new(Schema::new(fields));
+    let result = result
+        .iter()
+        .map(|b| {
+            RecordBatch::try_new(result_schema.clone(), b.columns().to_vec())
+                .map_err(|e| e.into())
+        })
+        .collect::<Result<Vec<_>>>()?;
     let table = Arc::new(MemTable::try_new(result_schema.clone(), vec![result])?);
     let mut df = ctx.read_table(table)?
         .select(
@@ -465,7 +486,7 @@ pub async fn transform_actual_result(
                 .fields
                 .iter()
                 .map(|field| {
-                    match Field::data_type(field) {
+                    match field.data_type() {
                         DataType::Decimal128(_, _) => {
                             // if decimal, then round it to 2 decimal places like the answers
                             // round() doesn't support the second argument for decimal places to round to
@@ -481,18 +502,18 @@ pub async fn transform_actual_result(
                                     round,
                                     DataType::Decimal128(15, 2),
                                 ))),
-                                Field::name(field).to_string(),
+                                field.name().to_string(),
                             )
                         }
                         DataType::Utf8 => {
                             // if string, then trim it like the answers got trimmed
                             Expr::Alias(
                                 Box::new(trim(col(Field::name(field)))),
-                                Field::name(field).to_string(),
+                                field.name().to_string(),
                             )
                         }
                         _ => {
-                            col(Field::name(field))
+                            col(field.name())
                         }
                     }
                 }).collect()
