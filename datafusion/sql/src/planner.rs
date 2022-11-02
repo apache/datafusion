@@ -3585,8 +3585,8 @@ mod tests {
         let sql = "SELECT SUM(age) FROM person GROUP BY doesnotexist";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!("Schema error: No field named 'doesnotexist'. Valid fields are 'SUM(person.age)', \
-        'person.id', 'person.first_name', 'person.last_name', 'person.age', 'person.state', \
-        'person.salary', 'person.birth_date', 'person.😀'.", format!("{}", err));
+        'person'.'id', 'person'.'first_name', 'person'.'last_name', 'person'.'age', 'person'.'state', \
+        'person'.'salary', 'person'.'birth_date', 'person'.'😀'.", format!("{}", err));
     }
 
     #[test]

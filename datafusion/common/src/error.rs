@@ -22,7 +22,7 @@ use std::fmt::{Display, Formatter};
 use std::io;
 use std::result;
 
-use crate::DFSchema;
+use crate::{Column, DFSchema};
 #[cfg(feature = "avro")]
 use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
@@ -123,9 +123,8 @@ pub enum SchemaError {
     DuplicateUnqualifiedField { name: String },
     /// No field with this name
     FieldNotFound {
-        qualifier: Option<String>,
-        name: String,
-        valid_fields: Option<Vec<String>>,
+        field: Column,
+        valid_fields: Option<Vec<Column>>,
     },
 }
 
@@ -136,9 +135,14 @@ pub fn field_not_found(
     schema: &DFSchema,
 ) -> DataFusionError {
     DataFusionError::SchemaError(SchemaError::FieldNotFound {
-        qualifier,
-        name: name.to_string(),
-        valid_fields: Some(schema.field_names()),
+        field: Column::new(qualifier, name),
+        valid_fields: Some(
+            schema
+                .fields()
+                .iter()
+                .map(|f| f.qualified_column())
+                .collect(),
+        ),
     })
 }
 
@@ -146,23 +150,28 @@ impl Display for SchemaError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::FieldNotFound {
-                qualifier,
-                name,
+                field,
                 valid_fields,
             } => {
                 write!(f, "No field named ")?;
-                if let Some(q) = qualifier {
-                    write!(f, "'{}.{}'", q, name)?;
+                if let Some(q) = &field.relation {
+                    write!(f, "'{}'.'{}'", q, field.name)?;
                 } else {
-                    write!(f, "'{}'", name)?;
+                    write!(f, "'{}'", field.name)?;
                 }
-                if let Some(field_names) = valid_fields {
+                if let Some(fields) = valid_fields {
                     write!(
                         f,
                         ". Valid fields are {}",
-                        field_names
+                        fields
                             .iter()
-                            .map(|name| format!("'{}'", name))
+                            .map(|field| {
+                                if let Some(q) = &field.relation {
+                                    format!("'{}'.'{}'", q, field.name)
+                                } else {
+                                    format!("'{}'", field.name)
+                                }
+                            })
                             .collect::<Vec<String>>()
                             .join(", ")
                     )?;
@@ -172,7 +181,7 @@ impl Display for SchemaError {
             Self::DuplicateQualifiedField { qualifier, name } => {
                 write!(
                     f,
-                    "Schema contains duplicate qualified field name '{}.{}'",
+                    "Schema contains duplicate qualified field name '{}'.'{}'",
                     qualifier, name
                 )
             }
@@ -185,7 +194,7 @@ impl Display for SchemaError {
             }
             Self::AmbiguousReference { qualifier, name } => {
                 if let Some(q) = qualifier {
-                    write!(f, "Schema contains qualified field name '{}.{}' and unqualified field name '{}' which would be ambiguous", q, name, name)
+                    write!(f, "Schema contains qualified field name '{}'.'{}' and unqualified field name '{}' which would be ambiguous", q, name, name)
                 } else {
                     write!(f, "Ambiguous reference to unqualified field '{}'", name)
                 }
