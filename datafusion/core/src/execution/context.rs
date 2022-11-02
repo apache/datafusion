@@ -350,7 +350,7 @@ impl SessionContext {
                 let old_value =
                     config_options.read().get(&variable).ok_or_else(|| {
                         DataFusionError::Execution(format!(
-                            "Unknown Variable {}",
+                            "Can not SET variable: Unknown Variable {}",
                             variable
                         ))
                     })?;
