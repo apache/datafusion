@@ -19,10 +19,9 @@
 //! representing collections of named schemas.
 
 use crate::catalog::schema::SchemaProvider;
+use dashmap::DashMap;
 use datafusion_common::{DataFusionError, Result};
-use parking_lot::RwLock;
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Represent a list of named catalogs
@@ -49,14 +48,14 @@ pub trait CatalogList: Sync + Send {
 /// Simple in-memory list of catalogs
 pub struct MemoryCatalogList {
     /// Collection of catalogs containing schemas and ultimately TableProviders
-    pub catalogs: RwLock<HashMap<String, Arc<dyn CatalogProvider>>>,
+    pub catalogs: DashMap<String, Arc<dyn CatalogProvider>>,
 }
 
 impl MemoryCatalogList {
     /// Instantiates a new `MemoryCatalogList` with an empty collection of catalogs
     pub fn new() -> Self {
         Self {
-            catalogs: RwLock::new(HashMap::new()),
+            catalogs: DashMap::new(),
         }
     }
 }
@@ -77,18 +76,15 @@ impl CatalogList for MemoryCatalogList {
         name: String,
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
-        let mut catalogs = self.catalogs.write();
-        catalogs.insert(name, catalog)
+        self.catalogs.insert(name, catalog)
     }
 
     fn catalog_names(&self) -> Vec<String> {
-        let catalogs = self.catalogs.read();
-        catalogs.keys().map(|s| s.to_string()).collect()
+        self.catalogs.iter().map(|c| c.key().clone()).collect()
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        let catalogs = self.catalogs.read();
-        catalogs.get(name).cloned()
+        self.catalogs.get(name).map(|c| c.value().clone())
     }
 }
 
@@ -132,14 +128,14 @@ pub trait CatalogProvider: Sync + Send {
 
 /// Simple in-memory implementation of a catalog.
 pub struct MemoryCatalogProvider {
-    schemas: RwLock<HashMap<String, Arc<dyn SchemaProvider>>>,
+    schemas: DashMap<String, Arc<dyn SchemaProvider>>,
 }
 
 impl MemoryCatalogProvider {
     /// Instantiates a new MemoryCatalogProvider with an empty collection of schemas.
     pub fn new() -> Self {
         Self {
-            schemas: RwLock::new(HashMap::new()),
+            schemas: DashMap::new(),
         }
     }
 }
@@ -150,13 +146,11 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     fn schema_names(&self) -> Vec<String> {
-        let schemas = self.schemas.read();
-        schemas.keys().cloned().collect()
+        self.schemas.iter().map(|s| s.key().clone()).collect()
     }
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        let schemas = self.schemas.read();
-        schemas.get(name).cloned()
+        self.schemas.get(name).map(|s| s.value().clone())
     }
 
     fn register_schema(
@@ -164,8 +158,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         name: &str,
         schema: Arc<dyn SchemaProvider>,
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
-        let mut schemas = self.schemas.write();
-        Ok(schemas.insert(name.into(), schema))
+        Ok(self.schemas.insert(name.into(), schema))
     }
 }
 
