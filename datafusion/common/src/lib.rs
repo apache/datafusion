@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod bisect;
+pub mod cast;
 mod column;
 pub mod delta;
 mod dfschema;

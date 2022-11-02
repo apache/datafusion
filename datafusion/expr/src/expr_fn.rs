@@ -438,7 +438,7 @@ pub fn array(args: Vec<Expr>) -> Expr {
 /// which is not NULL
 pub fn coalesce(args: Vec<Expr>) -> Expr {
     Expr::ScalarFunction {
-        fun: built_in_function::BuiltinScalarFunction::Coalesce,
+        fun: BuiltinScalarFunction::Coalesce,
         args,
     }
 }
@@ -456,6 +456,22 @@ pub fn now() -> Expr {
 pub fn current_date() -> Expr {
     Expr::ScalarFunction {
         fun: BuiltinScalarFunction::CurrentDate,
+        args: vec![],
+    }
+}
+
+/// Returns uuid v4 as a string value
+pub fn uuid() -> Expr {
+    Expr::ScalarFunction {
+        fun: BuiltinScalarFunction::Uuid,
+        args: vec![],
+    }
+}
+
+/// Returns current UTC time as a [`DataType::Time64`] value
+pub fn current_time() -> Expr {
+    Expr::ScalarFunction {
+        fun: BuiltinScalarFunction::CurrentTime,
         args: vec![],
     }
 }
@@ -674,6 +690,17 @@ mod test {
         test_scalar_expr!(FromUnixtime, from_unixtime, unixtime);
 
         test_unary_scalar_expr!(ArrowTypeof, arrow_typeof);
+    }
+
+    #[test]
+    fn uuid_function_definitions() {
+        if let Expr::ScalarFunction { fun, args } = uuid() {
+            let name = built_in_function::BuiltinScalarFunction::Uuid;
+            assert_eq!(name, fun);
+            assert_eq!(0, args.len());
+        } else {
+            unreachable!();
+        }
     }
 
     #[test]

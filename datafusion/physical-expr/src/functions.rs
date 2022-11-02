@@ -433,6 +433,12 @@ pub fn create_physical_fun(
                 execution_props.query_execution_start_time,
             ))
         }
+        BuiltinScalarFunction::CurrentTime => {
+            // bind value for current_time at plan time
+            Arc::new(datetime_expressions::make_current_time(
+                execution_props.query_execution_start_time,
+            ))
+        }
         BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function(string_expressions::initcap::<i32>)(args)
@@ -754,6 +760,7 @@ pub fn create_physical_fun(
             ))),
         }),
         BuiltinScalarFunction::Upper => Arc::new(string_expressions::upper),
+        BuiltinScalarFunction::Uuid => Arc::new(string_expressions::uuid),
         _ => {
             return Err(DataFusionError::Internal(format!(
                 "create_physical_fun: Unsupported scalar function {:?}",
@@ -2754,7 +2761,11 @@ mod tests {
         let execution_props = ExecutionProps::new();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
-        let funs = [BuiltinScalarFunction::Now, BuiltinScalarFunction::Random];
+        let funs = [
+            BuiltinScalarFunction::Now,
+            BuiltinScalarFunction::Random,
+            BuiltinScalarFunction::Uuid,
+        ];
 
         for fun in funs.iter() {
             create_physical_expr_with_type_coercion(fun, &[], &schema, &execution_props)?;

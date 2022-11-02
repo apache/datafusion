@@ -1180,6 +1180,16 @@ async fn test_random_expression() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_uuid_expression() -> Result<()> {
+    let ctx = create_ctx();
+    let sql = "SELECT uuid()";
+    let actual = execute(&ctx, sql).await;
+    let uuid = actual[0][0].parse::<uuid::Uuid>().unwrap();
+    assert_eq!(uuid.get_version_num(), 4);
+    Ok(())
+}
+
+#[tokio::test]
 async fn case_with_bool_type_result() -> Result<()> {
     let ctx = SessionContext::new();
     let sql = "select case when 'cpu' != 'cpu' then true else false end";
