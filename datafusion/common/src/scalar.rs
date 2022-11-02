@@ -3604,11 +3604,7 @@ mod tests {
         // iter_to_array for struct scalars
         let array =
             ScalarValue::iter_to_array(vec![s0.clone(), s1.clone(), s2.clone()]).unwrap();
-        let array = match as_struct_array(&array) {
-            Ok(array) => array,
-            Err(e) => panic!("{}", e),
-        };
-
+        let array =  as_struct_array(&array).unwrap();
         let expected = StructArray::from(vec![
             (
                 field_a.clone(),
