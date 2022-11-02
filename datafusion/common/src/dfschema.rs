@@ -211,11 +211,9 @@ impl DFSchema {
                         TableReference::Partial { schema, table } => {
                             schema == qq && table == name
                         }
-                        TableReference::Full {
-                            schema,
-                            table,
-                            ..
-                        } => schema == qq && table == name,
+                        TableReference::Full { schema, table, .. } => {
+                            schema == qq && table == name
+                        }
                         _ => false,
                     }
                 }
