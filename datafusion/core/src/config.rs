@@ -361,7 +361,7 @@ impl ConfigOptions {
     }
 
     /// set a `String` configuration option
-    pub fn set_string(&mut self, key: &str, value: String) {
+    pub fn set_string(&mut self, key: &str, value: impl Into<String>) {
         self.set(key, ScalarValue::Utf8(Some(value)))
     }
 
