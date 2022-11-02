@@ -64,7 +64,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, error};
 use object_store::{ObjectMeta, ObjectStore};
-use parquet::arrow::arrow_reader::{ArrowReaderOptions, RowSelection, RowSelector};
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, RowSelector};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::{ConvertedType, LogicalType};
@@ -555,12 +555,8 @@ impl FileOpener for ParquetOpener {
                             selectors.into_iter().flatten().collect::<Vec<_>>(),
                         );
                     }
-                    let acc = row_selections.pop_front().unwrap_or_default();
-                    let final_selection = row_selections
-                        .into_iter()
-                        .fold(acc, |acc, x| intersect_row_selection(acc, x, true));
-                    builder =
-                        builder.with_row_selection(RowSelection::from(final_selection));
+                    let final_selection = combine_multi_col_selection(row_selections);
+                    builder = builder.with_row_selection(final_selection.into());
                 }
             }
 
@@ -585,6 +581,60 @@ impl FileOpener for ParquetOpener {
     }
 }
 
+// For example:
+// > ┏━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━
+// >    ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ┃
+// > ┃     ┌──────────────┐  │     ┌──────────────┐  │  ┃
+// > ┃  │  │              │     │  │              │     ┃
+// > ┃     │              │  │     │     Page     │  │
+// >    │  │              │     │  │      3       │     ┃
+// > ┃     │              │  │     │   min: "A"   │  │  ┃
+// > ┃  │  │              │     │  │   max: "C"   │     ┃
+// > ┃     │     Page     │  │     │ first_row: 0 │  │
+// >    │  │      1       │     │  │              │     ┃
+// > ┃     │   min: 10    │  │     └──────────────┘  │  ┃
+// > ┃  │  │   max: 20    │     │  ┌──────────────┐     ┃
+// > ┃     │ first_row: 0 │  │     │              │  │
+// >    │  │              │     │  │     Page     │     ┃
+// > ┃     │              │  │     │      4       │  │  ┃
+// > ┃  │  │              │     │  │   min: "D"   │     ┃
+// > ┃     │              │  │     │   max: "G"   │  │
+// >    │  │              │     │  │first_row: 100│     ┃
+// > ┃     └──────────────┘  │     │              │  │  ┃
+// > ┃  │  ┌──────────────┐     │  │              │     ┃
+// > ┃     │              │  │     └──────────────┘  │
+// >    │  │     Page     │     │  ┌──────────────┐     ┃
+// > ┃     │      2       │  │     │              │  │  ┃
+// > ┃  │  │   min: 30    │     │  │     Page     │     ┃
+// > ┃     │   max: 40    │  │     │      5       │  │
+// >    │  │first_row: 200│     │  │   min: "H"   │     ┃
+// > ┃     │              │  │     │   max: "Z"   │  │  ┃
+// > ┃  │  │              │     │  │first_row: 250│     ┃
+// > ┃     └──────────────┘  │     │              │  │
+// >    │                       │  └──────────────┘     ┃
+// > ┃   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ┃
+// > ┃       ColumnChunk            ColumnChunk         ┃
+// > ┃            A                      B
+// >  ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━┛
+// >
+// >   Total rows: 300
+//
+// Given the predicate 'A > 35 AND B = "F"':
+// using `extract_page_index_push_down_predicates` get two single column predicate:
+// Using 'A > 35': could get RowSelector1: [ Skip(0~199), Read(200~299)]
+// Using  B = "F": could get RowSelector2: [ Skip(0~99), Read(100~249), Skip(250~299)]
+//
+// As the Final selection is the intersection of each columns RowSelectors:
+// final_selection:[ Skip(0~199), Read(200~249), Skip(250~299)]
+fn combine_multi_col_selection(
+    row_selections: VecDeque<Vec<RowSelector>>,
+) -> Vec<RowSelector> {
+    row_selections
+        .into_iter()
+        .reduce(intersect_row_selection)
+        .unwrap()
+}
+
 // combine two `RowSelection` return the intersection
 // For example:
 // self:     NNYYYYNNY
@@ -595,7 +645,6 @@ impl FileOpener for ParquetOpener {
 pub(crate) fn intersect_row_selection(
     left: Vec<RowSelector>,
     right: Vec<RowSelector>,
-    need_combine: bool,
 ) -> Vec<RowSelector> {
     let mut res = vec![];
     let mut l_iter = left.into_iter().peekable();
@@ -611,6 +660,7 @@ pub(crate) fn intersect_row_selection(
             continue;
         }
         match (a.skip, b.skip) {
+            // Keep both ranges
             (false, false) => {
                 if a.row_count < b.row_count {
                     res.push(RowSelector::select(a.row_count));
@@ -622,6 +672,7 @@ pub(crate) fn intersect_row_selection(
                     r_iter.next().unwrap();
                 }
             }
+            // skip at least one
             _ => {
                 if a.row_count < b.row_count {
                     res.push(RowSelector::skip(a.row_count));
@@ -642,27 +693,25 @@ pub(crate) fn intersect_row_selection(
         res.extend(r_iter);
     }
     // combine the adjacent same operators and last zero row count
-    if need_combine {
-        let mut pre = res[0];
-        let mut after_combine = vec![];
-        for selector in res.iter_mut().skip(1) {
-            if selector.skip == pre.skip {
-                pre.row_count += selector.row_count;
-            } else {
-                after_combine.push(pre);
-                pre = *selector;
-            }
-        }
-        if pre.row_count != 0 {
+    // TODO: remove when https://github.com/apache/arrow-rs/pull/2994 is released~
+
+    let mut pre = res[0];
+    let mut after_combine = vec![];
+    for selector in res.iter_mut().skip(1) {
+        if selector.skip == pre.skip {
+            pre.row_count += selector.row_count;
+        } else {
             after_combine.push(pre);
+            pre = *selector;
         }
-        after_combine
-    } else {
-        res
     }
+    if pre.row_count != 0 {
+        after_combine.push(pre);
+    }
+    after_combine
 }
 
-// Extract one col pruningPredicate from input predicate for evaluating page Index.
+// Extract single col pruningPredicate from input predicate for evaluating page Index.
 fn extract_page_index_push_down_predicates(
     predicate: &Option<PruningPredicate>,
     schema: SchemaRef,
@@ -2150,7 +2199,7 @@ mod tests {
             RowSelector::select(1),
         ];
 
-        let res = intersect_row_selection(a, b, true);
+        let res = intersect_row_selection(a, b);
         assert_eq!(
             res,
             vec![
@@ -2168,7 +2217,7 @@ mod tests {
             RowSelector::skip(33),
         ];
         let b = vec![RowSelector::select(36), RowSelector::skip(36)];
-        let res = intersect_row_selection(a, b, true);
+        let res = intersect_row_selection(a, b);
         assert_eq!(res, vec![RowSelector::select(3), RowSelector::skip(69)]);
 
         // a size less than b size
@@ -2180,10 +2229,9 @@ mod tests {
             RowSelector::skip(2),
             RowSelector::select(2),
         ];
-        let res = intersect_row_selection(a, b, true);
+        let res = intersect_row_selection(a, b);
         assert_eq!(res, vec![RowSelector::select(2), RowSelector::skip(8)]);
 
-        // test with not combine
         let a = vec![RowSelector::select(3), RowSelector::skip(7)];
         let b = vec![
             RowSelector::select(2),
@@ -2192,19 +2240,8 @@ mod tests {
             RowSelector::skip(2),
             RowSelector::select(2),
         ];
-        let res = intersect_row_selection(a, b, false);
-        assert_eq!(
-            res,
-            vec![
-                RowSelector::select(2),
-                RowSelector::skip(1),
-                RowSelector::skip(1),
-                RowSelector::skip(2),
-                RowSelector::skip(2),
-                RowSelector::skip(2),
-                RowSelector::skip(0),
-            ]
-        );
+        let res = intersect_row_selection(a, b);
+        assert_eq!(res, vec![RowSelector::select(2), RowSelector::skip(8),]);
     }
 
     #[test]
