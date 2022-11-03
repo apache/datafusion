@@ -370,10 +370,12 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
             // expr IN () --> false
             // expr NOT IN () --> true
             Expr::InList {
-                expr: _expr,
+                expr,
                 list,
                 negated,
-            } if list.is_empty() => lit(negated),
+            } if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
+                lit(negated)
+            }
 
             // if expr is a single column reference:
             // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
@@ -381,7 +383,10 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 expr,
                 list,
                 negated,
-            } if list.len() <= THRESHOLD_INLINE_INLIST && expr.try_into_col().is_ok() => {
+            } if list.len() == 1
+                || list.len() <= THRESHOLD_INLINE_INLIST
+                    && expr.try_into_col().is_ok() =>
+            {
                 let first_val = list[0].clone();
                 if negated {
                     list.into_iter()
@@ -1793,6 +1798,12 @@ mod tests {
         assert_eq!(
             simplify(in_list(col("c1"), vec![lit(1)], true)),
             col("c1").not_eq(lit(1))
+        );
+
+        // more complex expressions can be simplified
+        assert_eq!(
+            simplify(in_list(col("c1") * lit(10), vec![lit(2)], false)),
+            col("c1") * lit(10).eq(lit(1))
         );
 
         assert_eq!(
