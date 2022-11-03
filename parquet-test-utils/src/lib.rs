@@ -195,7 +195,7 @@ impl TestParquetFile {
         }
 
         for child in plan.children() {
-            if let Some(metrics) = TestParquetFile::parquet_metrics(child) {
+            if let Some(metrics) = Self::parquet_metrics(child) {
                 return Some(metrics);
             }
         }

@@ -41,7 +41,7 @@ impl OptimizerRule for EliminateFilter {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        _optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         let predicate_and_input = match plan {
             LogicalPlan::Filter(filter) => match filter.predicate() {
@@ -54,7 +54,7 @@ impl OptimizerRule for EliminateFilter {
         };
 
         match predicate_and_input {
-            Some((true, input)) => self.optimize(input, optimizer_config),
+            Some((true, input)) => self.optimize(input, _optimizer_config),
             Some((false, input)) => Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
                 schema: input.schema().clone(),
@@ -64,7 +64,7 @@ impl OptimizerRule for EliminateFilter {
                 let inputs = plan.inputs();
                 let new_inputs = inputs
                     .iter()
-                    .map(|plan| self.optimize(plan, optimizer_config))
+                    .map(|plan| self.optimize(plan, _optimizer_config))
                     .collect::<Result<Vec<_>>>()?;
 
                 from_plan(plan, &plan.expressions(), &new_inputs)

@@ -38,11 +38,11 @@ fn create_context() -> Result<SessionContext> {
     // define data in two partitions
     let batch1 = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[2.0, 4.0, 8.0]))],
+        vec![Arc::new(Float32Array::from_slice([2.0, 4.0, 8.0]))],
     )?;
     let batch2 = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[64.0]))],
+        vec![Arc::new(Float32Array::from_slice([64.0]))],
     )?;
 
     // declare a new context. In spark API, this corresponds to a new spark SQLsession
