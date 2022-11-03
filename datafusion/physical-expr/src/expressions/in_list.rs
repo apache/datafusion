@@ -27,10 +27,11 @@ use crate::physical_expr::down_cast_any_ref;
 use crate::utils::expr_list_eq_any_order;
 use crate::PhysicalExpr;
 use arrow::array::*;
+use arrow::compute::take;
 use arrow::datatypes::*;
-use arrow::downcast_primitive_array;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
+use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use hashbrown::hash_map::RawEntryMut;
@@ -57,7 +58,7 @@ impl Debug for InListExpr {
 
 /// A type-erased container of array elements
 trait Set: Send + Sync {
-    fn contains(&self, v: &dyn Array, negated: bool) -> BooleanArray;
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray>;
 }
 
 struct ArrayHashSet {
@@ -92,13 +93,22 @@ where
     for<'a> &'a T: ArrayAccessor,
     for<'a> <&'a T as ArrayAccessor>::Item: PartialEq + HashValue,
 {
-    fn contains(&self, v: &dyn Array, negated: bool) -> BooleanArray {
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        downcast_dictionary_array! {
+            v => {
+                let values_contains = self.contains(v.values().as_ref(), negated)?;
+                let result = take(&values_contains, v.keys(), None)?;
+                return Ok(BooleanArray::from(result.data().clone()))
+            }
+            _ => {}
+        }
+
         let v = v.as_any().downcast_ref::<T>().unwrap();
         let in_data = self.array.data();
         let in_array = &self.array;
         let has_nulls = in_data.null_count() != 0;
 
-        ArrayIter::new(v)
+        Ok(ArrayIter::new(v)
             .map(|v| {
                 v.and_then(|v| {
                     let hash = v.hash_one(&self.hash_set.state);
@@ -116,7 +126,7 @@ where
                     }
                 })
             })
-            .collect()
+            .collect())
     }
 }
 
@@ -188,10 +198,12 @@ fn make_set(array: &dyn Array) -> Result<Box<dyn Set>> {
             let array = as_generic_binary_array::<i64>(array);
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
+        DataType::Dictionary(_, _) => unreachable!("dictionary should have been flattened"),
         d => return Err(DataFusionError::NotImplemented(format!("DataType::{} not supported in InList", d)))
     })
 }
 
+/// Evaluates the list of expressions into an array, flattening any dictionaries
 fn evaluate_list(
     list: &[Arc<dyn PhysicalExpr>],
     batch: &RecordBatch,
@@ -203,6 +215,8 @@ fn evaluate_list(
                 ColumnarValue::Array(_) => Err(DataFusionError::Execution(
                     "InList expression must evaluate to a scalar".to_string(),
                 )),
+                // Flatten dictionary values
+                ColumnarValue::Scalar(ScalarValue::Dictionary(_, v)) => Ok(*v),
                 ColumnarValue::Scalar(s) => Ok(s),
             })
         })
@@ -286,10 +300,10 @@ impl PhysicalExpr for InListExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?.into_array(1);
         let r = match &self.static_filter {
-            Some(f) => f.contains(value.as_ref(), self.negated),
+            Some(f) => f.contains(value.as_ref(), self.negated)?,
             None => {
                 let list = evaluate_list(&self.list, batch)?;
-                make_set(list.as_ref())?.contains(value.as_ref(), self.negated)
+                make_set(list.as_ref())?.contains(value.as_ref(), self.negated)?
             }
         };
         Ok(ColumnarValue::Array(Arc::new(r)))
@@ -947,7 +961,7 @@ mod tests {
         let result = try_cast_static_filter_to_set(&phy_exprs, &schema).unwrap();
 
         let array = Int64Array::from(vec![1, 2, 3, 4]);
-        let r = result.contains(&array, false);
+        let r = result.contains(&array, false).unwrap();
         assert_eq!(r, BooleanArray::from(vec![true, true, true, false]));
 
         try_cast_static_filter_to_set(&phy_exprs, &schema).unwrap();
