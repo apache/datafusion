@@ -90,9 +90,23 @@ pub trait ContextProvider {
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType>;
 }
 
+#[derive(Debug)]
+struct ParserOptions {
+    parse_float_as_decimal: bool,
+}
+
+impl Default for ParserOptions {
+    fn default() -> Self {
+        Self {
+            parse_float_as_decimal: false,
+        }
+    }
+}
+
 /// SQL query planner
 pub struct SqlToRel<'a, S: ContextProvider> {
     schema_provider: &'a S,
+    options: ParserOptions,
 }
 
 fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
@@ -135,7 +149,10 @@ fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Create a new query planner
     pub fn new(schema_provider: &'a S) -> Self {
-        SqlToRel { schema_provider }
+        SqlToRel {
+            schema_provider,
+            options: ParserOptions::default(),
+        }
     }
 
     /// Generate a logical plan from an DataFusion SQL statement
@@ -1696,7 +1713,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|row| {
                 row.into_iter()
                     .map(|v| match v {
-                        SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
+                        SQLExpr::Value(Value::Number(n, _)) => self.parse_sql_number(&n),
                         SQLExpr::Value(
                             Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
                         ) => Ok(lit(s)),
@@ -1750,7 +1767,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<Expr> {
         match sql {
-            SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
+            SQLExpr::Value(Value::Number(n, _)) => self.parse_sql_number(&n),
             SQLExpr::Value(Value::SingleQuotedString(ref s) | Value::DoubleQuotedString(ref s)) => Ok(lit(s.clone())),
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
             SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Null)),
@@ -2671,6 +2688,43 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Ok(lit(ScalarValue::new_list(Some(values), data_type)))
         }
     }
+
+    /// Parse number in sql string, convert to Expr::Literal
+    fn parse_sql_number(&self, n: &str) -> Result<Expr> {
+        if n.contains('E') {
+            Err(DataFusionError::NotImplemented(
+                "sql numeric literal in scientific notation is not supported".to_string(),
+            ))
+        } else if let Some(i) = n.find('.') {
+            if self.options.parse_float_as_decimal {
+                let p = n.len() - 1;
+                let s = n.len() - i - 1;
+                let str = n.replace('.', "");
+                let n = str.parse::<i128>().map_err(|_| {
+                    DataFusionError::from(ParserError(format!(
+                        "Cannot parse {} as i128 when building decimal",
+                        str
+                    )))
+                })?;
+                Ok(Expr::Literal(ScalarValue::Decimal128(
+                    Some(n),
+                    p as u8,
+                    s as u8,
+                )))
+            } else {
+                n.parse::<f64>().map(lit).map_err(|_| {
+                    DataFusionError::from(ParserError(format!(
+                        "Cannot parse {} as f64",
+                        n
+                    )))
+                })
+            }
+        } else {
+            n.parse::<i64>().map(lit).map_err(|_| {
+                DataFusionError::from(ParserError(format!("Cannot parse {} as i64", n)))
+            })
+        }
+    }
 }
 
 /// Normalize a SQL object name
@@ -2905,21 +2959,6 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         }
         other => convert_simple_data_type(other),
     }
-}
-
-// Parse number in sql string, convert to Expr::Literal
-fn parse_sql_number(n: &str) -> Result<Expr> {
-    // parse first as i64
-    n.parse::<i64>()
-        .map(lit)
-        // if parsing as i64 fails try f64
-        .or_else(|_| n.parse::<f64>().map(lit))
-        .map_err(|_| {
-            DataFusionError::from(ParserError(format!(
-                "Cannot parse {} as i64 or f64",
-                n
-            )))
-        })
 }
 
 #[cfg(test)]
