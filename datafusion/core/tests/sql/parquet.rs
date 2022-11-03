@@ -212,16 +212,16 @@ async fn parquet_query_with_max_min() {
 
     if let Ok(()) = fs::create_dir(table_path) {
         let filename = "foo.parquet";
-        let path = table_path.join(&filename);
+        let path = table_path.join(filename);
         let file = fs::File::create(path).unwrap();
         let mut writer =
             ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), None)
                 .unwrap();
 
         // create mock record batch
-        let c1s = Arc::new(Int32Array::from_slice(&[1, 2, 3]));
-        let c2s = Arc::new(StringArray::from_slice(&["aaa", "bbb", "ccc"]));
-        let c3s = Arc::new(Int64Array::from_slice(&[100, 200, 300]));
+        let c1s = Arc::new(Int32Array::from_slice([1, 2, 3]));
+        let c2s = Arc::new(StringArray::from_slice(["aaa", "bbb", "ccc"]));
+        let c3s = Arc::new(Int64Array::from_slice([100, 200, 300]));
         let c4s = Arc::new(Date32Array::from(vec![Some(1), Some(2), Some(3)]));
         let rec_batch =
             RecordBatch::try_new(schema.clone(), vec![c1s, c2s, c3s, c4s]).unwrap();
