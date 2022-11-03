@@ -23,7 +23,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result, SchemaError};
-use crate::{field_not_found, Column};
+use crate::{field_not_found, Column, TableReference};
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -203,7 +203,20 @@ impl DFSchema {
                 // qualifier and name.
                 (Some(q), Some(field_q)) => q == field_q && field.name() == name,
                 // field to lookup is qualified but current field is unqualified.
-                (Some(_), None) => false,
+                (Some(qq), None) => {
+                    // the original field may now be aliased with a name that matches the
+                    // original qualified name
+                    let table_ref: TableReference = field.name().as_str().into();
+                    match table_ref {
+                        TableReference::Partial { schema, table } => {
+                            schema == qq && table == name
+                        }
+                        TableReference::Full { schema, table, .. } => {
+                            schema == qq && table == name
+                        }
+                        _ => false,
+                    }
+                }
                 // field to lookup is unqualified, no need to compare qualifier
                 (None, Some(_)) | (None, None) => field.name() == name,
             })
@@ -597,6 +610,18 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
+    fn qualifier_in_name() -> Result<()> {
+        let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
+        // lookup with unqualified name "t1.c0"
+        let err = schema.index_of_column_by_name(None, "t1.c0").err().unwrap();
+        assert_eq!(
+            "Schema error: No field named 't1.c0'. Valid fields are 't1'.'c0', 't1'.'c1'.",
+            &format!("{}", err)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn from_unqualified_field() {
         let field = Field::new("c0", DataType::Boolean, true);
         let field = DFField::from(field);
@@ -663,7 +688,7 @@ mod tests {
         assert!(join.is_err());
         assert_eq!(
             "Schema error: Schema contains duplicate \
-        qualified field name \'t1.c0\'",
+        qualified field name \'t1\'.\'c0\'",
             &format!("{}", join.err().unwrap())
         );
         Ok(())
@@ -712,7 +737,7 @@ mod tests {
         assert!(join.is_err());
         assert_eq!(
             "Schema error: Schema contains qualified \
-        field name \'t1.c0\' and unqualified field name \'c0\' which would be ambiguous",
+        field name \'t1\'.\'c0\' and unqualified field name \'c0\' which would be ambiguous",
             &format!("{}", join.err().unwrap())
         );
         Ok(())
@@ -722,7 +747,7 @@ mod tests {
     #[test]
     fn helpful_error_messages() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        let expected_help = "Valid fields are \'t1.c0\', \'t1.c1\'.";
+        let expected_help = "Valid fields are \'t1\'.\'c0\', \'t1\'.\'c1\'.";
         // Pertinent message parts
         let expected_err_msg = "Fully qualified field name \'t1.c0\'";
         assert!(schema

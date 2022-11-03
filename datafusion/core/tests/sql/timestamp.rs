@@ -1651,3 +1651,34 @@ async fn test_current_date() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_current_time() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select current_time() dt";
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        results[0]
+            .schema()
+            .field_with_name("dt")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Time64(TimeUnit::Nanosecond)
+    );
+
+    let sql = "select case when current_time() = (now()::bigint % 86400000000000)::time then 'OK' else 'FAIL' end result";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------+",
+        "| result |",
+        "+--------+",
+        "| OK     |",
+        "+--------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+    Ok(())
+}

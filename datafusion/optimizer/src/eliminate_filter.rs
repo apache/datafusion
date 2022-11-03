@@ -43,29 +43,22 @@ impl OptimizerRule for EliminateFilter {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        let (filter_value, input) = match plan {
+        let predicate_and_input = match plan {
             LogicalPlan::Filter(filter) => match filter.predicate() {
                 Expr::Literal(ScalarValue::Boolean(Some(v))) => {
-                    (Some(*v), Some(filter.input()))
+                    Some((*v, filter.input()))
                 }
-                _ => (None, None),
+                _ => None,
             },
-            _ => (None, None),
+            _ => None,
         };
 
-        match filter_value {
-            Some(v) => {
-                // input is guaranteed be Some due to previous code
-                let input = input.unwrap();
-                if v {
-                    self.optimize(input, optimizer_config)
-                } else {
-                    Ok(LogicalPlan::EmptyRelation(EmptyRelation {
-                        produce_one_row: false,
-                        schema: input.schema().clone(),
-                    }))
-                }
-            }
+        match predicate_and_input {
+            Some((true, input)) => self.optimize(input, optimizer_config),
+            Some((false, input)) => Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: input.schema().clone(),
+            })),
             None => {
                 // Apply the optimization to all inputs of the plan
                 let inputs = plan.inputs();

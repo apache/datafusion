@@ -61,7 +61,7 @@ async fn csv_query_with_negated_predicate() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
-        "| COUNT(UInt8(1)) |",
+        "| COUNT(Int64(1)) |",
         "+-----------------+",
         "| 21              |",
         "+-----------------+",
@@ -78,7 +78,7 @@ async fn csv_query_with_is_not_null_predicate() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
-        "| COUNT(UInt8(1)) |",
+        "| COUNT(Int64(1)) |",
         "+-----------------+",
         "| 100             |",
         "+-----------------+",
@@ -95,7 +95,7 @@ async fn csv_query_with_is_null_predicate() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
-        "| COUNT(UInt8(1)) |",
+        "| COUNT(Int64(1)) |",
         "+-----------------+",
         "| 0               |",
         "+-----------------+",
@@ -428,8 +428,101 @@ async fn csv_in_set_test() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore]
-// https://github.com/apache/arrow-datafusion/issues/3936
+async fn in_list_string_dictionaries() -> Result<()> {
+    // let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
+    let input = vec![Some("foo"), Some("bar"), Some("fazzz")]
+        .into_iter()
+        .collect::<DictionaryArray<Int32Type>>();
+
+    let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("test", batch)?;
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('Bar')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('foo')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["+-----+", "| c1  |", "+-----+", "| foo |", "+-----+"];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('bar', 'foo')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----+", "| c1  |", "+-----+", "| foo |", "| bar |", "+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('Bar', 'foo')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["+-----+", "| c1  |", "+-----+", "| foo |", "+-----+"];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('foo', 'Bar', 'fazzz')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| foo   |",
+        "| fazzz |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn in_list_string_dictionaries_with_null() -> Result<()> {
+    let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
+        .into_iter()
+        .collect::<DictionaryArray<Int32Type>>();
+
+    let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("test", batch)?;
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('Bar')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('foo')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["+-----+", "| c1  |", "+-----+", "| foo |", "+-----+"];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('bar', 'foo')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----+", "| c1  |", "+-----+", "| foo |", "| bar |", "+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('Bar', 'foo')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec!["+-----+", "| c1  |", "+-----+", "| foo |", "+-----+"];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT * FROM test WHERE c1 IN ('foo', 'Bar', 'fazzz')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| c1    |",
+        "+-------+",
+        "| foo   |",
+        "| fazzz |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn in_set_string_dictionaries() -> Result<()> {
     let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
         .into_iter()
@@ -440,7 +533,7 @@ async fn in_set_string_dictionaries() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_batch("test", batch)?;
 
-    let sql = "SELECT * FROM test WHERE c1 IN ('foo', 'Bar', 'fazz')";
+    let sql = "SELECT * FROM test WHERE c1 IN ('foo', 'Bar', 'fazzz')";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+",

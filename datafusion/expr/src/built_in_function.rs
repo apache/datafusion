@@ -158,12 +158,16 @@ pub enum BuiltinScalarFunction {
     Now,
     ///current_date
     CurrentDate,
+    /// current_time
+    CurrentTime,
     /// translate
     Translate,
     /// trim
     Trim,
     /// upper
     Upper,
+    /// uuid
+    Uuid,
     /// regexp_match
     RegexpMatch,
     /// struct
@@ -181,6 +185,8 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Random
                 | BuiltinScalarFunction::Now
                 | BuiltinScalarFunction::CurrentDate
+                | BuiltinScalarFunction::CurrentTime
+                | BuiltinScalarFunction::Uuid
         )
     }
     /// Returns the [Volatility] of the builtin function.
@@ -259,9 +265,11 @@ impl BuiltinScalarFunction {
             // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
             BuiltinScalarFunction::CurrentDate => Volatility::Stable,
+            BuiltinScalarFunction::CurrentTime => Volatility::Stable,
 
             // Volatile builtin functions
             BuiltinScalarFunction::Random => Volatility::Volatile,
+            BuiltinScalarFunction::Uuid => Volatility::Volatile,
         }
     }
 }
@@ -315,6 +323,7 @@ impl FromStr for BuiltinScalarFunction {
             "concat_ws" => BuiltinScalarFunction::ConcatWithSeparator,
             "chr" => BuiltinScalarFunction::Chr,
             "current_date" => BuiltinScalarFunction::CurrentDate,
+            "current_time" => BuiltinScalarFunction::CurrentTime,
             "date_part" | "datepart" => BuiltinScalarFunction::DatePart,
             "date_trunc" | "datetrunc" => BuiltinScalarFunction::DateTrunc,
             "date_bin" => BuiltinScalarFunction::DateBin,
@@ -353,6 +362,7 @@ impl FromStr for BuiltinScalarFunction {
             "translate" => BuiltinScalarFunction::Translate,
             "trim" => BuiltinScalarFunction::Trim,
             "upper" => BuiltinScalarFunction::Upper,
+            "uuid" => BuiltinScalarFunction::Uuid,
             "regexp_match" => BuiltinScalarFunction::RegexpMatch,
             "struct" => BuiltinScalarFunction::Struct,
             "from_unixtime" => BuiltinScalarFunction::FromUnixtime,
