@@ -513,12 +513,12 @@ fn table_with_many_types() -> Arc<dyn TableProvider> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![
-            Arc::new(Int32Array::from_slice(&[1])),
-            Arc::new(Float64Array::from_slice(&[1.0])),
+            Arc::new(Int32Array::from_slice([1])),
+            Arc::new(Float64Array::from_slice([1.0])),
             Arc::new(StringArray::from(vec![Some("foo")])),
             Arc::new(LargeStringArray::from(vec![Some("bar")])),
-            Arc::new(BinaryArray::from_slice(&[b"foo" as &[u8]])),
-            Arc::new(LargeBinaryArray::from_slice(&[b"foo" as &[u8]])),
+            Arc::new(BinaryArray::from_slice([b"foo" as &[u8]])),
+            Arc::new(LargeBinaryArray::from_slice([b"foo" as &[u8]])),
             Arc::new(TimestampNanosecondArray::from_opt_vec(
                 vec![Some(123)],
                 None,

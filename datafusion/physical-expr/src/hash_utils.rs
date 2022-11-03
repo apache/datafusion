@@ -36,11 +36,11 @@ fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: 
     if mul_col {
         hashes_buffer.iter_mut().for_each(|hash| {
             // stable hash for null value
-            *hash = combine_hashes(random_state.hash_one(&1), *hash);
+            *hash = combine_hashes(random_state.hash_one(1), *hash);
         })
     } else {
         hashes_buffer.iter_mut().for_each(|hash| {
-            *hash = random_state.hash_one(&1);
+            *hash = random_state.hash_one(1);
         })
     }
 }
@@ -270,8 +270,8 @@ mod tests {
 
     #[test]
     fn create_hashes_for_float_arrays() -> Result<()> {
-        let f32_arr = Arc::new(Float32Array::from_slice(&[0.12, 0.5, 1f32, 444.7]));
-        let f64_arr = Arc::new(Float64Array::from_slice(&[0.12, 0.5, 1f64, 444.7]));
+        let f32_arr = Arc::new(Float32Array::from_slice([0.12, 0.5, 1f32, 444.7]));
+        let f64_arr = Arc::new(Float64Array::from_slice([0.12, 0.5, 1f64, 444.7]));
 
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
         let hashes_buff = &mut vec![0; f32_arr.len()];

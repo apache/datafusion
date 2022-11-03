@@ -1219,7 +1219,7 @@ mod tests {
 
         // Note the statistics return binary (which can't be cast to string)
         let statistics = OneContainerStats {
-            min_values: Some(Arc::new(BinaryArray::from_slice(&[&[255u8] as &[u8]]))),
+            min_values: Some(Arc::new(BinaryArray::from_slice([&[255u8] as &[u8]]))),
             max_values: None,
             num_containers: 1,
         };

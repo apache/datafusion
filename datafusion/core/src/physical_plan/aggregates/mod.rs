@@ -683,16 +683,16 @@ mod tests {
                 RecordBatch::try_new(
                     schema.clone(),
                     vec![
-                        Arc::new(UInt32Array::from_slice(&[2, 3, 4, 4])),
-                        Arc::new(Float64Array::from_slice(&[1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from_slice([2, 3, 4, 4])),
+                        Arc::new(Float64Array::from_slice([1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),
                 RecordBatch::try_new(
                     schema,
                     vec![
-                        Arc::new(UInt32Array::from_slice(&[2, 3, 3, 4])),
-                        Arc::new(Float64Array::from_slice(&[1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from_slice([2, 3, 3, 4])),
+                        Arc::new(Float64Array::from_slice([1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),

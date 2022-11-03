@@ -143,7 +143,7 @@ impl ListingTableConfig {
     pub async fn infer_options(self, ctx: &SessionState) -> Result<Self> {
         let store = ctx
             .runtime_env
-            .object_store(&self.table_paths.get(0).unwrap())?;
+            .object_store(self.table_paths.get(0).unwrap())?;
 
         let file = self
             .table_paths
@@ -442,7 +442,7 @@ impl ListingTable {
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
         let store = ctx
             .runtime_env
-            .object_store(&self.table_paths.get(0).unwrap())?;
+            .object_store(self.table_paths.get(0).unwrap())?;
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
             pruned_partition_list(

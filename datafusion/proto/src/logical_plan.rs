@@ -915,7 +915,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 definition: view_table
                                     .definition()
                                     .clone()
-                                    .unwrap_or_else(|| "".to_string()),
+                                    .unwrap_or_default(),
                             },
                         ))),
                     })
@@ -1208,7 +1208,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         table_partition_cols: table_partition_cols.clone(),
                         if_not_exists: *if_not_exists,
                         delimiter: String::from(*delimiter),
-                        definition: definition.clone().unwrap_or_else(|| "".to_string()),
+                        definition: definition.clone().unwrap_or_default(),
                         file_compression_type: file_compression_type.to_string(),
                     },
                 )),
@@ -1227,7 +1227,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             extension_codec,
                         )?)),
                         or_replace: *or_replace,
-                        definition: definition.clone().unwrap_or_else(|| "".to_string()),
+                        definition: definition.clone().unwrap_or_default(),
                     },
                 ))),
             }),
