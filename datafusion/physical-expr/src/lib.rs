@@ -21,6 +21,7 @@ pub mod conditional_expressions;
 #[cfg(feature = "crypto_expressions")]
 pub mod crypto_expressions;
 pub mod datetime_expressions;
+pub mod equivalence;
 pub mod execution_props;
 pub mod expressions;
 pub mod functions;
@@ -45,17 +46,15 @@ pub mod window;
 // reexport this to maintain compatibility with anything that used from_slice previously
 pub use aggregate::AggregateExpr;
 pub use datafusion_common::from_slice;
-pub use physical_expr::{
-    EquivalenceProperties, ExprBoundaries, PhysicalExpr, PhysicalExprStats,
-};
+pub use equivalence::EquivalenceProperties;
+pub use equivalence::EquivalentClass;
+pub use physical_expr::{ExprBoundaries, PhysicalExpr, PhysicalExprStats};
 pub use planner::create_physical_expr;
 pub use scalar_function::ScalarFunctionExpr;
 pub use sort_expr::PhysicalSortExpr;
 pub use utils::{
-    combine_equivalence_properties, expr_list_eq_any_order, expr_list_eq_strict_order,
-    merge_equivalence_properties_with_alias, normalize_expr_with_equivalence_properties,
-    normalize_out_expr_with_alias_schema,
-    normalize_sort_expr_with_equivalence_properties, remove_equivalence_properties,
-    sort_expr_list_eq_strict_order, split_predicate,
-    truncate_equivalence_properties_not_in_schema,
+    expr_list_eq_any_order, expr_list_eq_strict_order,
+    normalize_expr_with_equivalence_properties, normalize_out_expr_with_alias_schema,
+    normalize_sort_expr_with_equivalence_properties, sort_expr_list_eq_strict_order,
+    split_conjunction,
 };

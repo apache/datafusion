@@ -19,7 +19,6 @@ use arrow::datatypes::{DataType, Schema};
 
 use arrow::record_batch::RecordBatch;
 
-use crate::expressions::Column;
 use datafusion_common::{ColumnStatistics, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
@@ -27,7 +26,6 @@ use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
 use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
 
 use std::any::Any;
-use std::collections::HashSet;
 use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
@@ -135,67 +133,6 @@ impl PhysicalExprStats for BasicExpressionStats {
     #[allow(unused_variables)]
     fn boundaries(&self, columns: &[ColumnStatistics]) -> Option<ExprBoundaries> {
         None
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct EquivalenceProperties {
-    /// First element in the EquivalenceProperties
-    head: Column,
-    /// Other equal columns
-    others: HashSet<Column>,
-}
-
-impl EquivalenceProperties {
-    pub fn new(head: Column, others: Vec<Column>) -> Self {
-        EquivalenceProperties {
-            head,
-            others: HashSet::from_iter(others),
-        }
-    }
-
-    pub fn head(&self) -> &Column {
-        &self.head
-    }
-
-    pub fn others(&self) -> &HashSet<Column> {
-        &self.others
-    }
-
-    pub fn contains(&self, col: &Column) -> bool {
-        self.head == *col || self.others.contains(col)
-    }
-
-    pub fn insert(&mut self, col: Column) -> bool {
-        self.others.insert(col)
-    }
-
-    pub fn remove(&mut self, col: &Column) -> bool {
-        let removed = self.others.remove(col);
-        if !removed && *col == self.head {
-            let one_col = self.others.iter().next().cloned();
-            if let Some(col) = one_col {
-                let removed = self.others.remove(&col);
-                self.head = col;
-                removed
-            } else {
-                false
-            }
-        } else {
-            true
-        }
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &'_ Column> {
-        std::iter::once(&self.head).chain(self.others.iter())
-    }
-
-    pub fn len(&self) -> usize {
-        self.others.len() + 1
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 }
 

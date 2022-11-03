@@ -89,7 +89,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         None
     }
 
-    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
     }
 

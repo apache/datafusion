@@ -842,6 +842,7 @@ mod tests {
     use super::*;
     use crate::execution::options::{CsvReadOptions, ParquetReadOptions};
     use crate::physical_plan::ColumnarValue;
+    use crate::physical_plan::Partitioning;
     use crate::test_util;
     use crate::test_util::parquet_test_data;
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
@@ -1541,10 +1542,20 @@ mod tests {
         let physical_plan = union.create_physical_plan().await?;
         let default_partition_count =
             SessionContext::new().copied_config().target_partitions;
+
+        // For partition aware union, the output partition count should not be changed.
         assert_eq!(
             physical_plan.output_partitioning().partition_count(),
             default_partition_count
         );
+        // For partition aware union, the output partition is the same with the union's inputs
+        for child in physical_plan.children() {
+            assert_eq!(
+                physical_plan.output_partitioning(),
+                child.output_partitioning()
+            );
+        }
+
         Ok(())
     }
 
@@ -1588,11 +1599,10 @@ mod tests {
         let default_partition_count =
             SessionContext::new().copied_config().target_partitions;
 
-        // the union's output partitioning count should be the combination of all output partitions count
-        assert_eq!(
-            physical_plan.output_partitioning().partition_count(),
-            default_partition_count * 2
-        );
+        // For non-partition aware union, the output partitioning count should be the combination of all output partitions count
+        assert!(matches!(
+            physical_plan.output_partitioning(),
+            Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count * 2));
         Ok(())
     }
 }

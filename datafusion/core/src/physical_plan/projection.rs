@@ -40,10 +40,7 @@ use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::execution::context::TaskContext;
-use datafusion_physical_expr::{
-    merge_equivalence_properties_with_alias, normalize_out_expr_with_alias_schema,
-    truncate_equivalence_properties_not_in_schema,
-};
+use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 
@@ -59,6 +56,7 @@ pub struct ProjectionExec {
     /// The output ordering
     output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// The alias map used to normalize out expressions like Partitioning and PhysicalSortExpr
+    /// The key is the column from the input schema and the values are the columns from the output schema
     alias_map: HashMap<Column, Vec<Column>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
@@ -197,16 +195,10 @@ impl ExecutionPlan for ProjectionExec {
     // 1) Add Alias, Alias can introduce additional equivalence properties,
     //    For example:  Projection(a, a as a1, a as a2)
     // 2) Truncate the properties that are not in the schema of the Projection
-    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         let mut input_equivalence_properties = self.input.equivalence_properties();
-        merge_equivalence_properties_with_alias(
-            &mut input_equivalence_properties,
-            &self.alias_map,
-        );
-        truncate_equivalence_properties_not_in_schema(
-            &mut input_equivalence_properties,
-            &self.schema,
-        );
+        input_equivalence_properties.merge_properties_with_alias(&self.alias_map);
+        input_equivalence_properties.truncate_properties_not_in_schema(&self.schema);
         input_equivalence_properties
     }
 

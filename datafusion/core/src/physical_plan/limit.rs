@@ -122,7 +122,7 @@ impl ExecutionPlan for GlobalLimitExec {
         self.input.output_ordering()
     }
 
-    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
     }
 
@@ -289,7 +289,7 @@ impl ExecutionPlan for LocalLimitExec {
         self.input.output_ordering()
     }
 
-    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
     }
 

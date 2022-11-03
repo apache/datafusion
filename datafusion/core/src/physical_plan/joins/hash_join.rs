@@ -63,7 +63,7 @@ use crate::physical_plan::{
     hash_utils::create_hashes,
     joins::utils::{
         adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
-        estimate_join_statistics, join_equivalence_properties,
+        combine_join_equivalence_properties, estimate_join_statistics,
         partitioned_join_output_partitioning, ColumnIndex, JoinFilter, JoinOn, JoinSide,
     },
     metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
@@ -329,9 +329,9 @@ impl ExecutionPlan for HashJoinExec {
         None
     }
 
-    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         let left_columns_len = self.left.schema().fields.len();
-        join_equivalence_properties(
+        combine_join_equivalence_properties(
             self.join_type,
             self.left.equivalence_properties(),
             self.right.equivalence_properties(),

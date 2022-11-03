@@ -144,7 +144,7 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
-    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
     }
 

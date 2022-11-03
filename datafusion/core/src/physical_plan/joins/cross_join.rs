@@ -170,7 +170,7 @@ impl ExecutionPlan for CrossJoinExec {
         None
     }
 
-    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         let left_columns_len = self.left.schema().fields.len();
         cross_join_equivalence_properties(
             self.left.equivalence_properties(),

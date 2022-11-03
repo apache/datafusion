@@ -43,7 +43,7 @@ use crate::physical_plan::common::combine_batches;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
-    build_join_schema, check_join_is_valid, join_equivalence_properties,
+    build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
     partitioned_join_output_partitioning, JoinOn,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -250,9 +250,9 @@ impl ExecutionPlan for SortMergeJoinExec {
         self.output_ordering.as_deref()
     }
 
-    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         let left_columns_len = self.left.schema().fields.len();
-        join_equivalence_properties(
+        combine_join_equivalence_properties(
             self.join_type,
             self.left.equivalence_properties(),
             self.right.equivalence_properties(),

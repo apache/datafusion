@@ -23,7 +23,7 @@ use crate::physical_plan::expressions::Column;
 use arrow::datatypes::{Field, Schema};
 use arrow::error::ArrowError;
 use datafusion_common::ScalarValue;
-use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
 use futures::future::{BoxFuture, Shared};
 use futures::{ready, FutureExt};
 use parking_lot::Mutex;
@@ -36,7 +36,6 @@ use std::task::{Context, Poll};
 use crate::physical_plan::{
     ColumnStatistics, EquivalenceProperties, ExecutionPlan, Partitioning, Statistics,
 };
-use datafusion_physical_expr::combine_equivalence_properties;
 use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 
 /// The on clause of the join, as vector of (left, right) columns.
@@ -137,19 +136,20 @@ pub fn adjust_right_output_partitioning(
     }
 }
 
-/// Calculate the Equivalence Properties for Join Node
-pub fn join_equivalence_properties(
+/// Combine the Equivalence Properties for Join Node
+pub fn combine_join_equivalence_properties(
     join_type: JoinType,
-    left_properties: Vec<EquivalenceProperties>,
-    right_properties: Vec<EquivalenceProperties>,
+    left_properties: EquivalenceProperties,
+    right_properties: EquivalenceProperties,
     left_columns_len: usize,
     on: &[(Column, Column)],
-) -> Vec<EquivalenceProperties> {
-    let mut eq_properties = match join_type {
+) -> EquivalenceProperties {
+    let mut new_properties = match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
             let mut left_properties = left_properties;
             let new_right_properties = right_properties
-                .into_iter()
+                .classes()
+                .iter()
                 .map(|prop| {
                     let new_head = Column::new(
                         prop.head().name(),
@@ -162,9 +162,10 @@ pub fn join_equivalence_properties(
                             Column::new(col.name(), left_columns_len + col.index())
                         })
                         .collect::<Vec<_>>();
-                    EquivalenceProperties::new(new_head, new_others)
+                    EquivalentClass::new(new_head, new_others)
                 })
                 .collect::<Vec<_>>();
+
             left_properties.extend(new_right_properties);
             left_properties
         }
@@ -176,21 +177,22 @@ pub fn join_equivalence_properties(
         on.iter().for_each(|(column1, column2)| {
             let new_column2 =
                 Column::new(column2.name(), left_columns_len + column2.index());
-            combine_equivalence_properties(&mut eq_properties, (column1, &new_column2))
+            new_properties.add_equal_conditions((column1, &new_column2))
         })
     }
-    eq_properties
+    new_properties
 }
 
 /// Calculate the Equivalence Properties for CrossJoin Node
 pub fn cross_join_equivalence_properties(
-    left_properties: Vec<EquivalenceProperties>,
-    right_properties: Vec<EquivalenceProperties>,
+    left_properties: EquivalenceProperties,
+    right_properties: EquivalenceProperties,
     left_columns_len: usize,
-) -> Vec<EquivalenceProperties> {
+) -> EquivalenceProperties {
     let mut left_properties = left_properties;
     let new_right_properties = right_properties
-        .into_iter()
+        .classes()
+        .iter()
         .map(|prop| {
             let new_head =
                 Column::new(prop.head().name(), left_columns_len + prop.head().index());
@@ -199,7 +201,7 @@ pub fn cross_join_equivalence_properties(
                 .iter()
                 .map(|col| Column::new(col.name(), left_columns_len + col.index()))
                 .collect::<Vec<_>>();
-            EquivalenceProperties::new(new_head, new_others)
+            EquivalentClass::new(new_head, new_others)
         })
         .collect::<Vec<_>>();
     left_properties.extend(new_right_properties);

@@ -50,10 +50,7 @@ use crate::physical_plan::EquivalenceProperties;
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
-use datafusion_physical_expr::{
-    merge_equivalence_properties_with_alias, normalize_out_expr_with_alias_schema,
-    truncate_equivalence_properties_not_in_schema,
-};
+use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
 use datafusion_row::{row_supported, RowType};
 
 /// Hash aggregate modes
@@ -170,6 +167,7 @@ pub struct AggregateExec {
     /// to the partial aggregate
     input_schema: SchemaRef,
     /// The alias map used to normalize out expressions like Partitioning and PhysicalSortExpr
+    /// The key is the column from the input schema and the values are the columns from the output schema
     alias_map: HashMap<Column, Vec<Column>>,
     /// Execution Metrics
     metrics: ExecutionPlanMetricsSet,
@@ -302,7 +300,6 @@ impl ExecutionPlan for AggregateExec {
         }
     }
 
-    // TODO check the output ordering of AggregateExec
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
@@ -317,16 +314,10 @@ impl ExecutionPlan for AggregateExec {
         }
     }
 
-    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         let mut input_equivalence_properties = self.input.equivalence_properties();
-        merge_equivalence_properties_with_alias(
-            &mut input_equivalence_properties,
-            &self.alias_map,
-        );
-        truncate_equivalence_properties_not_in_schema(
-            &mut input_equivalence_properties,
-            &self.schema,
-        );
+        input_equivalence_properties.merge_properties_with_alias(&self.alias_map);
+        input_equivalence_properties.truncate_properties_not_in_schema(&self.schema);
         input_equivalence_properties
     }
 

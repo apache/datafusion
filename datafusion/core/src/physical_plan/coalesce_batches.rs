@@ -96,14 +96,11 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self.input.output_partitioning()
     }
 
-    // Depends on how the CoalesceBatches was implemented, it is possible to keep
-    // the input ordering when combines small batches into larger batches
-    // TODO revisit the logic later
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 
-    fn equivalence_properties(&self) -> Vec<EquivalenceProperties> {
+    fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
     }
 
