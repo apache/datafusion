@@ -585,51 +585,53 @@ impl FileOpener for ParquetOpener {
     }
 }
 
-// For example:
-// > ┏━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━
-// >    ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ┃
-// > ┃     ┌──────────────┐  │     ┌──────────────┐  │  ┃
-// > ┃  │  │              │     │  │              │     ┃
-// > ┃     │              │  │     │     Page     │  │
-// >    │  │              │     │  │      3       │     ┃
-// > ┃     │              │  │     │   min: "A"   │  │  ┃
-// > ┃  │  │              │     │  │   max: "C"   │     ┃
-// > ┃     │     Page     │  │     │ first_row: 0 │  │
-// >    │  │      1       │     │  │              │     ┃
-// > ┃     │   min: 10    │  │     └──────────────┘  │  ┃
-// > ┃  │  │   max: 20    │     │  ┌──────────────┐     ┃
-// > ┃     │ first_row: 0 │  │     │              │  │
-// >    │  │              │     │  │     Page     │     ┃
-// > ┃     │              │  │     │      4       │  │  ┃
-// > ┃  │  │              │     │  │   min: "D"   │     ┃
-// > ┃     │              │  │     │   max: "G"   │  │
-// >    │  │              │     │  │first_row: 100│     ┃
-// > ┃     └──────────────┘  │     │              │  │  ┃
-// > ┃  │  ┌──────────────┐     │  │              │     ┃
-// > ┃     │              │  │     └──────────────┘  │
-// >    │  │     Page     │     │  ┌──────────────┐     ┃
-// > ┃     │      2       │  │     │              │  │  ┃
-// > ┃  │  │   min: 30    │     │  │     Page     │     ┃
-// > ┃     │   max: 40    │  │     │      5       │  │
-// >    │  │first_row: 200│     │  │   min: "H"   │     ┃
-// > ┃     │              │  │     │   max: "Z"   │  │  ┃
-// > ┃  │  │              │     │  │first_row: 250│     ┃
-// > ┃     └──────────────┘  │     │              │  │
-// >    │                       │  └──────────────┘     ┃
-// > ┃   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ┃
-// > ┃       ColumnChunk            ColumnChunk         ┃
-// > ┃            A                      B
-// >  ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━┛
-// >
-// >   Total rows: 300
-//
-// Given the predicate 'A > 35 AND B = "F"':
-// using `extract_page_index_push_down_predicates` get two single column predicate:
-// Using 'A > 35': could get RowSelector1: [ Skip(0~199), Read(200~299)]
-// Using  B = "F": could get RowSelector2: [ Skip(0~99), Read(100~249), Skip(250~299)]
-//
-// As the Final selection is the intersection of each columns RowSelectors:
-// final_selection:[ Skip(0~199), Read(200~249), Skip(250~299)]
+/// For example:
+/// ```text
+/// ┏━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━
+///    ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ┃
+/// ┃     ┌──────────────┐  │     ┌──────────────┐  │  ┃
+/// ┃  │  │              │     │  │              │     ┃
+/// ┃     │              │  │     │     Page     │  │
+///    │  │              │     │  │      3       │     ┃
+/// ┃     │              │  │     │   min: "A"   │  │  ┃
+/// ┃  │  │              │     │  │   max: "C"   │     ┃
+/// ┃     │     Page     │  │     │ first_row: 0 │  │
+///    │  │      1       │     │  │              │     ┃
+/// ┃     │   min: 10    │  │     └──────────────┘  │  ┃
+/// ┃  │  │   max: 20    │     │  ┌──────────────┐     ┃
+/// ┃     │ first_row: 0 │  │     │              │  │
+///    │  │              │     │  │     Page     │     ┃
+/// ┃     │              │  │     │      4       │  │  ┃
+/// ┃  │  │              │     │  │   min: "D"   │     ┃
+/// ┃     │              │  │     │   max: "G"   │  │
+///    │  │              │     │  │first_row: 100│     ┃
+/// ┃     └──────────────┘  │     │              │  │  ┃
+/// ┃  │  ┌──────────────┐     │  │              │     ┃
+/// ┃     │              │  │     └──────────────┘  │
+///    │  │     Page     │     │  ┌──────────────┐     ┃
+/// ┃     │      2       │  │     │              │  │  ┃
+/// ┃  │  │   min: 30    │     │  │     Page     │     ┃
+/// ┃     │   max: 40    │  │     │      5       │  │
+///    │  │first_row: 200│     │  │   min: "H"   │     ┃
+/// ┃     │              │  │     │   max: "Z"   │  │  ┃
+/// ┃  │  │              │     │  │first_row: 250│     ┃
+/// ┃     └──────────────┘  │     │              │  │
+///    │                       │  └──────────────┘     ┃
+/// ┃   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ┃
+/// ┃       ColumnChunk            ColumnChunk         ┃
+/// ┃            A                      B
+///  ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━┛
+///
+///   Total rows: 300
+/// ```
+///
+/// Given the predicate 'A > 35 AND B = "F"':
+/// using `extract_page_index_push_down_predicates` get two single column predicate:
+/// Using 'A > 35': could get `RowSelector1: [ Skip(0~199), Read(200~299)]`
+/// Using  B = "F": could get `RowSelector2: [ Skip(0~99), Read(100~249), Skip(250~299)]`
+///
+/// As the Final selection is the intersection of each columns `RowSelectors:
+/// final_selection:[ Skip(0~199), Read(200~249), Skip(250~299)]`
 fn combine_multi_col_selection(
     row_selections: VecDeque<Vec<RowSelector>>,
 ) -> Vec<RowSelector> {
@@ -639,13 +641,15 @@ fn combine_multi_col_selection(
         .unwrap()
 }
 
-// combine two `RowSelection` return the intersection
-// For example:
-// self:     NNYYYYNNY
-// other:    NYNNNNNNY
-//
-// returned: NNNNNNNNY
-// set `need_combine` true will combine result: Select(2) + Select(1) + Skip(2) -> Select(3) + Skip(2)
+/// combine two `RowSelection` return the intersection
+/// For example:
+/// self:     NNYYYYNNY
+/// other:    NYNNNNNNY
+///
+/// returned: NNNNNNNNY
+/// set `need_combine` true will combine result: Select(2) + Select(1) + Skip(2) -> Select(3) + Skip(2)
+///
+/// Move to arrow-rs: https://github.com/apache/arrow-rs/issues/3003
 pub(crate) fn intersect_row_selection(
     left: Vec<RowSelector>,
     right: Vec<RowSelector>,
