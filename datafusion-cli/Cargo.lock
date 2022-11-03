@@ -656,6 +656,7 @@ dependencies = [
  "itertools",
  "lazy_static",
  "md-5",
+ "num-traits",
  "ordered-float 3.3.0",
  "paste",
  "rand",
