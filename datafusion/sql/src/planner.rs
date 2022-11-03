@@ -92,7 +92,7 @@ pub trait ContextProvider {
 
 /// SQL parser options
 #[derive(Debug)]
-struct ParserOptions {
+pub struct ParserOptions {
     parse_float_as_decimal: bool,
 }
 
@@ -150,9 +150,14 @@ fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Create a new query planner
     pub fn new(schema_provider: &'a S) -> Self {
+        Self::new_with_options(schema_provider, ParserOptions::default())
+    }
+
+    /// Create a new query planner
+    pub fn new_with_options(schema_provider: &'a S, options: ParserOptions) -> Self {
         SqlToRel {
             schema_provider,
-            options: ParserOptions::default(),
+            options,
         }
     }
 
@@ -2692,9 +2697,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Parse number in sql string, convert to Expr::Literal
     fn parse_sql_number(&self, n: &str) -> Result<Expr> {
-        if let Some(i) = n.find('E') {
-            let _mantissa = &n[0..i];
-            let _exponent = &n[i + 1..];
+        if let Some(_) = n.find('E') {
+            // not implemented yet
+            // https://github.com/apache/arrow-datafusion/issues/3448
             Err(DataFusionError::NotImplemented(
                 "sql numeric literals in scientific notation are not supported"
                     .to_string(),
@@ -2724,7 +2729,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         n
                     )))
                 })?;
-                Ok(Expr::Literal(ScalarValue::Decimal128(Some(number), 38, 0,)))
+                Ok(Expr::Literal(ScalarValue::Decimal128(Some(number), 38, 0)))
             }
         } else {
             n.parse::<f64>().map(lit).map_err(|_| {
@@ -2974,6 +2979,19 @@ mod tests {
     use datafusion_common::assert_contains;
     use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
     use std::any::Any;
+
+    #[test]
+    fn parse_decimals() {
+        let options = ParserOptions {
+            parse_float_as_decimal: true,
+        };
+        quick_test_with_options(
+            "SELECT 1, 1.0, 0.1, .1, 12.34",
+            "Projection: Int64(1), Decimal128(Some(10),2,1), Decimal128(Some(1),2,1), Decimal128(Some(1),1,1), Decimal128(Some(1234),4,2)\
+             \n  EmptyRelation",
+            options
+        );
+    }
 
     #[test]
     fn select_no_relation() {
@@ -4936,8 +4954,15 @@ mod tests {
     }
 
     fn logical_plan(sql: &str) -> Result<LogicalPlan> {
+        logical_plan_with_options(sql, ParserOptions::default())
+    }
+
+    fn logical_plan_with_options(
+        sql: &str,
+        options: ParserOptions,
+    ) -> Result<LogicalPlan> {
         let dialect = &GenericDialect {};
-        logical_plan_with_dialect(sql, dialect)
+        logical_plan_with_dialect_and_options(sql, dialect, options)
     }
 
     fn logical_plan_with_dialect(
@@ -4950,9 +4975,25 @@ mod tests {
         planner.statement_to_plan(ast.pop_front().unwrap())
     }
 
+    fn logical_plan_with_dialect_and_options(
+        sql: &str,
+        dialect: &dyn Dialect,
+        options: ParserOptions,
+    ) -> Result<LogicalPlan> {
+        let planner = SqlToRel::new_with_options(&MockContextProvider {}, options);
+        let result = DFParser::parse_sql_with_dialect(sql, dialect);
+        let mut ast = result?;
+        planner.statement_to_plan(ast.pop_front().unwrap())
+    }
+
     /// Create logical plan, write with formatter, compare to expected output
     fn quick_test(sql: &str, expected: &str) {
         let plan = logical_plan(sql).unwrap();
+        assert_eq!(format!("{:?}", plan), expected);
+    }
+
+    fn quick_test_with_options(sql: &str, expected: &str, options: ParserOptions) {
+        let plan = logical_plan_with_options(sql, options).unwrap();
         assert_eq!(format!("{:?}", plan), expected);
     }
 
