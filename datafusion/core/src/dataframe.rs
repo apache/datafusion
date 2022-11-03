@@ -843,6 +843,7 @@ mod tests {
     use crate::execution::options::{CsvReadOptions, ParquetReadOptions};
     use crate::physical_plan::ColumnarValue;
     use crate::physical_plan::Partitioning;
+    use crate::physical_plan::PhysicalExpr;
     use crate::test_util;
     use crate::test_util::parquet_test_data;
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
@@ -852,6 +853,7 @@ mod tests {
         avg, cast, count, count_distinct, create_udf, lit, max, min, sum,
         BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFunction,
     };
+    use datafusion_physical_expr::expressions::Column;
 
     #[tokio::test]
     async fn select_columns() -> Result<()> {
@@ -1603,6 +1605,76 @@ mod tests {
         assert!(matches!(
             physical_plan.output_partitioning(),
             Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count * 2));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn verify_join_output_partitioning() -> Result<()> {
+        let left = test_table().await?.select_columns(&["c1", "c2"])?;
+        let right = test_table_with_name("c2")
+            .await?
+            .select_columns(&["c1", "c2"])?
+            .with_column_renamed("c2.c1", "c2_c1")?
+            .with_column_renamed("c2.c2", "c2_c2")?;
+
+        let all_join_types = vec![
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::RightSemi,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+        ];
+
+        let default_partition_count =
+            SessionContext::new().copied_config().target_partitions;
+
+        for join_type in all_join_types {
+            let join = left.join(
+                right.clone(),
+                join_type,
+                &["c1", "c2"],
+                &["c2_c1", "c2_c2"],
+                None,
+            )?;
+            let physical_plan = join.create_physical_plan().await?;
+            let out_partitioning = physical_plan.output_partitioning();
+            let join_schema = physical_plan.schema();
+
+            match join_type {
+                JoinType::Inner
+                | JoinType::Left
+                | JoinType::LeftSemi
+                | JoinType::LeftAnti => {
+                    let left_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
+                        Arc::new(Column::new_with_schema("c1", &join_schema).unwrap()),
+                        Arc::new(Column::new_with_schema("c2", &join_schema).unwrap()),
+                    ];
+                    assert_eq!(
+                        out_partitioning,
+                        Partitioning::Hash(left_exprs, default_partition_count)
+                    );
+                }
+                JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
+                    let right_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
+                        Arc::new(Column::new_with_schema("c2_c1", &join_schema).unwrap()),
+                        Arc::new(Column::new_with_schema("c2_c2", &join_schema).unwrap()),
+                    ];
+                    assert_eq!(
+                        out_partitioning,
+                        Partitioning::Hash(right_exprs, default_partition_count)
+                    );
+                }
+                JoinType::Full => {
+                    assert!(matches!(
+                        out_partitioning,
+                    Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count));
+                }
+            }
+        }
+
         Ok(())
     }
 }
