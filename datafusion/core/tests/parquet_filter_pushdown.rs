@@ -26,7 +26,6 @@
 //! select * from data limit 10;
 //! ```
 
-use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use arrow::compute::concat_batches;
@@ -37,8 +36,6 @@ use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::prelude::{col, SessionContext};
 use datafusion_optimizer::utils::{conjunction, disjunction, split_conjunction};
 use itertools::Itertools;
-use lazy_static::lazy_static;
-use parking_lot::Mutex;
 use parquet_test_utils::{ParquetScanOptions, TestParquetFile};
 use tempfile::TempDir;
 use test_utils::AccessLogGenerator;
@@ -46,104 +43,49 @@ use test_utils::AccessLogGenerator;
 /// how many rows of generated data to write to our parquet file (arbitrary)
 const NUM_ROWS: usize = 53819;
 
-// Only create the parquet file once as it is fairly large
-struct SharedTestFile {
-    /// Drop of SharedTestFile drops this field and cleans up the temporary directory and files
-    #[allow(dead_code)]
-    tempdir: TempDir,
-    /// Randomly (but consistently) generated test file. You can use
-    /// `datafusion-cli` to explore it more carefully
-    test_parquet_file: TestParquetFile,
-}
-
-impl SharedTestFile {
-    // Gets a handle to the shared instance. Any concurrently running
-    // tests will get a handle to the same file, and the last one that
-    // completes will drop it with the ref count goes to zero
-    fn instance() -> Arc<Self> {
-        let mut global_test_file = TESTFILE.lock();
-
-        if let Some(pre_existing) = global_test_file.upgrade() {
-            println!("Using pre-existing file");
-            pre_existing
-        } else {
-            // hold the mutex while we initialize and block all other
-            // threads so we create exactly one file at a time
-            let new_test_file = Arc::new(Self::new());
-            // save a weak pointer so concurrently running tests can use the same file
-            *global_test_file = Arc::downgrade(&new_test_file);
-            new_test_file
-        }
-    }
-
-    /// Create an initialize a new SharedTestfile. This may take several seconds and will panic if there are errors
-    fn new() -> Self {
-        let tempdir = TempDir::new().unwrap();
-
-        let generator = AccessLogGenerator::new().with_row_limit(Some(NUM_ROWS));
-
-        // TODO: set the max page rows with some various / arbitrary sizes 8311
-        // (using https://github.com/apache/arrow-rs/issues/2941) to ensure we get multiple pages
-        let page_size = None;
-        let row_group_size = None;
-        let file = tempdir.path().join("data.parquet");
-
-        let start = Instant::now();
-        println!("Writing test data to {:?}", file);
-        let test_parquet_file =
-            match TestParquetFile::try_new(file, generator, page_size, row_group_size) {
-                Err(e) => {
-                    panic!("Error writing data: {}", e);
-                }
-                Ok(f) => {
-                    println!(
-                        "Completed generating test data in {:?}",
-                        Instant::now() - start
-                    );
-                    f
-                }
-            };
-
-        Self {
-            tempdir,
-            test_parquet_file,
-        }
-    }
-}
-
-// Only create the parquet file once as it is fairly large
-lazy_static! {
-    static ref TESTFILE: Mutex<Weak<SharedTestFile>> = Mutex::new(Default::default());
-}
-
 #[cfg(not(target_family = "windows"))]
 #[tokio::test]
-async fn selective() {
-    TestCase::new()
+async fn single_file() {
+    // Only create the parquet file once as it is fairly large
+    let tempdir = TempDir::new().unwrap();
+
+    let generator = AccessLogGenerator::new().with_row_limit(Some(NUM_ROWS));
+
+    // TODO: set the max page rows with some various / arbitrary sizes 8311
+    // (using https://github.com/apache/arrow-rs/issues/2941) to ensure we get multiple pages
+    let page_size = None;
+    let row_group_size = None;
+    let file = tempdir.path().join("data.parquet");
+
+    let start = Instant::now();
+    println!("Writing test data to {:?}", file);
+    let test_parquet_file =
+        TestParquetFile::try_new(file, generator, page_size, row_group_size).unwrap();
+    println!(
+        "Completed generating test data in {:?}",
+        Instant::now() - start
+    );
+
+    TestCase::new(&test_parquet_file)
+        .with_name("selective")
         // request_method = 'GET'
         .with_filter(col("request_method").eq(lit("GET")))
         .with_pushdown_expected(PushdownExpected::Some)
         .with_expected_rows(8886)
         .run()
-        .await
-}
+        .await;
 
-#[cfg(not(target_family = "windows"))]
-#[tokio::test]
-async fn non_selective() {
-    TestCase::new()
+    TestCase::new(&test_parquet_file)
+        .with_name("non_selective")
         // request_method != 'GET'
         .with_filter(col("request_method").not_eq(lit("GET")))
         .with_pushdown_expected(PushdownExpected::Some)
         .with_expected_rows(44933)
         .run()
-        .await
-}
+        .await;
 
-#[cfg(not(target_family = "windows"))]
-#[tokio::test]
-async fn basic_conjunction() {
-    TestCase::new()
+    TestCase::new(&test_parquet_file)
+        .with_name("basic_conjunction")
         // request_method = 'POST' AND
         //   response_status = 503
         .with_filter(
@@ -156,63 +98,48 @@ async fn basic_conjunction() {
         .with_pushdown_expected(PushdownExpected::Some)
         .with_expected_rows(1729)
         .run()
-        .await
-}
+        .await;
 
-#[cfg(not(target_family = "windows"))]
-#[tokio::test]
-async fn everything() {
-    TestCase::new()
+    TestCase::new(&test_parquet_file)
+        .with_name("everything")
         // filter filters everything (no row has this status)
         // response_status = 429
         .with_filter(col("response_status").eq(lit(429_u16)))
         .with_pushdown_expected(PushdownExpected::Some)
         .with_expected_rows(0)
         .run()
-        .await
-}
+        .await;
 
-#[cfg(not(target_family = "windows"))]
-#[tokio::test]
-async fn nothing() {
-    TestCase::new()
+    TestCase::new(&test_parquet_file)
+        .with_name("nothing")
         // No rows are filtered out -- all are returned
         // response_status > 0
         .with_filter(col("response_status").gt(lit(0_u16)))
         .with_pushdown_expected(PushdownExpected::None)
         .with_expected_rows(NUM_ROWS)
         .run()
-        .await
-}
+        .await;
 
-#[cfg(not(target_family = "windows"))]
-#[tokio::test]
-async fn dict_selective() {
-    TestCase::new()
+    TestCase::new(&test_parquet_file)
+        .with_name("dict_selective")
         // container = 'backend_container_0'
         .with_filter(col("container").eq(lit("backend_container_0")))
         .with_pushdown_expected(PushdownExpected::Some)
         .with_expected_rows(37856)
         .run()
-        .await
-}
+        .await;
 
-#[cfg(not(target_family = "windows"))]
-#[tokio::test]
-async fn dict_non_selective() {
-    TestCase::new()
+    TestCase::new(&test_parquet_file)
+        .with_name("not eq")
         // container != 'backend_container_0'
         .with_filter(col("container").not_eq(lit("backend_container_0")))
         .with_pushdown_expected(PushdownExpected::Some)
         .with_expected_rows(15963)
         .run()
-        .await
-}
+        .await;
 
-#[cfg(not(target_family = "windows"))]
-#[tokio::test]
-async fn dict_conjunction() {
-    TestCase::new()
+    TestCase::new(&test_parquet_file)
+        .with_name("dict_conjunction")
         // container == 'backend_container_0' AND
         //   pod = 'aqcathnxqsphdhgjtgvxsfyiwbmhlmg'
         .with_filter(
@@ -225,13 +152,10 @@ async fn dict_conjunction() {
         .with_pushdown_expected(PushdownExpected::Some)
         .with_expected_rows(3052)
         .run()
-        .await
-}
+        .await;
 
-#[cfg(not(target_family = "windows"))]
-#[tokio::test]
-async fn dict_very_selective() {
-    TestCase::new()
+    TestCase::new(&test_parquet_file)
+        .with_name("dict_very_selective")
         // request_bytes > 2B AND
         //   container == 'backend_container_0' AND
         //   pod = 'aqcathnxqsphdhgjtgvxsfyiwbmhlmg'
@@ -246,13 +170,10 @@ async fn dict_very_selective() {
         .with_pushdown_expected(PushdownExpected::Some)
         .with_expected_rows(88)
         .run()
-        .await
-}
+        .await;
 
-#[cfg(not(target_family = "windows"))]
-#[tokio::test]
-async fn dict_very_selective2() {
-    TestCase::new()
+    TestCase::new(&test_parquet_file)
+        .with_name("dict_very_selective2")
         // picks only 2 rows
         // client_addr = '204.47.29.82' AND
         //   container == 'backend_container_0' AND
@@ -268,13 +189,10 @@ async fn dict_very_selective2() {
         .with_pushdown_expected(PushdownExpected::Some)
         .with_expected_rows(88)
         .run()
-        .await
-}
+        .await;
 
-#[cfg(not(target_family = "windows"))]
-#[tokio::test]
-async fn dict_disjunction() {
-    TestCase::new()
+    TestCase::new(&test_parquet_file)
+        .with_name("dict_disjunction")
         // container = 'backend_container_0' OR
         //   pod = 'aqcathnxqsphdhgjtgvxsfyiwbmhlmg'
         .with_filter(
@@ -287,13 +205,10 @@ async fn dict_disjunction() {
         .with_pushdown_expected(PushdownExpected::Some)
         .with_expected_rows(39982)
         .run()
-        .await
-}
+        .await;
 
-#[cfg(not(target_family = "windows"))]
-#[tokio::test]
-async fn dict_disjunction3() {
-    TestCase::new()
+    TestCase::new(&test_parquet_file)
+        .with_name("dict_disjunction3")
         // request_method != 'GET' OR
         //   response_status = 400 OR
         //   service = 'backend'
@@ -308,9 +223,8 @@ async fn dict_disjunction3() {
         .with_pushdown_expected(PushdownExpected::None)
         .with_expected_rows(NUM_ROWS)
         .run()
-        .await
+        .await;
 }
-
 /// Expected pushdown behavior
 #[derive(Debug, Clone, Copy)]
 enum PushdownExpected {
@@ -321,7 +235,11 @@ enum PushdownExpected {
 }
 
 /// parameters for running a test
-struct TestCase {
+struct TestCase<'a> {
+    test_parquet_file: &'a TestParquetFile,
+    /// Human readable name to help debug failures
+    name: String,
+    /// The filter to apply
     filter: Expr,
     /// Did we expect the pushdown filtering to have filtered any rows?
     pushdown_expected: PushdownExpected,
@@ -329,14 +247,21 @@ struct TestCase {
     expected_rows: usize,
 }
 
-impl TestCase {
-    fn new() -> Self {
+impl<'a> TestCase<'a> {
+    fn new(test_parquet_file: &'a TestParquetFile) -> Self {
         Self {
+            test_parquet_file,
+            name: "<NOT SPECIFIED>".into(),
             // default to a filter that passes everything
             filter: lit(true),
             pushdown_expected: PushdownExpected::None,
             expected_rows: 0,
         }
+    }
+
+    fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
     }
 
     /// Set the filter expression to use
@@ -359,6 +284,8 @@ impl TestCase {
     }
 
     async fn run(&self) {
+        println!("Running test case {}", self.name);
+
         // Also try and reorder the filters
         // aka if the filter is `A AND B`
         // this code will also try  `B AND A`
@@ -373,12 +300,8 @@ impl TestCase {
 
     /// Scan the parquet file with the filters with various pushdown options
     async fn run_with_filter(&self, filter: &Expr) {
-        let shared_test_file = SharedTestFile::instance();
-        let test_parquet_file = &shared_test_file.test_parquet_file;
-
         let no_pushdown = self
             .read_with_options(
-                test_parquet_file,
                 ParquetScanOptions {
                     pushdown_filters: false,
                     reorder_filters: false,
@@ -392,7 +315,6 @@ impl TestCase {
 
         let only_pushdown = self
             .read_with_options(
-                test_parquet_file,
                 ParquetScanOptions {
                     pushdown_filters: true,
                     reorder_filters: false,
@@ -407,7 +329,6 @@ impl TestCase {
 
         let pushdown_and_reordering = self
             .read_with_options(
-                test_parquet_file,
                 ParquetScanOptions {
                     pushdown_filters: true,
                     reorder_filters: true,
@@ -426,7 +347,6 @@ impl TestCase {
 
         // let page_index_only = self
         //     .read_with_options(
-        //         test_parquet_file,
         //         ParquetScanOptions {
         //             pushdown_filters: false,
         //             reorder_filters: false,
@@ -438,7 +358,6 @@ impl TestCase {
 
         // let pushdown_reordering_and_page_index = self
         //     .read_with_options(
-        //         test_parquet_file,
         //         ParquetScanOptions {
         //             pushdown_filters: false,
         //             reorder_filters: false,
@@ -453,23 +372,22 @@ impl TestCase {
     /// Reads data from a test parquet file using the specified scan options
     async fn read_with_options(
         &self,
-        test_file: &TestParquetFile,
         scan_options: ParquetScanOptions,
         pushdown_expected: PushdownExpected,
         filter: &Expr,
     ) -> RecordBatch {
-        println!("Querying {:?}", test_file.path());
         println!("  scan options: {scan_options:?}");
         println!("  reading with filter {:?}", filter);
         let ctx = SessionContext::new();
-        let exec = test_file
+        let exec = self
+            .test_parquet_file
             .create_scan(filter.clone(), scan_options)
             .await
             .unwrap();
         let result = collect(exec.clone(), ctx.task_ctx()).await.unwrap();
 
         // Concatenate the results back together
-        let batch = concat_batches(&test_file.schema(), &result).unwrap();
+        let batch = concat_batches(&self.test_parquet_file.schema(), &result).unwrap();
 
         let total_rows = batch.num_rows();
 
