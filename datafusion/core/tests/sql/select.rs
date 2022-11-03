@@ -497,7 +497,7 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    let input = Int64Array::from_slice(&[1, 2, 3, 4]);
+    let input = Int64Array::from_slice([1, 2, 3, 4]);
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
     ctx.register_batch("test", batch)?;
 

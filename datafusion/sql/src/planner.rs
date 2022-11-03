@@ -27,7 +27,7 @@ use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
     DropTable, DropView, Explain, JoinType, LogicalPlan, LogicalPlanBuilder,
-    Partitioning, PlanType, ToStringifiedPlan,
+    Partitioning, PlanType, SetVariable, ToStringifiedPlan,
 };
 use datafusion_expr::utils::{
     can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
@@ -46,8 +46,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
 
-use crate::table_reference::TableReference;
 use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
+use datafusion_common::TableReference;
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
@@ -161,6 +161,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } => self.explain_statement_to_plan(verbose, analyze, *statement),
             Statement::Query(query) => self.query_to_plan(*query, &mut HashMap::new()),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
+            Statement::SetVariable {
+                local,
+                hivevar,
+                variable,
+                value,
+            } => self.set_variable_to_plan(local, hivevar, &variable, value),
+
             Statement::CreateTable {
                 query: Some(query),
                 name,
@@ -2187,7 +2194,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         ) => {
                             let (aggregate_fun, args) = self.aggregate_fn_to_expr(
                                 aggregate_fun,
-                                function,
+                                function.args,
                                 schema,
                             )?;
 
@@ -2220,7 +2227,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // next, aggregate built-ins
                 if let Ok(fun) = AggregateFunction::from_str(&name) {
                     let distinct = function.distinct;
-                    let (fun, args) = self.aggregate_fn_to_expr(fun, function, schema)?;
+                    let (fun, args) = self.aggregate_fn_to_expr(fun, function.args, schema)?;
                     return Ok(Expr::AggregateFunction {
                         fun,
                         distinct,
@@ -2344,25 +2351,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn aggregate_fn_to_expr(
         &self,
         fun: AggregateFunction,
-        function: sqlparser::ast::Function,
+        args: Vec<FunctionArg>,
         schema: &DFSchema,
     ) -> Result<(AggregateFunction, Vec<Expr>)> {
         let args = match fun {
             // Special case rewrite COUNT(*) to COUNT(constant)
-            AggregateFunction::Count => function
-                .args
+            AggregateFunction::Count => args
                 .into_iter()
                 .map(|a| match a {
-                    FunctionArg::Unnamed(FunctionArgExpr::Expr(SQLExpr::Value(
-                        Value::Number(_, _),
-                    ))) => Ok(Expr::Literal(COUNT_STAR_EXPANSION.clone())),
                     FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
                         Ok(Expr::Literal(COUNT_STAR_EXPANSION.clone()))
                     }
                     _ => self.sql_fn_arg_to_logical_expr(a, schema, &mut HashMap::new()),
                 })
                 .collect::<Result<Vec<Expr>>>()?,
-            _ => self.function_args_to_expr(function.args, schema)?,
+            _ => self.function_args_to_expr(args, schema)?,
         };
 
         Ok((fun, args))
@@ -2449,6 +2452,84 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         assert_eq!(rewrite.len(), 1);
 
         self.statement_to_plan(rewrite.pop_front().unwrap())
+    }
+
+    fn set_variable_to_plan(
+        &self,
+        local: bool,
+        hivevar: bool,
+        variable: &ObjectName,
+        value: Vec<sqlparser::ast::Expr>,
+    ) -> Result<LogicalPlan> {
+        if local {
+            return Err(DataFusionError::NotImplemented(
+                "LOCAL is not supported".to_string(),
+            ));
+        }
+
+        if hivevar {
+            return Err(DataFusionError::NotImplemented(
+                "HIVEVAR is not supported".to_string(),
+            ));
+        }
+
+        let variable = variable.to_string();
+        let mut variable_lower = variable.to_lowercase();
+
+        if variable_lower == "timezone" || variable_lower == "time.zone" {
+            // we could introduce alias in OptionDefinition if this string matching thing grows
+            variable_lower = "datafusion.execution.time_zone".to_string();
+        }
+
+        // we don't support change time zone until we complete time zone related implementation
+        if variable_lower == "datafusion.execution.time_zone" {
+            return Err(DataFusionError::Plan(
+                "Changing Time Zone isn't supported yet".to_string(),
+            ));
+        }
+
+        // parse value string from Expr
+        let value_string = match &value[0] {
+            SQLExpr::Identifier(i) => i.to_string(),
+            SQLExpr::Value(v) => match v {
+                Value::SingleQuotedString(s) => s.to_string(),
+                Value::Number(_, _) | Value::Boolean(_) => v.to_string(),
+                Value::DoubleQuotedString(_)
+                | Value::EscapedStringLiteral(_)
+                | Value::NationalStringLiteral(_)
+                | Value::HexStringLiteral(_)
+                | Value::Null
+                | Value::Placeholder(_) => {
+                    return Err(DataFusionError::Plan(format!(
+                        "Unspported Value {}",
+                        value[0]
+                    )))
+                }
+            },
+            // for capture signed number e.g. +8, -8
+            SQLExpr::UnaryOp { op, expr } => match op {
+                UnaryOperator::Plus => format!("+{}", expr),
+                UnaryOperator::Minus => format!("-{}", expr),
+                _ => {
+                    return Err(DataFusionError::Plan(format!(
+                        "Unspported Value {}",
+                        value[0]
+                    )))
+                }
+            },
+            _ => {
+                return Err(DataFusionError::Plan(format!(
+                    "Unspported Value {}",
+                    value[0]
+                )))
+            }
+        };
+
+        Ok(LogicalPlan::SetVariable(SetVariable {
+            variable: variable_lower,
+            value: value_string,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        }))
     }
 
     fn show_columns_to_plan(
@@ -3589,8 +3670,8 @@ mod tests {
         let sql = "SELECT SUM(age) FROM person GROUP BY doesnotexist";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!("Schema error: No field named 'doesnotexist'. Valid fields are 'SUM(person.age)', \
-        'person.id', 'person.first_name', 'person.last_name', 'person.age', 'person.state', \
-        'person.salary', 'person.birth_date', 'person.😀'.", format!("{}", err));
+        'person'.'id', 'person'.'first_name', 'person'.'last_name', 'person'.'age', 'person'.'state', \
+        'person'.'salary', 'person'.'birth_date', 'person'.'😀'.", format!("{}", err));
     }
 
     #[test]
@@ -3662,14 +3743,14 @@ mod tests {
     fn select_simple_aggregate_with_groupby_can_use_positions() {
         quick_test(
             "SELECT state, age AS b, COUNT(1) FROM person GROUP BY 1, 2",
-            "Projection: person.state, person.age AS b, COUNT(UInt8(1))\
-             \n  Aggregate: groupBy=[[person.state, person.age]], aggr=[[COUNT(UInt8(1))]]\
+            "Projection: person.state, person.age AS b, COUNT(Int64(1))\
+             \n  Aggregate: groupBy=[[person.state, person.age]], aggr=[[COUNT(Int64(1))]]\
              \n    TableScan: person",
         );
         quick_test(
             "SELECT state, age AS b, COUNT(1) FROM person GROUP BY 2, 1",
-            "Projection: person.state, person.age AS b, COUNT(UInt8(1))\
-             \n  Aggregate: groupBy=[[person.age, person.state]], aggr=[[COUNT(UInt8(1))]]\
+            "Projection: person.state, person.age AS b, COUNT(Int64(1))\
+             \n  Aggregate: groupBy=[[person.age, person.state]], aggr=[[COUNT(Int64(1))]]\
              \n    TableScan: person",
         );
     }
@@ -3834,8 +3915,8 @@ mod tests {
     #[test]
     fn select_count_one() {
         let sql = "SELECT COUNT(1) FROM person";
-        let expected = "Projection: COUNT(UInt8(1))\
-                        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        let expected = "Projection: COUNT(Int64(1))\
+                        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
                         \n    TableScan: person";
         quick_test(sql, expected);
     }

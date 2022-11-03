@@ -41,19 +41,32 @@ unicode_expressions = ["unicode-segmentation"]
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 arrow = { version = "26.0.0", features = ["prettyprint"] }
+arrow-buffer = "26.0.0"
+arrow-schema = "26.0.0"
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { version = "0.4.22", default-features = false }
 datafusion-common = { path = "../common", version = "13.0.0" }
 datafusion-expr = { path = "../expr", version = "13.0.0" }
 datafusion-row = { path = "../row", version = "13.0.0" }
+half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.12", features = ["raw"] }
 itertools = { version = "0.10", features = ["use_std"] }
 lazy_static = { version = "^1.4.0" }
 md-5 = { version = "^0.10.0", optional = true }
+num-traits = { version = "0.2", default-features = false }
 ordered-float = "3.0"
 paste = "^1.0"
 rand = "0.8"
 regex = { version = "^1.4.3", optional = true }
 sha2 = { version = "^0.10.1", optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
+uuid = { version = "^1.2", features = ["v4"] }
+
+[dev-dependencies]
+criterion = "0.4"
+rand = "0.8"
+
+[[bench]]
+harness = false
+name = "in_list"

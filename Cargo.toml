@@ -17,7 +17,20 @@
 
 [workspace]
 exclude = ["datafusion-cli"]
-members = ["datafusion/common", "datafusion/core", "datafusion/expr", "datafusion/jit", "datafusion/optimizer", "datafusion/physical-expr", "datafusion/proto", "datafusion/row", "datafusion/sql", "datafusion-examples", "benchmarks",
+members = [
+    "datafusion/common",
+    "datafusion/core",
+    "datafusion/expr",
+    "datafusion/jit",
+    "datafusion/optimizer",
+    "datafusion/physical-expr",
+    "datafusion/proto",
+    "datafusion/row",
+    "datafusion/sql",
+    "datafusion-examples",
+    "test-utils",
+    "parquet-test-utils",
+    "benchmarks",
 ]
 
 [profile.release]
@@ -37,8 +50,3 @@ opt-level = 3
 overflow-checks = false
 panic = 'unwind'
 rpath = false
-
-[patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "26.0.0"}
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "26.0.0"}
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "26.0.0"}

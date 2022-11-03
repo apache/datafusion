@@ -287,9 +287,9 @@ async fn optimizers_catch_all_statistics() {
             Field::new("MAX(test.c1)", DataType::Int32, false),
         ])),
         vec![
-            Arc::new(Int64Array::from_slice(&[4])),
-            Arc::new(Int32Array::from_slice(&[1])),
-            Arc::new(Int32Array::from_slice(&[100])),
+            Arc::new(Int64Array::from_slice([4])),
+            Arc::new(Int32Array::from_slice([1])),
+            Arc::new(Int32Array::from_slice([100])),
         ],
     )
     .unwrap();

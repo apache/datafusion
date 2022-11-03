@@ -903,7 +903,7 @@ async fn group_by_timestamp_millis() -> Result<()> {
         schema.clone(),
         vec![
             Arc::new(TimestampMillisecondArray::from(timestamps)),
-            Arc::new(Int32Array::from_slice(&[10, 20, 30, 40, 50, 60])),
+            Arc::new(Int32Array::from_slice([10, 20, 30, 40, 50, 60])),
         ],
     )?;
     ctx.register_batch("t1", data).unwrap();
@@ -1613,5 +1613,68 @@ async fn test_cast_to_timetz_should_not_work() -> Result<()> {
         results.to_string(),
         "This feature is not implemented: Unsupported SQL type Time(Tz)"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_current_date() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select current_date() dt";
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        results[0]
+            .schema()
+            .field_with_name("dt")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Date32
+    );
+
+    let sql = "select case when current_date() = cast(now() as date) then 'OK' else 'FAIL' end result";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------+",
+        "| result |",
+        "+--------+",
+        "| OK     |",
+        "+--------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_current_time() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "select current_time() dt";
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        results[0]
+            .schema()
+            .field_with_name("dt")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Time64(TimeUnit::Nanosecond)
+    );
+
+    let sql = "select case when current_time() = (now()::bigint % 86400000000000)::time then 'OK' else 'FAIL' end result";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------+",
+        "| result |",
+        "+--------+",
+        "| OK     |",
+        "+--------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
     Ok(())
 }

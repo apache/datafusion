@@ -471,7 +471,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
                     escape_char: escape_char
                         .map(|ch| ch.to_string())
-                        .unwrap_or_else(|| "".to_string()),
+                        .unwrap_or_default()
                 });
                 Self {
                     expr_type: Some(ExprType::Like(pb)),
@@ -484,7 +484,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
                     escape_char: escape_char
                         .map(|ch| ch.to_string())
-                        .unwrap_or_else(|| "".to_string()),
+                        .unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::Ilike(pb)),
@@ -497,7 +497,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
                     escape_char: escape_char
                         .map(|ch| ch.to_string())
-                        .unwrap_or_else(|| "".to_string()),
+                        .unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::SimilarTo(pb)),
@@ -1164,6 +1164,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Left => Self::Left,
             BuiltinScalarFunction::Lpad => Self::Lpad,
             BuiltinScalarFunction::Random => Self::Random,
+            BuiltinScalarFunction::Uuid => Self::Uuid,
             BuiltinScalarFunction::RegexpReplace => Self::RegexpReplace,
             BuiltinScalarFunction::Repeat => Self::Repeat,
             BuiltinScalarFunction::Replace => Self::Replace,
@@ -1178,6 +1179,8 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
             BuiltinScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
             BuiltinScalarFunction::Now => Self::Now,
+            BuiltinScalarFunction::CurrentDate => Self::CurrentDate,
+            BuiltinScalarFunction::CurrentTime => Self::CurrentTime,
             BuiltinScalarFunction::Translate => Self::Translate,
             BuiltinScalarFunction::RegexpMatch => Self::RegexpMatch,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,

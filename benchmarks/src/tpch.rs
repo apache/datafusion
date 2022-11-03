@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
+use arrow::array::{
+    Array, ArrayRef, Decimal128Array, Float64Array, Int32Array, Int64Array, StringArray,
+};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use std::fs;
 use std::ops::{Div, Mul};
@@ -23,7 +26,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use datafusion::arrow::util::display::array_value_to_string;
+use datafusion::common::cast::as_date32_array;
+use datafusion::common::ScalarValue;
 use datafusion::logical_expr::Cast;
 use datafusion::prelude::*;
 use datafusion::{
@@ -229,11 +233,7 @@ pub fn get_answer_schema(n: usize) -> Schema {
             Field::new("custdist", DataType::Int64, true),
         ]),
 
-        14 => Schema::new(vec![Field::new(
-            "promo_revenue",
-            DataType::Decimal128(38, 2),
-            true,
-        )]),
+        14 => Schema::new(vec![Field::new("promo_revenue", DataType::Float64, true)]),
 
         15 => Schema::new(vec![
             Field::new("s_suppkey", DataType::Int64, true),
@@ -250,11 +250,7 @@ pub fn get_answer_schema(n: usize) -> Schema {
             Field::new("supplier_cnt", DataType::Int64, true),
         ]),
 
-        17 => Schema::new(vec![Field::new(
-            "avg_yearly",
-            DataType::Decimal128(38, 2),
-            true,
-        )]),
+        17 => Schema::new(vec![Field::new("avg_yearly", DataType::Float64, true)]),
 
         18 => Schema::new(vec![
             Field::new("c_name", DataType::Utf8, true),
@@ -389,14 +385,14 @@ pub async fn convert_tbl(
 
 /// Converts the results into a 2d array of strings, `result[row][column]`
 /// Special cases nulls to NULL for testing
-pub fn result_vec(results: &[RecordBatch]) -> Vec<Vec<String>> {
+pub fn result_vec(results: &[RecordBatch]) -> Vec<Vec<ScalarValue>> {
     let mut result = vec![];
     for batch in results {
         for row_index in 0..batch.num_rows() {
             let row_vec = batch
                 .columns()
                 .iter()
-                .map(|column| col_str(column, row_index))
+                .map(|column| col_to_scalar(column, row_index))
                 .collect();
             result.push(row_vec);
         }
@@ -422,13 +418,37 @@ pub fn string_schema(schema: Schema) -> Schema {
     )
 }
 
-/// Specialised String representation
-fn col_str(column: &ArrayRef, row_index: usize) -> String {
+fn col_to_scalar(column: &ArrayRef, row_index: usize) -> ScalarValue {
     if column.is_null(row_index) {
-        return "NULL".to_string();
+        return ScalarValue::Null;
     }
-
-    array_value_to_string(column, row_index).unwrap()
+    match column.data_type() {
+        DataType::Int32 => {
+            let array = column.as_any().downcast_ref::<Int32Array>().unwrap();
+            ScalarValue::Int32(Some(array.value(row_index)))
+        }
+        DataType::Int64 => {
+            let array = column.as_any().downcast_ref::<Int64Array>().unwrap();
+            ScalarValue::Int64(Some(array.value(row_index)))
+        }
+        DataType::Float64 => {
+            let array = column.as_any().downcast_ref::<Float64Array>().unwrap();
+            ScalarValue::Float64(Some(array.value(row_index)))
+        }
+        DataType::Decimal128(p, s) => {
+            let array = column.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            ScalarValue::Decimal128(Some(array.value(row_index)), *p, *s)
+        }
+        DataType::Date32 => {
+            let array = as_date32_array(column).unwrap();
+            ScalarValue::Date32(Some(array.value(row_index)))
+        }
+        DataType::Utf8 => {
+            let array = column.as_any().downcast_ref::<StringArray>().unwrap();
+            ScalarValue::Utf8(Some(array.value(row_index).to_string()))
+        }
+        other => panic!("unexpected data type in benchmark: {}", other),
+    }
 }
 
 pub async fn transform_actual_result(
@@ -437,8 +457,28 @@ pub async fn transform_actual_result(
 ) -> Result<Vec<RecordBatch>> {
     // to compare the recorded answers to the answers we got back from running the query,
     // we need to round the decimal columns and trim the Utf8 columns
+    // we also need to rewrite the batches to use a compatible schema
     let ctx = SessionContext::new();
-    let result_schema = result[0].schema();
+    let fields = result[0]
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| {
+            let simple_name = match f.name().find('.') {
+                Some(i) => f.name()[i + 1..].to_string(),
+                _ => f.name().to_string(),
+            };
+            f.clone().with_name(simple_name)
+        })
+        .collect();
+    let result_schema = SchemaRef::new(Schema::new(fields));
+    let result = result
+        .iter()
+        .map(|b| {
+            RecordBatch::try_new(result_schema.clone(), b.columns().to_vec())
+                .map_err(|e| e.into())
+        })
+        .collect::<Result<Vec<_>>>()?;
     let table = Arc::new(MemTable::try_new(result_schema.clone(), vec![result])?);
     let mut df = ctx.read_table(table)?
         .select(
@@ -446,7 +486,7 @@ pub async fn transform_actual_result(
                 .fields
                 .iter()
                 .map(|field| {
-                    match Field::data_type(field) {
+                    match field.data_type() {
                         DataType::Decimal128(_, _) => {
                             // if decimal, then round it to 2 decimal places like the answers
                             // round() doesn't support the second argument for decimal places to round to
@@ -460,20 +500,20 @@ pub async fn transform_actual_result(
                             Expr::Alias(
                                 Box::new(Expr::Cast(Cast::new(
                                     round,
-                                    DataType::Decimal128(38, 2),
+                                    DataType::Decimal128(15, 2),
                                 ))),
-                                Field::name(field).to_string(),
+                                field.name().to_string(),
                             )
                         }
                         DataType::Utf8 => {
                             // if string, then trim it like the answers got trimmed
                             Expr::Alias(
                                 Box::new(trim(col(Field::name(field)))),
-                                Field::name(field).to_string(),
+                                field.name().to_string(),
                             )
                         }
                         _ => {
-                            col(Field::name(field))
+                            col(field.name())
                         }
                     }
                 }).collect()
