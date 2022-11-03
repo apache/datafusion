@@ -2253,11 +2253,6 @@ mod tests {
     async fn with_listing_schema_provider() -> Result<()> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let path = path.join("tests/tpch-csv");
-        println!(
-            "Looking for data in {} exists={}",
-            path.display(),
-            path.exists()
-        );
         let url = format!("file://{}", path.display());
 
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
@@ -2280,8 +2275,8 @@ mod tests {
                     schema.as_any().downcast_ref::<ListingSchemaProvider>()
                 {
                     listing.refresh().await.unwrap();
+                    table_count = schema.table_names().len();
                 }
-                table_count = schema.table_names().len();
             }
         }
 
