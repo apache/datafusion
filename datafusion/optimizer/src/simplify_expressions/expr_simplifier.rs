@@ -367,6 +367,8 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                     None => lit_bool_null(),
                 }
             }
+            // expr IN () --> false
+            // expr NOT IN () --> true
             Expr::InList {
                 expr: _expr,
                 list,
