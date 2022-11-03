@@ -377,7 +377,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 expr,
                 list,
                 negated,
-            } if list.len() <= THRESHOLD_INLINE_INLIST => {
+            } if list.len() <= THRESHOLD_INLINE_INLIST && expr.try_into_col().is_ok() => {
                 let first_val = list[0].clone();
                 if negated {
                     list.into_iter()
