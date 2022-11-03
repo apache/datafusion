@@ -313,3 +313,4 @@ DataFusion CLI v13.0.0
 | datafusion.execution.batch_size | 1024    |
 +---------------------------------+---------+
 1 row in set. Query took 0.005 seconds.
+```
