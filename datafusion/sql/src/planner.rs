@@ -2718,12 +2718,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     s as u8,
                 )))
             } else {
-                n.parse::<f64>().map(lit).map_err(|_| {
+                let number = n.parse::<i128>().map_err(|_| {
                     DataFusionError::from(ParserError(format!(
-                        "Cannot parse {} as f64",
+                        "Cannot parse {} as i128 when building decimal",
                         n
                     )))
-                })
+                })?;
+                Ok(Expr::Literal(ScalarValue::Decimal128(Some(number), 38, 0,)))
             }
         } else {
             n.parse::<f64>().map(lit).map_err(|_| {
