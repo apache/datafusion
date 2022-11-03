@@ -375,6 +375,8 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 negated,
             } if list.is_empty() => lit(negated),
 
+            // if expr is a single column reference:
+            // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
             Expr::InList {
                 expr,
                 list,
