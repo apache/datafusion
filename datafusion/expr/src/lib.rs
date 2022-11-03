@@ -72,7 +72,7 @@ pub use logical_plan::{
     CreateMemoryTable, CreateView, CrossJoin, Distinct, DropTable, DropView,
     EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint, JoinType, Limit,
     LogicalPlan, LogicalPlanBuilder, Partitioning, PlanType, PlanVisitor, Projection,
-    Repartition, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
+    Repartition, SetVariable, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
     ToStringifiedPlan, Union, UserDefinedLogicalNode, Values, Window,
 };
 pub use nullif::SUPPORTED_NULLIF_TYPES;
