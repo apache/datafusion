@@ -2252,7 +2252,13 @@ mod tests {
     #[tokio::test]
     async fn with_listing_schema_provider() -> Result<()> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let url = format!("file://{}/tests/tpch-csv", path.display());
+        let path = path.join("tests/tpch-csv");
+        println!(
+            "Looking for data in {} exists={}",
+            path.display(),
+            path.exists()
+        );
+        let url = format!("file://{}", path.display());
 
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
