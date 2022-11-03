@@ -252,6 +252,12 @@ Available commands inside DataFusion CLI are:
 
 ```
 
+- Set configuration options
+
+```SQL
+> SET datafusion.execution.batch_size to 1024;
+```
+
 ## Changing Configuration Options
 
 All available configuration options can be seen using `SHOW ALL` as described above.
@@ -282,3 +288,28 @@ DataFusion CLI v12.0.0
 +-------------------------------------------------+---------+
 8 rows in set. Query took 0.002 seconds.
 ```
+
+You can change the configuration options using `SET` statement as well
+
+```shell
+$ datafusion-cli
+DataFusion CLI v13.0.0
+
+❯ show datafusion.execution.batch_size;
++---------------------------------+---------+
+| name                            | setting |
++---------------------------------+---------+
+| datafusion.execution.batch_size | 8192    |
++---------------------------------+---------+
+1 row in set. Query took 0.011 seconds.
+
+❯ set datafusion.execution.batch_size to 1024;
+0 rows in set. Query took 0.000 seconds.
+
+❯ show datafusion.execution.batch_size;
++---------------------------------+---------+
+| name                            | setting |
++---------------------------------+---------+
+| datafusion.execution.batch_size | 1024    |
++---------------------------------+---------+
+1 row in set. Query took 0.005 seconds.
