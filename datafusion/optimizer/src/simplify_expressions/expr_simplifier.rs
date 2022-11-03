@@ -387,19 +387,16 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 || list.len() <= THRESHOLD_INLINE_INLIST
                     && expr.try_into_col().is_ok() =>
             {
-                let first_val = list[0].clone();
                 if negated {
                     list.into_iter()
-                        .skip(1)
-                        .fold((*expr.clone()).not_eq(first_val), |acc, y| {
+                        .reduce(|acc, y| {
                             (*expr.clone()).not_eq(y.clone()).and(acc)
-                        })
+                        }).unwrap()
                 } else {
                     list.into_iter()
-                        .skip(1)
-                        .fold((*expr.clone()).eq(first_val), |acc, y| {
+                        .reduce(|acc, y| {
                             (*expr.clone()).eq(y.clone()).or(acc)
-                        })
+                        }).unwrap()
                 }
             }
 
