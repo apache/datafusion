@@ -494,7 +494,7 @@ impl LogicalPlan {
     fn all_inputs(&self) -> Vec<Arc<LogicalPlan>> {
         let mut inputs = vec![];
         for expr in self.expressions() {
-            self.collect_subqueries(&expr, &mut inputs);
+            Self::collect_subqueries(&expr, &mut inputs);
         }
         for input in self.inputs() {
             inputs.push(Arc::new(input.clone()));
@@ -502,11 +502,11 @@ impl LogicalPlan {
         inputs
     }
 
-    fn collect_subqueries(&self, expr: &Expr, sub: &mut Vec<Arc<LogicalPlan>>) {
+    fn collect_subqueries(expr: &Expr, sub: &mut Vec<Arc<LogicalPlan>>) {
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-                self.collect_subqueries(left, sub);
-                self.collect_subqueries(right, sub);
+                Self::collect_subqueries(left, sub);
+                Self::collect_subqueries(right, sub);
             }
             Expr::Exists { subquery, .. } => {
                 sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));

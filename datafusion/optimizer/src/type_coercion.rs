@@ -58,9 +58,9 @@ impl OptimizerRule for TypeCoercion {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        _optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        optimize_internal(&DFSchema::empty(), plan, optimizer_config)
+        optimize_internal(&DFSchema::empty(), plan)
     }
 }
 
@@ -68,13 +68,12 @@ fn optimize_internal(
     // use the external schema to handle the correlated subqueries case
     external_schema: &DFSchema,
     plan: &LogicalPlan,
-    optimizer_config: &mut OptimizerConfig,
 ) -> Result<LogicalPlan> {
     // optimize child plans first
     let new_inputs = plan
         .inputs()
         .iter()
-        .map(|p| optimize_internal(external_schema, p, optimizer_config))
+        .map(|p| optimize_internal(external_schema, p))
         .collect::<Result<Vec<_>>>()?;
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
@@ -120,18 +119,11 @@ impl ExprRewriter for TypeCoercionRewriter {
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         match expr {
             Expr::ScalarSubquery(Subquery { subquery }) => {
-                let mut optimizer_config = OptimizerConfig::new();
-                let new_plan =
-                    optimize_internal(&self.schema, &subquery, &mut optimizer_config)?;
+                let new_plan = optimize_internal(&self.schema, &subquery)?;
                 Ok(Expr::ScalarSubquery(Subquery::new(new_plan)))
             }
             Expr::Exists { subquery, negated } => {
-                let mut optimizer_config = OptimizerConfig::new();
-                let new_plan = optimize_internal(
-                    &self.schema,
-                    &subquery.subquery,
-                    &mut optimizer_config,
-                )?;
+                let new_plan = optimize_internal(&self.schema, &subquery.subquery)?;
                 Ok(Expr::Exists {
                     subquery: Subquery::new(new_plan),
                     negated,
@@ -142,12 +134,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                 subquery,
                 negated,
             } => {
-                let mut optimizer_config = OptimizerConfig::new();
-                let new_plan = optimize_internal(
-                    &self.schema,
-                    &subquery.subquery,
-                    &mut optimizer_config,
-                )?;
+                let new_plan = optimize_internal(&self.schema, &subquery.subquery)?;
                 Ok(Expr::InSubquery {
                     expr,
                     subquery: Subquery::new(new_plan),

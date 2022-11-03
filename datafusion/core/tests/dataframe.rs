@@ -48,16 +48,16 @@ async fn join() -> Result<()> {
     let batch1 = RecordBatch::try_new(
         schema1.clone(),
         vec![
-            Arc::new(StringArray::from_slice(&["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
         ],
     )?;
     // define data.
     let batch2 = RecordBatch::try_new(
         schema2.clone(),
         vec![
-            Arc::new(StringArray::from_slice(&["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
         ],
     )?;
 
@@ -90,8 +90,8 @@ async fn sort_on_unprojected_columns() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![
-            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
-            Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice([2, 12, 12, 120])),
         ],
     )
     .unwrap();
@@ -134,7 +134,7 @@ async fn filter_with_alias_overwrite() -> Result<()> {
 
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice(&[1, 10, 10, 100]))],
+        vec![Arc::new(Int32Array::from_slice([1, 10, 10, 100]))],
     )
     .unwrap();
 
@@ -170,7 +170,7 @@ async fn select_with_alias_overwrite() -> Result<()> {
 
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice(&[1, 10, 10, 100]))],
+        vec![Arc::new(Int32Array::from_slice([1, 10, 10, 100]))],
     )
     .unwrap();
 
@@ -390,13 +390,13 @@ fn create_test_table() -> Result<Arc<DataFrame>> {
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from_slice(&[
+            Arc::new(StringArray::from_slice([
                 "abcDEF",
                 "abc123",
                 "CBAdef",
                 "123AbcDef",
             ])),
-            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
         ],
     )?;
 

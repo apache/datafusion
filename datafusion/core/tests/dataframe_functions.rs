@@ -44,13 +44,13 @@ fn create_test_table() -> Result<Arc<DataFrame>> {
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from_slice(&[
+            Arc::new(StringArray::from_slice([
                 "abcDEF",
                 "abc123",
                 "CBAdef",
                 "123AbcDef",
             ])),
-            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
         ],
     )?;
 

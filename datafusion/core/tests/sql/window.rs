@@ -1113,7 +1113,7 @@ async fn window_frame_ranges_timestamp() -> Result<()> {
     // define data in two partitions
     let batch = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(TimestampNanosecondArray::from_slice(&[
+        vec![Arc::new(TimestampNanosecondArray::from_slice([
             1664264591000000000,
             1664264592000000000,
             1664264592000000000,
