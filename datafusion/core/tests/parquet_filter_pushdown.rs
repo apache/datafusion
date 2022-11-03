@@ -26,6 +26,7 @@
 //! select * from data limit 10;
 //! ```
 
+use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use arrow::compute::concat_batches;
@@ -37,6 +38,7 @@ use datafusion::prelude::{col, SessionContext};
 use datafusion_optimizer::utils::{conjunction, disjunction, split_conjunction};
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use parking_lot::Mutex;
 use parquet_test_utils::{ParquetScanOptions, TestParquetFile};
 use tempfile::TempDir;
 use test_utils::AccessLogGenerator;
@@ -45,32 +47,73 @@ use test_utils::AccessLogGenerator;
 const NUM_ROWS: usize = 53819;
 
 // Only create the parquet file once as it is fairly large
-lazy_static! {
-    static ref TEMPDIR: TempDir = TempDir::new().unwrap();
+struct SharedTestFile {
+    /// Drop of SharedTestFile drops this field and cleans up the temporary directory and files
+    #[allow(dead_code)]
+    tempdir: TempDir,
+    /// Randomly (but consistently) generated test file. You can use
+    /// `datafusion-cli` to explore it more carefully
+    test_parquet_file: TestParquetFile,
+}
 
-    /// Randomly (but consistently) generated test file. You can use `datafusion-cli` to explore it more carefully
-    static ref TESTFILE: TestParquetFile = {
-        let generator = AccessLogGenerator::new()
-            .with_row_limit(Some(NUM_ROWS));
+impl SharedTestFile {
+    // Gets a handle to the shared instance. Any concurrently running
+    // tests will get a handle to the same file, and the last one that
+    // completes will drop it with the ref count goes to zero
+    fn instance() -> Arc<Self> {
+        let mut global_test_file = TESTFILE.lock();
+
+        if let Some(pre_existing) = global_test_file.upgrade() {
+            println!("Using pre-existing file");
+            pre_existing
+        } else {
+            // hold the mutex while we initialize and block all other
+            // threads so we create exactly one file at a time
+            let new_test_file = Arc::new(Self::new());
+            // save a weak pointer so concurrently running tests can use the same file
+            *global_test_file = Arc::downgrade(&new_test_file);
+            new_test_file
+        }
+    }
+
+    /// Create an initialize a new SharedTestfile. This may take several seconds and will panic if there are errors
+    fn new() -> Self {
+        let tempdir = TempDir::new().unwrap();
+
+        let generator = AccessLogGenerator::new().with_row_limit(Some(NUM_ROWS));
 
         // TODO: set the max page rows with some various / arbitrary sizes 8311
         // (using https://github.com/apache/arrow-rs/issues/2941) to ensure we get multiple pages
         let page_size = None;
         let row_group_size = None;
-        let file = TEMPDIR.path().join("data.parquet");
+        let file = tempdir.path().join("data.parquet");
 
         let start = Instant::now();
         println!("Writing test data to {:?}", file);
-        match TestParquetFile::try_new(file, generator, page_size, row_group_size) {
-            Err(e) => {
-                panic!("Error writing data: {}", e);
-            }
-            Ok(f) => {
-                println!("Completed generating test data in {:?}", Instant::now() - start);
-                f
-            }
+        let test_parquet_file =
+            match TestParquetFile::try_new(file, generator, page_size, row_group_size) {
+                Err(e) => {
+                    panic!("Error writing data: {}", e);
+                }
+                Ok(f) => {
+                    println!(
+                        "Completed generating test data in {:?}",
+                        Instant::now() - start
+                    );
+                    f
+                }
+            };
+
+        Self {
+            tempdir,
+            test_parquet_file,
         }
-    };
+    }
+}
+
+// Only create the parquet file once as it is fairly large
+lazy_static! {
+    static ref TESTFILE: Mutex<Weak<SharedTestFile>> = Mutex::new(Default::default());
 }
 
 #[cfg(not(target_family = "windows"))]
@@ -330,9 +373,12 @@ impl TestCase {
 
     /// Scan the parquet file with the filters with various pushdown options
     async fn run_with_filter(&self, filter: &Expr) {
+        let shared_test_file = SharedTestFile::instance();
+        let test_parquet_file = &shared_test_file.test_parquet_file;
+
         let no_pushdown = self
             .read_with_options(
-                &TESTFILE,
+                test_parquet_file,
                 ParquetScanOptions {
                     pushdown_filters: false,
                     reorder_filters: false,
@@ -346,7 +392,7 @@ impl TestCase {
 
         let only_pushdown = self
             .read_with_options(
-                &TESTFILE,
+                test_parquet_file,
                 ParquetScanOptions {
                     pushdown_filters: true,
                     reorder_filters: false,
@@ -361,7 +407,7 @@ impl TestCase {
 
         let pushdown_and_reordering = self
             .read_with_options(
-                &TESTFILE,
+                test_parquet_file,
                 ParquetScanOptions {
                     pushdown_filters: true,
                     reorder_filters: true,
@@ -380,7 +426,7 @@ impl TestCase {
 
         // let page_index_only = self
         //     .read_with_options(
-        //         &TESTFILE,
+        //         test_parquet_file,
         //         ParquetScanOptions {
         //             pushdown_filters: false,
         //             reorder_filters: false,
@@ -392,7 +438,7 @@ impl TestCase {
 
         // let pushdown_reordering_and_page_index = self
         //     .read_with_options(
-        //         &TESTFILE,
+        //         test_parquet_file,
         //         ParquetScanOptions {
         //             pushdown_filters: false,
         //             reorder_filters: false,
