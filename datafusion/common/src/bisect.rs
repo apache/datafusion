@@ -98,10 +98,10 @@ mod tests {
     #[test]
     fn test_bisect_left_and_right() {
         let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice(&[5.0, 7.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice(&[2.0, 3.0, 3.0, 4.0, 5.0])),
-            Arc::new(Float64Array::from_slice(&[5.0, 7.0, 8.0, 10., 11.0])),
-            Arc::new(Float64Array::from_slice(&[15.0, 13.0, 8.0, 5., 0.0])),
+            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
+            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
+            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
+            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
         ];
         let search_tuple: Vec<ScalarValue> = vec![
             ScalarValue::Float64(Some(8.0)),
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn test_bisect_left_and_right_diff_sort() {
         // Descending, left
-        let arrays: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice(&[
+        let arrays: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice([
             4.0, 3.0, 2.0, 1.0, 0.0,
         ]))];
         let search_tuple: Vec<ScalarValue> = vec![ScalarValue::Float64(Some(4.0))];
@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(res, 0);
 
         // Descending, right
-        let arrays: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice(&[
+        let arrays: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice([
             4.0, 3.0, 2.0, 1.0, 0.0,
         ]))];
         let search_tuple: Vec<ScalarValue> = vec![ScalarValue::Float64(Some(4.0))];
@@ -193,9 +193,8 @@ mod tests {
         assert_eq!(res, 1);
 
         // Ascending, left
-        let arrays: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice(&[
-            5.0, 7.0, 8.0, 9., 10.,
-        ]))];
+        let arrays: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.]))];
         let search_tuple: Vec<ScalarValue> = vec![ScalarValue::Float64(Some(7.0))];
         let ords = [SortOptions {
             descending: false,
@@ -205,9 +204,8 @@ mod tests {
         assert_eq!(res, 1);
 
         // Ascending, right
-        let arrays: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice(&[
-            5.0, 7.0, 8.0, 9., 10.,
-        ]))];
+        let arrays: Vec<ArrayRef> =
+            vec![Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.]))];
         let search_tuple: Vec<ScalarValue> = vec![ScalarValue::Float64(Some(7.0))];
         let ords = [SortOptions {
             descending: false,
@@ -217,8 +215,8 @@ mod tests {
         assert_eq!(res, 2);
 
         let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice(&[5.0, 7.0, 8.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice(&[10.0, 9.0, 8.0, 7.5, 7., 6.])),
+            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 8.0, 9., 10.])),
+            Arc::new(Float64Array::from_slice([10.0, 9.0, 8.0, 7.5, 7., 6.])),
         ];
         let search_tuple: Vec<ScalarValue> = vec![
             ScalarValue::Float64(Some(8.0)),

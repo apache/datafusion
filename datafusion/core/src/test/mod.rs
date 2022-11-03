@@ -53,8 +53,8 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let batch = RecordBatch::try_new(
         dual_schema.clone(),
         vec![
-            Arc::new(array::Int32Array::from_slice(&[1])),
-            Arc::new(array::StringArray::from_slice(&["a"])),
+            Arc::new(array::Int32Array::from_slice([1])),
+            Arc::new(array::StringArray::from_slice(["a"])),
         ],
     )
     .unwrap();
@@ -282,7 +282,7 @@ pub fn create_vec_batches(schema: &Schema, n: usize) -> Vec<RecordBatch> {
 fn create_batch(schema: &Schema) -> RecordBatch {
     RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]))],
+        vec![Arc::new(UInt32Array::from_slice([1, 2, 3, 4, 5, 6, 7, 8]))],
     )
     .unwrap()
 }

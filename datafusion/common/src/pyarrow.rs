@@ -39,7 +39,7 @@ impl PyArrowConvert for ScalarValue {
 
         // construct pyarrow array from the python value and pyarrow type
         let factory = py.import("pyarrow")?.getattr("array")?;
-        let args = PyList::new(py, &[val]);
+        let args = PyList::new(py, [val]);
         let array = factory.call1((args, typ))?;
 
         // convert the pyarrow array to rust array using C data interface

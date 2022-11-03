@@ -2016,11 +2016,11 @@ async fn simple_avg() -> Result<()> {
 
     let batch1 = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
+        vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
     )?;
     let batch2 = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
+        vec![Arc::new(Int32Array::from_slice([4, 5]))],
     )?;
 
     let ctx = SessionContext::new();
@@ -2051,11 +2051,11 @@ async fn simple_mean() -> Result<()> {
 
     let batch1 = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
+        vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
     )?;
     let batch2 = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
+        vec![Arc::new(Int32Array::from_slice([4, 5]))],
     )?;
 
     let ctx = SessionContext::new();

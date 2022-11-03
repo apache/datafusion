@@ -200,7 +200,7 @@ impl Accumulator for StddevAccumulator {
         let variance = self.variance.evaluate()?;
         match variance {
             ScalarValue::Float64(e) => {
-                if e == None {
+                if e.is_none() {
                     Ok(ScalarValue::Float64(None))
                 } else {
                     Ok(ScalarValue::Float64(e.map(|f| f.sqrt())))
