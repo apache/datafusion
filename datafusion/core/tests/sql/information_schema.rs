@@ -701,7 +701,7 @@ async fn show_all() {
         "| datafusion.execution.parquet.enable_page_index  | false   |",
         "| datafusion.execution.parquet.pushdown_filters   | false   |",
         "| datafusion.execution.parquet.reorder_filters    | false   |",
-        "| datafusion.execution.time_zone                  | UTC     |",
+        "| datafusion.execution.time_zone                  | +00:00  |",
         "| datafusion.explain.logical_plan_only            | false   |",
         "| datafusion.explain.physical_plan_only           | false   |",
         "| datafusion.optimizer.filter_null_join_keys      | false   |",
@@ -725,7 +725,7 @@ async fn show_time_zone_default_utc() {
         "+--------------------------------+---------+",
         "| name                           | setting |",
         "+--------------------------------+---------+",
-        "| datafusion.execution.time_zone | UTC     |",
+        "| datafusion.execution.time_zone | +00:00  |",
         "+--------------------------------+---------+",
     ];
 
@@ -744,7 +744,7 @@ async fn show_timezone_default_utc() {
         "+--------------------------------+---------+",
         "| name                           | setting |",
         "+--------------------------------+---------+",
-        "| datafusion.execution.time_zone | UTC     |",
+        "| datafusion.execution.time_zone | +00:00  |",
         "+--------------------------------+---------+",
     ];
 

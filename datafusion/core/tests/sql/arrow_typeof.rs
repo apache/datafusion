@@ -110,7 +110,7 @@ async fn arrow_typeof_timestamp_utc() -> Result<()> {
     let ctx = SessionContext::new();
     let sql = "SELECT arrow_typeof(now())";
     let actual = execute(&ctx, sql).await;
-    let expected = "Timestamp(Nanosecond, Some(\"UTC\"))";
+    let expected = "Timestamp(Nanosecond, Some(\"+00:00\"))";
     assert_eq!(expected, &actual[0][0]);
 
     Ok(())

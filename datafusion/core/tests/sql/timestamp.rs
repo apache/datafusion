@@ -527,18 +527,18 @@ async fn timestamp_minmax() -> Result<()> {
     let ctx = SessionContext::new();
     let table_a = make_timestamp_tz_table::<TimestampMillisecondType>(None)?;
     let table_b =
-        make_timestamp_tz_table::<TimestampNanosecondType>(Some("UTC".to_owned()))?;
+        make_timestamp_tz_table::<TimestampNanosecondType>(Some("+00:00".to_owned()))?;
     ctx.register_table("table_a", table_a)?;
     ctx.register_table("table_b", table_b)?;
 
     let sql = "SELECT MIN(table_a.ts), MAX(table_b.ts) FROM table_a, table_b";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-------------------------+----------------------------+",
-        "| MIN(table_a.ts)         | MAX(table_b.ts)            |",
-        "+-------------------------+----------------------------+",
-        "| 2020-09-08T11:42:29.190 | 2020-09-08T13:42:29.190855 |",
-        "+-------------------------+----------------------------+",
+        "+-------------------------+----------------------------------+",
+        "| MIN(table_a.ts)         | MAX(table_b.ts)                  |",
+        "+-------------------------+----------------------------------+",
+        "| 2020-09-08T11:42:29.190 | 2020-09-08T13:42:29.190855+00:00 |",
+        "+-------------------------+----------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -550,28 +550,29 @@ async fn timestamp_coercion() -> Result<()> {
     {
         let ctx = SessionContext::new();
         let table_a =
-            make_timestamp_tz_table::<TimestampSecondType>(Some("UTC".to_owned()))?;
-        let table_b =
-            make_timestamp_tz_table::<TimestampMillisecondType>(Some("UTC".to_owned()))?;
+            make_timestamp_tz_table::<TimestampSecondType>(Some("+00:00".to_owned()))?;
+        let table_b = make_timestamp_tz_table::<TimestampMillisecondType>(Some(
+            "+00:00".to_owned(),
+        ))?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
         let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
-            "+---------------------+-------------------------+-------------------------+",
-            "| ts                  | ts                      | table_a.ts = table_b.ts |",
-            "+---------------------+-------------------------+-------------------------+",
-            "| 2020-09-08T13:42:29 | 2020-09-08T13:42:29.190 | true                    |",
-            "| 2020-09-08T13:42:29 | 2020-09-08T12:42:29.190 | false                   |",
-            "| 2020-09-08T13:42:29 | 2020-09-08T11:42:29.190 | false                   |",
-            "| 2020-09-08T12:42:29 | 2020-09-08T13:42:29.190 | false                   |",
-            "| 2020-09-08T12:42:29 | 2020-09-08T12:42:29.190 | true                    |",
-            "| 2020-09-08T12:42:29 | 2020-09-08T11:42:29.190 | false                   |",
-            "| 2020-09-08T11:42:29 | 2020-09-08T13:42:29.190 | false                   |",
-            "| 2020-09-08T11:42:29 | 2020-09-08T12:42:29.190 | false                   |",
-            "| 2020-09-08T11:42:29 | 2020-09-08T11:42:29.190 | true                    |",
-            "+---------------------+-------------------------+-------------------------+",
+            "+---------------------------+-------------------------------+-------------------------+",
+            "| ts                        | ts                            | table_a.ts = table_b.ts |",
+            "+---------------------------+-------------------------------+-------------------------+",
+            "| 2020-09-08T13:42:29+00:00 | 2020-09-08T13:42:29.190+00:00 | true                    |",
+            "| 2020-09-08T13:42:29+00:00 | 2020-09-08T12:42:29.190+00:00 | false                   |",
+            "| 2020-09-08T13:42:29+00:00 | 2020-09-08T11:42:29.190+00:00 | false                   |",
+            "| 2020-09-08T12:42:29+00:00 | 2020-09-08T13:42:29.190+00:00 | false                   |",
+            "| 2020-09-08T12:42:29+00:00 | 2020-09-08T12:42:29.190+00:00 | true                    |",
+            "| 2020-09-08T12:42:29+00:00 | 2020-09-08T11:42:29.190+00:00 | false                   |",
+            "| 2020-09-08T11:42:29+00:00 | 2020-09-08T13:42:29.190+00:00 | false                   |",
+            "| 2020-09-08T11:42:29+00:00 | 2020-09-08T12:42:29.190+00:00 | false                   |",
+            "| 2020-09-08T11:42:29+00:00 | 2020-09-08T11:42:29.190+00:00 | true                    |",
+            "+---------------------------+-------------------------------+-------------------------+",
         ];
         assert_batches_eq!(expected, &actual);
     }
@@ -1173,7 +1174,7 @@ async fn to_timestamp_i32() -> Result<()> {
         "+-------------------------------+",
         "| totimestamp(Int64(1))         |",
         "+-------------------------------+",
-        "| 1970-01-01 00:00:00.000000001 |",
+        "| 1970-01-01T00:00:00.000000001 |",
         "+-------------------------------+",
     ];
 
@@ -1538,13 +1539,13 @@ async fn cast_timestamp_to_timestamptz() -> Result<()> {
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
-        "+------------------------------------------------------+------------------------------------+",
-        "| table_a.ts                                           | arrowtypeof(table_a.ts)            |",
-        "+------------------------------------------------------+------------------------------------+",
-        "| 2020-09-08T13:42:29.190855 (Unknown Time Zone 'UTC') | Timestamp(Nanosecond, Some(\"UTC\")) |",
-        "| 2020-09-08T12:42:29.190855 (Unknown Time Zone 'UTC') | Timestamp(Nanosecond, Some(\"UTC\")) |",
-        "| 2020-09-08T11:42:29.190855 (Unknown Time Zone 'UTC') | Timestamp(Nanosecond, Some(\"UTC\")) |",
-        "+------------------------------------------------------+------------------------------------+",
+        "+----------------------------------+---------------------------------------+",
+        "| table_a.ts                       | arrowtypeof(table_a.ts)               |",
+        "+----------------------------------+---------------------------------------+",
+        "| 2020-09-08T13:42:29.190855+00:00 | Timestamp(Nanosecond, Some(\"+00:00\")) |",
+        "| 2020-09-08T12:42:29.190855+00:00 | Timestamp(Nanosecond, Some(\"+00:00\")) |",
+        "| 2020-09-08T11:42:29.190855+00:00 | Timestamp(Nanosecond, Some(\"+00:00\")) |",
+        "+----------------------------------+---------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
