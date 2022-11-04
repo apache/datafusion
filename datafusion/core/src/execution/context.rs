@@ -1595,11 +1595,11 @@ impl SessionState {
             (Some(url), Some(format)) => (url, format),
             _ => return,
         };
-        let url = url.to_string();
-        let format = format.to_string();
-        if url.is_empty() || format.is_empty() {
+        if url.is_null() || format.is_null() {
             return;
         }
+        let url = url.to_string();
+        let format = format.to_string();
         let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
         let authority = match url.host_str() {
             Some(host) => format!("{}://{}", url.scheme(), host),

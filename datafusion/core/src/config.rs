@@ -150,13 +150,13 @@ impl ConfigDefinition {
     pub fn new_string(
         key: impl Into<String>,
         description: impl Into<String>,
-        default_value: String,
+        default_value: Option<String>,
     ) -> Self {
         Self::new(
             key,
             description,
             DataType::Utf8,
-            ScalarValue::Utf8(Some(default_value)),
+            ScalarValue::Utf8(default_value),
         )
     }
 }
@@ -223,7 +223,7 @@ impl BuiltInConfigs {
                 "The session time zone which some function require \
                 e.g. EXTRACT(HOUR from SOME_TIME) shift the underline datetime according to the time zone,
                 then extract the hour.",
-                "UTC".into()
+                Some("UTC".into()),
             ),
             ConfigDefinition::new_bool(
                 OPT_PARQUET_PUSHDOWN_FILTERS,
@@ -259,12 +259,12 @@ impl BuiltInConfigs {
             ConfigDefinition::new_string(
                 OPT_CATALOG_LOCATION,
                 "Location scanned to load tables for `default` schema",
-                "".to_string()
+                None,
             ),
             ConfigDefinition::new_string(
                 OPT_CATALOG_TYPE,
                 "Type of `TableProvider` to use when loading `default` schema",
-                "".to_string()
+                None,
             ),
             ]
         }
