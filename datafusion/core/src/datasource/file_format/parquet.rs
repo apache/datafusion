@@ -532,25 +532,45 @@ pub(crate) mod test_util {
 
     pub async fn store_parquet(
         batches: Vec<RecordBatch>,
+        multi_page: bool,
     ) -> Result<(Vec<ObjectMeta>, Vec<NamedTempFile>)> {
-        let files: Vec<_> = batches
-            .into_iter()
-            .map(|batch| {
-                let mut output = NamedTempFile::new().expect("creating temp file");
+        if multi_page {
+            // All batches write in to one file, each batch must have same schema.
+            let mut output = NamedTempFile::new().expect("creating temp file");
+            let mut builder = WriterProperties::builder();
+            // todo https://github.com/apache/arrow-rs/issues/2941 release change to row limit.
+            builder = builder.set_data_pagesize_limit(1);
+            builder = builder.set_write_batch_size(1);
+            let proper = builder.build();
+            let mut writer =
+                ArrowWriter::try_new(&mut output, batches[0].schema(), Some(proper))
+                    .expect("creating writer");
+            for b in batches {
+                writer.write(&b).expect("Writing batch");
+            }
+            writer.close().unwrap();
+            Ok((vec![local_unpartitioned_file(&output)], vec![output]))
+        } else {
+            // Each batch writes to their own file
+            let files: Vec<_> = batches
+                .into_iter()
+                .map(|batch| {
+                    let mut output = NamedTempFile::new().expect("creating temp file");
 
-                let props = WriterProperties::builder().build();
-                let mut writer =
-                    ArrowWriter::try_new(&mut output, batch.schema(), Some(props))
-                        .expect("creating writer");
+                    let props = WriterProperties::builder().build();
+                    let mut writer =
+                        ArrowWriter::try_new(&mut output, batch.schema(), Some(props))
+                            .expect("creating writer");
 
-                writer.write(&batch).expect("Writing batch");
-                writer.close().unwrap();
-                output
-            })
-            .collect();
+                    writer.write(&batch).expect("Writing batch");
+                    writer.close().unwrap();
+                    output
+                })
+                .collect();
 
-        let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
-        Ok((meta, files))
+            let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
+            Ok((meta, files))
+        }
     }
 }
 
@@ -599,7 +619,7 @@ mod tests {
         let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)]).unwrap();
 
         let store = Arc::new(LocalFileSystem::new()) as _;
-        let (meta, _files) = store_parquet(vec![batch1, batch2]).await?;
+        let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
 
         let format = ParquetFormat::default();
         let schema = format.infer_schema(&store, &meta).await.unwrap();
@@ -738,7 +758,7 @@ mod tests {
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
         )));
-        let (meta, _files) = store_parquet(vec![batch1, batch2]).await?;
+        let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
 
         // Use a size hint larger than the parquet footer but smaller than the actual metadata, requiring a second fetch
         // for the remaining metadata
