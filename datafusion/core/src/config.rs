@@ -68,6 +68,12 @@ pub const OPT_OPTIMIZER_SKIP_FAILED_RULES: &str =
 /// Configuration option "datafusion.optimizer.max_passes"
 pub const OPT_OPTIMIZER_MAX_PASSES: &str = "datafusion.optimizer.max_passes";
 
+/// Location scanned to load tables for `default` schema
+pub const OPT_CATALOG_LOCATION: &str = "datafusion.catalog.location";
+
+/// Type of `TableProvider` to use when loading `default` schema
+pub const OPT_CATALOG_TYPE: &str = "datafusion.catalog.type";
+
 /// Definition of a configuration option
 pub struct ConfigDefinition {
     /// key used to identifier this configuration option
@@ -245,11 +251,22 @@ impl BuiltInConfigs {
                 rule. When set to false, any rules that produce errors will cause the query to fail.",
                 true
             ),
-             ConfigDefinition::new_u64(
-                 OPT_OPTIMIZER_MAX_PASSES,
-                 "Number of times that the optimizer will attempt to optimize the plan",
-                 3
-             )]
+            ConfigDefinition::new_u64(
+                OPT_OPTIMIZER_MAX_PASSES,
+                "Number of times that the optimizer will attempt to optimize the plan",
+                3
+            ),
+            ConfigDefinition::new_string(
+                OPT_CATALOG_LOCATION,
+                "Location scanned to load tables for `default` schema",
+                "".to_string()
+            ),
+            ConfigDefinition::new_string(
+                OPT_CATALOG_TYPE,
+                "Type of `TableProvider` to use when loading `default` schema",
+                "".to_string()
+            ),
+            ]
         }
     }
 
