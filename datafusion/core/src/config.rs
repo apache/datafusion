@@ -263,7 +263,7 @@ impl BuiltInConfigs {
             ),
             ConfigDefinition::new_string(
                 OPT_CATALOG_TYPE,
-                "Type of `TableProvider` to use when loading `default` schema",
+                "Type of `TableProvider` to use when loading `default` schema. Defaults to None",
                 None,
             ),
             ]
