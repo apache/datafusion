@@ -383,23 +383,32 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 expr,
                 list,
                 negated,
-            } if list.len() == 1
-                || list.len() <= THRESHOLD_INLINE_INLIST
-                    && expr.try_into_col().is_ok() =>
+            } if !list.is_empty()
+                && (
+                    // For lists with only 1 value we allow more complex expressions to be simplified
+                    // e.g SUBSTR(c1, 2, 3) IN ('1') -> SUBSTR(c1, 2, 3) = '1'
+                    // for more than one we avoid repeating this potentially expensive
+                    // expressions
+                    list.len() == 1
+                        || list.len() <= THRESHOLD_INLINE_INLIST
+                            && expr.try_into_col().is_ok()
+                ) =>
             {
+                let first_val = list[0].clone();
                 if negated {
                     list.into_iter()
-                        .reduce(|acc, y| {
+                        .skip(1)
+                        .fold((*expr.clone()).not_eq(first_val), |acc, y| {
                             (*expr.clone()).not_eq(y.clone()).and(acc)
-                        }).unwrap()
+                        })
                 } else {
                     list.into_iter()
-                        .reduce(|acc, y| {
+                        .skip(1)
+                        .fold((*expr.clone()).eq(first_val), |acc, y| {
                             (*expr.clone()).eq(y.clone()).or(acc)
-                        }).unwrap()
+                        })
                 }
             }
-
             //
             // Rules for NotEq
             //
