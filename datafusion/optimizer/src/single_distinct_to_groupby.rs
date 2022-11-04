@@ -137,12 +137,14 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                 // - aggr expr
                 let mut alias_expr: Vec<Expr> = Vec::new();
                 for (alias, original_field) in group_expr_alias {
-                    alias_expr.push(col(&alias).alias(original_field.name()));
+                    alias_expr.push(col(&alias).alias(original_field.qualified_name()));
                 }
                 for (i, expr) in new_aggr_exprs.iter().enumerate() {
                     alias_expr.push(columnize_expr(
-                        expr.clone()
-                            .alias(schema.clone().fields()[i + group_expr.len()].name()),
+                        expr.clone().alias(
+                            schema.clone().fields()[i + group_expr.len()]
+                                .qualified_name(),
+                        ),
                         &outer_aggr_schema,
                     ));
                 }
@@ -362,7 +364,7 @@ mod tests {
             .build()?;
 
         // Should work
-        let expected = "Projection: group_alias_0 AS a, COUNT(alias1) AS COUNT(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N]\
+        let expected = "Projection: group_alias_0 AS test.a, COUNT(alias1) AS COUNT(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N]\
                             \n  Aggregate: groupBy=[[group_alias_0]], aggr=[[COUNT(alias1)]] [group_alias_0:UInt32, COUNT(alias1):Int64;N]\
                             \n    Aggregate: groupBy=[[test.a AS group_alias_0, test.b AS alias1]], aggr=[[]] [group_alias_0:UInt32, alias1:UInt32]\
                             \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
@@ -409,7 +411,7 @@ mod tests {
             )?
             .build()?;
         // Should work
-        let expected = "Projection: group_alias_0 AS a, COUNT(alias1) AS COUNT(DISTINCT test.b), MAX(alias1) AS MAX(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N, MAX(DISTINCT test.b):UInt32;N]\
+        let expected = "Projection: group_alias_0 AS test.a, COUNT(alias1) AS COUNT(DISTINCT test.b), MAX(alias1) AS MAX(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):Int64;N, MAX(DISTINCT test.b):UInt32;N]\
                             \n  Aggregate: groupBy=[[group_alias_0]], aggr=[[COUNT(alias1), MAX(alias1)]] [group_alias_0:UInt32, COUNT(alias1):Int64;N, MAX(alias1):UInt32;N]\
                             \n    Aggregate: groupBy=[[test.a AS group_alias_0, test.b AS alias1]], aggr=[[]] [group_alias_0:UInt32, alias1:UInt32]\
                             \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";

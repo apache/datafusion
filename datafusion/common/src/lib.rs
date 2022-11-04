@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod bisect;
+pub mod cast;
 mod column;
 pub mod delta;
 mod dfschema;
@@ -26,6 +27,7 @@ pub mod parsers;
 mod pyarrow;
 pub mod scalar;
 pub mod stats;
+mod table_reference;
 pub mod test_util;
 
 pub use column::Column;
@@ -34,6 +36,7 @@ pub use error::{field_not_found, DataFusionError, Result, SchemaError};
 pub use parsers::parse_interval;
 pub use scalar::{ScalarType, ScalarValue};
 pub use stats::{ColumnStatistics, Statistics};
+pub use table_reference::{ResolvedTableReference, TableReference};
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.

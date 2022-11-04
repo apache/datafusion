@@ -39,6 +39,7 @@ use arrow::{
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 use ordered_float::OrderedFloat;
 
+use crate::cast::as_struct_array;
 use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
 
@@ -2008,15 +2009,7 @@ impl ScalarValue {
                 Self::Dictionary(key_type.clone(), Box::new(value))
             }
             DataType::Struct(fields) => {
-                let array =
-                    array
-                        .as_any()
-                        .downcast_ref::<StructArray>()
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "Failed to downcast ArrayRef to StructArray".to_string(),
-                            )
-                        })?;
+                let array = as_struct_array(array)?;
                 let mut field_values: Vec<ScalarValue> = Vec::new();
                 for col_index in 0..array.num_columns() {
                     let col_array = array.column(col_index);
@@ -3439,26 +3432,26 @@ mod tests {
         let expected = Arc::new(StructArray::from(vec![
             (
                 field_a.clone(),
-                Arc::new(Int32Array::from_slice(&[23, 23])) as ArrayRef,
+                Arc::new(Int32Array::from_slice([23, 23])) as ArrayRef,
             ),
             (
                 field_b.clone(),
-                Arc::new(BooleanArray::from_slice(&[false, false])) as ArrayRef,
+                Arc::new(BooleanArray::from_slice([false, false])) as ArrayRef,
             ),
             (
                 field_c.clone(),
-                Arc::new(StringArray::from_slice(&["Hello", "Hello"])) as ArrayRef,
+                Arc::new(StringArray::from_slice(["Hello", "Hello"])) as ArrayRef,
             ),
             (
                 field_d.clone(),
                 Arc::new(StructArray::from(vec![
                     (
                         field_e.clone(),
-                        Arc::new(Int16Array::from_slice(&[2, 2])) as ArrayRef,
+                        Arc::new(Int16Array::from_slice([2, 2])) as ArrayRef,
                     ),
                     (
                         field_f.clone(),
-                        Arc::new(Int64Array::from_slice(&[3, 3])) as ArrayRef,
+                        Arc::new(Int64Array::from_slice([3, 3])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
             ),
@@ -3534,15 +3527,15 @@ mod tests {
         let expected = Arc::new(StructArray::from(vec![
             (
                 field_a,
-                Arc::new(Int32Array::from_slice(&[23, 7, -1000])) as ArrayRef,
+                Arc::new(Int32Array::from_slice([23, 7, -1000])) as ArrayRef,
             ),
             (
                 field_b,
-                Arc::new(BooleanArray::from_slice(&[false, true, true])) as ArrayRef,
+                Arc::new(BooleanArray::from_slice([false, true, true])) as ArrayRef,
             ),
             (
                 field_c,
-                Arc::new(StringArray::from_slice(&["Hello", "World", "!!!!!"]))
+                Arc::new(StringArray::from_slice(["Hello", "World", "!!!!!"]))
                     as ArrayRef,
             ),
             (
@@ -3550,11 +3543,11 @@ mod tests {
                 Arc::new(StructArray::from(vec![
                     (
                         field_e,
-                        Arc::new(Int16Array::from_slice(&[2, 4, 6])) as ArrayRef,
+                        Arc::new(Int16Array::from_slice([2, 4, 6])) as ArrayRef,
                     ),
                     (
                         field_f,
-                        Arc::new(Int64Array::from_slice(&[3, 5, 7])) as ArrayRef,
+                        Arc::new(Int64Array::from_slice([3, 5, 7])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
             ),
@@ -3611,12 +3604,11 @@ mod tests {
         // iter_to_array for struct scalars
         let array =
             ScalarValue::iter_to_array(vec![s0.clone(), s1.clone(), s2.clone()]).unwrap();
-        let array = array.as_any().downcast_ref::<StructArray>().unwrap();
-
+        let array = as_struct_array(&array).unwrap();
         let expected = StructArray::from(vec![
             (
                 field_a.clone(),
-                Arc::new(StringArray::from_slice(&["First", "Second", "Third"]))
+                Arc::new(StringArray::from_slice(["First", "Second", "Third"]))
                     as ArrayRef,
             ),
             (

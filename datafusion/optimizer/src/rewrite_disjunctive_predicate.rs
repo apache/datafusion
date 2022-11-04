@@ -122,11 +122,7 @@ impl RewriteDisjunctivePredicate {
     pub fn new() -> Self {
         Self::default()
     }
-    fn rewrite_disjunctive_predicate(
-        &self,
-        plan: &LogicalPlan,
-        _optimizer_config: &OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+    fn rewrite_disjunctive_predicate(plan: &LogicalPlan) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(filter) => {
                 let predicate = predicate(filter.predicate())?;
@@ -134,10 +130,7 @@ impl RewriteDisjunctivePredicate {
                 let rewritten_expr = normalize_predicate(rewritten_predicate);
                 Ok(LogicalPlan::Filter(Filter::try_new(
                     rewritten_expr,
-                    Arc::new(self.rewrite_disjunctive_predicate(
-                        filter.input(),
-                        _optimizer_config,
-                    )?),
+                    Arc::new(Self::rewrite_disjunctive_predicate(filter.input())?),
                 )?))
             }
             _ => {
@@ -145,9 +138,7 @@ impl RewriteDisjunctivePredicate {
                 let inputs = plan.inputs();
                 let new_inputs = inputs
                     .iter()
-                    .map(|input| {
-                        self.rewrite_disjunctive_predicate(input, _optimizer_config)
-                    })
+                    .map(|input| Self::rewrite_disjunctive_predicate(input))
                     .collect::<Result<Vec<_>>>()?;
                 from_plan(plan, &expr, &new_inputs)
             }
@@ -159,9 +150,9 @@ impl OptimizerRule for RewriteDisjunctivePredicate {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        _optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        self.rewrite_disjunctive_predicate(plan, optimizer_config)
+        Self::rewrite_disjunctive_predicate(plan)
     }
 
     fn name(&self) -> &str {

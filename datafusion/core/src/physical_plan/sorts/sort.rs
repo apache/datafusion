@@ -653,7 +653,7 @@ fn write_sorted(
 }
 
 fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: &Path) -> Result<()> {
-    let file = BufReader::new(File::open(&path)?);
+    let file = BufReader::new(File::open(path)?);
     let reader = FileReader::try_new(file, None)?;
     for batch in reader {
         sender

@@ -25,6 +25,7 @@ pub mod equivalence;
 pub mod execution_props;
 pub mod expressions;
 pub mod functions;
+pub mod hash_utils;
 pub mod math_expressions;
 mod physical_expr;
 pub mod planner;

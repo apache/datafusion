@@ -1111,6 +1111,11 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateView".to_string(),
                     ))
                 }
+                LogicalPlan::SetVariable(_) => {
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: SetVariable must be root of the plan".to_string(),
+                    ))
+                }
                 LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),
                 )),
@@ -2049,8 +2054,9 @@ mod tests {
             .build()?;
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
-        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"1\") }], negated: false, set: None }";
-        assert!(format!("{:?}", execution_plan).contains(expected));
+        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"1\") }], negated: false }";
+        let actual = format!("{:?}", execution_plan);
+        assert!(actual.contains(expected), "{}", actual);
 
         Ok(())
     }
@@ -2080,50 +2086,6 @@ mod tests {
             Box::new(vec![Field::new("foo", DataType::Boolean, false)]),
         );
         lit(struct_literal)
-    }
-
-    #[tokio::test]
-    async fn in_set_test() -> Result<()> {
-        // OPTIMIZER_INSET_THRESHOLD = 10
-        // expression: "a in ('a', 1, 2, ..30)"
-        let mut list = vec![Expr::Literal(ScalarValue::Utf8(Some("a".to_string())))];
-        for i in 1..31 {
-            list.push(Expr::Literal(ScalarValue::Int64(Some(i))));
-        }
-        let logical_plan = test_csv_scan()
-            .await?
-            .filter(col("c12").lt(lit(0.05)))?
-            .project(vec![col("c1").in_list(list, false)])?
-            .build()?;
-        let execution_plan = plan(&logical_plan).await?;
-        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"1\") }, Literal { value: Utf8(\"2\") },";
-        assert!(format!("{:?}", execution_plan).contains(expected));
-        let expected =
-            "Literal { value: Utf8(\"30\") }], negated: false, set: Some(InSet { set: ";
-        assert!(format!("{:?}", execution_plan).contains(expected));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn in_set_null_test() -> Result<()> {
-        // test NULL
-        let mut list = vec![Expr::Literal(ScalarValue::Int64(None))];
-        for i in 1..31 {
-            list.push(Expr::Literal(ScalarValue::Int64(Some(i))));
-        }
-
-        let logical_plan = test_csv_scan()
-            .await?
-            .filter(col("c12").lt(lit(0.05)))?
-            .project(vec![col("c1").in_list(list, false)])?
-            .build()?;
-        let execution_plan = plan(&logical_plan).await?;
-        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(NULL) }, Literal { value: Utf8(\"1\") }, Literal { value: Utf8(\"2\") }";
-        assert!(format!("{:?}", execution_plan).contains(expected));
-        let expected =
-            "Literal { value: Utf8(\"30\") }], negated: false, set: Some(InSet";
-        assert!(format!("{:?}", execution_plan).contains(expected));
-        Ok(())
     }
 
     #[tokio::test]

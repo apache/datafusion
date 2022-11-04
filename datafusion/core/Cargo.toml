@@ -57,6 +57,7 @@ unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 apache-avro = { version = "0.14", optional = true }
 arrow = { version = "25.0.0", features = ["prettyprint"] }
+
 async-compression = { version = "0.3.14", features = ["bzip2", "gzip", "futures-io", "tokio"] }
 async-trait = "0.1.41"
 bytes = "1.1"

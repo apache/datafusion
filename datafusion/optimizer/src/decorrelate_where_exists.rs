@@ -136,15 +136,13 @@ fn optimize_exists(
     let subqry_filter = match query_info.query.subquery.as_ref() {
         LogicalPlan::Distinct(subqry_distinct) => match subqry_distinct.input.as_ref() {
             LogicalPlan::Projection(subqry_proj) => {
-                Filter::try_from_plan(&*subqry_proj.input)
+                Filter::try_from_plan(&subqry_proj.input)
             }
             _ => Err(DataFusionError::NotImplemented(
                 "Subquery currently only supports distinct or projection".to_string(),
             )),
         },
-        LogicalPlan::Projection(subqry_proj) => {
-            Filter::try_from_plan(&*subqry_proj.input)
-        }
+        LogicalPlan::Projection(subqry_proj) => Filter::try_from_plan(&subqry_proj.input),
         _ => Err(DataFusionError::NotImplemented(
             "Subquery currently only supports distinct or projection".to_string(),
         )),

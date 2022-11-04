@@ -538,14 +538,14 @@ async fn csv_query_count_star() {
 }
 
 #[tokio::test]
-async fn csv_query_count_one() {
+async fn csv_query_count_literal() {
     let ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&ctx).await;
-    let sql = "SELECT COUNT(1) FROM aggregate_test_100";
+    let sql = "SELECT COUNT(2) FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
-        "| COUNT(UInt8(1)) |",
+        "| COUNT(Int64(2)) |",
         "+-----------------+",
         "| 100             |",
         "+-----------------+",
@@ -2016,11 +2016,11 @@ async fn simple_avg() -> Result<()> {
 
     let batch1 = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
+        vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
     )?;
     let batch2 = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
+        vec![Arc::new(Int32Array::from_slice([4, 5]))],
     )?;
 
     let ctx = SessionContext::new();
@@ -2051,11 +2051,11 @@ async fn simple_mean() -> Result<()> {
 
     let batch1 = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
+        vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
     )?;
     let batch2 = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
+        vec![Arc::new(Int32Array::from_slice([4, 5]))],
     )?;
 
     let ctx = SessionContext::new();

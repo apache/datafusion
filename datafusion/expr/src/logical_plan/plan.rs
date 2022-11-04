@@ -106,6 +106,8 @@ pub enum LogicalPlan {
     Extension(Extension),
     /// Remove duplicate rows from the input
     Distinct(Distinct),
+    /// Set a Varaible
+    SetVariable(SetVariable),
 }
 
 impl LogicalPlan {
@@ -144,6 +146,7 @@ impl LogicalPlan {
             LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => schema,
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
             LogicalPlan::DropView(DropView { schema, .. }) => schema,
+            LogicalPlan::SetVariable(SetVariable { schema, .. }) => schema,
         }
     }
 
@@ -200,7 +203,9 @@ impl LogicalPlan {
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::Distinct(Distinct { input, .. }) => input.all_schemas(),
-            LogicalPlan::DropTable(_) | LogicalPlan::DropView(_) => vec![],
+            LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_)
+            | LogicalPlan::SetVariable(_) => vec![],
         }
     }
 
@@ -260,6 +265,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze { .. }
@@ -305,6 +311,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_) => vec![],
         }
     }
@@ -455,6 +462,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateCatalogSchema(_)
             | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
+            | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_) => true,
         };
         if !recurse {
@@ -486,7 +494,7 @@ impl LogicalPlan {
     fn all_inputs(&self) -> Vec<Arc<LogicalPlan>> {
         let mut inputs = vec![];
         for expr in self.expressions() {
-            self.collect_subqueries(&expr, &mut inputs);
+            Self::collect_subqueries(&expr, &mut inputs);
         }
         for input in self.inputs() {
             inputs.push(Arc::new(input.clone()));
@@ -494,11 +502,11 @@ impl LogicalPlan {
         inputs
     }
 
-    fn collect_subqueries(&self, expr: &Expr, sub: &mut Vec<Arc<LogicalPlan>>) {
+    fn collect_subqueries(expr: &Expr, sub: &mut Vec<Arc<LogicalPlan>>) {
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-                self.collect_subqueries(left, sub);
-                self.collect_subqueries(right, sub);
+                Self::collect_subqueries(left, sub);
+                Self::collect_subqueries(right, sub);
             }
             Expr::Exists { subquery, .. } => {
                 sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
@@ -939,6 +947,11 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "DropView: {:?} if not exist:={}", name, if_exists)
                     }
+                    LogicalPlan::SetVariable(SetVariable {
+                        variable, value, ..
+                    }) => {
+                        write!(f, "SetVariable: set {:?} to {:?}", variable, value)
+                    }
                     LogicalPlan::Distinct(Distinct { .. }) => {
                         write!(f, "Distinct:")
                     }
@@ -1051,6 +1064,17 @@ pub struct DropView {
     pub name: String,
     /// If the view exists
     pub if_exists: bool,
+    /// Dummy schema
+    pub schema: DFSchemaRef,
+}
+
+/// Set a Variable -- value in [`ConfigOptions`]
+#[derive(Clone)]
+pub struct SetVariable {
+    /// The variable name
+    pub variable: String,
+    /// The value to set
+    pub value: String,
     /// Dummy schema
     pub schema: DFSchemaRef,
 }
@@ -1488,6 +1512,7 @@ impl Subquery {
     pub fn try_from_expr(plan: &Expr) -> datafusion_common::Result<&Subquery> {
         match plan {
             Expr::ScalarSubquery(it) => Ok(it),
+            Expr::Cast(cast) => Subquery::try_from_expr(cast.expr.as_ref()),
             _ => plan_err!("Could not coerce into ScalarSubquery!"),
         }
     }

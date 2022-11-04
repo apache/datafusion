@@ -20,8 +20,7 @@
 
 pub mod parser;
 pub mod planner;
-mod table_reference;
 pub mod utils;
 
+pub use datafusion_common::{ResolvedTableReference, TableReference};
 pub use sqlparser;
-pub use table_reference::{ResolvedTableReference, TableReference};

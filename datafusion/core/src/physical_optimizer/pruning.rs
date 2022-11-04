@@ -445,7 +445,7 @@ impl<'a> PruningExpressionBuilder<'a> {
         let (column_expr, scalar_expr, columns, correct_operator) =
             match (left_columns.len(), right_columns.len()) {
                 (1, 0) => (left, right, left_columns, op),
-                (0, 1) => (right, left, right_columns, reverse_operator(op)),
+                (0, 1) => (right, left, right_columns, reverse_operator(op)?),
                 _ => {
                     // if more than one column used in expression - not supported
                     return Err(DataFusionError::Plan(
@@ -547,7 +547,7 @@ fn rewrite_expr_to_prunable(
         // `-col > lit()`  --> `col < -lit()`
         Expr::Negative(c) => {
             let (left, op, right) = rewrite_expr_to_prunable(c, op, scalar_expr, schema)?;
-            Ok((left, reverse_operator(op), Expr::Negative(Box::new(right))))
+            Ok((left, reverse_operator(op)?, Expr::Negative(Box::new(right))))
         }
         // `!col = true` --> `col = !true`
         Expr::Not(c) => {
@@ -560,7 +560,7 @@ fn rewrite_expr_to_prunable(
             return match c.as_ref() {
                 Expr::Column(_) => Ok((
                     c.as_ref().clone(),
-                    reverse_operator(op),
+                    reverse_operator(op)?,
                     Expr::Not(Box::new(scalar_expr.clone())),
                 )),
                 _ => Err(DataFusionError::Plan(format!(
@@ -641,14 +641,13 @@ fn rewrite_column_expr(
     })
 }
 
-fn reverse_operator(op: Operator) -> Operator {
-    match op {
-        Operator::Lt => Operator::Gt,
-        Operator::Gt => Operator::Lt,
-        Operator::LtEq => Operator::GtEq,
-        Operator::GtEq => Operator::LtEq,
-        _ => op,
-    }
+fn reverse_operator(op: Operator) -> Result<Operator> {
+    op.swap().ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "Could not reverse operator {} while building pruning predicate",
+            op
+        ))
+    })
 }
 
 /// Given a column reference to `column`, returns a pruning
@@ -1220,7 +1219,7 @@ mod tests {
 
         // Note the statistics return binary (which can't be cast to string)
         let statistics = OneContainerStats {
-            min_values: Some(Arc::new(BinaryArray::from_slice(&[&[255u8] as &[u8]]))),
+            min_values: Some(Arc::new(BinaryArray::from_slice([&[255u8] as &[u8]]))),
             max_values: None,
             num_containers: 1,
         };

@@ -48,14 +48,13 @@ fn build() -> Result<(), String> {
         .map_err(|e| format!("protobuf compilation failed: {}", e))?;
 
     let descriptor_set = std::fs::read(&descriptor_path)
-        .expect(&*format!("Cannot read {:?}", &descriptor_path));
+        .unwrap_or_else(|e| panic!("Cannot read {:?}: {}", &descriptor_path, e));
 
     pbjson_build::Builder::new()
         .register_descriptors(&descriptor_set)
-        .expect(&*format!(
-            "Cannot register descriptors {:?}",
-            &descriptor_set
-        ))
+        .unwrap_or_else(|e| {
+            panic!("Cannot register descriptors {:?}: {}", &descriptor_set, e)
+        })
         .build(&[".datafusion"])
         .map_err(|e| format!("pbjson compilation failed: {}", e))?;
 
