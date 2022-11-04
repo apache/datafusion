@@ -405,7 +405,6 @@ pub fn build_row_filter(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::physical_plan::file_format::row_filter::FilterCandidateBuilder;
     use arrow::datatypes::Field;
     use datafusion_expr::{cast, col, lit};
     use parquet::arrow::parquet_to_arrow_schema;
