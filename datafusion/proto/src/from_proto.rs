@@ -656,7 +656,7 @@ impl TryFrom<&protobuf::PrimitiveScalarType> for ScalarValue {
             PrimitiveScalarType::Binary => Self::Binary(None),
             PrimitiveScalarType::LargeBinary => Self::LargeBinary(None),
             PrimitiveScalarType::Date32 => Self::Date32(None),
-            PrimitiveScalarType::Time64 => Self::Time64Nanosecond(None),
+            PrimitiveScalarType::Time64 => Self::Time64(None),
             PrimitiveScalarType::TimestampMicrosecond => {
                 Self::TimestampMicrosecond(None, None)
             }
@@ -765,7 +765,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 )
             }
             Value::Date64Value(v) => Self::Date64(Some(*v)),
-            Value::Time64Value(v) => Self::Time64Nanosecond(Some(*v)),
+            Value::Time64Value(v) => Self::Time64(Some(*v)),
             Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
             Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(*v)),
             Value::TimestampValue(v) => {
@@ -1513,7 +1513,7 @@ fn typechecked_scalar_value_conversion(
                     PrimitiveScalarType::Utf8 => ScalarValue::Utf8(None),
                     PrimitiveScalarType::LargeUtf8 => ScalarValue::LargeUtf8(None),
                     PrimitiveScalarType::Date32 => ScalarValue::Date32(None),
-                    PrimitiveScalarType::Time64 => ScalarValue::Time64Nanosecond(None),
+                    PrimitiveScalarType::Time64 => ScalarValue::Time64(None),
                     PrimitiveScalarType::TimestampMicrosecond => {
                         ScalarValue::TimestampMicrosecond(None, None)
                     }

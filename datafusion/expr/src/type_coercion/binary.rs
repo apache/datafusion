@@ -20,9 +20,7 @@
 use crate::type_coercion::is_numeric;
 use crate::Operator;
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{
-    DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-};
+use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE};
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 
@@ -517,6 +515,7 @@ fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 /// casted to for the purpose of a date computation
 fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
+    use arrow::datatypes::TimeUnit;
     match (lhs_type, rhs_type) {
         (Date64, Date32) => Some(Date64),
         (Date32, Date64) => Some(Date64),
@@ -524,22 +523,6 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         (Date32, Utf8) => Some(Date32),
         (Utf8, Date64) => Some(Date64),
         (Date64, Utf8) => Some(Date64),
-        (Utf8, Time32(unit)) => match check_time_unit(Time32(unit.clone())) {
-            None => None,
-            Some(unit) => Some(Time32(unit)),
-        },
-        (Time32(unit), Utf8) => match check_time_unit(Time32(unit.clone())) {
-            None => None,
-            Some(unit) => Some(Time32(unit)),
-        },
-        (Utf8, Time64(unit)) => match check_time_unit(Time64(unit.clone())) {
-            None => None,
-            Some(unit) => Some(Time64(unit)),
-        },
-        (Time64(unit), Utf8) => match check_time_unit(Time64(unit.clone())) {
-            None => None,
-            Some(unit) => Some(Time64(unit)),
-        },
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
                 // can't cast across timezones
@@ -636,17 +619,6 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
                 None
             }
         }
-        _ => None,
-    }
-}
-
-fn check_time_unit(datatype: DataType) -> Option<TimeUnit> {
-    use arrow::datatypes::DataType::*;
-    match datatype {
-        Time32(TimeUnit::Second) => Some(TimeUnit::Second),
-        Time32(TimeUnit::Millisecond) => Some(TimeUnit::Millisecond),
-        Time64(TimeUnit::Microsecond) => Some(TimeUnit::Microsecond),
-        Time64(TimeUnit::Nanosecond) => Some(TimeUnit::Nanosecond),
         _ => None,
     }
 }
@@ -851,30 +823,6 @@ mod tests {
             DataType::Date64,
             Operator::Lt,
             DataType::Date64
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Time32(TimeUnit::Second),
-            Operator::Eq,
-            DataType::Time32(TimeUnit::Second)
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Time32(TimeUnit::Millisecond),
-            Operator::Eq,
-            DataType::Time32(TimeUnit::Millisecond)
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Time64(TimeUnit::Microsecond),
-            Operator::Eq,
-            DataType::Time64(TimeUnit::Microsecond)
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Time64(TimeUnit::Nanosecond),
-            Operator::Eq,
-            DataType::Time64(TimeUnit::Nanosecond)
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
