@@ -40,6 +40,8 @@ pub struct ExprSimplifier<S> {
     info: S,
 }
 
+const THRESHOLD_INLINE_INLIST: usize = 3;
+
 impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// Create a new `ExprSimplifier` with the given `info` such as an
     /// instance of [`SimplifyContext`]. See
@@ -365,7 +367,48 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                     None => lit_bool_null(),
                 }
             }
+            // expr IN () --> false
+            // expr NOT IN () --> true
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
+                lit(negated)
+            }
 
+            // if expr is a single column reference:
+            // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } if !list.is_empty()
+                && (
+                    // For lists with only 1 value we allow more complex expressions to be simplified
+                    // e.g SUBSTR(c1, 2, 3) IN ('1') -> SUBSTR(c1, 2, 3) = '1'
+                    // for more than one we avoid repeating this potentially expensive
+                    // expressions
+                    list.len() == 1
+                        || list.len() <= THRESHOLD_INLINE_INLIST
+                            && expr.try_into_col().is_ok()
+                ) =>
+            {
+                let first_val = list[0].clone();
+                if negated {
+                    list.into_iter()
+                        .skip(1)
+                        .fold((*expr.clone()).not_eq(first_val), |acc, y| {
+                            (*expr.clone()).not_eq(y).and(acc)
+                        })
+                } else {
+                    list.into_iter()
+                        .skip(1)
+                        .fold((*expr.clone()).eq(first_val), |acc, y| {
+                            (*expr.clone()).eq(y).or(acc)
+                        })
+                }
+            }
             //
             // Rules for NotEq
             //
@@ -1747,6 +1790,37 @@ mod tests {
             lit_bool_null(),
         );
         assert_eq!(expected_expr, result);
+    }
+
+    #[test]
+    fn simplify_inlist() {
+        assert_eq!(simplify(in_list(col("c1"), vec![], false)), lit(false));
+        assert_eq!(simplify(in_list(col("c1"), vec![], true)), lit(true));
+
+        assert_eq!(
+            simplify(in_list(col("c1"), vec![lit(1)], false)),
+            col("c1").eq(lit(1))
+        );
+        assert_eq!(
+            simplify(in_list(col("c1"), vec![lit(1)], true)),
+            col("c1").not_eq(lit(1))
+        );
+
+        // more complex expressions can be simplified if list contains
+        // one element only
+        assert_eq!(
+            simplify(in_list(col("c1") * lit(10), vec![lit(2)], false)),
+            (col("c1") * lit(10)).eq(lit(2))
+        );
+
+        assert_eq!(
+            simplify(in_list(col("c1"), vec![lit(1), lit(2)], false)),
+            col("c1").eq(lit(2)).or(col("c1").eq(lit(1)))
+        );
+        assert_eq!(
+            simplify(in_list(col("c1"), vec![lit(1), lit(2)], true)),
+            col("c1").not_eq(lit(2)).and(col("c1").not_eq(lit(1)))
+        );
     }
 
     #[test]
