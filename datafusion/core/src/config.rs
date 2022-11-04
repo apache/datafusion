@@ -223,7 +223,7 @@ impl BuiltInConfigs {
                 "The session time zone which some function require \
                 e.g. EXTRACT(HOUR from SOME_TIME) shift the underline datetime according to the time zone,
                 then extract the hour.",
-                Some("UTC".into()),
+                Some("+00:00".into()),
             ),
             ConfigDefinition::new_bool(
                 OPT_PARQUET_PUSHDOWN_FILTERS,
