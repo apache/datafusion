@@ -1793,7 +1793,7 @@ mod tests {
     }
 
     #[test]
-    fn simplify_inlist() {
+    fn simplify_inlist() {  
         assert_eq!(simplify(in_list(col("c1"), vec![], false)), lit(false));
         assert_eq!(simplify(in_list(col("c1"), vec![], true)), lit(true));
 
@@ -1806,10 +1806,11 @@ mod tests {
             col("c1").not_eq(lit(1))
         );
 
-        // more complex expressions can be simplified
+        // more complex expressions can be simplified if list contains
+        // one element only
         assert_eq!(
             simplify(in_list(col("c1") * lit(10), vec![lit(2)], false)),
-            col("c1") * lit(10).eq(lit(1))
+            (col("c1") * lit(10)).eq(lit(2))
         );
 
         assert_eq!(
