@@ -192,14 +192,14 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
     let t1_data = RecordBatch::try_new(
         t1_schema,
         vec![
-            Arc::new(UInt32Array::from_slice(&[11, 22, 33, 44])),
+            Arc::new(UInt32Array::from_slice([11, 22, 33, 44])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
                 Some("c"),
                 Some("d"),
             ])),
-            Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4])),
+            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
         ],
     )?;
     ctx.register_batch("t1", t1_data)?;
@@ -212,14 +212,14 @@ fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionC
     let t2_data = RecordBatch::try_new(
         t2_schema,
         vec![
-            Arc::new(UInt32Array::from_slice(&[11, 22, 44, 55])),
+            Arc::new(UInt32Array::from_slice([11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
                 Some("z"),
                 Some("y"),
                 Some("x"),
                 Some("w"),
             ])),
-            Arc::new(UInt32Array::from_slice(&[3, 1, 3, 3])),
+            Arc::new(UInt32Array::from_slice([3, 1, 3, 3])),
         ],
     )?;
     ctx.register_batch("t2", t2_data)?;
@@ -241,9 +241,9 @@ fn create_join_context_qualified(
     let t1_data = RecordBatch::try_new(
         t1_schema,
         vec![
-            Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4])),
-            Arc::new(UInt32Array::from_slice(&[10, 20, 30, 40])),
-            Arc::new(UInt32Array::from_slice(&[50, 60, 70, 80])),
+            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
+            Arc::new(UInt32Array::from_slice([10, 20, 30, 40])),
+            Arc::new(UInt32Array::from_slice([50, 60, 70, 80])),
         ],
     )?;
     ctx.register_batch(left_name, t1_data)?;
@@ -256,9 +256,9 @@ fn create_join_context_qualified(
     let t2_data = RecordBatch::try_new(
         t2_schema,
         vec![
-            Arc::new(UInt32Array::from_slice(&[1, 2, 9, 4])),
-            Arc::new(UInt32Array::from_slice(&[100, 200, 300, 400])),
-            Arc::new(UInt32Array::from_slice(&[500, 600, 700, 800])),
+            Arc::new(UInt32Array::from_slice([1, 2, 9, 4])),
+            Arc::new(UInt32Array::from_slice([100, 200, 300, 400])),
+            Arc::new(UInt32Array::from_slice([500, 600, 700, 800])),
         ],
     )?;
     ctx.register_batch(right_name, t2_data)?;
@@ -350,7 +350,7 @@ fn create_join_context_unbalanced(
     let t1_data = RecordBatch::try_new(
         t1_schema,
         vec![
-            Arc::new(UInt32Array::from_slice(&[11, 22, 33, 44, 77])),
+            Arc::new(UInt32Array::from_slice([11, 22, 33, 44, 77])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
@@ -369,7 +369,7 @@ fn create_join_context_unbalanced(
     let t2_data = RecordBatch::try_new(
         t2_schema,
         vec![
-            Arc::new(UInt32Array::from_slice(&[11, 22, 44, 55])),
+            Arc::new(UInt32Array::from_slice([11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
                 Some("z"),
                 Some("y"),

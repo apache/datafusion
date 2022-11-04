@@ -323,7 +323,6 @@ impl LogicalPlanBuilder {
 
     /// Add missing sort columns to all downstream projection
     fn add_missing_columns(
-        &self,
         curr_plan: LogicalPlan,
         missing_cols: &[Column],
     ) -> Result<LogicalPlan> {
@@ -354,7 +353,7 @@ impl LogicalPlanBuilder {
                     .inputs()
                     .into_iter()
                     .map(|input_plan| {
-                        self.add_missing_columns((*input_plan).clone(), missing_cols)
+                        Self::add_missing_columns((*input_plan).clone(), missing_cols)
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -399,7 +398,7 @@ impl LogicalPlanBuilder {
             })));
         }
 
-        let plan = self.add_missing_columns(self.plan.clone(), &missing_cols)?;
+        let plan = Self::add_missing_columns(self.plan.clone(), &missing_cols)?;
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_cols(exprs, &plan)?,
             input: Arc::new(plan.clone()),

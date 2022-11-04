@@ -257,8 +257,8 @@ impl Accumulator for CovarianceAccumulator {
             let value1 = arr1.next();
             let value2 = arr2.next();
 
-            if value1 == None || value2 == None {
-                if value1 == None && value2 == None {
+            if value1.is_none() || value2.is_none() {
+                if value1.is_none() && value2.is_none() {
                     continue;
                 } else {
                     return Err(DataFusionError::Internal(
@@ -295,8 +295,8 @@ impl Accumulator for CovarianceAccumulator {
             let value1 = arr1.next();
             let value2 = arr2.next();
 
-            if value1 == None || value2 == None {
-                if value1 == None && value2 == None {
+            if value1.is_none() || value2.is_none() {
+                if value1.is_none() && value2.is_none() {
                     continue;
                 } else {
                     return Err(DataFusionError::Internal(

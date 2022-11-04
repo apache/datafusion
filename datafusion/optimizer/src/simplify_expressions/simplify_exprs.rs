@@ -51,13 +51,12 @@ impl OptimizerRule for SimplifyExpressions {
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time =
             optimizer_config.query_execution_start_time();
-        self.optimize_internal(plan, &execution_props)
+        Self::optimize_internal(plan, &execution_props)
     }
 }
 
 impl SimplifyExpressions {
     fn optimize_internal(
-        &self,
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
@@ -78,7 +77,7 @@ impl SimplifyExpressions {
         let new_inputs = plan
             .inputs()
             .iter()
-            .map(|input| self.optimize_internal(input, execution_props))
+            .map(|input| Self::optimize_internal(input, execution_props))
             .collect::<Result<Vec<_>>>()?;
 
         let expr = plan

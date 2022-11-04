@@ -471,7 +471,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
                     escape_char: escape_char
                         .map(|ch| ch.to_string())
-                        .unwrap_or_else(|| "".to_string()),
+                        .unwrap_or_default()
                 });
                 Self {
                     expr_type: Some(ExprType::Like(pb)),
@@ -484,7 +484,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
                     escape_char: escape_char
                         .map(|ch| ch.to_string())
-                        .unwrap_or_else(|| "".to_string()),
+                        .unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::Ilike(pb)),
@@ -497,7 +497,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
                     escape_char: escape_char
                         .map(|ch| ch.to_string())
-                        .unwrap_or_else(|| "".to_string()),
+                        .unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::SimilarTo(pb)),
