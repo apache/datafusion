@@ -258,7 +258,7 @@ impl BuiltInConfigs {
             ),
             ConfigDefinition::new_string(
                 OPT_CATALOG_LOCATION,
-                "Location scanned to load tables for `default` schema",
+                "Location scanned to load tables for `default` schema, defaults to None",
                 None,
             ),
             ConfigDefinition::new_string(
