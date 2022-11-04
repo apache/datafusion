@@ -698,6 +698,8 @@ async fn show_all() {
         "+-------------------------------------------------+---------+",
         "| name                                            | setting |",
         "+-------------------------------------------------+---------+",
+        "| datafusion.catalog.location                     |         |",
+        "| datafusion.catalog.type                         |         |",
         "| datafusion.execution.batch_size                 | 8192    |",
         "| datafusion.execution.coalesce_batches           | true    |",
         "| datafusion.execution.coalesce_target_batch_size | 4096    |",

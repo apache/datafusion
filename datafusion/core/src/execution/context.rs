@@ -1521,39 +1521,7 @@ impl SessionState {
                 )
                 .expect("memory catalog provider can register schema");
 
-            let url = config
-                .config_options
-                .read()
-                .get("datafusion.catalog.location");
-            let format = config.config_options.read().get("datafusion.catalog.type");
-            if let (Some(url), Some(format)) = (url, format) {
-                let url = Url::parse(url.to_string().as_str())
-                    .expect("Invalid default catalog location!");
-                let authority = match url.host_str() {
-                    Some(host) => format!("{}://{}", url.scheme(), host),
-                    None => format!("{}://", url.scheme()),
-                };
-                let path = &url.as_str()[authority.len() as usize..];
-                let path =
-                    object_store::path::Path::parse(path).expect("Can't parse path");
-                let store = ObjectStoreUrl::parse(authority.as_str())
-                    .expect("Invalid default catalog url");
-                if let Ok(store) = runtime.object_store(store) {
-                    if let Some(factory) =
-                        runtime.table_factories.get(format.to_string().as_str())
-                    {
-                        let schema = ListingSchemaProvider::new(
-                            authority,
-                            path,
-                            factory.clone(),
-                            store,
-                        );
-                        let _ = default_catalog
-                            .register_schema("default", Arc::new(schema))
-                            .expect("Failed to register default schema");
-                    }
-                }
-            }
+            Self::register_default_schema(&config, &runtime, &default_catalog);
 
             let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema {
                 Arc::new(CatalogWithInformationSchema::new(
@@ -1610,6 +1578,47 @@ impl SessionState {
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
+        }
+    }
+
+    fn register_default_schema(
+        config: &SessionConfig,
+        runtime: &Arc<RuntimeEnv>,
+        default_catalog: &MemoryCatalogProvider,
+    ) {
+        let url = config
+            .config_options
+            .read()
+            .get("datafusion.catalog.location");
+        let format = config.config_options.read().get("datafusion.catalog.type");
+        let (url, format) = match (url, format) {
+            (Some(url), Some(format)) => (url, format),
+            _ => return,
+        };
+        let url = url.to_string();
+        let format = format.to_string();
+        if url.is_empty() || format.is_empty() {
+            return;
+        }
+        let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
+        let authority = match url.host_str() {
+            Some(host) => format!("{}://{}", url.scheme(), host),
+            None => format!("{}://", url.scheme()),
+        };
+        let path = &url.as_str()[authority.len() as usize..];
+        let path = object_store::path::Path::parse(path).expect("Can't parse path");
+        let store = ObjectStoreUrl::parse(authority.as_str())
+            .expect("Invalid default catalog url");
+        if let Ok(store) = runtime.object_store(store) {
+            if let Some(factory) =
+                runtime.table_factories.get(format.to_string().as_str())
+            {
+                let schema =
+                    ListingSchemaProvider::new(authority, path, factory.clone(), store);
+                let _ = default_catalog
+                    .register_schema("default", Arc::new(schema))
+                    .expect("Failed to register default schema");
+            }
         }
     }
 
