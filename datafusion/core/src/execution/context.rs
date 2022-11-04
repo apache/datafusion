@@ -1609,17 +1609,18 @@ impl SessionState {
         let path = object_store::path::Path::parse(path).expect("Can't parse path");
         let store = ObjectStoreUrl::parse(authority.as_str())
             .expect("Invalid default catalog url");
-        if let Ok(store) = runtime.object_store(store) {
-            if let Some(factory) =
-                runtime.table_factories.get(format.to_string().as_str())
-            {
-                let schema =
-                    ListingSchemaProvider::new(authority, path, factory.clone(), store);
-                let _ = default_catalog
-                    .register_schema("default", Arc::new(schema))
-                    .expect("Failed to register default schema");
-            }
-        }
+        let store = match runtime.object_store(store) {
+            Ok(store) => store,
+            _ => return,
+        };
+        let factory = match runtime.table_factories.get(format.as_str()) {
+            Some(factory) => factory,
+            _ => return,
+        };
+        let schema = ListingSchemaProvider::new(authority, path, factory.clone(), store);
+        let _ = default_catalog
+            .register_schema("default", Arc::new(schema))
+            .expect("Failed to register default schema");
     }
 
     fn resolve_table_ref<'a>(
