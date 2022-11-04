@@ -399,13 +399,13 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                     list.into_iter()
                         .skip(1)
                         .fold((*expr.clone()).not_eq(first_val), |acc, y| {
-                            (*expr.clone()).not_eq(y.clone()).and(acc)
+                            (*expr.clone()).not_eq(y).and(acc)
                         })
                 } else {
                     list.into_iter()
                         .skip(1)
                         .fold((*expr.clone()).eq(first_val), |acc, y| {
-                            (*expr.clone()).eq(y.clone()).or(acc)
+                            (*expr.clone()).eq(y).or(acc)
                         })
                 }
             }
