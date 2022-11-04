@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Borrow;
+use std::collections::HashMap;
 use clap::Parser;
 use datafusion::datasource::object_store::ObjectStoreRegistry;
 use datafusion::error::{DataFusionError, Result};
@@ -29,6 +31,11 @@ use mimalloc::MiMalloc;
 use std::env;
 use std::path::Path;
 use std::sync::Arc;
+use datafusion::catalog::listing_schema::ListingSchemaProvider;
+use datafusion::datasource::datasource::TableProviderFactory;
+use datafusion::datasource::file_format::file_type::FileType;
+use datafusion::datasource::listing_table_factory::ListingTableFactory;
+use datafusion::test_util::TestTableFactory;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -106,6 +113,20 @@ pub async fn main() -> Result<()> {
     let mut ctx =
         SessionContext::with_config_rt(session_config.clone(), Arc::new(runtime_env));
 
+    let cat_names = ctx.catalog_names().clone();
+    for cat_name in cat_names.iter() {
+        let cat = ctx.catalog(cat_name.as_str()).
+            ok_or(DataFusionError::Internal("Catalog not found!".to_string()))?;
+        for schema_name in cat.schema_names() {
+            let schema = cat.schema(schema_name.as_str())
+                .ok_or(DataFusionError::Internal("Schema not found!".to_string()))?;
+            let lister = schema.as_any().downcast_ref::<ListingSchemaProvider>();
+            if let Some(lister) = lister {
+                lister.refresh(&ctx.state()).await?;
+            }
+        }
+    }
+
     let mut print_options = PrintOptions {
         format: args.format,
         quiet: args.quiet,
@@ -142,11 +163,20 @@ pub async fn main() -> Result<()> {
 }
 
 fn create_runtime_env() -> Result<RuntimeEnv> {
+    let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+        HashMap::new();
+    table_factories.insert("csv".to_string(), Arc::new(ListingTableFactory::new(FileType::CSV)));
+    table_factories.insert("parquet".to_string(), Arc::new(ListingTableFactory::new(FileType::PARQUET)));
+    table_factories.insert("avro".to_string(), Arc::new(ListingTableFactory::new(FileType::AVRO)));
+    table_factories.insert("json".to_string(), Arc::new(ListingTableFactory::new(FileType::JSON)));
+
     let object_store_provider = DatafusionCliObjectStoreProvider {};
     let object_store_registry =
         ObjectStoreRegistry::new_with_provider(Some(Arc::new(object_store_provider)));
     let rn_config =
-        RuntimeConfig::new().with_object_store_registry(Arc::new(object_store_registry));
+        RuntimeConfig::new()
+            .with_object_store_registry(Arc::new(object_store_registry))
+            .with_table_factories(table_factories);
     RuntimeEnv::new(rn_config)
 }
 

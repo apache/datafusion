@@ -92,5 +92,9 @@ pub trait TableProvider: Sync + Send {
 #[async_trait]
 pub trait TableProviderFactory: Sync + Send {
     /// Create a TableProvider with the given url
-    async fn create(&self, url: &str) -> Result<Arc<dyn TableProvider>>;
+    async fn create(
+        &self,
+        ctx: &SessionState,
+        url: &str,
+    ) -> Result<Arc<dyn TableProvider>>;
 }
