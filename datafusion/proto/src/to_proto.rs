@@ -1188,7 +1188,25 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
 
-            datafusion::scalar::ScalarValue::Time64(v) => {
+            datafusion::scalar::ScalarValue::Time32Second(v) => {
+                create_proto_scalar(v, PrimitiveScalarType::Time64, |v| {
+                    Value::Time64Value(*v as i64 * 1_000_000_000)
+                })
+            }
+
+            datafusion::scalar::ScalarValue::Time32Millisecond(v) => {
+                create_proto_scalar(v, PrimitiveScalarType::Time64, |v| {
+                    Value::Time64Value(*v as i64 * 1_000_000)
+                })
+            }
+
+            datafusion::scalar::ScalarValue::Time64Microsecond(v) => {
+                create_proto_scalar(v, PrimitiveScalarType::Time64, |v| {
+                    Value::Time64Value(*v * 1_000)
+                })
+            }
+
+            datafusion::scalar::ScalarValue::Time64Nanosecond(v) => {
                 create_proto_scalar(v, PrimitiveScalarType::Time64, |v| {
                     Value::Time64Value(*v)
                 })
