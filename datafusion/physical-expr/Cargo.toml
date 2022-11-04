@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-physical-expr"
 description = "Physical expression implementation for DataFusion query engine"
-version = "13.0.0"
+version = "14.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"
@@ -46,9 +46,9 @@ arrow-schema = "26.0.0"
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 chrono = { version = "0.4.22", default-features = false }
-datafusion-common = { path = "../common", version = "13.0.0" }
-datafusion-expr = { path = "../expr", version = "13.0.0" }
-datafusion-row = { path = "../row", version = "13.0.0" }
+datafusion-common = { path = "../common", version = "14.0.0" }
+datafusion-expr = { path = "../expr", version = "14.0.0" }
+datafusion-row = { path = "../row", version = "14.0.0" }
 half = { version = "2.1", default-features = false }
 hashbrown = { version = "0.12", features = ["raw"] }
 itertools = { version = "0.10", features = ["use_std"] }
