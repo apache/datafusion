@@ -1793,7 +1793,7 @@ mod tests {
     }
 
     #[test]
-    fn simplify_inlist() {  
+    fn simplify_inlist() {
         assert_eq!(simplify(in_list(col("c1"), vec![], false)), lit(false));
         assert_eq!(simplify(in_list(col("c1"), vec![], true)), lit(true));
 
