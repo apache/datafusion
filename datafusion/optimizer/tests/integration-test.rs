@@ -227,8 +227,6 @@ fn concat_ws_literals() -> Result<()> {
 }
 
 #[test]
-#[ignore]
-// https://github.com/apache/arrow-datafusion/issues/3938
 fn timestamp_nano_ts_none_predicates() -> Result<()> {
     let sql = "SELECT col_int32
         FROM test
@@ -237,8 +235,9 @@ fn timestamp_nano_ts_none_predicates() -> Result<()> {
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
-    let expected = "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"UTC\"))\
-                    \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
+    let expected =
+        "Projection: test.col_int32\n  Filter: CAST(test.col_ts_nano_none AS Timestamp(Nanosecond, Some(\"+00:00\"))) < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
+         \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
 }
@@ -252,8 +251,9 @@ fn timestamp_nano_ts_utc_predicates() {
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
-    let expected = "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
-                    \n    TableScan: test projection=[col_int32, col_ts_nano_utc]";
+    let expected =
+        "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
+         \n    TableScan: test projection=[col_int32, col_ts_nano_utc]";
     assert_eq!(expected, format!("{:?}", plan));
 }
 
