@@ -19,6 +19,12 @@ Closes #.
 There is no need to duplicate the description in the issue here but it is sometimes worth providing a summary of the individual changes in this PR.
 -->
 
+# How are these changes tested?
+
+<!--
+Was it possible to write an automated test? If not, why?
+-->
+
 # Are there any user-facing changes?
 
 <!--
