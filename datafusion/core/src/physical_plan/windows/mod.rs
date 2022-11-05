@@ -65,6 +65,7 @@ pub fn create_window_expr(
             create_built_in_window_expr(fun, args, input_schema, name)?,
             partition_by,
             order_by,
+            window_frame,
         )),
     })
 }
