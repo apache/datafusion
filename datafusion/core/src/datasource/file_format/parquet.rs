@@ -538,9 +538,7 @@ pub(crate) mod test_util {
             // All batches write in to one file, each batch must have same schema.
             let mut output = NamedTempFile::new().expect("creating temp file");
             let mut builder = WriterProperties::builder();
-            // todo https://github.com/apache/arrow-rs/issues/2941 release change to row limit.
-            builder = builder.set_data_pagesize_limit(1);
-            builder = builder.set_write_batch_size(1);
+            builder = builder.set_data_page_row_count_limit(2);
             let proper = builder.build();
             let mut writer =
                 ArrowWriter::try_new(&mut output, batches[0].schema(), Some(proper))
