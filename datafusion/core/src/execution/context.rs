@@ -175,6 +175,26 @@ impl SessionContext {
         Self::with_config(SessionConfig::new())
     }
 
+    /// Finds any ListSchemaProviders and instructs them to reload tables from "disk"
+    pub async fn refresh_catalogs(&self) -> Result<()> {
+        let cat_names = self.catalog_names().clone();
+        for cat_name in cat_names.iter() {
+            let cat = self.catalog(cat_name.as_str()).ok_or_else(|| {
+                DataFusionError::Internal("Catalog not found!".to_string())
+            })?;
+            for schema_name in cat.schema_names() {
+                let schema = cat.schema(schema_name.as_str()).ok_or_else(|| {
+                    DataFusionError::Internal("Schema not found!".to_string())
+                })?;
+                let lister = schema.as_any().downcast_ref::<ListingSchemaProvider>();
+                if let Some(lister) = lister {
+                    lister.refresh(&self.state()).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Creates a new session context using the provided session configuration.
     pub fn with_config(config: SessionConfig) -> Self {
         let runtime = Arc::new(RuntimeEnv::default());
@@ -1764,7 +1784,7 @@ impl ContextProvider for SessionState {
             Ok(schema) => {
                 let provider = schema.table(resolved_ref.table).ok_or_else(|| {
                     DataFusionError::Plan(format!(
-                        "'{}.{}.{}' not found",
+                        "table '{}.{}.{}' not found",
                         resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
                     ))
                 })?;
@@ -2005,11 +2025,12 @@ mod tests {
     use super::*;
     use crate::assert_batches_eq;
     use crate::datasource::datasource::TableProviderFactory;
+    use crate::datasource::listing_table_factory::ListingTableFactory;
     use crate::execution::context::QueryPlanner;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
-    use crate::test_util::{parquet_test_data, TestTableFactory};
+    use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
     use arrow::array::ArrayRef;
     use arrow::datatypes::*;
@@ -2267,7 +2288,8 @@ mod tests {
 
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
-        table_factories.insert("test".to_string(), Arc::new(TestTableFactory {}));
+        let factory = Arc::new(ListingTableFactory::new(FileType::CSV));
+        table_factories.insert("test".to_string(), factory);
         let rt_cfg = RuntimeConfig::new().with_table_factories(table_factories);
         let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
         let cfg = SessionConfig::new()
@@ -2275,22 +2297,24 @@ mod tests {
             .set_str("datafusion.catalog.type", "test");
         let session_state = SessionState::with_config_rt(cfg, runtime);
         let ctx = SessionContext::with_state(session_state);
+        ctx.refresh_catalogs().await?;
 
-        let mut table_count = 0;
-        for cat_name in ctx.catalog_names().iter() {
-            let cat = ctx.catalog(cat_name).unwrap();
-            for s_name in cat.schema_names().iter() {
-                let schema = cat.schema(s_name).unwrap();
-                if let Some(listing) =
-                    schema.as_any().downcast_ref::<ListingSchemaProvider>()
-                {
-                    listing.refresh(&ctx.state()).await.unwrap();
-                    table_count = schema.table_names().len();
-                }
-            }
-        }
+        let result =
+            plan_and_collect(&ctx, "select c_name from default.customer limit 3;")
+                .await?;
 
-        assert_eq!(table_count, 8);
+        let actual = arrow::util::pretty::pretty_format_batches(&result)
+            .unwrap()
+            .to_string();
+        let expected = r#"+--------------------+
+| c_name             |
++--------------------+
+| Customer#000000002 |
+| Customer#000000003 |
+| Customer#000000004 |
++--------------------+"#;
+        assert_eq!(actual, expected);
+
         Ok(())
     }
 

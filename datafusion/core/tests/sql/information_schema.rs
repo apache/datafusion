@@ -271,7 +271,7 @@ async fn information_schema_describe_table_not_exists() {
     let err = plan_and_collect(&ctx, sql_all).await.unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Error during planning: 'datafusion.public.table' not found"
+        "Error during planning: table 'datafusion.public.table' not found"
     );
 }
 
@@ -368,7 +368,7 @@ async fn information_schema_show_columns() {
     assert_eq!(
         err.to_string(),
         // Error propagates from SessionState::get_table_provider
-        "Error during planning: 'datafusion.public.T' not found"
+        "Error during planning: table 'datafusion.public.T' not found"
     );
 }
 
@@ -431,7 +431,7 @@ async fn information_schema_show_table_table_names() {
     assert_eq!(
         err.to_string(),
         // Error propagates from SessionState::get_table_provider
-        "Error during planning: 'datafusion.public.t2' not found"
+        "Error during planning: table 'datafusion.public.t2' not found"
     );
 
     let err = plan_and_collect(&ctx, "SHOW columns from datafusion.public.t2")
@@ -440,7 +440,7 @@ async fn information_schema_show_table_table_names() {
     assert_eq!(
         err.to_string(),
         // Error propagates from SessionState::get_table_provider
-        "Error during planning: 'datafusion.public.t2' not found"
+        "Error during planning: table 'datafusion.public.t2' not found"
     );
 }
 
