@@ -1726,7 +1726,7 @@ mod tests {
         // todo fix this  https://github.com/apache/arrow-rs/issues/2941 release change to row limit.
         // assert the batches and some metrics
         let expected = vec![
-            "+-----+", "| int |", "+-----+", "| 3 |", "| 4 |", "| 5 |", "+-----+",
+            "+-----+", "| int |", "+-----+", "| 3   |", "| 4   |", "| 5   |", "+-----+",
         ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
         assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 3);
