@@ -1723,7 +1723,6 @@ mod tests {
 
         let metrics = rt.parquet_exec.metrics().unwrap();
 
-        // todo fix this  https://github.com/apache/arrow-rs/issues/2941 release change to row limit.
         // assert the batches and some metrics
         let expected = vec![
             "+-----+", "| int |", "+-----+", "| 3   |", "| 4   |", "| 5   |", "+-----+",
