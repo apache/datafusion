@@ -52,27 +52,20 @@ impl PhysicalOptimizerRule for AddCoalescePartitionsExec {
                 .iter()
                 .map(|child| self.optimize(child.clone(), _config))
                 .collect::<Result<Vec<_>>>()?;
-            match plan.required_child_distribution() {
-                Distribution::UnspecifiedDistribution => {
-                    with_new_children_if_necessary(plan, children)
-                }
-                Distribution::HashPartitioned(_) => {
-                    with_new_children_if_necessary(plan, children)
-                }
-                Distribution::SinglePartition => with_new_children_if_necessary(
-                    plan,
-                    children
-                        .iter()
-                        .map(|child| {
-                            if child.output_partitioning().partition_count() == 1 {
-                                child.clone()
-                            } else {
-                                Arc::new(CoalescePartitionsExec::new(child.clone()))
-                            }
-                        })
-                        .collect(),
-                ),
-            }
+            assert_eq!(children.len(), plan.required_input_distribution().len());
+            let new_children = children
+                .into_iter()
+                .zip(plan.required_input_distribution())
+                .map(|(child, dist)| match dist {
+                    Distribution::SinglePartition
+                        if child.output_partitioning().partition_count() > 1 =>
+                    {
+                        Arc::new(CoalescePartitionsExec::new(child.clone()))
+                    }
+                    _ => child,
+                })
+                .collect::<Vec<_>>();
+            with_new_children_if_necessary(plan, new_children)
         }
     }
 

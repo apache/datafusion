@@ -235,8 +235,8 @@ impl ExecutionPlan for ProxyExecutionPlan {
         self.inner.output_ordering()
     }
 
-    fn required_child_distribution(&self) -> Distribution {
-        self.inner.required_child_distribution()
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.inner.required_input_distribution()
     }
 
     fn relies_on_input_order(&self) -> bool {

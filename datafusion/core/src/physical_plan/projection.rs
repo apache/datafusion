@@ -21,14 +21,15 @@
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::error::Result;
 use crate::physical_plan::{
-    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
+    ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
+    Partitioning, PhysicalExpr,
 };
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
@@ -39,6 +40,7 @@ use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::execution::context::TaskContext;
+use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 
@@ -51,6 +53,11 @@ pub struct ProjectionExec {
     schema: SchemaRef,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
+    /// The output ordering
+    output_ordering: Option<Vec<PhysicalSortExpr>>,
+    /// The alias map used to normalize out expressions like Partitioning and PhysicalSortExpr
+    /// The key is the column from the input schema and the values are the columns from the output schema
+    alias_map: HashMap<Column, Vec<Column>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -82,10 +89,47 @@ impl ProjectionExec {
             input_schema.metadata().clone(),
         ));
 
+        let mut alias_map: HashMap<Column, Vec<Column>> = HashMap::new();
+        for (expression, name) in expr.iter() {
+            if let Some(column) = expression.as_any().downcast_ref::<Column>() {
+                let new_col_idx = schema.index_of(name)?;
+                // When the column name is the same, but index does not equal, treat it as Alias
+                if (column.name() != name) || (column.index() != new_col_idx) {
+                    let entry = alias_map.entry(column.clone()).or_insert_with(Vec::new);
+                    entry.push(Column::new(name, new_col_idx));
+                }
+            };
+        }
+
+        // Output Ordering need to respect the alias
+        let child_output_ordering = input.output_ordering();
+        let output_ordering = match child_output_ordering {
+            Some(sort_exprs) => {
+                let normalized_exprs = sort_exprs
+                    .iter()
+                    .map(|sort_expr| {
+                        let expr = normalize_out_expr_with_alias_schema(
+                            sort_expr.expr.clone(),
+                            &alias_map,
+                            &schema,
+                        );
+                        PhysicalSortExpr {
+                            expr,
+                            options: sort_expr.options,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                Some(normalized_exprs)
+            }
+            None => None,
+        };
+
         Ok(Self {
             expr,
             schema,
             input: input.clone(),
+            output_ordering,
+            alias_map,
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -118,11 +162,28 @@ impl ExecutionPlan for ProjectionExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        self.input.output_partitioning()
+        // Output partition need to respect the alias
+        let input_partition = self.input.output_partitioning();
+        match input_partition {
+            Partitioning::Hash(exprs, part) => {
+                let normalized_exprs = exprs
+                    .into_iter()
+                    .map(|expr| {
+                        normalize_out_expr_with_alias_schema(
+                            expr,
+                            &self.alias_map,
+                            &self.schema,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                Partitioning::Hash(normalized_exprs, part)
+            }
+            _ => input_partition,
+        }
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
+        self.output_ordering.as_deref()
     }
 
     fn maintains_input_order(&self) -> bool {
@@ -130,8 +191,15 @@ impl ExecutionPlan for ProjectionExec {
         true
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    // Equivalence properties need to be adjusted after the Projection.
+    // 1) Add Alias, Alias can introduce additional equivalence properties,
+    //    For example:  Projection(a, a as a1, a as a2)
+    // 2) Truncate the properties that are not in the schema of the Projection
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        let mut input_equivalence_properties = self.input.equivalence_properties();
+        input_equivalence_properties.merge_properties_with_alias(&self.alias_map);
+        input_equivalence_properties.truncate_properties_not_in_schema(&self.schema);
+        input_equivalence_properties
     }
 
     fn with_new_children(

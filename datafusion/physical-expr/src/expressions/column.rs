@@ -118,6 +118,76 @@ impl PartialEq<dyn Any> for Column {
     }
 }
 
+/// Represents the unknown column without index
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+pub struct UnKnownColumn {
+    name: String,
+}
+
+impl UnKnownColumn {
+    /// Create a new unknown column expression
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+        }
+    }
+
+    /// Get the column name
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl std::fmt::Display for UnKnownColumn {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl PhysicalExpr for UnKnownColumn {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    /// Get the data type of this expression, given the schema of the input
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        Ok(DataType::Null)
+    }
+
+    /// Decide whehter this expression is nullable, given the schema of the input
+    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Evaluate the expression
+    fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
+        Err(DataFusionError::Plan(
+            "UnKnownColumn::evaluate() should not be called".to_owned(),
+        ))
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
+    }
+}
+
+impl PartialEq<dyn Any> for UnKnownColumn {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self == x)
+            .unwrap_or(false)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ColumnExprStats {
     index: usize,

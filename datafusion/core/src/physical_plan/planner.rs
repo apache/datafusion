@@ -522,8 +522,9 @@ impl DefaultPhysicalPlanner {
                         && session_state.config.target_partitions > 1
                         && session_state.config.repartition_windows;
 
-                    let input_exec = if can_repartition {
-                        let partition_keys = partition_keys
+                    let physical_partition_keys = if can_repartition
+                    {
+                        partition_keys
                             .iter()
                             .map(|e| {
                                 self.create_physical_expr(
@@ -533,11 +534,16 @@ impl DefaultPhysicalPlanner {
                                     session_state,
                                 )
                             })
-                            .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?;
+                            .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?
+                    } else {
+                        vec![]
+                    };
+
+                    let input_exec = if can_repartition {
                         Arc::new(RepartitionExec::try_new(
                             input_exec,
                             Partitioning::Hash(
-                                partition_keys,
+                                physical_partition_keys.clone(),
                                 session_state.config.target_partitions,
                             ),
                         )?)
@@ -576,8 +582,8 @@ impl DefaultPhysicalPlanner {
 
                     let logical_input_schema = input.schema();
 
-                    let input_exec = if sort_keys.is_empty() {
-                        input_exec
+                    let physical_sort_keys = if sort_keys.is_empty() {
+                        None
                     } else {
                         let physical_input_schema = input_exec.schema();
                         let sort_keys = sort_keys
@@ -600,13 +606,19 @@ impl DefaultPhysicalPlanner {
                                 _ => unreachable!(),
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        Arc::new(if can_repartition {
-                            SortExec::new_with_partitioning(sort_keys, input_exec, true, None)
-                        } else {
-                            SortExec::try_new(sort_keys, input_exec, None)?
-                        })
+                        Some(sort_keys)
                     };
 
+                    let input_exec = match physical_sort_keys.clone() {
+                        None => input_exec,
+                        Some(sort_exprs) => {
+                            if can_repartition {
+                                Arc::new(SortExec::new_with_partitioning(sort_exprs, input_exec, true, None))
+                            } else {
+                                Arc::new(SortExec::try_new(sort_exprs, input_exec, None)?)
+                            }
+                        },
+                    };
                     let physical_input_schema = input_exec.schema();
                     let window_expr = window_expr
                         .iter()
@@ -624,6 +636,8 @@ impl DefaultPhysicalPlanner {
                         window_expr,
                         input_exec,
                         physical_input_schema,
+                        physical_partition_keys,
+                        physical_sort_keys,
                     )?))
                 }
                 LogicalPlan::Aggregate(Aggregate {
@@ -2306,10 +2320,6 @@ mod tests {
 
         fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
             None
-        }
-
-        fn relies_on_input_order(&self) -> bool {
-            false
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
