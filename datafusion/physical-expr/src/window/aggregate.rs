@@ -31,7 +31,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::WindowFrame;
 
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
-use crate::{window::WindowExpr, AggregateExpr};
+use crate::{window::groups::WindowFrameGroups, window::WindowExpr, AggregateExpr};
 
 /// A window expr that takes the form of an aggregate function
 #[derive(Debug)]
@@ -114,6 +114,7 @@ impl WindowExpr for AggregateWindowExpr {
                 .map(|v| v.slice(partition_range.start, length))
                 .collect::<Vec<_>>();
 
+            let mut window_frame_groups = WindowFrameGroups::default();
             let mut last_range: (usize, usize) = (0, 0);
 
             // We iterate on each row to perform a running calculation.
@@ -121,6 +122,7 @@ impl WindowExpr for AggregateWindowExpr {
             for i in 0..length {
                 let cur_range = self.calculate_range(
                     &window_frame,
+                    &mut window_frame_groups,
                     &slice_order_bys,
                     &sort_options,
                     length,

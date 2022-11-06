@@ -31,6 +31,8 @@ use std::sync::Arc;
 use datafusion_expr::WindowFrameBound;
 use datafusion_expr::{WindowFrame, WindowFrameUnits};
 
+use crate::window::groups::WindowFrameGroups;
+
 /// A window expression that:
 /// * knows its resulting field
 pub trait WindowExpr: Send + Sync + Debug {
@@ -117,10 +119,11 @@ pub trait WindowExpr: Send + Sync + Debug {
     }
 
     /// We use start and end bounds to calculate current row's starting and ending range.
-    /// This function supports different modes, but we currently do not support window calculation for GROUPS inside window frames.
+    /// This function supports different modes.
     fn calculate_range(
         &self,
         window_frame: &Option<Arc<WindowFrame>>,
+        window_frame_groups: &mut WindowFrameGroups,
         range_columns: &[ArrayRef],
         sort_options: &[SortOptions],
         length: usize,
@@ -212,11 +215,6 @@ pub trait WindowExpr: Send + Sync + Debug {
                                 0
                             }
                         }
-                        WindowFrameBound::Preceding(_) => {
-                            return Err(DataFusionError::Internal(
-                                "Rows should be Uint".to_string(),
-                            ))
-                        }
                         WindowFrameBound::CurrentRow => idx,
                         // UNBOUNDED FOLLOWING
                         WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
@@ -228,7 +226,9 @@ pub trait WindowExpr: Send + Sync + Debug {
                         WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
                             min(idx + n as usize, length)
                         }
-                        WindowFrameBound::Following(_) => {
+                        // ERRONEOUS FRAMES
+                        WindowFrameBound::Preceding(_)
+                        | WindowFrameBound::Following(_) => {
                             return Err(DataFusionError::Internal(
                                 "Rows should be Uint".to_string(),
                             ))
@@ -249,18 +249,15 @@ pub trait WindowExpr: Send + Sync + Debug {
                                 0
                             }
                         }
-                        WindowFrameBound::Preceding(_) => {
-                            return Err(DataFusionError::Internal(
-                                "Rows should be Uint".to_string(),
-                            ))
-                        }
                         WindowFrameBound::CurrentRow => idx + 1,
                         // UNBOUNDED FOLLOWING
                         WindowFrameBound::Following(ScalarValue::UInt64(None)) => length,
                         WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
                             min(idx + n as usize + 1, length)
                         }
-                        WindowFrameBound::Following(_) => {
+                        // ERRONEOUS FRAMES
+                        WindowFrameBound::Preceding(_)
+                        | WindowFrameBound::Following(_) => {
                             return Err(DataFusionError::Internal(
                                 "Rows should be Uint".to_string(),
                             ))
@@ -268,9 +265,104 @@ pub trait WindowExpr: Send + Sync + Debug {
                     };
                     Ok((start, end))
                 }
-                WindowFrameUnits::Groups => Err(DataFusionError::NotImplemented(
-                    "Window frame for groups is not implemented".to_string(),
-                )),
+                WindowFrameUnits::Groups => {
+                    if range_columns.is_empty() {
+                        return Err(DataFusionError::Execution(
+                            "GROUPS mode requires an ORDER BY clause".to_string(),
+                        ));
+                    }
+                    let start = match window_frame.start_bound {
+                        // UNBOUNDED PRECEDING
+                        WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => 0,
+                        WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
+                            calculate_index_of_group::<true, true>(
+                                range_columns,
+                                window_frame_groups,
+                                idx,
+                                n,
+                                length,
+                            )?
+                        }
+                        WindowFrameBound::CurrentRow => {
+                            calculate_index_of_group::<true, true>(
+                                range_columns,
+                                window_frame_groups,
+                                idx,
+                                0,
+                                length,
+                            )?
+                        }
+                        WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
+                            calculate_index_of_group::<true, false>(
+                                range_columns,
+                                window_frame_groups,
+                                idx,
+                                n,
+                                length,
+                            )?
+                        }
+                        // UNBOUNDED FOLLOWING
+                        WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
+                            return Err(DataFusionError::Internal(format!(
+                                "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
+                                window_frame
+                            )))
+                        }
+                        // ERRONEOUS FRAMES
+                        WindowFrameBound::Preceding(_)
+                        | WindowFrameBound::Following(_) => {
+                            return Err(DataFusionError::Internal(
+                                "Groups should be Uint".to_string(),
+                            ))
+                        }
+                    };
+                    let end = match window_frame.end_bound {
+                        // UNBOUNDED PRECEDING
+                        WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
+                            return Err(DataFusionError::Internal(format!(
+                                "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
+                                window_frame
+                            )))
+                        }
+                        WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
+                            calculate_index_of_group::<false, true>(
+                                range_columns,
+                                window_frame_groups,
+                                idx,
+                                n,
+                                length,
+                            )?
+                        }
+                        WindowFrameBound::CurrentRow => {
+                            calculate_index_of_group::<false, false>(
+                                range_columns,
+                                window_frame_groups,
+                                idx,
+                                0,
+                                length,
+                            )?
+                        }
+                        WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
+                            calculate_index_of_group::<false, false>(
+                                range_columns,
+                                window_frame_groups,
+                                idx,
+                                n,
+                                length,
+                            )?
+                        }
+                        // UNBOUNDED FOLLOWING
+                        WindowFrameBound::Following(ScalarValue::UInt64(None)) => length,
+                        // ERRONEOUS FRAMES
+                        WindowFrameBound::Preceding(_)
+                        | WindowFrameBound::Following(_) => {
+                            return Err(DataFusionError::Internal(
+                                "Groups should be Uint".to_string(),
+                            ))
+                        }
+                    };
+                    Ok((start, end))
+                }
             }
         } else {
             Ok((0, length))
@@ -319,4 +411,23 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
     };
     // `BISECT_SIDE` true means bisect_left, false means bisect_right
     bisect::<BISECT_SIDE>(range_columns, &end_range, sort_options)
+}
+
+fn calculate_index_of_group<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
+    range_columns: &[ArrayRef],
+    window_frame_groups: &mut WindowFrameGroups,
+    idx: usize,
+    delta: u64,
+    length: usize,
+) -> Result<usize> {
+    let current_row_values = range_columns
+        .iter()
+        .map(|col| ScalarValue::try_from_array(col, idx))
+        .collect::<Result<Vec<ScalarValue>>>()?;
+    window_frame_groups.process::<BISECT_SIDE, SEARCH_SIDE>(
+        &current_row_values,
+        delta,
+        range_columns,
+        length,
+    )
 }
