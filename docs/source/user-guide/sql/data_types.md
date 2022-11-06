@@ -48,7 +48,7 @@ This mapping occurs when defining the schema in a `CREATE EXTERNAL TABLE` comman
 | `FLOAT`                              | `Float32`         |                                                                                                             |
 | `REAL`                               | `Float32`         |                                                                                                             |
 | `DOUBLE`                             | `Float64`         |                                                                                                             |
-| `DECIMAL(p,s)`                       | `Decimal128(p,s)` | Decimal support is currently experimental ([#3523](https://github.com/apache/arrow-datafusion/issues/3523)) |
+| `DECIMAL(precision,scale)`                       | `Decimal128(precision,scale)` | Decimal support is currently experimental ([#3523](https://github.com/apache/arrow-datafusion/issues/3523)) |
 
 ## Date/Time Types
 
