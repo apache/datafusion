@@ -76,10 +76,6 @@ impl ExecutionPlan for AvroExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
-    }
-
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         Vec::new()
     }

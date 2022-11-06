@@ -33,7 +33,9 @@ use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::physical_plan::{
+    DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
+};
 
 use super::SendableRecordBatchStream;
 use crate::execution::context::TaskContext;
@@ -87,8 +89,8 @@ impl ExecutionPlan for CoalescePartitionsExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(

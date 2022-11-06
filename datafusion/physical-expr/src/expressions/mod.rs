@@ -72,7 +72,7 @@ pub use case::{case, CaseExpr};
 pub use cast::{
     cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
 };
-pub use column::{col, Column};
+pub use column::{col, Column, UnKnownColumn};
 pub use datetime::DateTimeIntervalExpr;
 pub use get_indexed_field::GetIndexedFieldExpr;
 pub use in_list::{in_list, InListExpr};
