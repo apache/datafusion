@@ -225,7 +225,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Union(_)
-            | LogicalPlan::TableScan (_)
+            | LogicalPlan::TableScan(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Subquery(_)
@@ -242,7 +242,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::DropView(_)
             | LogicalPlan::SetVariable(_)
             | LogicalPlan::Distinct(_)
-            | LogicalPlan::Extension (_) => {
+            | LogicalPlan::Extension(_) => {
                 // apply the optimization to all inputs of the plan
                 utils::optimize_children(self, plan, optimizer_config)
             }
