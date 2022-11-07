@@ -5016,7 +5016,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn get_config_option(&self, variable: &str) -> Option<ScalarValue> {
+        fn get_config_option(&self, _: &str) -> Option<ScalarValue> {
             unimplemented!()
         }
     }
