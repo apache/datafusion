@@ -29,4 +29,6 @@ mod window_expr;
 pub use aggregate::AggregateWindowExpr;
 pub use built_in::BuiltInWindowExpr;
 pub use built_in_window_function_expr::BuiltInWindowFunctionExpr;
+pub use window_expr::AggregateWindowAccumulatorState;
+pub use window_expr::WindowAccumulatorResult;
 pub use window_expr::WindowExpr;

@@ -98,3 +98,6 @@ dev/dist
 
 # CI
 arrow-ballista
+
+# do not track
+datafusion/core/tests/postgrerefs/

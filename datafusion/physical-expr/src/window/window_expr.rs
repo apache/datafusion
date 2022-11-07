@@ -24,11 +24,13 @@ use datafusion_common::bisect::bisect;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use std::any::Any;
 use std::cmp::min;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
-use datafusion_expr::WindowFrameBound;
+use datafusion_expr::utils::WindowSortKeys;
+use datafusion_expr::{Accumulator, AggregateState, WindowFrameBound};
 use datafusion_expr::{WindowFrame, WindowFrameUnits};
 
 /// A window expression that:
@@ -64,6 +66,21 @@ pub trait WindowExpr: Send + Sync + Debug {
 
     /// evaluate the window function values against the batch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef>;
+
+    /// evaluate the window function values against the batch
+    fn evaluate_stream(
+        &self,
+        _batch: &Option<RecordBatch>,
+        _window_accumulators: &mut HashMap<
+            Vec<ScalarValue>,
+            AggregateWindowAccumulatorState,
+        >,
+        window_sort_keys: &WindowSortKeys,
+    ) -> Result<Vec<WindowAccumulatorResult>> {
+        Err(DataFusionError::Internal(
+            "evaluate stream is not implemented".to_string(),
+        ))
+    }
 
     /// evaluate the partition points given the sort columns; if the sort columns are
     /// empty then the result will be a single element vec of the whole column rows.
@@ -125,10 +142,44 @@ pub trait WindowExpr: Send + Sync + Debug {
         sort_options: &[SortOptions],
         length: usize,
         idx: usize,
+        window_sort_keys: &WindowSortKeys,
     ) -> Result<(usize, usize)> {
         if let Some(window_frame) = window_frame {
             match window_frame.units {
                 WindowFrameUnits::Range => {
+                    let window_frame = if !window_sort_keys.is_empty() {
+                        let physical_sorting = window_sort_keys.first().unwrap();
+                        if let Some(column_info) = physical_sorting.column_info {
+                            let is_descending: bool = sort_options
+                                .first()
+                                .ok_or_else(|| {
+                                    DataFusionError::Internal(
+                                        "Array is empty".to_string(),
+                                    )
+                                })?
+                                .descending;
+                            let is_physical_descending = !column_info.is_ascending;
+                            if is_physical_descending != is_descending {
+                                let new_window_frame =
+                                    get_reversed_window_frame(&window_frame)?;
+                                // println!("old window frame: {:?}", window_frame);
+                                // println!("new window frame: {:?}", new_window_frame);
+
+                                // println!(
+                                //     "is_descending: {:?}, is_physical_descending: {:?}",
+                                //     is_descending, is_physical_descending
+                                // );
+                                new_window_frame
+                            } else {
+                                Arc::clone(window_frame)
+                            }
+                        } else {
+                            Arc::clone(window_frame)
+                        }
+                    } else {
+                        Arc::clone(window_frame)
+                    };
+
                     let start = match &window_frame.start_bound {
                         // UNBOUNDED PRECEDING
                         WindowFrameBound::Preceding(n) => {
@@ -140,6 +191,7 @@ pub trait WindowExpr: Send + Sync + Debug {
                                     sort_options,
                                     idx,
                                     Some(n),
+                                    window_sort_keys,
                                 )?
                             }
                         }
@@ -152,6 +204,7 @@ pub trait WindowExpr: Send + Sync + Debug {
                                     sort_options,
                                     idx,
                                     None,
+                                    window_sort_keys,
                                 )?
                             }
                         }
@@ -161,6 +214,7 @@ pub trait WindowExpr: Send + Sync + Debug {
                                 sort_options,
                                 idx,
                                 Some(n),
+                                window_sort_keys,
                             )?
                         }
                     };
@@ -171,6 +225,7 @@ pub trait WindowExpr: Send + Sync + Debug {
                                 sort_options,
                                 idx,
                                 Some(n),
+                                window_sort_keys,
                             )?
                         }
                         WindowFrameBound::CurrentRow => {
@@ -182,6 +237,7 @@ pub trait WindowExpr: Send + Sync + Debug {
                                     sort_options,
                                     idx,
                                     None,
+                                    window_sort_keys,
                                 )?
                             }
                         }
@@ -195,6 +251,7 @@ pub trait WindowExpr: Send + Sync + Debug {
                                     sort_options,
                                     idx,
                                     Some(n),
+                                    window_sort_keys,
                                 )?
                             }
                         }
@@ -276,6 +333,18 @@ pub trait WindowExpr: Send + Sync + Debug {
             Ok((0, length))
         }
     }
+
+    fn calculate_running_window(
+        &self,
+        _state: &mut AggregateWindowAccumulatorState,
+        _accumulator: &mut Box<dyn Accumulator>,
+        _is_end: bool,
+        _window_sort_keys: &WindowSortKeys,
+    ) -> Result<Option<ArrayRef>> {
+        Err(DataFusionError::NotImplemented(
+            "running window calculation is not implemented".to_string(),
+        ))
+    }
 }
 
 fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
@@ -283,6 +352,7 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
     sort_options: &[SortOptions],
     idx: usize,
     delta: Option<&ScalarValue>,
+    window_sort_keys: &WindowSortKeys,
 ) -> Result<usize> {
     let current_row_values = range_columns
         .iter()
@@ -293,6 +363,19 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
             .first()
             .ok_or_else(|| DataFusionError::Internal("Array is empty".to_string()))?
             .descending;
+        let is_descending = if !window_sort_keys.is_empty() {
+            if let Some(column_info) = window_sort_keys
+                .first()
+                .ok_or_else(|| DataFusionError::Internal("Array is empty".to_string()))?
+                .column_info
+            {
+                !column_info.is_ascending
+            } else {
+                is_descending
+            }
+        } else {
+            is_descending
+        };
 
         current_row_values
             .iter()
@@ -317,6 +400,83 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
     } else {
         current_row_values
     };
+    let new_sort_options = if !window_sort_keys.is_empty() {
+        sort_options
+            .into_iter()
+            .map(|elem| {
+                let descending =
+                    if let Some(column_info) = window_sort_keys[0].column_info {
+                        !column_info.is_ascending
+                    } else {
+                        elem.descending
+                    };
+                SortOptions {
+                    nulls_first: elem.nulls_first,
+                    descending: descending,
+                }
+            })
+            .collect::<Vec<SortOptions>>()
+    } else {
+        sort_options.to_vec()
+    };
     // `BISECT_SIDE` true means bisect_left, false means bisect_right
-    bisect::<BISECT_SIDE>(range_columns, &end_range, sort_options)
+    bisect::<BISECT_SIDE>(range_columns, &end_range, &new_sort_options)
+}
+
+fn get_reversed_window_frame(window_frame: &WindowFrame) -> Result<Arc<WindowFrame>> {
+    let mut new_window_frame = window_frame.clone();
+    match &window_frame.start_bound {
+        WindowFrameBound::Preceding(elem) => {
+            new_window_frame.end_bound = WindowFrameBound::Following(elem.clone())
+        }
+        WindowFrameBound::Following(elem) => {
+            new_window_frame.end_bound = WindowFrameBound::Preceding(elem.clone())
+        }
+        WindowFrameBound::CurrentRow => {
+            new_window_frame.end_bound = WindowFrameBound::CurrentRow
+        }
+    };
+    match &window_frame.end_bound {
+        WindowFrameBound::Preceding(elem) => {
+            new_window_frame.start_bound = WindowFrameBound::Following(elem.clone())
+        }
+        WindowFrameBound::Following(elem) => {
+            new_window_frame.start_bound = WindowFrameBound::Preceding(elem.clone())
+        }
+        WindowFrameBound::CurrentRow => {
+            new_window_frame.start_bound = WindowFrameBound::CurrentRow
+        }
+    };
+    Ok(Arc::new(new_window_frame))
+}
+
+#[derive(Debug, Clone)]
+pub struct AggregateWindowAccumulatorState {
+    pub value_slice: Vec<ArrayRef>,
+    pub order_bys: Vec<ArrayRef>,
+    pub last_range: (usize, usize),
+    pub cur_range: (usize, usize),
+    pub last_idx: usize,
+    pub aggregate_state: Vec<AggregateState>,
+}
+
+impl AggregateWindowAccumulatorState {
+    /// create a new aggregate window function expression
+    pub fn new() -> Self {
+        Self {
+            value_slice: vec![],
+            order_bys: vec![],
+            last_range: (0, 0),
+            cur_range: (0, 0),
+            last_idx: 0,
+            aggregate_state: vec![],
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WindowAccumulatorResult {
+    pub partition_id: Vec<ScalarValue>,
+    pub col: Option<ArrayRef>,
+    pub n_partition_range: usize,
 }

@@ -249,6 +249,22 @@ impl Accumulator for SumAccumulator {
         ])
     }
 
+    fn set_state(&mut self, state_data: Vec<AggregateState>) -> Result<()> {
+        match &state_data[0] {
+            AggregateState::Scalar(val) => {
+                self.sum = val.clone();
+            }
+            _ => todo!(),
+        }
+        match &state_data[1] {
+            AggregateState::Scalar(ScalarValue::UInt64(Some(val))) => {
+                self.count = *val;
+            }
+            _ => todo!(),
+        }
+        Ok(())
+    }
+
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         self.count += (values.len() - values.data().null_count()) as u64;

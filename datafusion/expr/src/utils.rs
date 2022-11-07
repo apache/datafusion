@@ -25,7 +25,7 @@ use crate::logical_plan::{
     Limit, Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union,
     Values, Window,
 };
-use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, WindowFunction};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -198,35 +198,253 @@ pub fn expand_qualified_wildcard(
     expand_wildcard(&qualifier_schema, plan)
 }
 
-type WindowSortKey = Vec<Expr>;
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct WindowSortKey {
+    pub expr: Expr,
+    pub column_info: Option<ColumnInfo>,
+    pub is_partition: bool,
+}
+
+// We keep in Vector because window frame  may contain multiple ORDER BYs and/or PARTITION BYs
+pub type WindowSortKeys = Vec<WindowSortKey>;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct ColumnInfo {
+    pub is_sorted: bool,
+    pub is_ascending: bool,
+    pub is_nullable: bool,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct SortField {
+    pub is_ascending: bool,
+    pub nulls_first: bool,
+}
+
+pub fn get_sort_fields(expr: &Expr) -> Result<SortField> {
+    match expr {
+        Expr::Sort {
+            expr: _,
+            asc,
+            nulls_first,
+        } => Ok(SortField {
+            is_ascending: *asc,
+            nulls_first: *nulls_first,
+        }),
+        unexpected => Err(DataFusionError::Internal(format!(
+            "expected expression to be Expr:Sort {:?}",
+            unexpected
+        ))),
+    }
+}
+
+pub fn decide_col_sorting(
+    input_schema: &Option<DFSchemaRef>,
+    expr: &Expr,
+) -> Result<Option<ColumnInfo>> {
+    // let mut skip_flag = false;
+    if let Some(input_schema) = input_schema {
+        match &expr {
+            Expr::Sort {
+                expr,
+                asc: _asc,
+                nulls_first: _nulls_first,
+            } => {
+                let field_str = expr.to_string();
+                let field_name = field_str.split(".").last();
+                if let Some(field_name) = field_name {
+                    Ok(get_decision_flags(input_schema, field_name))
+                } else {
+                    Ok(None)
+                }
+            }
+            unexpected => Err(DataFusionError::Internal(format!(
+                "expected expression to be Expr:Sort {:?}",
+                unexpected
+            ))),
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn get_column_from_name<'a>(
+    input_schema: &'a DFSchemaRef,
+    field_name: &str,
+) -> Option<&'a DFField> {
+    for i in 0..input_schema.fields().len() {
+        let elem = &input_schema.fields()[i];
+        if *elem.name() == field_name {
+            return Some(elem);
+        }
+    }
+    None
+}
+
+pub fn get_decision_flags(
+    input_schema: &DFSchemaRef,
+    field_name: &str,
+) -> Option<ColumnInfo> {
+    let b = get_column_from_name(input_schema, field_name);
+    if let Some(b) = b {
+        let is_nullable = b.is_nullable();
+        if let Some(metadata) = b.field().metadata() {
+            let is_sorted = if metadata.contains_key("is_sorted") {
+                metadata["is_sorted"] == "true"
+            } else {
+                false
+            };
+            let is_ascending = if metadata.contains_key("is_ascending") {
+                metadata["is_ascending"] == "true"
+            } else {
+                return None;
+            };
+            return Some(ColumnInfo {
+                is_sorted,
+                is_ascending,
+                is_nullable,
+            });
+        }
+    }
+    None
+}
+
+pub fn is_all_window_functions_aggregator(exprs: &Vec<&Expr>) -> bool {
+    let mut res = true;
+    for expr in exprs.into_iter() {
+        let is_aggregate = match expr {
+            Expr::WindowFunction { fun, .. } => match fun {
+                WindowFunction::AggregateFunction(aggregate_function) => true,
+                WindowFunction::BuiltInWindowFunction(builtin_window_function) => false,
+            },
+            Expr::Alias(inside_expr, _) => match &**inside_expr {
+                Expr::WindowFunction { fun, .. } => match fun {
+                    WindowFunction::AggregateFunction(aggregate_function) => true,
+                    WindowFunction::BuiltInWindowFunction(builtin_window_function) => {
+                        false
+                    }
+                },
+                _ => {
+                    println!("expr: {:?}", expr);
+                    panic!("expects window functions");
+                }
+            },
+            _ => {
+                println!("expr: {:?}", expr);
+                panic!("expects window functions");
+            }
+        };
+        res = res && is_aggregate;
+    }
+    res
+}
+
+pub fn remove_redundant_order_bys(
+    sort_keys: &WindowSortKeys,
+    exprs: &Vec<&Expr>,
+) -> Result<WindowSortKeys> {
+    let is_all_aggregate = is_all_window_functions_aggregator(exprs);
+    let mut non_inc_sort_keys = vec![];
+    for WindowSortKey {
+        expr,
+        column_info,
+        is_partition,
+    } in sort_keys.iter()
+    {
+        let can_skip = if let Some(column_info) = column_info {
+            let sort_fields = get_sort_fields(&expr)?;
+            // println!("column info: {:?}", column_info);
+            // println!("sort_fields: {:?}", sort_fields);
+            column_info.is_sorted
+                && !column_info.is_nullable
+                && (is_all_aggregate
+                    || column_info.is_ascending == sort_fields.is_ascending)
+        } else {
+            false
+        };
+        if !can_skip {
+            non_inc_sort_keys.push(WindowSortKey {
+                expr: expr.clone(),
+                column_info: *column_info,
+                is_partition: *is_partition,
+            });
+        }
+    }
+    Ok(non_inc_sort_keys)
+}
+
+pub fn optimize_window_frame_groups(
+    groups: Vec<(WindowSortKeys, Vec<&Expr>)>,
+    input_schema: &Option<DFSchemaRef>,
+) -> Result<Vec<(WindowSortKeys, Vec<Expr>)>> {
+    let mut first_to_do = vec![];
+    let mut to_keep_same = vec![];
+    for (sort_keys, exprs) in groups {
+        let non_inc_sort_keys = remove_redundant_order_bys(&sort_keys, &exprs)?;
+        // make it first element (bottom at logical plan)
+        if non_inc_sort_keys.is_empty() && !sort_keys.is_empty() {
+            let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
+            first_to_do.push((non_inc_sort_keys, exprs));
+            // TODO: change ORDER BY direction aligned with the column
+        } else {
+            let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
+            to_keep_same.push((sort_keys, exprs));
+        }
+    }
+    // since iterator will be reversed we are appending first to do to last
+    let res = [to_keep_same, first_to_do].concat();
+    Ok(res)
+}
 
 /// Generate a sort key for a given window expr's partition_by and order_bu expr
-pub fn generate_sort_key(partition_by: &[Expr], order_by: &[Expr]) -> WindowSortKey {
+pub fn generate_sort_key(
+    partition_by: &[Expr],
+    order_by: &[Expr],
+    input_schema: &Option<DFSchemaRef>,
+) -> Result<WindowSortKeys> {
     let mut sort_key = vec![];
-    partition_by.iter().for_each(|e| {
-        let e = e.clone().sort(true, true);
-        if !sort_key.contains(&e) {
-            sort_key.push(e);
+    partition_by.iter().try_for_each(|expr| -> Result<()> {
+        let expr = expr.clone().sort(true, true);
+        let column_info = decide_col_sorting(input_schema, &expr)?;
+        // TODO: If the repartition is false we can skip in partition by queries also
+        // once this information is available handle that case. For now we are not optimizing in
+        // partition by columns.
+        let elem = WindowSortKey {
+            expr,
+            column_info: column_info,
+            is_partition: true,
+        };
+        if !sort_key.contains(&elem) {
+            sort_key.push(elem);
         }
-    });
-    order_by.iter().for_each(|e| {
-        if !sort_key.contains(e) {
-            sort_key.push(e.clone());
+        Ok(())
+    })?;
+    order_by.iter().try_for_each(|expr| -> Result<()> {
+        let column_info = decide_col_sorting(input_schema, expr)?;
+        let elem = WindowSortKey {
+            expr: expr.clone(),
+            column_info: column_info,
+            is_partition: false,
+        };
+        if !sort_key.contains(&elem) {
+            sort_key.push(elem);
         }
-    });
-    sort_key
+        Ok(())
+    })?;
+    Ok(sort_key)
 }
 
 /// group a slice of window expression expr by their order by expressions
-pub fn group_window_expr_by_sort_keys(
-    window_expr: &[Expr],
-) -> Result<Vec<(WindowSortKey, Vec<&Expr>)>> {
+pub fn group_window_expr_by_sort_keys<'a>(
+    window_expr: &'a [Expr],
+    input_schema: &Option<DFSchemaRef>,
+) -> Result<Vec<(WindowSortKeys, Vec<&'a Expr>)>> {
     let mut result = vec![];
     window_expr.iter().try_for_each(|expr| match expr {
         Expr::WindowFunction { partition_by, order_by, .. } => {
-            let sort_key = generate_sort_key(partition_by, order_by);
+            let sort_key = generate_sort_key(partition_by, order_by, input_schema)?;
             if let Some((_, values)) = result.iter_mut().find(
-                |group: &&mut (WindowSortKey, Vec<&Expr>)| matches!(group, (key, _) if *key == sort_key),
+                |group: &&mut (WindowSortKeys, Vec<&Expr>)| matches!(group, (key, _) if *key == sort_key),
             ) {
                 values.push(expr);
             } else {
@@ -777,8 +995,8 @@ mod tests {
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
-        let result = group_window_expr_by_sort_keys(&[])?;
-        let expected: Vec<(WindowSortKey, Vec<&Expr>)> = vec![];
+        let result = group_window_expr_by_sort_keys(&[], &None)?;
+        let expected: Vec<(WindowSortKeys, Vec<&Expr>)> = vec![];
         assert_eq!(expected, result);
         Ok(())
     }
@@ -814,9 +1032,9 @@ mod tests {
             window_frame: None,
         };
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
-        let result = group_window_expr_by_sort_keys(exprs)?;
+        let result = group_window_expr_by_sort_keys(exprs, &None)?;
         let key = vec![];
-        let expected: Vec<(WindowSortKey, Vec<&Expr>)> =
+        let expected: Vec<(WindowSortKeys, Vec<&Expr>)> =
             vec![(key, vec![&max1, &max2, &min3, &sum4])];
         assert_eq!(expected, result);
         Ok(())
@@ -869,13 +1087,40 @@ mod tests {
         };
         // FIXME use as_ref
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
-        let result = group_window_expr_by_sort_keys(exprs)?;
+        let result = group_window_expr_by_sort_keys(exprs, &None)?;
 
-        let key1 = vec![age_asc.clone(), name_desc.clone()];
+        let key1 = vec![
+            WindowSortKey {
+                expr: age_asc.clone(),
+                column_info: None,
+                is_partition: false,
+            },
+            WindowSortKey {
+                expr: name_desc.clone(),
+                column_info: None,
+                is_partition: false,
+            },
+        ];
         let key2 = vec![];
-        let key3 = vec![name_desc, age_asc, created_at_desc];
+        let key3 = vec![
+            WindowSortKey {
+                expr: name_desc,
+                column_info: None,
+                is_partition: false,
+            },
+            WindowSortKey {
+                expr: age_asc,
+                column_info: None,
+                is_partition: false,
+            },
+            WindowSortKey {
+                expr: created_at_desc,
+                column_info: None,
+                is_partition: false,
+            },
+        ];
 
-        let expected: Vec<(WindowSortKey, Vec<&Expr>)> = vec![
+        let expected: Vec<(WindowSortKeys, Vec<&Expr>)> = vec![
             (key1, vec![&max1, &min3]),
             (key2, vec![&max2]),
             (key3, vec![&sum4]),

@@ -36,6 +36,14 @@ pub trait Accumulator: Send + Sync + Debug {
     /// of two values, sum and n.
     fn state(&self) -> Result<Vec<AggregateState>>;
 
+    /// Set state for accumulator
+    fn set_state(&mut self, _state_data: Vec<AggregateState>) -> Result<()> {
+        // TODO set state for all accumulators
+        Err(DataFusionError::Internal(
+            "Set state should be implemented for aggregate functions when used with incremental queries".to_string()
+        ))
+    }
+
     /// Updates the accumulator's state from a vector of arrays.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
 
@@ -59,7 +67,7 @@ pub trait Accumulator: Send + Sync + Debug {
 /// Representation of internal accumulator state. Accumulators can potentially have a mix of
 /// scalar and array values. It may be desirable to add custom aggregator states here as well
 /// in the future (perhaps `Custom(Box<dyn Any>)`?).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AggregateState {
     /// Simple scalar value. Note that `ScalarValue::List` can be used to pass multiple
     /// values around

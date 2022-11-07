@@ -37,11 +37,13 @@ use datafusion_physical_expr::window::BuiltInWindowFunctionExpr;
 use std::convert::TryInto;
 use std::sync::Arc;
 
+mod stream_window_agg_exec;
 mod window_agg_exec;
 
 pub use datafusion_physical_expr::window::{
     AggregateWindowExpr, BuiltInWindowExpr, WindowExpr,
 };
+pub use stream_window_agg_exec::StreamWindowAggExec;
 pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function

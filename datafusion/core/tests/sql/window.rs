@@ -16,6 +16,117 @@
 // under the License.
 
 use super::*;
+use std::collections::BTreeMap;
+
+fn append_to_the_content(batch: &RecordBatch, content: &mut String) -> Result<()> {
+    for row in 0..batch.num_rows() {
+        let mut res = "".to_string();
+        for col in 0..batch.num_columns() {
+            let column = batch.column(col);
+            let a = array_value_to_string(column, row)?;
+            res += &a;
+            if col < batch.num_columns() - 1 {
+                res += ", ";
+            }
+            // println!("{}", a);
+        }
+        // println!("{}", res);
+        content.push_str(&res);
+        content.push_str("\n");
+    }
+    Ok(())
+}
+
+fn split_record_batches(
+    batch: &RecordBatch,
+    num_split: usize,
+) -> Result<Vec<RecordBatch>> {
+    let row_num = batch.num_rows();
+    let number_of_batch = row_num / num_split;
+    let mut sizes = vec![num_split; number_of_batch];
+    sizes.push(row_num - (num_split * number_of_batch));
+    let mut result = vec![];
+    for (i, size) in sizes.iter().enumerate() {
+        result.push(batch.slice(i * num_split, *size));
+    }
+    Ok(result)
+}
+
+fn mock_data_running_test() -> Result<(SchemaRef, Vec<RecordBatch>)> {
+    let mut ts_field = Field::new("ts", DataType::Int32, false);
+    ts_field.set_metadata(Some(BTreeMap::from([
+        (String::from("is_sorted"), String::from("true")),
+        (String::from("is_ascending"), String::from("true")),
+    ])));
+    let mut inc_field = Field::new("inc_col", DataType::Int32, false);
+    inc_field.set_metadata(Some(BTreeMap::from([
+        (String::from("is_sorted"), String::from("true")),
+        (String::from("is_ascending"), String::from("true")),
+    ])));
+    let mut desc_field = Field::new("desc_col", DataType::Int32, false);
+    desc_field.set_metadata(Some(BTreeMap::from([
+        (String::from("is_sorted"), String::from("true")),
+        (String::from("is_ascending"), String::from("false")),
+    ])));
+
+    let mut equal_field = Field::new("equal", DataType::Int32, false);
+    equal_field.set_metadata(Some(BTreeMap::from([
+        (String::from("is_sorted"), String::from("true")),
+        (String::from("is_ascending"), String::from("false")),
+    ])));
+    let schema = Arc::new(Schema::new(vec![
+        ts_field,
+        inc_field,
+        desc_field,
+        equal_field,
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from_slice(&[
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+                39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56,
+                57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
+                75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92,
+                93, 94, 95, 96, 97, 98, 99, 100,
+            ])),
+            Arc::new(Int32Array::from_slice(&[
+                1, 2, 6, 10, 14, 15, 19, 20, 21, 22, 24, 29, 34, 38, 41, 45, 48, 50, 51,
+                56, 61, 63, 65, 67, 71, 72, 75, 76, 80, 84, 88, 93, 96, 97, 98, 101, 105,
+                110, 115, 118, 123, 124, 129, 132, 137, 141, 144, 149, 151, 152, 153,
+                155, 157, 161, 165, 169, 173, 178, 180, 184, 187, 188, 189, 191, 193,
+                197, 200, 203, 208, 210, 215, 218, 222, 227, 228, 232, 234, 236, 240,
+                242, 244, 245, 249, 252, 253, 254, 259, 260, 261, 265, 267, 271, 276,
+                277, 279, 284, 287, 290, 293, 296,
+            ])),
+            Arc::new(Int32Array::from_slice(&[
+                100, 99, 95, 91, 86, 83, 81, 78, 75, 70, 65, 63, 59, 56, 53, 49, 48, 45,
+                43, 42, 38, 35, 30, 25, 22, 21, 16, 11, 9, 5, 0, -5, -6, -9, -10, -15,
+                -20, -24, -27, -28, -31, -32, -34, -36, -39, -42, -46, -49, -54, -56,
+                -61, -64, -69, -70, -75, -78, -79, -84, -86, -87, -90, -93, -96, -97,
+                -99, -100, -104, -105, -109, -112, -117, -118, -119, -121, -122, -126,
+                -130, -132, -133, -134, -138, -139, -142, -143, -147, -149, -153, -155,
+                -160, -162, -163, -165, -168, -171, -172, -174, -178, -183, -187, -191,
+            ])),
+            Arc::new(Int32Array::from_slice(&[
+                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
+                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
+                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
+                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
+                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
+                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
+                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
+                100, 100,
+            ])),
+        ],
+    )?;
+
+    let batches = split_record_batches(&batch, 2)?;
+
+    Ok((schema, batches))
+}
 
 /// for window functions without order by the first, last, and nth function call does not make sense
 #[tokio::test]
@@ -1457,4 +1568,422 @@ async fn test_window_frame_nth_value_aggregate() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql::{
+        execute_to_batches, execute_with_partition, register_aggregate_csv,
+        register_aggregate_null_cases_csv,
+    };
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::record_batch::RecordBatch;
+    use arrow::util::display::array_value_to_string;
+    use arrow::util::pretty::print_batches;
+    use datafusion::assert_batches_eq;
+    use datafusion::datasource::MemTable;
+    use datafusion::physical_plan::common;
+    use datafusion::prelude::{SessionConfig, SessionContext};
+    use datafusion_common::from_slice::FromSlice;
+    use datafusion_common::Result;
+    use datafusion_common::ScalarValue;
+    use futures::StreamExt;
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::sync::Arc;
+
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
+    async fn test_window_frame_running() -> Result<()> {
+        let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        let task_ctx = ctx.task_ctx();
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("users", Arc::new(mem_table))?;
+
+        let sql = " SELECT
+            SUM(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            SUM(desc_col) OVER(ORDER BY desc_col DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            SUM(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING AND 10 FOLLOWING),
+            SUM(desc_col) OVER(ORDER BY desc_col DESC RANGE BETWEEN 10 PRECEDING AND 10 FOLLOWING),
+            COUNT(*) OVER(ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            COUNT(*) OVER(ORDER BY desc_col DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            COUNT(*) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING AND 10 FOLLOWING),
+            COUNT(*) OVER(ORDER BY desc_col DESC RANGE BETWEEN 10 PRECEDING AND 10 FOLLOWING),
+            SUM(inc_col) OVER(ORDER BY inc_col ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            SUM(desc_col) OVER(ORDER BY desc_col DESC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            SUM(inc_col) OVER(ORDER BY inc_col ROWS BETWEEN 10 PRECEDING AND 10 FOLLOWING),
+            SUM(desc_col) OVER(ORDER BY desc_col DESC ROWS BETWEEN 10 PRECEDING AND 10 FOLLOWING),
+            COUNT(*) OVER(ORDER BY inc_col ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            COUNT(*) OVER(ORDER BY desc_col DESC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+            FROM users AS user
+            ";
+
+        let dataframe = ctx.sql(sql).await?;
+
+        let mut stream = dataframe.execute_stream().await.unwrap();
+        let mut res_calc = "".to_string();
+        while let Some(result) = stream.next().await {
+            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
+            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+        }
+        println!("{}", res_calc);
+        let postgre_ref = fs::read_to_string("tests/postgrerefs/test1.csv").unwrap();
+        assert_eq!(postgre_ref, res_calc);
+        // save_data_to_file("test_result.csv", res_calc).unwrap();
+
+        Ok(())
+    }
+
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
+    async fn test_window_frame_running_partition_by() -> Result<()> {
+        let config = SessionConfig::new().with_repartition_windows(false);
+        // let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        // let ctx = SessionContext::new();
+        let task_ctx = ctx.task_ctx();
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("users", Arc::new(mem_table))?;
+
+        let sql = "SELECT
+            SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING),
+SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 10 FOLLOWING)
+            FROM users AS user_
+            ";
+        let dataframe = ctx.sql(sql).await?;
+
+        let mut stream = dataframe.execute_stream().await.unwrap();
+        let mut res_calc = "".to_string();
+        while let Some(result) = stream.next().await {
+            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
+
+            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+        }
+        println!("{}", res_calc);
+        let postgre_ref = fs::read_to_string(
+            "tests/postgrerefs/test_window_frame_running_partition_by.csv",
+        )
+        .unwrap();
+        assert_eq!(postgre_ref, res_calc);
+        // save_data_to_file("test_result.csv", res_calc).unwrap();
+        Ok(())
+    }
+
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
+    async fn test_window_frame_running_partition_by_repartitioned() -> Result<()> {
+        let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        let task_ctx = ctx.task_ctx();
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("users", Arc::new(mem_table))?;
+
+        let sql = " SELECT
+            SUM(inc_col) OVER(PARTITION BY inc_col ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+            FROM users AS user_
+            ORDER BY ts
+            ";
+
+        let dataframe = ctx.sql(sql).await?;
+
+        let mut stream = dataframe.execute_stream().await.unwrap();
+        let mut combined_res: std::option::Option<RecordBatch> = None;
+        let mut res_calc = "".to_string();
+        while let Some(result) = stream.next().await {
+            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
+            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+        }
+        println!("{}", res_calc);
+        let postgre_ref =
+            fs::read_to_string("tests/postgrerefs/partition_by_inc.csv").unwrap();
+        assert_eq!(postgre_ref, res_calc);
+        // save_data_to_file("test_result.csv", res_calc).unwrap();
+        Ok(())
+    }
+
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
+    async fn test_window_frame_running_conflicting_window() -> Result<()> {
+        let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        let task_ctx = ctx.task_ctx();
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("users", Arc::new(mem_table))?;
+
+        let sql = "SELECT
+            SUM(inc_col) OVER(ORDER BY ts RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            SUM(desc_col) OVER(ORDER BY ts RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            SUM(inc_col) OVER(ORDER BY ts DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            SUM(desc_col) OVER(ORDER BY ts DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            COUNT(*) OVER(ORDER BY ts RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            COUNT(*) OVER(ORDER BY ts DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            SUM(inc_col) OVER(ORDER BY ts ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            SUM(desc_col) OVER(ORDER BY ts DESC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            COUNT(*) OVER(ORDER BY ts DESC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+            FROM users
+            ORDER BY ts";
+
+        let dataframe = ctx.sql(sql).await?;
+
+        let mut stream = dataframe.execute_stream().await.unwrap();
+        let mut res_calc = "".to_string();
+        while let Some(result) = stream.next().await {
+            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
+            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+        }
+        println!("{}", res_calc);
+        let postgre_ref = fs::read_to_string("tests/postgrerefs/test2.csv").unwrap();
+        assert_eq!(postgre_ref, res_calc);
+        // save_data_to_file("test_result.csv", res_calc).unwrap();
+        Ok(())
+    }
+
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
+    async fn test_window_frame_running_unbounded_query() -> Result<()> {
+        let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        let task_ctx = ctx.task_ctx();
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("users", Arc::new(mem_table))?;
+
+        let sql = "SELECT
+            SUM(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+            SUM(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
+            SUM(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 20 PRECEDING AND 20 FOLLOWING),
+            SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+            SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
+            SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN 20 PRECEDING AND 20 FOLLOWING)
+            FROM users
+            ORDER BY ts";
+
+        let dataframe = ctx.sql(sql).await?;
+
+        let mut stream = dataframe.execute_stream().await.unwrap();
+        let mut res_calc = "".to_string();
+        while let Some(result) = stream.next().await {
+            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
+            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+        }
+        println!("{}", res_calc);
+        let postgre_ref = fs::read_to_string(
+            "tests/postgrerefs/test_window_frame_running_unbounded_query.csv",
+        )
+        .unwrap();
+        assert_eq!(postgre_ref, res_calc);
+        // save_data_to_file("test_result.csv", res_calc).unwrap();
+        Ok(())
+    }
+
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
+    #[ignore]
+    async fn test_window_frame_running_partition_by_experiment() -> Result<()> {
+        // let config = SessionConfig::new();
+        let config = SessionConfig::new().with_target_partitions(1);
+        let ctx = SessionContext::with_config(config);
+        let task_ctx = ctx.task_ctx();
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("users", Arc::new(mem_table))?;
+
+        let sql = " SELECT
+            SUM(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+            FROM users AS user_
+            ";
+
+        let dataframe = ctx.sql(sql).await?;
+
+        let mut stream = dataframe.execute_stream().await.unwrap();
+        let mut res_calc = "".to_string();
+        while let Some(result) = stream.next().await {
+            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
+            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+        }
+        println!("{}", res_calc);
+        let postgre_ref =
+            fs::read_to_string("tests/postgrerefs/partition_by_inc.csv").unwrap();
+        assert_eq!(postgre_ref, res_calc);
+        // save_data_to_file("test_result.csv", res_calc).unwrap();
+        Ok(())
+    }
+
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
+    async fn test_window_frame_running_reversed() -> Result<()> {
+        let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        let task_ctx = ctx.task_ctx();
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("users", Arc::new(mem_table))?;
+
+        let sql = "SELECT
+SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING),
+SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING)
+            FROM users AS user_
+            ";
+
+        let dataframe = ctx.sql(sql).await?;
+
+        let mut stream = dataframe.execute_stream().await.unwrap();
+        let mut res_calc = "".to_string();
+        while let Some(result) = stream.next().await {
+            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
+            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+        }
+        println!("{}", res_calc);
+        let postgre_ref = fs::read_to_string(
+            "tests/postgrerefs/test_window_frame_running_reversed.csv",
+        )
+        .unwrap();
+        assert_eq!(postgre_ref, res_calc);
+        // save_data_to_file("test_result.csv", res_calc).unwrap();
+
+        Ok(())
+    }
+
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
+    async fn test_window_frame_running_unbounded() -> Result<()> {
+        let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        let task_ctx = ctx.task_ctx();
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("users", Arc::new(mem_table))?;
+
+        let sql = "SELECT
+SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN UNBOUNDED PRECEDING and 1 FOLLOWING),
+SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING),
+SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED FOLLOWING)
+            FROM users AS user_
+            ORDER BY ts
+            ";
+
+        let dataframe = ctx.sql(sql).await?;
+
+        let mut stream = dataframe.execute_stream().await.unwrap();
+        let mut res_calc = "".to_string();
+        while let Some(result) = stream.next().await {
+            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
+            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+        }
+        println!("{}", res_calc);
+        let postgre_ref = fs::read_to_string(
+            "tests/postgrerefs/test_window_frame_running_unbounded.csv",
+        )
+        .unwrap();
+        assert_eq!(postgre_ref, res_calc);
+        // save_data_to_file("test_result.csv", res_calc).unwrap();
+
+        Ok(())
+    }
+
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
+    #[ignore]
+    async fn test_window_frame_first_value_last_value() -> Result<()> {
+        let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        let task_ctx = ctx.task_ctx();
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("users", Arc::new(mem_table))?;
+
+        let sql = "SELECT
+FIRST_VALUE(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING)
+            FROM users AS user_
+            ";
+
+        let dataframe = ctx.sql(sql).await?;
+
+        let mut stream = dataframe.execute_stream().await.unwrap();
+        let mut res_calc = "".to_string();
+        while let Some(result) = stream.next().await {
+            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
+            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+        }
+        println!("{}", res_calc);
+        let postgre_ref = fs::read_to_string(
+            "tests/postgrerefs/test_window_frame_running_unbounded.csv",
+        )
+        .unwrap();
+        assert_eq!(postgre_ref, res_calc);
+        // save_data_to_file("test_result.csv", res_calc).unwrap();
+
+        Ok(())
+    }
+
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
+    #[ignore]
+    async fn test_window_frame_first_value_last_value_aggregate() -> Result<()> {
+        // let config = SessionConfig::new().with_repartition_windows(false);
+        let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        // let ctx = SessionContext::new();
+        register_aggregate_csv(&ctx).await?;
+        let sql = "SELECT
+               FIRST_VALUE(c4) OVER(ORDER BY c9 ASC RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING)
+               FROM aggregate_test_100
+               ORDER BY c9
+               LIMIT 5";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+----------------------------+",
+            "| SUM(aggregate_test_100.c4) |",
+            "+----------------------------+",
+            "| -124618                    |",
+            "| 205080                     |",
+            "| -40819                     |",
+            "| -19517                     |",
+            "| 47246                      |",
+            "+----------------------------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn show_physical_plan() -> Result<()> {
+        let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        let task_ctx = ctx.task_ctx();
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("users", Arc::new(mem_table))?;
+
+        let sql = "SELECT
+            SUM(inc_col) OVER(PARTITION BY inc_col ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+            FROM users AS user_
+            ORDER BY ts
+            ";
+
+        let dataframe = ctx.sql(sql).await?;
+        let df = dataframe.explain(false, false)?;
+        // print the results
+        df.show().await?;
+
+        Ok(())
+    }
 }

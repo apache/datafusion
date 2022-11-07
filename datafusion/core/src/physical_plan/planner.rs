@@ -48,7 +48,7 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::windows::WindowAggExec;
+use crate::physical_plan::windows::{StreamWindowAggExec, WindowAggExec};
 use crate::physical_plan::{joins::utils as join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::{
@@ -63,7 +63,9 @@ use datafusion_expr::expr::{
     Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
-use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
+use datafusion_expr::utils::{
+    expand_wildcard, expr_to_columns, remove_redundant_order_bys,
+};
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
@@ -557,36 +559,61 @@ impl DefaultPhysicalPlanner {
                             ref partition_by,
                             ref order_by,
                             ..
-                        } => generate_sort_key(partition_by, order_by),
+                        } => generate_sort_key(partition_by, order_by, &Some(input.schema().clone())),
                         Expr::Alias(expr, _) => {
                             // Convert &Box<T> to &T
                             match &**expr {
                                 Expr::WindowFunction {
                                     ref partition_by,
                                     ref order_by,
-                                    ..} => generate_sort_key(partition_by, order_by),
+                                    ..} => generate_sort_key(partition_by, order_by, &Some(input.schema().clone())),
                                 _ => unreachable!(),
                             }
                         }
                         _ => unreachable!(),
                     };
-                    let sort_keys = get_sort_keys(&window_expr[0]);
+                    let sort_keys = get_sort_keys(&window_expr[0])?;
                     if window_expr.len() > 1 {
                         debug_assert!(
                             window_expr[1..]
                                 .iter()
-                                .all(|expr| get_sort_keys(expr) == sort_keys),
+                                .all(|expr| get_sort_keys(expr).unwrap() == sort_keys),
                             "all window expressions shall have the same sort keys, as guaranteed by logical planning"
                         );
                     }
 
+                    let window_exprs = window_expr.iter().map(|elem|{elem}).collect_vec();
+                    let mut non_inc_sort_keys = remove_redundant_order_bys(&sort_keys, &window_exprs)?;
+                    // We will receive this information from source
+                    let mut is_stream = true;
+                    let non_inc_sort_keys = if is_stream {
+                        if non_inc_sort_keys.is_empty() {
+                            non_inc_sort_keys
+                        } else {
+                            // we may raise error here
+                            sort_keys.clone()
+                        }
+                    } else{
+                        sort_keys.clone()
+                    };
+
+                    println!("sort keys: {:?}", sort_keys);
+                    println!("non_inc_sort keys: {:?}", non_inc_sort_keys);
+                    println!("schema: {:?}", input.schema());
+
+                    let non_inc_sort_keys = non_inc_sort_keys.iter().map(|window_sort_key|{
+                        window_sort_key.expr.clone()
+                    }).collect_vec();
+
+                    is_stream = non_inc_sort_keys.is_empty() && is_stream;
+
                     let logical_input_schema = input.schema();
 
-                    let physical_sort_keys = if sort_keys.is_empty() {
+                    let physical_sort_keys = if non_inc_sort_keys.is_empty() {
                         None
                     } else {
                         let physical_input_schema = input_exec.schema();
-                        let sort_keys = sort_keys
+                        let sort_keys = non_inc_sort_keys
                             .iter()
                             .map(|e| match e {
                                 Expr::Sort {
@@ -631,14 +658,24 @@ impl DefaultPhysicalPlanner {
                             )
                         })
                         .collect::<Result<Vec<_>>>()?;
-
-                    Ok(Arc::new(WindowAggExec::try_new(
-                        window_expr,
-                        input_exec,
-                        physical_input_schema,
-                        physical_partition_keys,
-                        physical_sort_keys,
-                    )?))
+                    if is_stream{
+                        Ok(Arc::new(StreamWindowAggExec::try_new(
+                            window_expr,
+                            input_exec,
+                            physical_input_schema,
+                            physical_partition_keys,
+                            physical_sort_keys,
+                            sort_keys,
+                        )?))
+                    }else {
+                        Ok(Arc::new(WindowAggExec::try_new(
+                            window_expr,
+                            input_exec,
+                            physical_input_schema,
+                            physical_partition_keys,
+                            physical_sort_keys,
+                        )?))
+                    }
                 }
                 LogicalPlan::Aggregate(Aggregate {
                     input,

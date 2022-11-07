@@ -125,6 +125,17 @@ impl Accumulator for CountAccumulator {
         )))])
     }
 
+    fn set_state(&mut self, state_data: Vec<AggregateState>) -> Result<()> {
+        // TODO set state for all accumulators
+        match &state_data[0] {
+            AggregateState::Scalar(ScalarValue::Int64(Some(val))) => {
+                self.count = *val;
+            }
+            _ => todo!(),
+        }
+        Ok(())
+    }
+
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
         self.count += (array.len() - array.data().null_count()) as i64;

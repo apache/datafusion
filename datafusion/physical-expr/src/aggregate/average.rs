@@ -157,6 +157,23 @@ impl Accumulator for AvgAccumulator {
         ])
     }
 
+    fn set_state(&mut self, state_data: Vec<AggregateState>) -> Result<()> {
+        // TODO set state for all accumulators
+        match &state_data[0] {
+            AggregateState::Scalar(ScalarValue::UInt64(Some(count))) => {
+                self.count = *count;
+            }
+            _ => todo!(),
+        }
+        match &state_data[1] {
+            AggregateState::Scalar(sum_val) => {
+                self.sum = sum_val.clone();
+            }
+            _ => todo!(),
+        }
+        Ok(())
+    }
+
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
 

@@ -122,6 +122,20 @@ pub(crate) fn combine_batches(
     }
 }
 
+pub(crate) fn append_new_batch(
+    batch1: &RecordBatch,
+    batch2: &RecordBatch,
+    schema: SchemaRef,
+) -> ArrowResult<RecordBatch> {
+    let columns = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(i, _)| concat(&[batch1.column(i), batch2.column(i)]))
+        .collect::<ArrowResult<Vec<_>>>()?;
+    RecordBatch::try_new(schema.clone(), columns)
+}
+
 /// Recursively builds a list of files in a directory with a given extension
 pub fn build_checked_file_list(dir: &str, ext: &str) -> Result<Vec<String>> {
     let mut filenames: Vec<String> = Vec::new();

@@ -525,6 +525,17 @@ impl Accumulator for MaxAccumulator {
         Ok(vec![AggregateState::Scalar(self.max.clone())])
     }
 
+    fn set_state(&mut self, state_data: Vec<AggregateState>) -> Result<()> {
+        // TODO set state for all accumulators
+        match &state_data[0] {
+            AggregateState::Scalar(max_val) => {
+                self.max = max_val.clone();
+            }
+            _ => todo!(),
+        }
+        Ok(())
+    }
+
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(self.max.clone())
     }
@@ -676,6 +687,17 @@ impl MinAccumulator {
 impl Accumulator for MinAccumulator {
     fn state(&self) -> Result<Vec<AggregateState>> {
         Ok(vec![AggregateState::Scalar(self.min.clone())])
+    }
+
+    fn set_state(&mut self, state_data: Vec<AggregateState>) -> Result<()> {
+        // TODO set state for all accumulators
+        match &state_data[0] {
+            AggregateState::Scalar(min_val) => {
+                self.min = min_val.clone();
+            }
+            _ => todo!(),
+        }
+        Ok(())
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {

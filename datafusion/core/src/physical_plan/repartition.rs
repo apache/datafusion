@@ -296,6 +296,10 @@ impl ExecutionPlan for RepartitionExec {
         self.input.equivalence_properties()
     }
 
+    fn benefits_from_input_partitioning(&self) -> bool {
+        false
+    }
+
     fn execute(
         &self,
         partition: usize,

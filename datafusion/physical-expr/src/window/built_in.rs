@@ -19,15 +19,18 @@
 
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
+use crate::window::{AggregateWindowAccumulatorState, WindowAccumulatorResult};
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use arrow::array::Array;
 use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_expr::utils::WindowSortKeys;
 use datafusion_expr::WindowFrame;
 use std::any::Any;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -121,6 +124,7 @@ impl WindowExpr for BuiltInWindowExpr {
                         &sort_options,
                         num_rows,
                         idx,
+                        &vec![],
                     )?;
                     let range = Range {
                         start: partition_range.start + range.0,
@@ -141,5 +145,72 @@ impl WindowExpr for BuiltInWindowExpr {
         };
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
         concat(&results).map_err(DataFusionError::ArrowError)
+    }
+
+    /// evaluate the window function values against the batch
+    fn evaluate_stream(
+        &self,
+        batch: &Option<RecordBatch>,
+        window_accumulators: &mut HashMap<
+            Vec<ScalarValue>,
+            AggregateWindowAccumulatorState,
+        >,
+        window_sort_keys: &WindowSortKeys,
+    ) -> Result<Vec<WindowAccumulatorResult>> {
+        if let Some(batch) = batch {
+            let evaluator = self.expr.create_evaluator(batch)?;
+            let num_rows = batch.num_rows();
+            let partition_columns = self.partition_columns(batch)?;
+            let partition_points =
+                self.evaluate_partition_points(num_rows, &partition_columns)?;
+            let partition_rows = partition_points
+                .iter()
+                .map(|partition_range| {
+                    let partition_row = partition_columns
+                        .iter()
+                        .map(|arr| {
+                            ScalarValue::try_from_array(
+                                &arr.values,
+                                partition_range.start,
+                            )
+                        })
+                        .collect::<Result<Vec<ScalarValue>>>()
+                        .unwrap();
+                    partition_row
+                })
+                .collect::<Vec<_>>();
+            // let partition_points = self
+            //     .evaluate_partition_points(num_rows, &self.partition_columns(batch)?)?;
+            let results = if evaluator.include_rank() {
+                let sort_partition_points =
+                    self.evaluate_partition_points(num_rows, &self.sort_columns(batch)?)?;
+                evaluator.evaluate_with_rank(partition_points, sort_partition_points)?
+            } else {
+                evaluator.evaluate(partition_points)?
+            };
+            let results = results
+                .into_iter()
+                .enumerate()
+                .map(|(i, elem)| {
+                    let length = elem.len();
+                    WindowAccumulatorResult {
+                        partition_id: partition_rows[i].clone(),
+                        col: Some(elem),
+                        n_partition_range: length,
+                    }
+                    // (Some(elem), (0, length), partition_rows[i].clone())
+                })
+                .collect::<Vec<_>>();
+            Ok(results)
+            // Ok(Some(concat(&results).map_err(DataFusionError::ArrowError)?))
+        } else {
+            Ok(vec![WindowAccumulatorResult {
+                partition_id: vec![],
+                col: None,
+                n_partition_range: 0,
+            }])
+            // Ok(vec![(None, (0, 0), vec![])])
+            // Err(DataFusionError::Internal("None is received".to_string()))
+        }
     }
 }
