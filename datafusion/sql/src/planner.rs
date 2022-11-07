@@ -55,6 +55,7 @@ use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
+
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
@@ -2483,13 +2484,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             variable_lower = "datafusion.execution.time_zone".to_string();
         }
 
-        // we don't support change time zone until we complete time zone related implementation
-        //if variable_lower == "datafusion.execution.time_zone" {
-        //    return Err(DataFusionError::Plan(
-        //        "Changing Time Zone isn't supported yet".to_string(),
-        //    ));
-        //}
-
         // parse value string from Expr
         let value_string = match &value[0] {
             SQLExpr::Identifier(i) => i.to_string(),
@@ -2678,7 +2672,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match sql_type {
             SQLDataType::Array(inner_sql_type) => {
                 let data_type = self.convert_simple_data_type(inner_sql_type)?;
-    
+
                 Ok(DataType::List(Box::new(Field::new(
                     "field", data_type, true,
                 ))))
@@ -2710,18 +2704,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let tz = if matches!(tz_info, TimezoneInfo::Tz)
                     || matches!(tz_info, TimezoneInfo::WithTimeZone)
                 {
-                    match self.schema_provider.get_config_option("datafusion.execution.time_zone") {
-                        Some(ScalarValue::Utf8(s)) => {
-                            s
-                        }                            
-                        Some(_) => {
-                            None
+                    // Timestamp With Time Zone
+                    // INPUT : [SQLDataType]   TimestampTz + [RuntimeConfig] Time Zone
+                    // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
+                    match self
+                        .schema_provider
+                        .get_config_option("datafusion.execution.time_zone")
+                    {
+                        Some(ScalarValue::Utf8(s)) => s,
+                        Some(v) => {
+                            return Err(DataFusionError::Internal(format!(
+                                "Incorrect data type for time_zone: {}",
+                                v.get_datatype(),
+                            )))
                         }
-                        None => None
+                        None => return Err(DataFusionError::Internal(format!(
+                            "Config Option datafusion.execution.time_zone doesn't exist"
+                        ))),
                     }
-                    //Some("+00:00".to_string())
-
                 } else {
+                    // Timestamp Without Time zone
                     None
                 };
                 Ok(DataType::Timestamp(TimeUnit::Nanosecond, tz))
@@ -2779,7 +2781,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))),
         }
     }
-
 }
 
 /// Normalize a SQL object name
@@ -2916,109 +2917,6 @@ fn extract_possible_join_keys(
         _ => Ok(()),
     }
 }
-
-/// Convert SQL simple data type to relational representation of data type
-/*
-pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
-    match sql_type {
-        SQLDataType::Boolean => Ok(DataType::Boolean),
-        SQLDataType::TinyInt(_) => Ok(DataType::Int8),
-        SQLDataType::SmallInt(_) => Ok(DataType::Int16),
-        SQLDataType::Int(_) | SQLDataType::Integer(_) => Ok(DataType::Int32),
-        SQLDataType::BigInt(_) => Ok(DataType::Int64),
-        SQLDataType::UnsignedTinyInt(_) => Ok(DataType::UInt8),
-        SQLDataType::UnsignedSmallInt(_) => Ok(DataType::UInt16),
-        SQLDataType::UnsignedInt(_) | SQLDataType::UnsignedInteger(_) => {
-            Ok(DataType::UInt32)
-        }
-        SQLDataType::UnsignedBigInt(_) => Ok(DataType::UInt64),
-        SQLDataType::Float(_) => Ok(DataType::Float32),
-        SQLDataType::Real => Ok(DataType::Float32),
-        SQLDataType::Double | SQLDataType::DoublePrecision => Ok(DataType::Float64),
-        SQLDataType::Char(_)
-        | SQLDataType::Varchar(_)
-        | SQLDataType::Text
-        | SQLDataType::String => Ok(DataType::Utf8),
-        SQLDataType::Timestamp(tz_info) => {
-            let tz = if matches!(tz_info, TimezoneInfo::Tz)
-                || matches!(tz_info, TimezoneInfo::WithTimeZone)
-            {
-                Some("+00:00".to_string())
-            } else {
-                None
-            };
-            Ok(DataType::Timestamp(TimeUnit::Nanosecond, tz))
-        }
-        SQLDataType::Date => Ok(DataType::Date32),
-        SQLDataType::Time(tz_info) => {
-            if matches!(tz_info, TimezoneInfo::None)
-                || matches!(tz_info, TimezoneInfo::WithoutTimeZone)
-            {
-                Ok(DataType::Time64(TimeUnit::Nanosecond))
-            } else {
-                // We dont support TIMETZ and TIME WITH TIME ZONE for now
-                Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported SQL type {:?}",
-                    sql_type
-                )))
-            }
-        }
-        SQLDataType::Decimal(exact_number_info) => {
-            let (precision, scale) = match *exact_number_info {
-                ExactNumberInfo::None => (None, None),
-                ExactNumberInfo::Precision(precision) => (Some(precision), None),
-                ExactNumberInfo::PrecisionAndScale(precision, scale) => {
-                    (Some(precision), Some(scale))
-                }
-            };
-            make_decimal_type(precision, scale)
-        }
-        SQLDataType::Bytea => Ok(DataType::Binary),
-        // Explicitly list all other types so that if sqlparser
-        // adds/changes the `SQLDataType` the compiler will tell us on upgrade
-        // and avoid bugs like https://github.com/apache/arrow-datafusion/issues/3059
-        SQLDataType::Nvarchar(_)
-        | SQLDataType::Uuid
-        | SQLDataType::Binary(_)
-        | SQLDataType::Varbinary(_)
-        | SQLDataType::Blob(_)
-        | SQLDataType::Datetime
-        | SQLDataType::Interval
-        | SQLDataType::Regclass
-        | SQLDataType::Custom(_)
-        | SQLDataType::Array(_)
-        | SQLDataType::Enum(_)
-        | SQLDataType::Set(_)
-        | SQLDataType::MediumInt(_)
-        | SQLDataType::UnsignedMediumInt(_)
-        | SQLDataType::Character(_)
-        | SQLDataType::CharacterVarying(_)
-        | SQLDataType::CharVarying(_)
-        | SQLDataType::CharacterLargeObject(_)
-        | SQLDataType::CharLargeObject(_)
-        | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported SQL type {:?}",
-            sql_type
-        ))),
-    }
-}
-*/
-
-/// Convert SQL data type to relational representation of data type
-/* 
-pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
-    match sql_type {
-        SQLDataType::Array(inner_sql_type) => {
-            let data_type = convert_simple_data_type(inner_sql_type)?;
-
-            Ok(DataType::List(Box::new(Field::new(
-                "field", data_type, true,
-            ))))
-        }
-        other => convert_simple_data_type(other),
-    }
-}
-*/
 
 // Parse number in sql string, convert to Expr::Literal
 fn parse_sql_number(n: &str) -> Result<Expr> {
@@ -5117,7 +5015,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn get_config_option(&self, variable: &str) -> Option<ScalarValue>{
+        fn get_config_option(&self, variable: &str) -> Option<ScalarValue> {
             unimplemented!()
         }
     }

@@ -1802,8 +1802,6 @@ impl ContextProvider for SessionState {
     fn get_config_option(&self, variable: &str) -> Option<ScalarValue> {
         self.config.config_options.read().get(variable)
     }
-    
-
 }
 
 impl FunctionRegistry for SessionState {

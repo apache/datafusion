@@ -121,7 +121,10 @@ impl ContextProvider for MySchemaProvider {
         None
     }
 
-    fn get_config_option(&self, _variable: &str) -> Option<datafusion_common::ScalarValue> {
+    fn get_config_option(
+        &self,
+        _variable: &str,
+    ) -> Option<datafusion_common::ScalarValue> {
         None
     }
 }
