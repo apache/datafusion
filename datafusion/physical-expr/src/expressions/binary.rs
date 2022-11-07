@@ -657,10 +657,8 @@ impl PhysicalExpr for BinaryExpr {
         )))
     }
 
-    /// Return the boundaries of this binary expression's result. If the expression itself
-    /// is a comparison which changes the boundaries of one of its inputs (a = 20 would pin
-    /// a to 20), then it might update the input's boundaries directly on the context.
-    fn analyze(&self, context: &mut AnalysisContext) -> Option<ExprBoundaries> {
+    /// Return the boundaries of this binary expression's result.
+    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
         match &self.op {
             Operator::Eq
             | Operator::Gt
@@ -669,8 +667,8 @@ impl PhysicalExpr for BinaryExpr {
             | Operator::GtEq => {
                 // We currently only support comparison when we know at least one of the sides are
                 // a known value (a scalar). This includes predicates like a > 20 or 5 > a.
-                let left_boundaries = self.left.analyze(context)?;
-                let right_boundaries = self.right.analyze(context)?;
+                let left_boundaries = self.left.boundaries(context)?;
+                let right_boundaries = self.right.boundaries(context)?;
                 let (op, left, right) = match right_boundaries.reduce() {
                     Some(right_value) => {
                         // We know the right side is a scalar, so we can use the operator as is
@@ -707,13 +705,13 @@ impl PartialEq<dyn Any> for BinaryExpr {
 // false, or unknown (with a probablistic selectivity value attached).
 fn analyze_expr_scalar_comparison(
     op: &Operator,
-    context: &mut AnalysisContext,
+    context: &AnalysisContext,
     left: &Arc<dyn PhysicalExpr>,
     right: ScalarValue,
 ) -> Option<ExprBoundaries> {
-    let left_bounds = left.analyze(context)?;
-    let left_min = left_bounds.min_value.clone();
-    let left_max = left_bounds.max_value.clone();
+    let left_bounds = left.boundaries(context)?;
+    let left_min = left_bounds.min_value;
+    let left_max = left_bounds.max_value;
 
     // Direct selectivity is applicable when we can determine that this comparison will
     // always be true or false (e.g. `x > 10` where the `x`'s min value is 11 or `a < 5`
@@ -761,43 +759,6 @@ fn analyze_expr_scalar_comparison(
             Some(overlap_between_boundaries as f64 / total_range as f64)
         }
     }?;
-
-    let (left_min, left_max) = match op {
-        // TODO: for lt/gt, we technically should shrink the possibility space
-        // by one since a < 5 means that 5 is not a possible value for `a`. However,
-        // it is currently tricky to do so (e.g. for floats, we can get away with 4.999
-        // so we need a smarter logic to find out what is the closest value that is
-        // different from the scalar_value).
-        Operator::Lt | Operator::LtEq => {
-            // We only want to update the upper bound when we know it will help us (e.g.
-            // it is actually smaller than what we have right now) and it is a valid
-            // value (e.g. [0, 100] < -100 would update the boundaries to [0, -100] if
-            // there weren't the selectivity check).
-            if right < left_max && selectivity > 0.0 {
-                (left_min, right)
-            } else {
-                (left_min, left_max)
-            }
-        }
-        Operator::Gt | Operator::GtEq => {
-            // Same as above, but this time we want to limit the lower bound.
-            if right > left_min && selectivity > 0.0 {
-                (right, left_max)
-            } else {
-                (left_min, left_max)
-            }
-        }
-        // For equality, we don't have the range problem so even if the selectivity
-        // is 0.0, we can still update the boundaries.
-        Operator::Eq => (right.clone(), right),
-        _ => unreachable!(),
-    };
-
-    // The context represents all the knowledge we have gathered during the
-    // analysis process, which we can now add more since the expression's upper
-    // and lower boundaries might have changed.
-    let left_bounds = ExprBoundaries::new(left_min, left_max, left_bounds.distinct_count);
-    left.apply(context, &left_bounds);
 
     // The selectivity can't be be greater than 1.0.
     assert!(selectivity <= 1.0);
@@ -3007,13 +2968,12 @@ mod tests {
             ((Operator::GtEq, 200), (0.0, 1, 100)),
         ];
 
-        for ((operator, rhs), (exp_selectivity, exp_min, exp_max)) in cases {
-            let mut context =
-                AnalysisContext::from_statistics(&schema, statistics.clone());
+        for ((operator, rhs), (exp_selectivity, _, _)) in cases {
+            let context = AnalysisContext::from_statistics(&schema, statistics.clone());
             let left = col("a", &schema).unwrap();
             let right = ScalarValue::Int64(Some(rhs));
             let boundaries =
-                analyze_expr_scalar_comparison(&operator, &mut context, &left, right)
+                analyze_expr_scalar_comparison(&operator, &context, &left, right)
                     .expect("this case should not return None");
 
             assert_eq!(
@@ -3036,12 +2996,6 @@ mod tests {
                 assert_eq!(boundaries.min_value, ScalarValue::Boolean(Some(false)));
                 assert_eq!(boundaries.max_value, ScalarValue::Boolean(Some(true)));
             }
-
-            let left_boundaries = left
-                .analyze(&mut context)
-                .expect("this case should not return None");
-            assert_eq!(left_boundaries.min_value, ScalarValue::Int64(Some(exp_min)));
-            assert_eq!(left_boundaries.max_value, ScalarValue::Int64(Some(exp_max)));
         }
         Ok(())
     }
@@ -3083,13 +3037,12 @@ mod tests {
             ((Operator::GtEq, 50.7), (1.0 / distance, 50.7, 50.7)),
         ];
 
-        for ((operator, rhs), (exp_selectivity, exp_min, exp_max)) in cases {
-            let mut context =
-                AnalysisContext::from_statistics(&schema, statistics.clone());
+        for ((operator, rhs), (exp_selectivity, _, _)) in cases {
+            let context = AnalysisContext::from_statistics(&schema, statistics.clone());
             let left = col("a", &schema).unwrap();
             let right = ScalarValue::from(rhs);
             let boundaries =
-                analyze_expr_scalar_comparison(&operator, &mut context, &left, right)
+                analyze_expr_scalar_comparison(&operator, &context, &left, right)
                     .expect("this case should not return None");
 
             assert_eq!(
@@ -3112,12 +3065,6 @@ mod tests {
                 assert_eq!(boundaries.min_value, ScalarValue::from(false));
                 assert_eq!(boundaries.max_value, ScalarValue::from(true));
             }
-
-            let left_boundaries = left
-                .analyze(&mut context)
-                .expect("this case should not return None");
-            assert_eq!(left_boundaries.min_value, ScalarValue::from(exp_min));
-            assert_eq!(left_boundaries.max_value, ScalarValue::from(exp_max));
         }
         Ok(())
     }
@@ -3137,17 +3084,11 @@ mod tests {
             &schema,
         );
 
-        let mut context = AnalysisContext::from_statistics(&schema, statistics);
+        let context = AnalysisContext::from_statistics(&schema, statistics);
         let predicate_boundaries = gt
-            .analyze(&mut context)
+            .boundaries(&context)
             .expect("boundaries should not be None");
         assert_eq!(predicate_boundaries.selectivity, Some(0.76));
-
-        let col_boundaries = a
-            .analyze(&mut context)
-            .expect("boundaries should not be None");
-        assert_eq!(col_boundaries.min_value, ScalarValue::from(25));
-        assert_eq!(col_boundaries.max_value, ScalarValue::from(100));
 
         Ok(())
     }
@@ -3171,17 +3112,11 @@ mod tests {
             &schema,
         );
 
-        let mut context = AnalysisContext::from_statistics(&schema, statistics);
+        let context = AnalysisContext::from_statistics(&schema, statistics);
         let predicate_boundaries = gt
-            .analyze(&mut context)
+            .boundaries(&context)
             .expect("boundaries should not be None");
         assert_eq!(predicate_boundaries.selectivity, Some(0.5));
-
-        let col_boundaries = a
-            .analyze(&mut context)
-            .expect("boundaries should not be None");
-        assert_eq!(col_boundaries.min_value, ScalarValue::from(1));
-        assert_eq!(col_boundaries.max_value, ScalarValue::from(50));
 
         Ok(())
     }

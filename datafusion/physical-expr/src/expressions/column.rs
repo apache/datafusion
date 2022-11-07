@@ -104,15 +104,9 @@ impl PhysicalExpr for Column {
     }
 
     /// Return the boundaries of this column, if known.
-    fn analyze(&self, context: &mut AnalysisContext) -> Option<ExprBoundaries> {
+    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
         assert!(self.index < context.column_boundaries.len());
         context.column_boundaries[self.index].clone()
-    }
-
-    /// Update the boundaries of this column on the given context.
-    fn apply(&self, context: &mut AnalysisContext, boundaries: &ExprBoundaries) {
-        assert!(self.index < context.column_boundaries.len());
-        context.column_boundaries[self.index] = Some(boundaries.clone());
     }
 }
 
@@ -292,10 +286,11 @@ mod test {
 
         (schema, statistics)
     }
+
     #[test]
     fn stats_bounds_analysis() -> Result<()> {
         let (schema, statistics) = get_test_table_stats();
-        let mut context = AnalysisContext::from_statistics(&schema, statistics);
+        let context = AnalysisContext::from_statistics(&schema, statistics);
 
         let cases = [
             // (name, index, expected boundaries)
@@ -322,7 +317,7 @@ mod test {
 
         for (name, index, expected) in cases {
             let col = Column::new(name, index);
-            let boundaries = col.analyze(&mut context);
+            let boundaries = col.boundaries(&context);
             assert_eq!(boundaries, expected);
         }
 

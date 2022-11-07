@@ -79,22 +79,17 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     #[allow(unused_variables)]
     /// Return the boundaries of this expression. This method (and all the
     /// related APIs) are experimental and subject to change.
-    fn analyze(&self, context: &mut AnalysisContext) -> Option<ExprBoundaries> {
+    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
         None
     }
-
-    #[allow(unused_variables)]
-    /// Apply the given boundaries to this expression (and its child expressions,
-    /// if they are relevant to the boundaries).
-    fn apply(&self, context: &mut AnalysisContext, boundaries: &ExprBoundaries) {}
 }
 
-/// A context for collecting and aggregating known boundaries of an expression
-/// tree.
+/// The shared context used during the analysis of an expression. Includes
+/// the boundaries for all known columns.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnalysisContext {
-    /// A list of known column boundaries, ordered by column index
-    /// in the current schema.
+    /// A list of known column boundaries, ordered by the index
+    /// of the column in the current schema.
     pub column_boundaries: Vec<Option<ExprBoundaries>>,
 }
 
