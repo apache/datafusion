@@ -100,6 +100,8 @@ pub(crate) fn build_page_filter(
     file_metadata: &ParquetMetaData,
     file_metrics: &ParquetFileMetrics,
 ) -> Result<Option<RowSelection>> {
+    // scoped timer updates on drop
+    let _timer_guard = file_metrics.page_index_eval_time.timer();
     let page_index_predicates =
         extract_page_index_push_down_predicates(pruning_predicate, schema)?;
 
@@ -154,6 +156,18 @@ pub(crate) fn build_page_filter(
             row_selections.push_back(selectors.into_iter().flatten().collect::<Vec<_>>());
         }
         let final_selection = combine_multi_col_selection(row_selections);
+        let total_skip =
+            final_selection.iter().fold(
+                0,
+                |acc, x| {
+                    if x.skip {
+                        acc + x.row_count
+                    } else {
+                        acc
+                    }
+                },
+            );
+        file_metrics.page_index_rows_filtered.add(total_skip);
         Ok(Some(final_selection.into()))
     } else {
         Ok(None)
