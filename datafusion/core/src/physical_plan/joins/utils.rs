@@ -20,6 +20,7 @@
 use crate::error::{DataFusionError, Result};
 use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
+use crate::physical_plan::SchemaRef;
 use arrow::datatypes::{Field, Schema};
 use arrow::error::ArrowError;
 use datafusion_common::ScalarValue;
@@ -143,10 +144,12 @@ pub fn combine_join_equivalence_properties(
     right_properties: EquivalenceProperties,
     left_columns_len: usize,
     on: &[(Column, Column)],
+    schema: SchemaRef,
 ) -> EquivalenceProperties {
-    let mut new_properties = match join_type {
+    let mut new_properties = EquivalenceProperties::new(schema);
+    match join_type {
         JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
-            let mut left_properties = left_properties;
+            new_properties.extend(left_properties.classes().to_vec());
             let new_right_properties = right_properties
                 .classes()
                 .iter()
@@ -166,12 +169,15 @@ pub fn combine_join_equivalence_properties(
                 })
                 .collect::<Vec<_>>();
 
-            left_properties.extend(new_right_properties);
-            left_properties
+            new_properties.extend(new_right_properties);
         }
-        JoinType::LeftSemi | JoinType::LeftAnti => left_properties,
-        JoinType::RightSemi | JoinType::RightAnti => right_properties,
-    };
+        JoinType::LeftSemi | JoinType::LeftAnti => {
+            new_properties.extend(left_properties.classes().to_vec())
+        }
+        JoinType::RightSemi | JoinType::RightAnti => {
+            new_properties.extend(right_properties.classes().to_vec())
+        }
+    }
 
     if join_type == JoinType::Inner {
         on.iter().for_each(|(column1, column2)| {
@@ -188,8 +194,10 @@ pub fn cross_join_equivalence_properties(
     left_properties: EquivalenceProperties,
     right_properties: EquivalenceProperties,
     left_columns_len: usize,
+    schema: SchemaRef,
 ) -> EquivalenceProperties {
-    let mut left_properties = left_properties;
+    let mut new_properties = EquivalenceProperties::new(schema);
+    new_properties.extend(left_properties.classes().to_vec());
     let new_right_properties = right_properties
         .classes()
         .iter()
@@ -204,8 +212,8 @@ pub fn cross_join_equivalence_properties(
             EquivalentClass::new(new_head, new_others)
         })
         .collect::<Vec<_>>();
-    left_properties.extend(new_right_properties);
-    left_properties
+    new_properties.extend(new_right_properties);
+    new_properties
 }
 
 /// Used in ColumnIndex to distinguish which side the index is for

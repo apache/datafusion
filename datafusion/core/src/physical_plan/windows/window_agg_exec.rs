@@ -36,7 +36,7 @@ use arrow::{
 };
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
-use log::warn;
+use log::debug;
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -136,7 +136,7 @@ impl ExecutionPlan for WindowAggExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.partition_keys.is_empty() {
-            warn!("No partition defined for WindowAggExec!!!");
+            debug!("No partition defined for WindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
             //TODO support PartitionCollections if there is no common partition columns in the window_expr

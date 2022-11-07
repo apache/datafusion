@@ -176,6 +176,7 @@ impl ExecutionPlan for CrossJoinExec {
             self.left.equivalence_properties(),
             self.right.equivalence_properties(),
             left_columns_len,
+            self.schema(),
         )
     }
 
