@@ -19,8 +19,10 @@
 use crate::catalog::schema::SchemaProvider;
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::TableProvider;
-use datafusion_common::DataFusionError;
+use crate::execution::context::SessionState;
+use datafusion_common::{context, DataFusionError};
 use futures::TryStreamExt;
+use itertools::Itertools;
 use object_store::ObjectStore;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
@@ -72,7 +74,7 @@ impl ListingSchemaProvider {
     }
 
     /// Reload table information from ObjectStore
-    pub async fn refresh(&self) -> datafusion_common::Result<()> {
+    pub async fn refresh(&self, state: &SessionState) -> datafusion_common::Result<()> {
         let entries: Vec<_> = self
             .store
             .list(Some(&self.path))
@@ -100,13 +102,20 @@ impl ListingSchemaProvider {
                 .ok_or_else(|| {
                     DataFusionError::Internal("Cannot parse file name!".to_string())
                 })?;
-            let table_name = table.to_str().ok_or_else(|| {
+            let table_name = file_name.split('.').collect_vec()[0];
+            let table_path = table.to_str().ok_or_else(|| {
                 DataFusionError::Internal("Cannot parse file name!".to_string())
             })?;
-            if !self.table_exist(file_name) {
-                let table_name = format!("{}/{}", self.authority, table_name);
-                let provider = self.factory.create(table_name.as_str()).await?;
-                let _ = self.register_table(file_name.to_string(), provider.clone())?;
+            if !self.table_exist(table_name) {
+                let table_url = format!("{}/{}", self.authority, table_path);
+                let provider = self
+                    .factory
+                    .create(state, table_url.as_str())
+                    .await
+                    .map_err(|e| {
+                        context!(format!("Could not create table for {}", table_url), e)
+                    })?;
+                let _ = self.register_table(table_name.to_string(), provider.clone())?;
             }
         }
         Ok(())

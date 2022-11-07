@@ -284,6 +284,7 @@ pub struct TestTableFactory {}
 impl TableProviderFactory for TestTableFactory {
     async fn create(
         &self,
+        _state: &SessionState,
         url: &str,
     ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(TestTableProvider {
