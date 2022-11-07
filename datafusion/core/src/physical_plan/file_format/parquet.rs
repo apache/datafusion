@@ -900,6 +900,8 @@ pub async fn plan_to_parquet(
 
 #[cfg(test)]
 mod tests {
+    // See also `parquet_exec` integration test
+
     use super::*;
     use crate::config::ConfigOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
