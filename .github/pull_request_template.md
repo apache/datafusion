@@ -19,10 +19,14 @@ Closes #.
 There is no need to duplicate the description in the issue here but it is sometimes worth providing a summary of the individual changes in this PR.
 -->
 
-# How are these changes tested?
+# Are these changes tested?
 
 <!--
-Was it possible to write an automated test? If not, why?
+We typically require tests for all PRs in order to:
+1. Prevent the code from being accidentally broken by subsequent changes
+2. Serve as another way to document the expected behavior of the code
+
+If tests are not included in your PR, please explain why (for example, are they covered by existing tests)?
 -->
 
 # Are there any user-facing changes?
