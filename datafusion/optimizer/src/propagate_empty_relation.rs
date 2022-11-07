@@ -120,14 +120,13 @@ impl OptimizerRule for PropagateEmptyRelation {
                         Ok(LogicalPlan::Projection(Projection::new_from_schema(
                             Arc::new(child),
                             optimized_children_plan.schema().clone(),
-                            union.alias.clone(),
+                            None
                         )))
                     }
                 } else {
                     Ok(LogicalPlan::Union(Union {
                         inputs: new_inputs,
                         schema: union.schema.clone(),
-                        alias: union.alias.clone(),
                     }))
                 }
             }
