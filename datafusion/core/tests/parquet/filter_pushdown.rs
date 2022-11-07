@@ -266,20 +266,17 @@ async fn single_file_small_data_pages() {
     // page 3:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: djzdyiecnumrsrcbizwlqzdhnpoiqdh, max: fktdcgtmzvoedpwhfevcvvrtaurzgex, num_nulls not defined] CRC:[none] SZ:7 VC:9216
     // page 4:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: fktdcgtmzvoedpwhfevcvvrtaurzgex, max: fwtdpgtxwqkkgtgvthhwycrvjiizdifyp, num_nulls not defined] CRC:[none] SZ:7 VC:9216
     // page 5:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: fwtdpgtxwqkkgtgvthhwycrvjiizdifyp, max: iadnalqpdzthpifrvewossmpqibgtsuin, num_nulls not defined] CRC:[none] SZ:7 VC:7739
-    //
-    // This test currently fails due to https://github.com/apache/arrow-datafusion/issues/3833
-    // (page index pruning not implemented for byte array)
 
-    // TestCase::new(&test_parquet_file)
-    //     .with_name("selective")
-    //     // predicate is chosen carefully to prune pages 0, 1, 2, 3, 4
-    //     // pod = 'iadnalqpdzthpifrvewossmpqibgtsuin'
-    //     .with_filter(col("pod").eq(lit("iadnalqpdzthpifrvewossmpqibgtsuin")))
-    //     .with_pushdown_expected(PushdownExpected::Some)
-    //     .with_page_index_filtering_expected(PageIndexFilteringExpected::Some)
-    //     .with_expected_rows(2574)
-    //     .run()
-    //     .await;
+    TestCase::new(&test_parquet_file)
+        .with_name("selective")
+        // predicate is chosen carefully to prune pages 0, 1, 2, 3, 4
+        // pod = 'iadnalqpdzthpifrvewossmpqibgtsuin'
+        .with_filter(col("pod").eq(lit("iadnalqpdzthpifrvewossmpqibgtsuin")))
+        .with_pushdown_expected(PushdownExpected::Some)
+        .with_page_index_filtering_expected(PageIndexFilteringExpected::Some)
+        .with_expected_rows(2574)
+        .run()
+        .await;
 
     // time TV=53819 RL=0 DL=0 DS:                7092 DE:PLAIN
     // --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
