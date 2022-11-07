@@ -114,19 +114,14 @@ impl WindowFrameGroups {
                     item_columns,
                     &group_values,
                     start_idx,
-                    None,
                 )?;
-            match next_group_and_start_index {
-                Some((group, index)) => {
-                    group_values = group;
-                    start_idx = index;
-                }
+            if let Some(entry) = next_group_and_start_index {
+                (group_values, start_idx) = entry;
+            } else {
                 // not enough groups to generate a window frame
-                None => {
-                    self.reached_end = true;
-                    self.window_frame_end_idx = self.window_frame_start_idx;
-                    return Ok(());
-                }
+                self.window_frame_end_idx = self.window_frame_start_idx;
+                self.reached_end = true;
+                return Ok(());
             }
         }
         self.group_start_indices
@@ -155,17 +150,13 @@ impl WindowFrameGroups {
                 item_columns,
                 &last_group_values.0,
                 last_group_values.1,
-                None,
             )?;
-        match next_group_and_start_index {
-            Some((group, index)) => {
-                self.group_start_indices.push_back((group, index));
-                self.window_frame_end_idx += 1;
-            }
+        if let Some(entry) = next_group_and_start_index {
+            self.group_start_indices.push_back(entry);
+            self.window_frame_end_idx += 1;
+        } else {
             // not enough groups to proceed
-            None => {
-                self.reached_end = true;
-            }
+            self.reached_end = true;
         }
         Ok(())
     }
@@ -244,32 +235,25 @@ impl WindowFrameGroups {
     }
 
     /// This function finds the next group and its start index for a given group and start index.
-    /// TODO: Explain the algorithm clearly.
-    // FUTURE WORK/ENHANCEMENTS:
-    // For small group sizes, proceeding one-by-one to find the group change can be more efficient.
-    // Statistics about previous group sizes can be utilized to choose the approach to use, or even
-    // to set the base step_size. We can also create a benchmark implementation to get insights about
-    // the crossover point.
+    /// It utilizes an exponentially growing step size to find the group boundary.
+    // TODO: For small group sizes, proceeding one-by-one to find the group change can be more efficient.
+    // Statistics about previous group sizes can be used to choose one-by-one vs. exponentially growing,
+    // or even to set the base step_size when exponentially growing. We can also create a benchmark
+    // implementation to get insights about the crossover point.
     fn find_next_group_and_start_index(
         item_columns: &[ArrayRef],
         current_row_values: &[ScalarValue],
         idx: usize,
-        step_size: Option<usize>,
     ) -> Result<Option<(Vec<ScalarValue>, usize)>> {
-        let step_size = if let Some(n) = step_size { n } else { 100 };
-        if step_size == 0 {
-            return Err(DataFusionError::Internal(
-                "Step size cannot be 0".to_string(),
-            ));
-        }
+        let mut step_size: usize = 1;
         let data_size: usize = item_columns
             .get(0)
             .ok_or_else(|| {
                 DataFusionError::Internal("Column array shouldn't be empty".to_string())
             })?
             .len();
-        let mut low: usize = idx;
-        let mut high: usize = cmp::min(low + step_size, data_size);
+        let mut low = idx;
+        let mut high = idx + step_size;
         while high < data_size {
             let val = item_columns
                 .iter()
@@ -277,7 +261,8 @@ impl WindowFrameGroups {
                 .collect::<Result<Vec<ScalarValue>>>()?;
             if val == current_row_values {
                 low = high;
-                high = cmp::min(low + step_size, data_size);
+                step_size *= 2;
+                high += step_size;
             } else {
                 break;
             }
@@ -287,7 +272,7 @@ impl WindowFrameGroups {
             current_row_values,
             |current, to_compare| Ok(current == to_compare),
             low,
-            high,
+            cmp::min(high, data_size),
         )?;
         if low == data_size {
             return Ok(None);
@@ -314,7 +299,6 @@ mod tests {
     fn test_find_next_group_and_start_index() {
         const NUM_ROWS: usize = 6;
         const NEXT_INDICES: [usize; 5] = [1, 2, 4, 4, 5];
-        const STEP_SIZE: usize = 1;
 
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 8., 9., 10.])),
@@ -337,15 +321,6 @@ mod tests {
                 &arrays,
                 &current_row_values,
                 current_idx,
-                None,
-            )
-            .unwrap();
-            assert_eq!(res, Some((next_row_values.clone(), *next_idx)));
-            let res = WindowFrameGroups::find_next_group_and_start_index(
-                &arrays,
-                &current_row_values,
-                current_idx,
-                Some(STEP_SIZE),
             )
             .unwrap();
             assert_eq!(res, Some((next_row_values, *next_idx)));
@@ -360,15 +335,6 @@ mod tests {
             &arrays,
             &current_row_values,
             current_idx,
-            None,
-        )
-        .unwrap();
-        assert_eq!(res, None);
-        let res = WindowFrameGroups::find_next_group_and_start_index(
-            &arrays,
-            &current_row_values,
-            current_idx,
-            Some(STEP_SIZE),
         )
         .unwrap();
         assert_eq!(res, None);
