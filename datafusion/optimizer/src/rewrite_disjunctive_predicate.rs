@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{OptimizerConfig, OptimizerRule};
+use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::logical_plan::Filter;
-use datafusion_expr::utils::from_plan;
 use datafusion_expr::{Expr, LogicalPlan, Operator};
 use std::sync::Arc;
 
@@ -122,28 +121,6 @@ impl RewriteDisjunctivePredicate {
     pub fn new() -> Self {
         Self::default()
     }
-    fn rewrite_disjunctive_predicate(plan: &LogicalPlan) -> Result<LogicalPlan> {
-        match plan {
-            LogicalPlan::Filter(filter) => {
-                let predicate = predicate(filter.predicate())?;
-                let rewritten_predicate = rewrite_predicate(predicate);
-                let rewritten_expr = normalize_predicate(rewritten_predicate);
-                Ok(LogicalPlan::Filter(Filter::try_new(
-                    rewritten_expr,
-                    Arc::new(Self::rewrite_disjunctive_predicate(filter.input())?),
-                )?))
-            }
-            _ => {
-                let expr = plan.expressions();
-                let inputs = plan.inputs();
-                let new_inputs = inputs
-                    .iter()
-                    .map(|input| Self::rewrite_disjunctive_predicate(input))
-                    .collect::<Result<Vec<_>>>()?;
-                from_plan(plan, &expr, &new_inputs)
-            }
-        }
-    }
 }
 
 impl OptimizerRule for RewriteDisjunctivePredicate {
@@ -152,7 +129,18 @@ impl OptimizerRule for RewriteDisjunctivePredicate {
         plan: &LogicalPlan,
         _optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        Self::rewrite_disjunctive_predicate(plan)
+        match plan {
+            LogicalPlan::Filter(filter) => {
+                let predicate = predicate(filter.predicate())?;
+                let rewritten_predicate = rewrite_predicate(predicate);
+                let rewritten_expr = normalize_predicate(rewritten_predicate);
+                Ok(LogicalPlan::Filter(Filter::try_new(
+                    rewritten_expr,
+                    Arc::new(Self::optimize(self, filter.input(), _optimizer_config)?),
+                )?))
+            }
+            _ => utils::optimize_children(self, plan, _optimizer_config),
+        }
     }
 
     fn name(&self) -> &str {
@@ -362,7 +350,6 @@ fn delete_duplicate_predicates(or_predicates: &[Predicate]) -> Predicate {
 }
 
 #[cfg(test)]
-
 mod tests {
     use crate::rewrite_disjunctive_predicate::{
         normalize_predicate, predicate, rewrite_predicate, Predicate,
@@ -392,7 +379,7 @@ mod tests {
                             },
                             Predicate::Other {
                                 expr: Box::new(gt_expr.clone())
-                            }
+                            },
                         ]
                     },
                     Predicate::And {
@@ -402,9 +389,9 @@ mod tests {
                             },
                             Predicate::Other {
                                 expr: Box::new(lt_expr.clone())
-                            }
+                            },
                         ]
-                    }
+                    },
                 ]
             }
         );
@@ -423,9 +410,9 @@ mod tests {
                             },
                             Predicate::Other {
                                 expr: Box::new(lt_expr.clone())
-                            }
+                            },
                         ]
-                    }
+                    },
                 ]
             }
         );
