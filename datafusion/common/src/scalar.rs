@@ -116,8 +116,7 @@ pub enum ScalarValue {
     Dictionary(Box<DataType>, Box<ScalarValue>),
 }
 
-// manual implementation of `PartialEq` that uses OrderedFloat to
-// get defined behavior for floating point
+// manual implementation of `PartialEq`
 impl PartialEq for ScalarValue {
     fn eq(&self, other: &Self) -> bool {
         use ScalarValue::*;
@@ -132,15 +131,19 @@ impl PartialEq for ScalarValue {
             (Boolean(v1), Boolean(v2)) => v1.eq(v2),
             (Boolean(_), _) => false,
             (Float32(v1), Float32(v2)) => {
-                let v1 = v1.map(OrderedFloat);
-                let v2 = v2.map(OrderedFloat);
-                v1.eq(&v2)
+                // Handle NaN == NaN as true manually like in OrderedFloat 
+                match (v1, v2) {
+                    (Some(f1), Some(f2)) if f1.is_nan() && f2.is_nan() => true,
+                    _ => v1.eq(&v2)
+                }
             }
             (Float32(_), _) => false,
             (Float64(v1), Float64(v2)) => {
-                let v1 = v1.map(OrderedFloat);
-                let v2 = v2.map(OrderedFloat);
-                v1.eq(&v2)
+                // Handle NaN == NaN as true manually like in OrderedFloat 
+                match (v1, v2) {
+                    (Some(f1), Some(f2)) if f1.is_nan() && f2.is_nan() => true,
+                    _ => v1.eq(&v2)
+                }
             }
             (Float64(_), _) => false,
             (Int8(v1), Int8(v2)) => v1.eq(v2),
@@ -201,8 +204,7 @@ impl PartialEq for ScalarValue {
     }
 }
 
-// manual implementation of `PartialOrd` that uses OrderedFloat to
-// get defined behavior for floating point
+// manual implementation of `PartialOrd`
 impl PartialOrd for ScalarValue {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         use ScalarValue::*;
@@ -222,14 +224,10 @@ impl PartialOrd for ScalarValue {
             (Boolean(v1), Boolean(v2)) => v1.partial_cmp(v2),
             (Boolean(_), _) => None,
             (Float32(v1), Float32(v2)) => {
-                let v1 = v1.map(OrderedFloat);
-                let v2 = v2.map(OrderedFloat);
                 v1.partial_cmp(&v2)
             }
             (Float32(_), _) => None,
             (Float64(v1), Float64(v2)) => {
-                let v1 = v1.map(OrderedFloat);
-                let v2 = v2.map(OrderedFloat);
                 v1.partial_cmp(&v2)
             }
             (Float64(_), _) => None,

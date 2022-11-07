@@ -410,7 +410,6 @@ mod tests {
 
     macro_rules! test_count_distinct_update_batch_floating_point {
         ($ARRAY_TYPE:ident, $DATA_TYPE:ident, $PRIM_TYPE:ty) => {{
-            use ordered_float::OrderedFloat;
             let values: Vec<Option<$PRIM_TYPE>> = vec![
                 Some(<$PRIM_TYPE>::INFINITY),
                 Some(<$PRIM_TYPE>::NAN),
@@ -437,9 +436,11 @@ mod tests {
 
             let mut state_vec =
                 state_to_vec!(&states[0], $DATA_TYPE, $PRIM_TYPE).unwrap();
+
+            dbg!(&state_vec);    
             state_vec.sort_by(|a, b| match (a, b) {
                 (Some(lhs), Some(rhs)) => {
-                    OrderedFloat::from(*lhs).cmp(&OrderedFloat::from(*rhs))
+                    lhs.total_cmp(rhs)
                 }
                 _ => a.partial_cmp(b).unwrap(),
             });

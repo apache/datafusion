@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregate::tdigest::TryIntoOrderedF64;
+use crate::aggregate::tdigest::TryIntoF64;
 use crate::aggregate::tdigest::{TDigest, DEFAULT_MAX_SIZE};
 use crate::expressions::{format_state_name, Literal};
 use crate::{AggregateExpr, PhysicalExpr};
@@ -30,7 +30,6 @@ use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_expr::{Accumulator, AggregateState};
-use ordered_float::OrderedFloat;
 use std::{any::Any, iter, sync::Arc};
 
 /// APPROX_PERCENTILE_CONT aggregate expression
@@ -267,9 +266,9 @@ impl ApproxPercentileAccumulator {
         self.digest = TDigest::merge_digests(digests);
     }
 
-    pub(crate) fn convert_to_ordered_float(
+    pub(crate) fn convert_to_float(
         values: &ArrayRef,
-    ) -> Result<Vec<OrderedFloat<f64>>> {
+    ) -> Result<Vec<f64>> {
         match values.data_type() {
             DataType::Float64 => {
                 let array = downcast_value!(values, Float64Array);
@@ -371,8 +370,7 @@ impl Accumulator for ApproxPercentileAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let sorted_values = &arrow::compute::sort(values, None)?;
-        let sorted_values =
-            ApproxPercentileAccumulator::convert_to_ordered_float(sorted_values)?;
+        let sorted_values = ApproxPercentileAccumulator::convert_to_float(sorted_values)?;
         self.digest = self.digest.merge_sorted_f64(&sorted_values);
         Ok(())
     }
