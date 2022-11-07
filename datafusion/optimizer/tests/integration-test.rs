@@ -330,6 +330,10 @@ impl ContextProvider for MySchemaProvider {
     fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
         None
     }
+
+    fn get_config_option(&self, _variable: &str) -> Option<datafusion_common::ScalarValue> {
+        None
+    }
 }
 
 fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
