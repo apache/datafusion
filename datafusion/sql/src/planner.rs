@@ -2718,9 +2718,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 v.get_datatype(),
                             )))
                         }
-                        None => return Err(DataFusionError::Internal(format!(
+                        None => return Err(DataFusionError::Internal(
                             "Config Option datafusion.execution.time_zone doesn't exist"
-                        ))),
+                                .to_string(),
+                        )),
                     }
                 } else {
                     // Timestamp Without Time zone
