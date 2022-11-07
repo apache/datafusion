@@ -80,7 +80,6 @@ impl_try_ordered_f64!(u32);
 impl_try_ordered_f64!(u16);
 impl_try_ordered_f64!(u8);
 
-
 /// Centroid implementation to the cluster mentioned in the paper.
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Centroid {
@@ -103,14 +102,8 @@ impl Ord for Centroid {
 }
 
 impl Centroid {
-    pub(crate) fn new(
-        mean: f64,
-        weight: f64,
-    ) -> Self {
-        Centroid {
-            mean: mean,
-            weight: weight,
-        }
+    pub(crate) fn new(mean: f64, weight: f64) -> Self {
+        Centroid { mean, weight }
     }
 
     #[inline]
@@ -123,11 +116,7 @@ impl Centroid {
         self.weight
     }
 
-    pub(crate) fn add(
-        &mut self,
-        sum: f64,
-        weight: f64,
-    ) -> f64 {
+    pub(crate) fn add(&mut self, sum: f64, weight: f64) -> f64 {
         let new_sum = sum + self.weight * self.mean;
         let new_weight = self.weight + weight;
         self.weight = new_weight;
@@ -222,14 +211,9 @@ impl TDigest {
         } else {
             2.0 * k_div_d * k_div_d
         }
-        .into()
     }
 
-    fn clamp(
-        v: f64,
-        lo: f64,
-        hi: f64,
-    ) -> f64 {
+    fn clamp(v: f64, lo: f64, hi: f64) -> f64 {
         if v > hi {
             hi
         } else if v < lo {
@@ -240,19 +224,13 @@ impl TDigest {
     }
 
     #[cfg(test)]
-    pub(crate) fn merge_unsorted_f64(
-        &self,
-        unsorted_values: Vec<f64>,
-    ) -> TDigest {
+    pub(crate) fn merge_unsorted_f64(&self, unsorted_values: Vec<f64>) -> TDigest {
         let mut values = unsorted_values;
         values.sort_by(|a, b| a.total_cmp(b));
         self.merge_sorted_f64(&values)
     }
 
-    pub(crate) fn merge_sorted_f64(
-        &self,
-        sorted_values: &[f64],
-    ) -> TDigest {
+    pub(crate) fn merge_sorted_f64(&self, sorted_values: &[f64]) -> TDigest {
         dbg!(&sorted_values);
         #[cfg(debug_assertions)]
         debug_assert!(is_sorted(sorted_values), "unsorted input to TDigest");
@@ -262,7 +240,7 @@ impl TDigest {
         }
 
         let mut result = TDigest::new(self.max_size());
-        result.count =self.count() + (sorted_values.len() as f64);
+        result.count = self.count() + (sorted_values.len() as f64);
 
         let maybe_min = *sorted_values.first().unwrap();
         let maybe_max = *sorted_values.last().unwrap();
@@ -321,9 +299,9 @@ impl TDigest {
                 sums_to_merge += next_sum;
                 weights_to_merge += next.weight();
             } else {
-                result.sum = result.sum + curr.add(sums_to_merge, weights_to_merge);
-                sums_to_merge = 0.0.into();
-                weights_to_merge = 0.0.into();
+                result.sum += curr.add(sums_to_merge, weights_to_merge);
+                sums_to_merge = 0_f64;
+                weights_to_merge = 0_f64;
 
                 compressed.push(curr.clone());
                 q_limit_times_count =
@@ -333,7 +311,7 @@ impl TDigest {
             }
         }
 
-        result.sum = result.sum + curr.add(sums_to_merge, weights_to_merge);
+        result.sum += curr.add(sums_to_merge, weights_to_merge);
         compressed.push(curr);
         compressed.shrink_to_fit();
         compressed.sort();
@@ -458,7 +436,7 @@ impl TDigest {
                 sums_to_merge += centroid.mean() * centroid.weight();
                 weights_to_merge += centroid.weight();
             } else {
-                result.sum = result.sum + curr.add(sums_to_merge, weights_to_merge);
+                result.sum += curr.add(sums_to_merge, weights_to_merge);
                 sums_to_merge = 0_f64;
                 weights_to_merge = 0_f64;
                 compressed.push(curr.clone());
@@ -469,7 +447,7 @@ impl TDigest {
             }
         }
 
-        result.sum = result.sum + curr.add(sums_to_merge, weights_to_merge);
+        result.sum += curr.add(sums_to_merge, weights_to_merge);
         compressed.push(curr.clone());
         compressed.shrink_to_fit();
         compressed.sort();
@@ -688,9 +666,7 @@ mod tests {
 
     #[test]
     fn test_int64_uniform() {
-        let values = (1i64..=1000)
-            .map(|v|v as f64)
-            .collect();
+        let values = (1i64..=1000).map(|v| v as f64).collect();
 
         let t = TDigest::new(100);
         let t = t.merge_unsorted_f64(values);
@@ -720,10 +696,7 @@ mod tests {
     #[test]
     fn test_merge_unsorted_against_uniform_distro() {
         let t = TDigest::new(100);
-        let values: Vec<_> = (1..=1_000_000)
-            .map(f64::from)
-            .map(|v| v as f64)
-            .collect();
+        let values: Vec<_> = (1..=1_000_000).map(f64::from).map(|v| v as f64).collect();
 
         let t = t.merge_unsorted_f64(values);
 
@@ -738,13 +711,8 @@ mod tests {
     #[test]
     fn test_merge_unsorted_against_skewed_distro() {
         let t = TDigest::new(100);
-        let mut values: Vec<_> = (1..=600_000)
-            .map(f64::from)
-            .map(|v| v as f64)
-            .collect();
-        for _ in 0..400_000 {
-            values.push(1_000_000_f64);
-        }
+        let mut values: Vec<_> = (1..=600_000).map(f64::from).map(|v| v as f64).collect();
+        values.resize(1_000_000, 1_000_000_f64);
 
         let t = t.merge_unsorted_f64(values);
 
@@ -760,10 +728,7 @@ mod tests {
 
         for _ in 1..=100 {
             let t = TDigest::new(100);
-            let values: Vec<_> = (1..=1_000)
-                .map(f64::from)
-                .map(|v| v as f64)
-                .collect();
+            let values: Vec<_> = (1..=1_000).map(f64::from).map(|v| v as f64).collect();
             let t = t.merge_unsorted_f64(values);
             digests.push(t)
         }

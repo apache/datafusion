@@ -437,11 +437,9 @@ mod tests {
             let mut state_vec =
                 state_to_vec!(&states[0], $DATA_TYPE, $PRIM_TYPE).unwrap();
 
-            dbg!(&state_vec);    
+            dbg!(&state_vec);
             state_vec.sort_by(|a, b| match (a, b) {
-                (Some(lhs), Some(rhs)) => {
-                    lhs.total_cmp(rhs)
-                }
+                (Some(lhs), Some(rhs)) => lhs.total_cmp(rhs),
                 _ => a.partial_cmp(b).unwrap(),
             });
 

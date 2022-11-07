@@ -266,9 +266,7 @@ impl ApproxPercentileAccumulator {
         self.digest = TDigest::merge_digests(digests);
     }
 
-    pub(crate) fn convert_to_float(
-        values: &ArrayRef,
-    ) -> Result<Vec<f64>> {
+    pub(crate) fn convert_to_float(values: &ArrayRef) -> Result<Vec<f64>> {
         match values.data_type() {
             DataType::Float64 => {
                 let array = downcast_value!(values, Float64Array);
