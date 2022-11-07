@@ -151,6 +151,7 @@ impl WindowExpr for BuiltInWindowExpr {
     fn evaluate_stream(
         &self,
         batch: &Option<RecordBatch>,
+        batch_state: &HashMap<Vec<ScalarValue>, RecordBatch>,
         window_accumulators: &mut HashMap<
             Vec<ScalarValue>,
             AggregateWindowAccumulatorState,

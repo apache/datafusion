@@ -239,6 +239,7 @@ fn compute_window_aggregates(
     window_sort_keys: &WindowSortKeys,
     state: &mut [WindowAggState],
     batch: &Option<RecordBatch>,
+    batch_state: &HashMap<Vec<ScalarValue>, RecordBatch>,
 ) -> Result<Vec<Vec<WindowAccumulatorResult>>> {
     window_expr
         .iter()
@@ -247,6 +248,7 @@ fn compute_window_aggregates(
             let mut accumulator_state = state[idx].accumulator_state.clone();
             let res = window_expr.evaluate_stream(
                 batch,
+                batch_state,
                 &mut accumulator_state,
                 window_sort_keys,
             );
@@ -536,7 +538,6 @@ impl WindowAggStream {
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
         if let Some(batch) = &self.batch {
-
             // calculate window cols
             let window_agg_results = compute_window_aggregates(
                 &self.window_expr,
@@ -544,6 +545,7 @@ impl WindowAggStream {
                 &mut self.state,
                 batch_inc,
                 // self.batch
+                &self.batch_state,
             )
             .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
             Self::concat_state_with_new_results(&mut self.state, &window_agg_results);
@@ -604,32 +606,45 @@ impl WindowAggStream {
 
         let result = match ready!(self.input.poll_next_unpin(cx)) {
             Some(Ok(batch)) => {
-                let window_expr = if let Some(window_expr) = self.window_expr.first(){
+                let window_expr = if let Some(window_expr) = self.window_expr.first() {
                     window_expr
-                }else{
+                } else {
                     panic!("empty window expr");
                 };
                 let partition_columns = window_expr.partition_columns(&batch)?;
                 let num_rows = batch.num_rows();
-                let partition_points =
-                    window_expr.evaluate_partition_points(num_rows, &partition_columns)?;
-                println!("partition points:{:?}", partition_points);
-                for partition_range in partition_points{
-                    let partition_row = partition_columns
-                        .iter()
-                        .map(|arr| {
-                            ScalarValue::try_from_array(&arr.values, partition_range.start)
-                        })
-                        .collect::<Result<Vec<ScalarValue>>>()?;
-                    let batch_chunk = batch.slice(partition_range.start, partition_range.end-partition_range.start);
-                    if let Some(state) = self.batch_state.get_mut(&partition_row) {
-                        let res = common::append_new_batch(state, &batch_chunk, self.input.schema())?;
-                        self.batch_state.insert(partition_row.clone(), res);
-                    } else {
-                        self.batch_state.insert(partition_row.clone(), batch_chunk);
-                    };
+                if num_rows > 0 {
+                    let partition_points = window_expr
+                        .evaluate_partition_points(num_rows, &partition_columns)?;
+                    // println!("n_rows: {}, partition points:{:?}", num_rows, partition_points);
+                    for partition_range in partition_points {
+                        let partition_row = partition_columns
+                            .iter()
+                            .map(|arr| {
+                                ScalarValue::try_from_array(
+                                    &arr.values,
+                                    partition_range.start,
+                                )
+                            })
+                            .collect::<Result<Vec<ScalarValue>>>()?;
+                        let batch_chunk = batch.slice(
+                            partition_range.start,
+                            partition_range.end - partition_range.start,
+                        );
+                        if let Some(state) = self.batch_state.get_mut(&partition_row) {
+                            let res = common::append_new_batch(
+                                state,
+                                &batch_chunk,
+                                self.input.schema(),
+                            )?;
+                            self.batch_state.insert(partition_row.clone(), res);
+                        } else {
+                            self.batch_state.insert(partition_row.clone(), batch_chunk);
+                        };
+                        // println!("n_rows: {}", self.batch_state.get(&partition_row).unwrap().num_rows());
+                    }
                 }
-                println!("batch state: {:?}", self.batch_state);
+                // println!("batch state: {:?}", self.batch_state);
 
                 self.batch = Some(if let Some(state_batch) = &self.batch {
                     common::append_new_batch(state_batch, &batch, self.input.schema())?

@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use datafusion_expr::utils::WindowSortKeys;
 use datafusion_expr::{Accumulator, AggregateState, WindowFrameBound};
@@ -71,6 +72,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn evaluate_stream(
         &self,
         _batch: &Option<RecordBatch>,
+        _batch_state: &HashMap<Vec<ScalarValue>, RecordBatch>,
         _window_accumulators: &mut HashMap<
             Vec<ScalarValue>,
             AggregateWindowAccumulatorState,
@@ -458,11 +460,16 @@ pub struct AggregateWindowAccumulatorState {
     pub cur_range: (usize, usize),
     pub last_idx: usize,
     pub aggregate_state: Vec<AggregateState>,
+    pub insert_time: u64,
 }
 
 impl AggregateWindowAccumulatorState {
     /// create a new aggregate window function expression
     pub fn new() -> Self {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .subsec_nanos() as u64;
         Self {
             value_slice: vec![],
             order_bys: vec![],
@@ -470,6 +477,7 @@ impl AggregateWindowAccumulatorState {
             cur_range: (0, 0),
             last_idx: 0,
             aggregate_state: vec![],
+            insert_time: ts,
         }
     }
 }

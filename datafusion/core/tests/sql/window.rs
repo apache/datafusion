@@ -1970,14 +1970,12 @@ FIRST_VALUE(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLL
         let task_ctx = ctx.task_ctx();
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
-
         ctx.register_table("users", Arc::new(mem_table))?;
 
         let sql = "SELECT
             SUM(inc_col) OVER(PARTITION BY inc_col ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
             FROM users AS user_
-            ORDER BY ts
-            ";
+            ORDER BY ts";
 
         let dataframe = ctx.sql(sql).await?;
         let df = dataframe.explain(false, false)?;

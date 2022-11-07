@@ -26,6 +26,7 @@ use std::sync::Arc;
 use arrow::array::Array;
 use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
+use arrow::util::pretty::print_batches;
 use arrow::{array::ArrayRef, datatypes::Field};
 
 use datafusion_common::Result;
@@ -166,7 +167,8 @@ impl WindowExpr for AggregateWindowExpr {
 
     fn evaluate_stream(
         &self,
-        batch: &Option<RecordBatch>,
+        _batch: &Option<RecordBatch>,
+        batch_state: &HashMap<Vec<ScalarValue>, RecordBatch>,
         window_accumulators: &mut HashMap<
             Vec<ScalarValue>,
             AggregateWindowAccumulatorState,
@@ -175,83 +177,58 @@ impl WindowExpr for AggregateWindowExpr {
     ) -> Result<Vec<WindowAccumulatorResult>> {
         let window_sort_keys =
             window_sort_keys[self.partition_by.len()..window_sort_keys.len()].to_vec();
-        let results = if let Some(batch) = batch {
-            let num_rows = batch.num_rows();
-            let partition_columns = self.partition_columns(batch)?;
-            let partition_points =
-                self.evaluate_partition_points(num_rows, &partition_columns)?;
+        let is_end = _batch.is_none();
+        let mut results = vec![];
+        for (partition_row, partition_batch) in batch_state.iter() {
+            // println!("partition_row: {:?}", partition_row);
+            // print_batches(&vec![partition_batch.clone()])?;
+            let mut accumulator = self.aggregate.create_accumulator()?;
+            let mut state = if let Some(state) = window_accumulators.get(partition_row) {
+                let aggregate_state = state.aggregate_state.clone();
+                accumulator.set_state(aggregate_state)?;
+                state.clone()
+            } else {
+                let state = AggregateWindowAccumulatorState::new();
+                window_accumulators.insert(partition_row.clone(), state.clone());
+                state.clone()
+            };
+            let num_rows = partition_batch.num_rows();
+            // let partition_columns = self.partition_columns(partition_batch)?;
+            let partition_range = Range {
+                start: 0,
+                end: num_rows,
+            };
 
-            let values = self.evaluate_args(batch)?;
+            let values = self.evaluate_args(partition_batch)?;
 
-            let columns = self.sort_columns(batch)?;
+            let columns = self.sort_columns(partition_batch)?;
             let order_bys: Vec<ArrayRef> =
                 columns.iter().map(|s| s.values.clone()).collect();
             let order_bys = order_bys[self.partition_by.len()..order_bys.len()].to_vec();
 
-            let mut results = vec![];
-            println!("partition points: {:?}", partition_points);
-            for partition_range in partition_points {
-                // let batch_chunk = batch.slice(partition_range.start, partition_range.end-partition_range.start);
-                // println!("chunk:{:?}", batch_chunk);
-                let partition_row = partition_columns
-                    .iter()
-                    .map(|arr| {
-                        ScalarValue::try_from_array(&arr.values, partition_range.start)
-                    })
-                    .collect::<Result<Vec<ScalarValue>>>()?;
-                let mut accumulator = self.aggregate.create_accumulator()?;
-                let mut state =
-                    if let Some(state) = window_accumulators.get(&partition_row) {
-                        let aggregate_state = state.aggregate_state.clone();
-                        accumulator.set_state(aggregate_state)?;
-                        state.clone()
-                    } else {
-                        let state = AggregateWindowAccumulatorState::new();
-                        window_accumulators.insert(partition_row.clone(), state.clone());
-                        state.clone()
-                    };
-                update_state(&mut state, &values, &order_bys, &partition_range)?;
-                window_accumulators.insert(partition_row.clone(), state.clone());
+            update_state(&mut state, &values, &order_bys, &partition_range)?;
+            window_accumulators.insert(partition_row.clone(), state.clone());
 
-                let res = self.calculate_running_window(
-                    &mut state,
-                    &mut accumulator,
-                    false,
-                    &window_sort_keys,
-                )?;
-                let res = WindowAccumulatorResult {
-                    partition_id: partition_row.clone(),
-                    col: res,
-                    n_partition_range: partition_range.end - partition_range.start,
-                };
-                window_accumulators.insert(partition_row.clone(), state.clone());
-                results.push(res);
-            }
-            results
-        } else {
-            let mut results = vec![];
-            for (partition_row, state) in window_accumulators.into_iter() {
-                let mut accumulator = self.aggregate.create_accumulator()?;
-
-                let aggregate_state = state.aggregate_state.clone();
-                accumulator.set_state(aggregate_state)?;
-
-                let res = self.calculate_running_window(
-                    state,
-                    &mut accumulator,
-                    true,
-                    &window_sort_keys,
-                )?;
-                let res = WindowAccumulatorResult {
-                    partition_id: partition_row.clone(),
-                    col: res,
-                    n_partition_range: 0,
-                };
-                results.push(res);
-            }
-            window_accumulators.clear();
-            results
-        };
+            let res = self.calculate_running_window(
+                &mut state,
+                &mut accumulator,
+                is_end,
+                &window_sort_keys,
+            )?;
+            let res = WindowAccumulatorResult {
+                partition_id: partition_row.clone(),
+                col: res,
+                n_partition_range: partition_range.end - partition_range.start,
+            };
+            window_accumulators.insert(partition_row.clone(), state.clone());
+            results.push((state.insert_time, res));
+        }
+        let tss = results.iter().map(|(ts, _)| *ts).collect::<Vec<u64>>();
+        println!("tss: {:?}", tss);
+        results.sort_by(|(ts_l, _), (ts_r, _)| ts_l.partial_cmp(ts_r).unwrap());
+        let tss = results.iter().map(|(ts, _)| *ts).collect::<Vec<u64>>();
+        println!("tss: {:?}", tss);
+        let results = results.into_iter().map(|(ts, elem)| elem).collect();
         Ok(results)
     }
 
@@ -290,10 +267,10 @@ impl WindowExpr for AggregateWindowExpr {
                 i,
                 &window_sort_keys,
             )?;
-            println!(
-                "cur range: {:?}, last range: {:?}, last idx: {:?}",
-                state.cur_range, state.last_range, state.last_idx
-            );
+            // println!(
+            //     "cur range: {:?}, last range: {:?}, last idx: {:?}",
+            //     state.cur_range, state.last_range, state.last_idx
+            // );
             // exit if range end index is length, need kind of flag to stop
             if state.cur_range.1 == length && !is_end {
                 state.cur_range = state.last_range;
@@ -330,21 +307,21 @@ impl WindowExpr for AggregateWindowExpr {
             state.last_range = state.cur_range;
             state.last_idx = i + 1;
         }
-        let n_to_keep = length - state.last_range.0;
-        state.value_slice = state
-            .value_slice
-            .iter()
-            .map(|elem| elem.slice(state.last_range.0, n_to_keep))
-            .collect::<Vec<_>>();
-
-        state.order_bys = state
-            .order_bys
-            .iter()
-            .map(|elem| elem.slice(state.last_range.0, n_to_keep))
-            .collect::<Vec<_>>();
-        state.last_idx -= state.last_range.0;
-        state.cur_range = (0, state.cur_range.1 - state.cur_range.0);
-        state.last_range = (0, state.last_range.1 - state.last_range.0);
+        // let n_to_keep = length - state.last_range.0;
+        // state.value_slice = state
+        //     .value_slice
+        //     .iter()
+        //     .map(|elem| elem.slice(state.last_range.0, n_to_keep))
+        //     .collect::<Vec<_>>();
+        //
+        // state.order_bys = state
+        //     .order_bys
+        //     .iter()
+        //     .map(|elem| elem.slice(state.last_range.0, n_to_keep))
+        //     .collect::<Vec<_>>();
+        // state.last_idx -= state.last_range.0;
+        // state.cur_range = (0, state.cur_range.1 - state.cur_range.0);
+        // state.last_range = (0, state.last_range.1 - state.last_range.0);
         state.aggregate_state = accumulator.state()?;
 
         if !row_wise_results.is_empty() {
@@ -377,18 +354,20 @@ fn update_state(
         state.value_slice = value_slice;
         state.order_bys = order_bys;
     } else {
-        state.value_slice = state
-            .value_slice
-            .iter()
-            .enumerate()
-            .map(|(i, elem)| concat(&[elem.as_ref(), value_slice[i].as_ref()]).unwrap())
-            .collect();
-        state.order_bys = state
-            .order_bys
-            .iter()
-            .enumerate()
-            .map(|(i, elem)| concat(&[elem.as_ref(), order_bys[i].as_ref()]).unwrap())
-            .collect();
+        // state.value_slice = state
+        //     .value_slice
+        //     .iter()
+        //     .enumerate()
+        //     .map(|(i, elem)| concat(&[elem.as_ref(), value_slice[i].as_ref()]).unwrap())
+        //     .collect();
+        // state.order_bys = state
+        //     .order_bys
+        //     .iter()
+        //     .enumerate()
+        //     .map(|(i, elem)| concat(&[elem.as_ref(), order_bys[i].as_ref()]).unwrap())
+        //     .collect();
+        state.value_slice = value_slice;
+        state.order_bys = order_bys;
     }
     Ok(())
 }
