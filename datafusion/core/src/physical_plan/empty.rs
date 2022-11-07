@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
-    memory::MemoryStream, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning,
 };
 use arrow::array::NullArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -96,10 +96,6 @@ impl ExecutionPlan for EmptyExec {
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
-    }
-
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::UnspecifiedDistribution
     }
 
     /// Get the output partitioning of this plan

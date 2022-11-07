@@ -37,6 +37,7 @@ use datafusion_physical_expr::{
     expressions, AggregateExpr, PhysicalExpr, PhysicalSortExpr,
 };
 use std::any::Any;
+use std::collections::HashMap;
 
 use std::sync::Arc;
 
@@ -45,9 +46,11 @@ mod no_grouping;
 mod row_hash;
 
 use crate::physical_plan::aggregates::row_hash::GroupedHashAggregateStreamV2;
+use crate::physical_plan::EquivalenceProperties;
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
+use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
 use datafusion_row::{row_supported, RowType};
 
 /// Hash aggregate modes
@@ -163,6 +166,9 @@ pub struct AggregateExec {
     /// same as input.schema() but for the final aggregate it will be the same as the input
     /// to the partial aggregate
     input_schema: SchemaRef,
+    /// The alias map used to normalize out expressions like Partitioning and PhysicalSortExpr
+    /// The key is the column from the input schema and the values are the columns from the output schema
+    alias_map: HashMap<Column, Vec<Column>>,
     /// Execution Metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -186,6 +192,18 @@ impl AggregateExec {
 
         let schema = Arc::new(schema);
 
+        let mut alias_map: HashMap<Column, Vec<Column>> = HashMap::new();
+        for (expression, name) in group_by.expr.iter() {
+            if let Some(column) = expression.as_any().downcast_ref::<Column>() {
+                let new_col_idx = schema.index_of(name)?;
+                // When the column name is the same, but index does not equal, treat it as Alias
+                if (column.name() != name) || (column.index() != new_col_idx) {
+                    let entry = alias_map.entry(column.clone()).or_insert_with(Vec::new);
+                    entry.push(Column::new(name, new_col_idx));
+                }
+            };
+        }
+
         Ok(AggregateExec {
             mode,
             group_by,
@@ -193,6 +211,7 @@ impl AggregateExec {
             input,
             schema,
             input_schema,
+            alias_map,
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -255,25 +274,51 @@ impl ExecutionPlan for AggregateExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        self.input.output_partitioning()
+        match &self.mode {
+            AggregateMode::Partial => {
+                // Partial Aggregation will not change the output partitioning but need to respect the Alias
+                let input_partition = self.input.output_partitioning();
+                match input_partition {
+                    Partitioning::Hash(exprs, part) => {
+                        let normalized_exprs = exprs
+                            .into_iter()
+                            .map(|expr| {
+                                normalize_out_expr_with_alias_schema(
+                                    expr,
+                                    &self.alias_map,
+                                    &self.schema,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        Partitioning::Hash(normalized_exprs, part)
+                    }
+                    _ => input_partition,
+                }
+            }
+            // Final Aggregation's output partitioning is the same as its real input
+            _ => self.input.output_partitioning(),
+        }
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 
-    fn required_child_distribution(&self) -> Distribution {
+    fn required_input_distribution(&self) -> Vec<Distribution> {
         match &self.mode {
-            AggregateMode::Partial => Distribution::UnspecifiedDistribution,
-            AggregateMode::FinalPartitioned => Distribution::HashPartitioned(
-                self.group_by.expr.iter().map(|x| x.0.clone()).collect(),
-            ),
-            AggregateMode::Final => Distribution::SinglePartition,
+            AggregateMode::Partial => vec![Distribution::UnspecifiedDistribution],
+            AggregateMode::FinalPartitioned => {
+                vec![Distribution::HashPartitioned(self.output_group_expr())]
+            }
+            AggregateMode::Final => vec![Distribution::SinglePartition],
         }
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        let mut input_equivalence_properties = self.input.equivalence_properties();
+        input_equivalence_properties.merge_properties_with_alias(&self.alias_map);
+        input_equivalence_properties.truncate_properties_not_in_schema(&self.schema);
+        input_equivalence_properties
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

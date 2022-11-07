@@ -409,8 +409,10 @@ message AliasNode {
 }
 
 message BinaryExprNode {
-  LogicalExprNode l = 1;
-  LogicalExprNode r = 2;
+  // Represents the operands from the left inner most expression
+  // to the right outer most expression where each of them are chained
+  // with the operator 'op'.
+  repeated LogicalExprNode operands = 1;
   string op = 3;
 }
 

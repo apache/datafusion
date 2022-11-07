@@ -97,7 +97,10 @@ use datafusion_sql::{
     planner::{ContextProvider, SqlToRel},
 };
 use parquet::file::properties::WriterProperties;
+use url::Url;
 
+use crate::catalog::listing_schema::ListingSchemaProvider;
+use crate::datasource::object_store::ObjectStoreUrl;
 use uuid::Uuid;
 
 use super::options::{
@@ -914,6 +917,11 @@ impl SessionContext {
         state.catalog_list.register_catalog(name, catalog)
     }
 
+    /// Retrieves the list of available catalog names.
+    pub fn catalog_names(&self) -> Vec<String> {
+        self.state.read().catalog_list.catalog_names()
+    }
+
     /// Retrieves a [`CatalogProvider`] instance by name
     pub fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
         self.state.read().catalog_list.catalog(name)
@@ -1258,6 +1266,11 @@ impl SessionConfig {
         self.set(key, ScalarValue::UInt64(Some(value)))
     }
 
+    /// Set a generic `str` configuration option
+    pub fn set_str(self, key: &str, value: &str) -> Self {
+        self.set(key, ScalarValue::Utf8(Some(value.to_string())))
+    }
+
     /// Customize batch size
     pub fn with_batch_size(self, n: usize) -> Self {
         // batch size must be greater than zero
@@ -1508,6 +1521,8 @@ impl SessionState {
                 )
                 .expect("memory catalog provider can register schema");
 
+            Self::register_default_schema(&config, &runtime, &default_catalog);
+
             let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema {
                 Arc::new(CatalogWithInformationSchema::new(
                     Arc::downgrade(&catalog_list),
@@ -1564,6 +1579,48 @@ impl SessionState {
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
         }
+    }
+
+    fn register_default_schema(
+        config: &SessionConfig,
+        runtime: &Arc<RuntimeEnv>,
+        default_catalog: &MemoryCatalogProvider,
+    ) {
+        let url = config
+            .config_options
+            .read()
+            .get("datafusion.catalog.location");
+        let format = config.config_options.read().get("datafusion.catalog.type");
+        let (url, format) = match (url, format) {
+            (Some(url), Some(format)) => (url, format),
+            _ => return,
+        };
+        if url.is_null() || format.is_null() {
+            return;
+        }
+        let url = url.to_string();
+        let format = format.to_string();
+        let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
+        let authority = match url.host_str() {
+            Some(host) => format!("{}://{}", url.scheme(), host),
+            None => format!("{}://", url.scheme()),
+        };
+        let path = &url.as_str()[authority.len() as usize..];
+        let path = object_store::path::Path::parse(path).expect("Can't parse path");
+        let store = ObjectStoreUrl::parse(authority.as_str())
+            .expect("Invalid default catalog url");
+        let store = match runtime.object_store(store) {
+            Ok(store) => store,
+            _ => return,
+        };
+        let factory = match runtime.table_factories.get(format.as_str()) {
+            Some(factory) => factory,
+            _ => return,
+        };
+        let schema = ListingSchemaProvider::new(authority, path, factory.clone(), store);
+        let _ = default_catalog
+            .register_schema("default", Arc::new(schema))
+            .expect("Failed to register default schema");
     }
 
     fn resolve_table_ref<'a>(
@@ -1947,10 +2004,12 @@ impl FunctionRegistry for TaskContext {
 mod tests {
     use super::*;
     use crate::assert_batches_eq;
+    use crate::datasource::datasource::TableProviderFactory;
     use crate::execution::context::QueryPlanner;
+    use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
-    use crate::test_util::parquet_test_data;
+    use crate::test_util::{parquet_test_data, TestTableFactory};
     use crate::variable::VarType;
     use arrow::array::ArrayRef;
     use arrow::datatypes::*;
@@ -1959,9 +2018,10 @@ mod tests {
     use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};
     use datafusion_physical_expr::functions::make_scalar_function;
     use std::fs::File;
+    use std::path::PathBuf;
     use std::sync::Weak;
     use std::thread::{self, JoinHandle};
-    use std::{io::prelude::*, sync::Mutex};
+    use std::{env, io::prelude::*, sync::Mutex};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -2196,6 +2256,41 @@ mod tests {
         for thread in threads {
             thread.join().expect("Failed to join thread")?;
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn with_listing_schema_provider() -> Result<()> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let path = path.join("tests/tpch-csv");
+        let url = format!("file://{}", path.display());
+
+        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+            HashMap::new();
+        table_factories.insert("test".to_string(), Arc::new(TestTableFactory {}));
+        let rt_cfg = RuntimeConfig::new().with_table_factories(table_factories);
+        let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
+        let cfg = SessionConfig::new()
+            .set_str("datafusion.catalog.location", url.as_str())
+            .set_str("datafusion.catalog.type", "test");
+        let session_state = SessionState::with_config_rt(cfg, runtime);
+        let ctx = SessionContext::with_state(session_state);
+
+        let mut table_count = 0;
+        for cat_name in ctx.catalog_names().iter() {
+            let cat = ctx.catalog(cat_name).unwrap();
+            for s_name in cat.schema_names().iter() {
+                let schema = cat.schema(s_name).unwrap();
+                if let Some(listing) =
+                    schema.as_any().downcast_ref::<ListingSchemaProvider>()
+                {
+                    listing.refresh().await.unwrap();
+                    table_count = schema.table_names().len();
+                }
+            }
+        }
+
+        assert_eq!(table_count, 8);
         Ok(())
     }
 

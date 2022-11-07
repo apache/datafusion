@@ -17,16 +17,15 @@
 
 //! The table implementation.
 
-use ahash::HashMap;
 use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use async_trait::async_trait;
+use dashmap::DashMap;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use parking_lot::RwLock;
 
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::{
@@ -266,28 +265,31 @@ impl ListingOptions {
 /// Cache is invalided when file size or last modification has changed
 #[derive(Default)]
 struct StatisticsCache {
-    statistics: RwLock<HashMap<Path, (ObjectMeta, Statistics)>>,
+    statistics: DashMap<Path, (ObjectMeta, Statistics)>,
 }
 
 impl StatisticsCache {
     /// Get `Statistics` for file location. Returns None if file has changed or not found.
     fn get(&self, meta: &ObjectMeta) -> Option<Statistics> {
-        let map = self.statistics.read();
-        let (saved_meta, statistics) = map.get(&meta.location)?;
-
-        if saved_meta.size != meta.size || saved_meta.last_modified != meta.last_modified
-        {
-            // file has changed
-            return None;
-        }
-
-        Some(statistics.clone())
+        self.statistics
+            .get(&meta.location)
+            .map(|s| {
+                let (saved_meta, statistics) = s.value();
+                if saved_meta.size != meta.size
+                    || saved_meta.last_modified != meta.last_modified
+                {
+                    // file has changed
+                    None
+                } else {
+                    Some(statistics.clone())
+                }
+            })
+            .unwrap_or(None)
     }
 
     /// Save collected file statistics
     fn save(&self, meta: ObjectMeta, statistics: Statistics) {
         self.statistics
-            .write()
             .insert(meta.location.clone(), (meta, statistics));
     }
 }

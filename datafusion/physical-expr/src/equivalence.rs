@@ -1,0 +1,256 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use crate::expressions::Column;
+
+use arrow::datatypes::SchemaRef;
+
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+/// Equivalence Properties is a vec of EquivalentClass.
+#[derive(Debug, Default, Clone)]
+pub struct EquivalenceProperties {
+    classes: Vec<EquivalentClass>,
+}
+
+impl EquivalenceProperties {
+    pub fn new() -> Self {
+        EquivalenceProperties { classes: vec![] }
+    }
+
+    pub fn classes(&self) -> &[EquivalentClass] {
+        &self.classes
+    }
+
+    pub fn extend<I: IntoIterator<Item = EquivalentClass>>(&mut self, iter: I) {
+        self.classes.extend(iter)
+    }
+
+    /// Add new equal conditions into the EquivalenceProperties, the new equal conditions are usually comming from the
+    /// equality predicates in Join or Filter
+    pub fn add_equal_conditions(&mut self, new_conditions: (&Column, &Column)) {
+        let mut idx1: Option<usize> = None;
+        let mut idx2: Option<usize> = None;
+        for (idx, class) in self.classes.iter_mut().enumerate() {
+            let contains_first = class.contains(new_conditions.0);
+            let contains_second = class.contains(new_conditions.1);
+            match (contains_first, contains_second) {
+                (true, false) => {
+                    class.insert(new_conditions.1.clone());
+                    idx1 = Some(idx);
+                }
+                (false, true) => {
+                    class.insert(new_conditions.0.clone());
+                    idx2 = Some(idx);
+                }
+                (true, true) => {
+                    idx1 = Some(idx);
+                    idx2 = Some(idx);
+                    break;
+                }
+                (false, false) => {}
+            }
+        }
+
+        match (idx1, idx2) {
+            (Some(idx_1), Some(idx_2)) if idx_1 != idx_2 => {
+                // need to merge the two existing EquivalentClasses
+                let second_eq_class = self.classes.get(idx_2).unwrap().clone();
+                let first_eq_class = self.classes.get_mut(idx_1).unwrap();
+                for prop in second_eq_class.iter() {
+                    if !first_eq_class.contains(prop) {
+                        first_eq_class.insert(prop.clone());
+                    }
+                }
+                self.classes.remove(idx_2);
+            }
+            (None, None) => {
+                // adding new pairs
+                self.classes.push(EquivalentClass::new(
+                    new_conditions.0.clone(),
+                    vec![new_conditions.1.clone()],
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    pub fn merge_properties_with_alias(
+        &mut self,
+        alias_map: &HashMap<Column, Vec<Column>>,
+    ) {
+        for (column, columns) in alias_map {
+            let mut find_match = false;
+            for class in self.classes.iter_mut() {
+                if class.contains(column) {
+                    for col in columns {
+                        class.insert(col.clone());
+                    }
+                    find_match = true;
+                    break;
+                }
+            }
+            if !find_match {
+                self.classes
+                    .push(EquivalentClass::new(column.clone(), columns.clone()));
+            }
+        }
+    }
+
+    pub fn truncate_properties_not_in_schema(&mut self, schema: &SchemaRef) {
+        for class in self.classes.iter_mut() {
+            let mut columns_to_remove = vec![];
+            for column in class.iter() {
+                if let Ok(idx) = schema.index_of(column.name()) {
+                    if idx != column.index() {
+                        columns_to_remove.push(column.clone());
+                    }
+                } else {
+                    columns_to_remove.push(column.clone());
+                }
+            }
+            for column in columns_to_remove {
+                class.remove(&column);
+            }
+        }
+        self.classes.retain(|props| props.len() > 1);
+    }
+}
+
+/// Equivalent Class is a set of Columns that are known to have the same value in all tuples in a relation
+/// Equivalent Class is generated by equality predicates, typically equijoin conditions and equality conditions in filters.
+#[derive(Debug, Clone)]
+pub struct EquivalentClass {
+    /// First element in the EquivalentClass
+    head: Column,
+    /// Other equal columns
+    others: HashSet<Column>,
+}
+
+impl EquivalentClass {
+    pub fn new(head: Column, others: Vec<Column>) -> Self {
+        EquivalentClass {
+            head,
+            others: HashSet::from_iter(others),
+        }
+    }
+
+    pub fn head(&self) -> &Column {
+        &self.head
+    }
+
+    pub fn others(&self) -> &HashSet<Column> {
+        &self.others
+    }
+
+    pub fn contains(&self, col: &Column) -> bool {
+        self.head == *col || self.others.contains(col)
+    }
+
+    pub fn insert(&mut self, col: Column) -> bool {
+        self.others.insert(col)
+    }
+
+    pub fn remove(&mut self, col: &Column) -> bool {
+        let removed = self.others.remove(col);
+        if !removed && *col == self.head {
+            let one_col = self.others.iter().next().cloned();
+            if let Some(col) = one_col {
+                let removed = self.others.remove(&col);
+                self.head = col;
+                removed
+            } else {
+                false
+            }
+        } else {
+            true
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &'_ Column> {
+        std::iter::once(&self.head).chain(self.others.iter())
+    }
+
+    pub fn len(&self) -> usize {
+        self.others.len() + 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::Column;
+    use datafusion_common::Result;
+
+    #[test]
+    fn add_equal_conditions_test() -> Result<()> {
+        let mut eq_properties = EquivalenceProperties::new();
+        let new_condition = (&Column::new("a", 0), &Column::new("b", 1));
+        eq_properties.add_equal_conditions(new_condition);
+        assert_eq!(eq_properties.classes().len(), 1);
+
+        let new_condition = (&Column::new("b", 1), &Column::new("a", 0));
+        eq_properties.add_equal_conditions(new_condition);
+        assert_eq!(eq_properties.classes().len(), 1);
+        assert_eq!(eq_properties.classes()[0].len(), 2);
+
+        let new_condition = (&Column::new("b", 1), &Column::new("c", 2));
+        eq_properties.add_equal_conditions(new_condition);
+        assert_eq!(eq_properties.classes().len(), 1);
+        assert_eq!(eq_properties.classes()[0].len(), 3);
+
+        let new_condition = (&Column::new("x", 99), &Column::new("y", 100));
+        eq_properties.add_equal_conditions(new_condition);
+        assert_eq!(eq_properties.classes().len(), 2);
+
+        let new_condition = (&Column::new("x", 99), &Column::new("a", 0));
+        eq_properties.add_equal_conditions(new_condition);
+        assert_eq!(eq_properties.classes().len(), 1);
+        assert_eq!(eq_properties.classes()[0].len(), 5);
+
+        Ok(())
+    }
+
+    #[test]
+    fn merge_equivalence_properties_with_alias_test() -> Result<()> {
+        let mut eq_properties = EquivalenceProperties::new();
+        let mut alias_map = HashMap::new();
+        alias_map.insert(
+            Column::new("a", 0),
+            vec![Column::new("a1", 1), Column::new("a2", 2)],
+        );
+
+        eq_properties.merge_properties_with_alias(&alias_map);
+        assert_eq!(eq_properties.classes().len(), 1);
+        assert_eq!(eq_properties.classes()[0].len(), 3);
+
+        let mut alias_map = HashMap::new();
+        alias_map.insert(
+            Column::new("a", 0),
+            vec![Column::new("a3", 1), Column::new("a4", 2)],
+        );
+        eq_properties.merge_properties_with_alias(&alias_map);
+        assert_eq!(eq_properties.classes().len(), 1);
+        assert_eq!(eq_properties.classes()[0].len(), 5);
+        Ok(())
+    }
+}

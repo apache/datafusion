@@ -29,16 +29,19 @@ use arrow::record_batch::RecordBatch;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
-    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
+    Partitioning, PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
+    Statistics,
 };
 use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
-use datafusion_physical_expr::PhysicalSortExpr;
 use log::debug;
 use std::time::Instant;
 
-use super::utils::{check_join_is_valid, OnceAsync, OnceFut};
+use super::utils::{
+    adjust_right_output_partitioning, check_join_is_valid,
+    cross_join_equivalence_properties, OnceAsync, OnceFut,
+};
 
 /// Data of the left side
 type JoinLeftData = RecordBatch;
@@ -153,16 +156,27 @@ impl ExecutionPlan for CrossJoinExec {
         )?))
     }
 
+    // TODO optimize CrossJoin implementation to generate M * N partitions
     fn output_partitioning(&self) -> Partitioning {
-        self.right.output_partitioning()
+        let left_columns_len = self.left.schema().fields.len();
+        adjust_right_output_partitioning(
+            self.right.output_partitioning(),
+            left_columns_len,
+        )
     }
 
+    // TODO check the output ordering of CrossJoin
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        let left_columns_len = self.left.schema().fields.len();
+        cross_join_equivalence_properties(
+            self.left.equivalence_properties(),
+            self.right.equivalence_properties(),
+            left_columns_len,
+        )
     }
 
     fn execute(

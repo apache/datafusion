@@ -18,9 +18,8 @@
 //! Describes the interface and built-in implementations of schemas,
 //! representing collections of named tables.
 
-use parking_lot::RwLock;
+use dashmap::DashMap;
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::datasource::TableProvider;
@@ -68,14 +67,14 @@ pub trait SchemaProvider: Sync + Send {
 
 /// Simple in-memory implementation of a schema.
 pub struct MemorySchemaProvider {
-    tables: RwLock<HashMap<String, Arc<dyn TableProvider>>>,
+    tables: DashMap<String, Arc<dyn TableProvider>>,
 }
 
 impl MemorySchemaProvider {
     /// Instantiates a new MemorySchemaProvider with an empty collection of tables.
     pub fn new() -> Self {
         Self {
-            tables: RwLock::new(HashMap::new()),
+            tables: DashMap::new(),
         }
     }
 }
@@ -92,13 +91,14 @@ impl SchemaProvider for MemorySchemaProvider {
     }
 
     fn table_names(&self) -> Vec<String> {
-        let tables = self.tables.read();
-        tables.keys().cloned().collect()
+        self.tables
+            .iter()
+            .map(|table| table.key().clone())
+            .collect()
     }
 
     fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        let tables = self.tables.read();
-        tables.get(name).cloned()
+        self.tables.get(name).map(|table| table.value().clone())
     }
 
     fn register_table(
@@ -112,18 +112,15 @@ impl SchemaProvider for MemorySchemaProvider {
                 name
             )));
         }
-        let mut tables = self.tables.write();
-        Ok(tables.insert(name, table))
+        Ok(self.tables.insert(name, table))
     }
 
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        let mut tables = self.tables.write();
-        Ok(tables.remove(name))
+        Ok(self.tables.remove(name).map(|(_, table)| table))
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        let tables = self.tables.read();
-        tables.contains_key(name)
+        self.tables.contains_key(name)
     }
 }
 

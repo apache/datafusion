@@ -690,11 +690,29 @@ pub fn parse_expr(
         .ok_or_else(|| Error::required("expr_type"))?;
 
     match expr_type {
-        ExprType::BinaryExpr(binary_expr) => Ok(Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(parse_required_expr(&binary_expr.l, registry, "l")?),
-            from_proto_binary_op(&binary_expr.op)?,
-            Box::new(parse_required_expr(&binary_expr.r, registry, "r")?),
-        ))),
+        ExprType::BinaryExpr(binary_expr) => {
+            let op = from_proto_binary_op(&binary_expr.op)?;
+            let operands = binary_expr
+                .operands
+                .iter()
+                .map(|expr| parse_expr(expr, registry))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            if operands.len() < 2 {
+                return Err(proto_error(
+                    "A binary expression must always have at least 2 operands",
+                ));
+            }
+
+            // Reduce the linearized operands (ordered by left innermost to right
+            // outermost) into a single expression tree.
+            Ok(operands
+                .into_iter()
+                .reduce(|left, right| {
+                    Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
+                })
+                .expect("Binary expression could not be reduced to a single expression."))
+        }
         ExprType::GetIndexedField(field) => {
             let key = field
                 .key

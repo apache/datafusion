@@ -122,10 +122,20 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// have any particular output order here
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
 
-    /// Specifies the data distribution requirements of all the
-    /// children for this operator
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::UnspecifiedDistribution
+    /// Specifies the data distribution requirements for all the
+    /// children for this operator, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        if !self.children().is_empty() {
+            vec![Distribution::UnspecifiedDistribution; self.children().len()]
+        } else {
+            vec![Distribution::UnspecifiedDistribution]
+        }
+    }
+
+    /// Specifies the ordering requirements for all the
+    /// children for this operator.
+    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
+        vec![None; self.children().len()]
     }
 
     /// Returns `true` if this operator relies on its inputs being
@@ -136,13 +146,17 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// optimizations which might reorder the inputs (such as
     /// repartitioning to increase concurrency).
     ///
-    /// The default implementation returns `true`
+    /// The default implementation checks the input ordering requirements
+    /// and if there is non empty ordering requirements to the input, the method will
+    /// return `true`.
     ///
     /// WARNING: if you override this default and return `false`, your
     /// operator can not rely on DataFusion preserving the input order
     /// as it will likely not.
     fn relies_on_input_order(&self) -> bool {
-        true
+        self.required_input_ordering()
+            .iter()
+            .any(|ordering| matches!(ordering, Some(_)))
     }
 
     /// Returns `false` if this operator's implementation may reorder
@@ -175,10 +189,15 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     fn benefits_from_input_partitioning(&self) -> bool {
         // By default try to maximize parallelism with more CPUs if
         // possible
-        !matches!(
-            self.required_child_distribution(),
-            Distribution::SinglePartition
-        )
+        !self
+            .required_input_distribution()
+            .into_iter()
+            .any(|dist| matches!(dist, Distribution::SinglePartition))
+    }
+
+    /// Get the EquivalenceProperties within the plan
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        EquivalenceProperties::new()
     }
 
     /// Get a list of child execution plans that provide the input for this plan. The returned list
@@ -460,6 +479,23 @@ impl Partitioning {
     }
 }
 
+impl PartialEq for Partitioning {
+    fn eq(&self, other: &Partitioning) -> bool {
+        match (self, other) {
+            (
+                Partitioning::RoundRobinBatch(count1),
+                Partitioning::RoundRobinBatch(count2),
+            ) if count1 == count2 => true,
+            (Partitioning::Hash(exprs1, count1), Partitioning::Hash(exprs2, count2))
+                if expr_list_eq_strict_order(exprs1, exprs2) && (count1 == count2) =>
+            {
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 /// Distribution schemes
 #[derive(Debug, Clone)]
 pub enum Distribution {
@@ -472,7 +508,10 @@ pub enum Distribution {
     HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
+use datafusion_physical_expr::expr_list_eq_strict_order;
+use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
+use datafusion_physical_expr::EquivalenceProperties;
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
