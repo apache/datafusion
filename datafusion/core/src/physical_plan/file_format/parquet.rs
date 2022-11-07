@@ -445,7 +445,7 @@ impl FileOpener for ParquetOpener {
             // page index pruning: if all data on individual pages can
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
-            if let Some(row_selection) = enable_page_index
+            if let Some(row_selection) = (enable_page_index && !row_groups.is_empty())
                 .then(|| {
                     page_filter::build_page_filter(
                         pruning_predicate.as_ref(),
@@ -914,7 +914,7 @@ mod tests {
         datasource::file_format::{parquet::ParquetFormat, FileFormat},
         physical_plan::collect,
     };
-    use arrow::array::Float32Array;
+    use arrow::array::{Float32Array, Int32Array};
     use arrow::datatypes::DataType::Decimal128;
     use arrow::record_batch::RecordBatch;
     use arrow::{
@@ -955,9 +955,16 @@ mod tests {
         predicate: Option<Expr>,
         pushdown_predicate: bool,
     ) -> Result<Vec<RecordBatch>> {
-        round_trip(batches, projection, schema, predicate, pushdown_predicate)
-            .await
-            .batches
+        round_trip(
+            batches,
+            projection,
+            schema,
+            predicate,
+            pushdown_predicate,
+            false,
+        )
+        .await
+        .batches
     }
 
     /// Writes each RecordBatch as an individual parquet file and then
@@ -969,6 +976,7 @@ mod tests {
         schema: Option<SchemaRef>,
         predicate: Option<Expr>,
         pushdown_predicate: bool,
+        page_index_predicate: bool,
     ) -> RoundTripResult {
         let file_schema = match schema {
             Some(schema) => schema,
@@ -978,7 +986,7 @@ mod tests {
             ),
         };
 
-        let (meta, _files) = store_parquet(batches).await.unwrap();
+        let (meta, _files) = store_parquet(batches, page_index_predicate).await.unwrap();
         let file_groups = meta.into_iter().map(Into::into).collect();
 
         // prepare the scan
@@ -1001,6 +1009,10 @@ mod tests {
             parquet_exec = parquet_exec
                 .with_pushdown_filters(true)
                 .with_reorder_filters(true);
+        }
+
+        if page_index_predicate {
+            parquet_exec = parquet_exec.with_enable_page_index(true);
         }
 
         let session_ctx = SessionContext::new();
@@ -1220,7 +1232,8 @@ mod tests {
         let filter = col("c2").eq(lit(2_i64));
 
         // read/write them files:
-        let rt = round_trip(vec![batch1, batch2], None, None, Some(filter), true).await;
+        let rt =
+            round_trip(vec![batch1, batch2], None, None, Some(filter), true, false).await;
         let expected = vec![
             "+----+----+----+",
             "| c1 | c3 | c2 |",
@@ -1369,7 +1382,8 @@ mod tests {
         let filter = col("c2").eq(lit(1_i64));
 
         // read/write them files:
-        let rt = round_trip(vec![batch1, batch2], None, None, Some(filter), true).await;
+        let rt =
+            round_trip(vec![batch1, batch2], None, None, Some(filter), true, false).await;
 
         let expected = vec![
             "+----+----+",
@@ -1691,6 +1705,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parquet_page_index_exec_metrics() {
+        let c1: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
+        let c2: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(4), Some(5)]));
+        let batch1 = create_batch(vec![("int", c1.clone())]);
+        let batch2 = create_batch(vec![("int", c2.clone())]);
+
+        let filter = col("int").eq(lit(4_i32));
+
+        let rt =
+            round_trip(vec![batch1, batch2], None, None, Some(filter), false, true).await;
+
+        let metrics = rt.parquet_exec.metrics().unwrap();
+
+        // assert the batches and some metrics
+        let expected = vec![
+            "+-----+", "| int |", "+-----+", "| 3   |", "| 4   |", "| 5   |", "+-----+",
+        ];
+        assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
+        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 3);
+        assert!(
+            get_value(&metrics, "page_index_eval_time") > 0,
+            "no eval time in metrics: {:#?}",
+            metrics
+        );
+    }
+
+    #[tokio::test]
     async fn parquet_exec_metrics() {
         let c1: ArrayRef = Arc::new(StringArray::from(vec![
             Some("Foo"),
@@ -1709,7 +1750,7 @@ mod tests {
         let filter = col("c1").not_eq(lit("bar"));
 
         // read/write them files:
-        let rt = round_trip(vec![batch1], None, None, Some(filter), true).await;
+        let rt = round_trip(vec![batch1], None, None, Some(filter), true, false).await;
 
         let metrics = rt.parquet_exec.metrics().unwrap();
 
