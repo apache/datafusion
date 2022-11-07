@@ -51,6 +51,7 @@ use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{binary_expr, cast, try_cast, ExprSchemable};
 use datafusion_physical_expr::create_physical_expr;
+use log::trace;
 
 /// Interface to pass statistics information to [`PruningPredicate`]
 ///
@@ -414,6 +415,12 @@ fn build_statistics_record_batch<S: PruningStatistics>(
     // provide the count in case there were no needed statistics
     let mut options = RecordBatchOptions::default();
     options.row_count = Some(statistics.num_containers());
+
+    trace!(
+        "Creating statistics batch for {:#?} with {:#?}",
+        required_columns,
+        arrays
+    );
 
     RecordBatch::try_new_with_options(schema, arrays, &options).map_err(|err| {
         DataFusionError::Plan(format!("Can not create statistics record batch: {}", err))
