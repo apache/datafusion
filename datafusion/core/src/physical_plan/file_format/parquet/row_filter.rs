@@ -133,7 +133,7 @@ impl ArrowPredicate for DatafusionArrowPredicate {
             Ok(array) => {
                 if let Some(mask) = array.as_any().downcast_ref::<BooleanArray>() {
                     let bool_arr = BooleanArray::from(mask.data().clone());
-                    let num_filtered = bool_arr.len() - true_count(&bool_arr);
+                    let num_filtered = bool_arr.len() - bool_arr.true_count();
                     self.rows_filtered.add(num_filtered);
                     timer.stop();
                     Ok(bool_arr)
@@ -148,27 +148,6 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 e
             ))),
         }
-    }
-}
-
-/// Return the number of non null true vaulues in an array
-// TODO remove when https://github.com/apache/arrow-rs/issues/2963 is released
-fn true_count(arr: &BooleanArray) -> usize {
-    match arr.data().null_buffer() {
-        Some(nulls) => {
-            let null_chunks = nulls.bit_chunks(arr.offset(), arr.len());
-            let value_chunks = arr.values().bit_chunks(arr.offset(), arr.len());
-            null_chunks
-                .iter()
-                .zip(value_chunks.iter())
-                .chain(std::iter::once((
-                    null_chunks.remainder_bits(),
-                    value_chunks.remainder_bits(),
-                )))
-                .map(|(a, b)| (a & b).count_ones() as usize)
-                .sum()
-        }
-        None => arr.values().count_set_bits_offset(arr.offset(), arr.len()),
     }
 }
 
