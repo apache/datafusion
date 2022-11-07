@@ -15,7 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides the utilities for the GROUPS window frame index calculations.
+//! This module provides utilities for GROUPS mode window frame index calculations.
+// In GROUPS mode, rows with duplicate sorting values are grouped together.
+// Therefore, there must be an ORDER BY clause in the window definition to use GROUPS mode.
+// The syntax is as follows:
+//     GROUPS frame_start [ frame_exclusion ]
+//     GROUPS BETWEEN frame_start AND frame_end [ frame_exclusion ]
+// The optional frame_exclusion specifier is not yet supported.
+// The frame_start and frame_end parameters allow us to specify which rows the window
+// frame starts and ends with. They accept the following values:
+//    - UNBOUNDED PRECEDING: Start with the first row of the partition. Possible only in frame_start.
+//    - offset PRECEDING: When used in frame_start, it refers to the first row of the group
+//                        that comes "offset" groups before the current group (i.e. the group
+//                        containing the current row). When used in frame_end, it refers to the
+//                        last row of the group that comes "offset" groups before the current group.
+//    - CURRENT ROW: When used in frame_start, it refers to the first row of the group containing
+//                   the current row. When used in frame_end, it refers to the last row of the group
+//                   containing the current row.
+//    - offset FOLLOWING: When used in frame_start, it refers to the first row of the group
+//                        that comes "offset" groups after the current group (i.e. the group
+//                        containing the current row). When used in frame_end, it refers to the
+//                        last row of the group that comes "offset" groups after the current group.
+//    - UNBOUNDED FOLLOWING: End with the last row of the partition. Possible only in frame_end.
 
 use arrow::array::ArrayRef;
 use std::cmp;
@@ -24,44 +45,8 @@ use std::collections::VecDeque;
 use datafusion_common::bisect::find_bisect_point;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 
-/// In the GROUPS mode, the rows with duplicate sorting values are grouped together.
-/// Therefore, there must be an ORDER BY clause in the window definition to use GROUPS mode.
-/// The syntax is as follows:
-///     GROUPS frame_start [ frame_exclusion ]
-///     GROUPS BETWEEN frame_start AND frame_end [ frame_exclusion ]
-/// The frame_exclusion is not yet supported.
-/// The frame_start and frame_end parameters allow us to specify which rows the window frame starts and ends with.
-/// They accept the following values:
-///    - UNBOUNDED PRECEDING: (possible only in frame_start) start with the first row of the partition
-///    - offset PRECEDING: When used as frame_start, it means the first row of the group which is a given number of
-///                        groups before the current group (the group containing the current row).
-///                        When used as frame_end, it means the last row of the group which is a given number of groups
-///                        before the current group.
-///    - CURRENT ROW: When used as frame_start, it means the first row in a group containing the current row.
-///                   When used as frame_end, it means the last row in a group containing the current row.
-///    - offset FOLLOWING: When used as frame_start, it means the first row of the group which is a given number of
-///                        groups after the current group (the group containing the current row).
-///                        When used as frame_end, it means the last row of the group which is a given number of groups
-///                        after the current group.
-///    - UNBOUNDED FOLLOWING: (possible only as a frame_end) end with the last row of the partition
-///
-/// In the following implementation, 'process' is the only public interface of the WindowFrameGroups. It is called for
-/// frame_start and frame_end of each row, consecutively.
-/// The call for frame_start, first, tries to initialize the WindowFrameGroups handler if it has not already been
-/// initialized. The initialization means the setting of the window frame start index. The window frame start index can
-/// only be set, if the current row's window frame start is greater or equal to zero depending on the offset. If the
-/// window frame start index is greater or equal to zero, it means the current row can be stored in the
-/// WindowFrameGroups handler's window frame (group_start_indices), the row values as the group identifier and the row
-/// index as the start index of the group. Then, it keeps track of the previous row values, so that a group change can
-/// be identified. If there is a group change, the WindowFrameGroups handler's window frame is proceeded by one group.
-/// The call for frame_end, first, calculates the current row's window frame end index from the offset. If the current
-/// row's window frame end index is greater than zero, the WindowFrameGroups handler's window frame is extended
-/// one-by-one until the current row's window frame end index is reached by finding the next group.
-/// The call to 'process' for frame_start returns the index of the the WindowFrameGroups handler's window frame's first
-/// entry, if there is a window frame, otherwise it returns 0.
-/// The call to 'process' for frame_end returns the index of the the WindowFrameGroups handler's window frame's last
-/// entry, if there is a window frame, otherwise it returns the last index of the partition (length).
-
+/// This structure encapsulates all the state information we require as we
+/// scan groups of data while processing window frames.
 #[derive(Debug, Default)]
 pub struct WindowFrameGroups {
     current_group_idx: u64,
@@ -73,17 +58,11 @@ pub struct WindowFrameGroups {
 }
 
 impl WindowFrameGroups {
-    fn extend_window_frame_if_necessary<
-        const BISECT_SIDE: bool,
-        const SEARCH_SIDE: bool,
-    >(
+    fn extend_window_frame_if_necessary<const SEARCH_SIDE: bool>(
         &mut self,
         item_columns: &[ArrayRef],
         delta: u64,
     ) -> Result<()> {
-        if BISECT_SIDE || self.reached_end {
-            return Ok(());
-        }
         let current_window_frame_end_idx = if !SEARCH_SIDE {
             self.current_group_idx + delta + 1
         } else if self.current_group_idx >= delta {
@@ -95,33 +74,32 @@ impl WindowFrameGroups {
             // the end index of the window frame is still before the first index
             return Ok(());
         }
+        if self.group_start_indices.is_empty() {
+            // TODO: Do we need to check for self.window_frame_end_idx <= current_window_frame_end_idx?
+            self.initialize_window_frame_start(item_columns)?;
+        }
         while !self.reached_end
-            && current_window_frame_end_idx >= self.window_frame_end_idx
+            && self.window_frame_end_idx <= current_window_frame_end_idx
         {
-            if self.group_start_indices.is_empty() {
-                self.initialize_window_frame_start(item_columns)?;
-                continue;
-            }
-            self.proceed_one_group::<BISECT_SIDE, SEARCH_SIDE>(item_columns, delta)?;
+            self.advance_one_group::<SEARCH_SIDE>(item_columns)?;
         }
         Ok(())
     }
 
-    fn initialize<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
+    fn initialize<const SEARCH_SIDE: bool>(
         &mut self,
         delta: u64,
         item_columns: &[ArrayRef],
     ) -> Result<()> {
-        if BISECT_SIDE {
-            if !SEARCH_SIDE {
-                self.window_frame_start_idx = self.current_group_idx + delta;
-                return self.initialize_window_frame_start(item_columns);
-            } else if self.current_group_idx >= delta {
-                self.window_frame_start_idx = self.current_group_idx - delta;
-                return self.initialize_window_frame_start(item_columns);
-            }
+        if !SEARCH_SIDE {
+            self.window_frame_start_idx = self.current_group_idx + delta;
+            self.initialize_window_frame_start(item_columns)
+        } else if self.current_group_idx >= delta {
+            self.window_frame_start_idx = self.current_group_idx - delta;
+            self.initialize_window_frame_start(item_columns)
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 
     fn initialize_window_frame_start(&mut self, item_columns: &[ArrayRef]) -> Result<()> {
@@ -161,15 +139,10 @@ impl WindowFrameGroups {
         self.reached_end || !self.group_start_indices.is_empty()
     }
 
-    /// This function proceeds the window frame by one group.
-    /// First, it extends the window frame by adding one next group as the last entry.
-    /// Then, if this function is called due to a group change (with BISECT_SIDE true), it pops the front entry.
-    /// If this function is called with BISECT_SIDE false, it means we are trying to extend the window frame to reach the
-    /// window frame size, so no popping of the front entry.
-    fn proceed_one_group<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
+    /// This function advances the window frame by one group.
+    fn advance_one_group<const SEARCH_SIDE: bool>(
         &mut self,
         item_columns: &[ArrayRef],
-        delta: u64,
     ) -> Result<()> {
         let last_group_values = self.group_start_indices.back();
         let last_group_values = if let Some(values) = last_group_values {
@@ -194,22 +167,27 @@ impl WindowFrameGroups {
                 self.reached_end = true;
             }
         }
-        if BISECT_SIDE {
-            let current_window_frame_start_idx = if !SEARCH_SIDE {
-                self.current_group_idx + delta
-            } else if self.current_group_idx >= delta {
-                self.current_group_idx - delta
-            } else {
-                0
-            };
-            if current_window_frame_start_idx > self.window_frame_start_idx {
-                self.group_start_indices.pop_front();
-                self.window_frame_start_idx += 1;
-            }
-        }
         Ok(())
     }
 
+    /// This function drops the oldest group from the window frame.
+    fn shift_one_group<const SEARCH_SIDE: bool>(&mut self, delta: u64) {
+        let current_window_frame_start_idx = if !SEARCH_SIDE {
+            self.current_group_idx + delta
+        } else if self.current_group_idx >= delta {
+            self.current_group_idx - delta
+        } else {
+            0
+        };
+        if current_window_frame_start_idx > self.window_frame_start_idx {
+            self.group_start_indices.pop_front();
+            self.window_frame_start_idx += 1;
+        }
+    }
+
+    /// This function is the main public interface of WindowFrameGroups. It is meant to be
+    /// called twice, in succession, to get window frame start and end indices (with `BISECT_SIDE`
+    /// supplied as false and true, respectively).
     pub fn process<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
         &mut self,
         current_row_values: &[ScalarValue],
@@ -217,13 +195,23 @@ impl WindowFrameGroups {
         item_columns: &[ArrayRef],
         length: usize,
     ) -> Result<usize> {
-        if !self.initialized() {
-            self.initialize::<BISECT_SIDE, SEARCH_SIDE>(delta, item_columns)?;
+        if BISECT_SIDE {
+            // When we call this function to get the window frame start index, it tries to initialize
+            // the internal grouping state if this is not already done before. This initialization takes
+            // place only when the window frame start index is greater than or equal to zero. In this
+            // case, the current row is stored in group_start_indices, with row values as the group
+            // identifier and row index as the start index of the group.
+            if !self.initialized() {
+                self.initialize::<SEARCH_SIDE>(delta, item_columns)?;
+            }
+        } else if !self.reached_end {
+            // When we call this function to get the window frame end index, it extends the window
+            // frame one by one until the current row's window frame end index is reached by finding
+            // the next group.
+            self.extend_window_frame_if_necessary::<SEARCH_SIDE>(item_columns, delta)?;
         }
-        self.extend_window_frame_if_necessary::<BISECT_SIDE, SEARCH_SIDE>(
-            item_columns,
-            delta,
-        )?;
+        // We keep track of previous row values, so that a group change can be identified.
+        // If there is a group change, the window frame is advanced and shifted by one group.
         let group_change = match &self.previous_row_values {
             None => false,
             Some(values) => current_row_values != values,
@@ -233,7 +221,8 @@ impl WindowFrameGroups {
         }
         if group_change {
             self.current_group_idx += 1;
-            self.proceed_one_group::<BISECT_SIDE, SEARCH_SIDE>(item_columns, delta)?;
+            self.advance_one_group::<SEARCH_SIDE>(item_columns)?;
+            self.shift_one_group::<SEARCH_SIDE>(delta);
         }
         Ok(if self.group_start_indices.is_empty() {
             if self.reached_end {
@@ -255,18 +244,12 @@ impl WindowFrameGroups {
     }
 
     /// This function finds the next group and its start index for a given group and start index.
-    /// It uses the bisect function, thus it should work on a bounded frame with a start and an end point.
-    /// To find the end point, a step_size is used with a default value of 100. After proceeding the end point,
-    /// if the entry at the end point still has the same group identifier (row values), the start point is set as the
-    /// end point, and the end point is proceeded one step size more. The end point is found when the entry at the end
-    /// point has a different group identifier (different row values), or the end of the partition is reached.
-    /// Then, the bisect function can be applied with low as the start point, and high as the end point.
-    ///
-    /// Improvement:
-    /// For small group sizes, proceeding one-by-one to find the group change can be more efficient.
-    /// A statistics about the group sizes can be utilized to decide upon which approach to use, or even set the
-    /// step_size.
-    /// We will also need a benchmark implementation to prove the efficiency.
+    /// TODO: Explain the algorithm clearly.
+    // FUTURE WORK/ENHANCEMENTS:
+    // For small group sizes, proceeding one-by-one to find the group change can be more efficient.
+    // Statistics about previous group sizes can be utilized to choose the approach to use, or even
+    // to set the base step_size. We can also create a benchmark implementation to get insights about
+    // the crossover point.
     fn find_next_group_and_start_index(
         item_columns: &[ArrayRef],
         current_row_values: &[ScalarValue],
@@ -408,7 +391,7 @@ mod tests {
 
         let mut window_frame_groups = WindowFrameGroups::default();
         window_frame_groups
-            .initialize::<START, PRECEDING>(DELTA, &arrays)
+            .initialize::<PRECEDING>(DELTA, &arrays)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 0);
@@ -416,7 +399,7 @@ mod tests {
         assert_eq!(window_frame_groups.group_start_indices.len(), 0);
 
         window_frame_groups
-            .extend_window_frame_if_necessary::<END, PRECEDING>(&arrays, DELTA)
+            .extend_window_frame_if_necessary::<PRECEDING>(&arrays, DELTA)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 0);
@@ -462,7 +445,7 @@ mod tests {
 
         let mut window_frame_groups = WindowFrameGroups::default();
         window_frame_groups
-            .initialize::<START, FOLLOWING>(DELTA, &arrays)
+            .initialize::<FOLLOWING>(DELTA, &arrays)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, DELTA);
         assert_eq!(window_frame_groups.window_frame_end_idx, DELTA);
@@ -470,7 +453,7 @@ mod tests {
         assert_eq!(window_frame_groups.group_start_indices.len(), 0);
 
         window_frame_groups
-            .extend_window_frame_if_necessary::<END, FOLLOWING>(&arrays, DELTA)
+            .extend_window_frame_if_necessary::<FOLLOWING>(&arrays, DELTA)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, DELTA);
         assert_eq!(window_frame_groups.window_frame_end_idx, DELTA);
@@ -517,7 +500,7 @@ mod tests {
 
         let mut window_frame_groups = WindowFrameGroups::default();
         window_frame_groups
-            .initialize::<START, PRECEDING>(DELTA, &arrays)
+            .initialize::<PRECEDING>(DELTA, &arrays)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 0);
@@ -525,7 +508,7 @@ mod tests {
         assert_eq!(window_frame_groups.group_start_indices.len(), 0);
 
         window_frame_groups
-            .extend_window_frame_if_necessary::<END, FOLLOWING>(&arrays, DELTA)
+            .extend_window_frame_if_necessary::<FOLLOWING>(&arrays, DELTA)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, NUM_ROWS as u64);
@@ -572,7 +555,7 @@ mod tests {
 
         let mut window_frame_groups = WindowFrameGroups::default();
         window_frame_groups
-            .initialize::<START, PRECEDING>(DELTA, &arrays)
+            .initialize::<PRECEDING>(DELTA, &arrays)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 0);
@@ -580,7 +563,7 @@ mod tests {
         assert_eq!(window_frame_groups.group_start_indices.len(), 0);
 
         window_frame_groups
-            .extend_window_frame_if_necessary::<END, FOLLOWING>(&arrays, DELTA)
+            .extend_window_frame_if_necessary::<FOLLOWING>(&arrays, DELTA)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 2 * DELTA + 1);
@@ -638,7 +621,7 @@ mod tests {
 
         let mut window_frame_groups = WindowFrameGroups::default();
         window_frame_groups
-            .initialize::<START, PRECEDING>(DELTA, &arrays)
+            .initialize::<PRECEDING>(DELTA, &arrays)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 0);
@@ -684,7 +667,7 @@ mod tests {
 
         let mut window_frame_groups = WindowFrameGroups::default();
         window_frame_groups
-            .initialize::<START, PRECEDING>(DELTA, &arrays)
+            .initialize::<PRECEDING>(DELTA, &arrays)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 1);

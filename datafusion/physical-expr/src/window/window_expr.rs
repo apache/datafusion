@@ -133,9 +133,9 @@ pub trait WindowExpr: Send + Sync + Debug {
             match window_frame.units {
                 WindowFrameUnits::Range => {
                     let start = match &window_frame.start_bound {
-                        // UNBOUNDED PRECEDING
                         WindowFrameBound::Preceding(n) => {
                             if n.is_null() {
+                                // UNBOUNDED PRECEDING
                                 0
                             } else {
                                 calculate_index_of_row::<true, true>(
