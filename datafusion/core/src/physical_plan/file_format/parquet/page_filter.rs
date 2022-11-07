@@ -17,7 +17,9 @@
 
 //! Contains code to filter entire pages
 
-use arrow::array::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array};
+use arrow::array::{
+    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
+};
 use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::utils::expr_to_columns;
@@ -421,7 +423,16 @@ macro_rules! get_min_max_values_for_page_index {
                     vec.iter().map(|x| x.$func().cloned()),
                 )))
             }
-            Index::INT96(_) | Index::BYTE_ARRAY(_) | Index::FIXED_LEN_BYTE_ARRAY(_) => {
+            Index::BYTE_ARRAY(index) => {
+                let vec = &index.indexes;
+                let array: StringArray = vec
+                    .iter()
+                    .map(|x| x.$func())
+                    .map(|x| x.and_then(|x| std::str::from_utf8(x).ok()))
+                    .collect();
+                Some(Arc::new(array))
+            }
+            Index::INT96(_) | Index::FIXED_LEN_BYTE_ARRAY(_) => {
                 //Todo support these type
                 None
             }
