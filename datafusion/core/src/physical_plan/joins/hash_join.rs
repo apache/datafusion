@@ -448,9 +448,14 @@ async fn collect_left_input(
 ) -> Result<JoinLeftData> {
     let schema = left.schema();
     let start = Instant::now();
-
     // merge all left parts into a single stream
-    let merge = CoalescePartitionsExec::new(left);
+    let merge = {
+        if left.output_partitioning().partition_count() != 1 {
+            Arc::new(CoalescePartitionsExec::new(left))
+        } else {
+            left
+        }
+    };
     let stream = merge.execute(0, context)?;
 
     // This operation performs 2 steps at once:

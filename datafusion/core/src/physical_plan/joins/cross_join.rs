@@ -29,9 +29,9 @@ use arrow::record_batch::RecordBatch;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
-    ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
-    Partitioning, PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
+    ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
+    ExecutionPlan, Partitioning, PhysicalSortExpr, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
@@ -110,7 +110,13 @@ async fn load_left_input(
     let start = Instant::now();
 
     // merge all left parts into a single stream
-    let merge = CoalescePartitionsExec::new(left.clone());
+    let merge = {
+        if left.output_partitioning().partition_count() != 1 {
+            Arc::new(CoalescePartitionsExec::new(left.clone()))
+        } else {
+            left.clone()
+        }
+    };
     let stream = merge.execute(0, context)?;
 
     // Load all batches and count the rows
@@ -154,6 +160,13 @@ impl ExecutionPlan for CrossJoinExec {
             children[0].clone(),
             children[1].clone(),
         )?))
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![
+            Distribution::SinglePartition,
+            Distribution::UnspecifiedDistribution,
+        ]
     }
 
     // TODO optimize CrossJoin implementation to generate M * N partitions

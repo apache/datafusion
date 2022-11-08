@@ -95,7 +95,7 @@ impl PhysicalOptimizerRule for BasicEnforcement {
 
 /// When the physical planner creates the Joins, the ordering of join keys is from the original query.
 /// That might not match with the output partitioning of the join node's children
-/// This method run a top-down process and try to adjust the output partitionging of the children
+/// This method runs a top-down process and try to adjust the output partitioning of the children
 /// if the children themselves are Joins or Aggregations.
 fn adjust_input_keys_down_recursively(
     plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
