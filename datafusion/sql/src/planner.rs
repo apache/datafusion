@@ -2975,6 +2975,17 @@ mod tests {
     }
 
     #[test]
+    fn cast_from_subquery() {
+        quick_test(
+            "SELECT CAST (a AS FLOAT) FROM (SELECT 1 AS a)",
+            "Projection: CAST(a AS Float32)\
+             \n  Projection: a\
+             \n    Projection: Int64(1) AS a\
+             \n      EmptyRelation",
+        );
+    }
+
+    #[test]
     fn cast_to_invalid_decimal_type() {
         // precision == 0
         {
