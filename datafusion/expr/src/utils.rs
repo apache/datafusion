@@ -25,7 +25,7 @@ use crate::logical_plan::{
     Limit, Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union,
     Values, Window,
 };
-use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use crate::{Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -676,6 +676,10 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
         Expr::Alias(inner_expr, name) => {
             Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
         }
+        Expr::Cast(Cast { expr, data_type }) => Expr::Cast(Cast {
+            expr: Box::new(columnize_expr(*expr, input_schema)),
+            data_type,
+        }),
         Expr::ScalarSubquery(_) => e.clone(),
         _ => match e.display_name() {
             Ok(name) => match input_schema.field_with_unqualified_name(&name) {
