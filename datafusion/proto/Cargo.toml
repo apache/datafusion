@@ -57,4 +57,4 @@ tokio = "1.18"
 [build-dependencies]
 # Pin these dependencies so that the generated output is deterministic
 pbjson-build = { version = "=0.5.1" }
-prost-build = { version = "=0.11.1" }
+prost-build = { version = "=0.11.2" }
