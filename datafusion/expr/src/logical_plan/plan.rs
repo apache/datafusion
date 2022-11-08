@@ -26,7 +26,7 @@ use crate::utils::{
 use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -1338,6 +1338,8 @@ pub struct CreateExternalTable {
     pub definition: Option<String>,
     /// File compression type (GZIP, BZIP2)
     pub file_compression_type: String,
+    /// Table(provider) specific options
+    pub options: HashMap<String, String>,
 }
 
 /// Produces a relation with string representations of

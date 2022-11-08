@@ -20,7 +20,8 @@ use crate::catalog::schema::SchemaProvider;
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
-use datafusion_common::{context, DataFusionError};
+use datafusion_common::{DFSchema, DataFusionError};
+use datafusion_expr::CreateExternalTable;
 use futures::TryStreamExt;
 use itertools::Itertools;
 use object_store::ObjectStore;
@@ -108,13 +109,26 @@ impl ListingSchemaProvider {
             })?;
             if !self.table_exist(table_name) {
                 let table_url = format!("{}/{}", self.authority, table_path);
+
                 let provider = self
                     .factory
-                    .create(state, table_url.as_str())
-                    .await
-                    .map_err(|e| {
-                        context!(format!("Could not create table for {}", table_url), e)
-                    })?;
+                    .create(
+                        state,
+                        &CreateExternalTable {
+                            schema: Arc::new(DFSchema::empty()),
+                            name: table_name.to_string(),
+                            location: table_url,
+                            file_type: "".to_string(),
+                            has_header: false,
+                            delimiter: ',',
+                            table_partition_cols: vec![],
+                            if_not_exists: false,
+                            definition: None,
+                            file_compression_type: "".to_string(),
+                            options: Default::default(),
+                        },
+                    )
+                    .await?;
                 let _ = self.register_table(table_name.to_string(), provider.clone())?;
             }
         }

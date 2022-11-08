@@ -25,6 +25,7 @@ use sqlparser::{
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
 };
+use std::collections::HashMap;
 use std::{collections::VecDeque, fmt};
 
 // Use `Parser::expected` instead, if possible
@@ -63,6 +64,8 @@ pub struct CreateExternalTable {
     pub if_not_exists: bool,
     /// File compression type (GZIP, BZIP2)
     pub file_compression_type: String,
+    /// Table(provider) specific options
+    pub options: HashMap<String, String>,
 }
 
 impl fmt::Display for CreateExternalTable {
@@ -348,6 +351,12 @@ impl<'a> DFParser<'a> {
             vec![]
         };
 
+        let options = if self.parse_has_options() {
+            self.parse_options()?
+        } else {
+            HashMap::new()
+        };
+
         self.parser.expect_keyword(Keyword::LOCATION)?;
         let location = self.parser.parse_literal_string()?;
 
@@ -361,6 +370,7 @@ impl<'a> DFParser<'a> {
             table_partition_cols,
             if_not_exists,
             file_compression_type,
+            options,
         };
         Ok(Statement::CreateExternalTable(create))
     }
@@ -379,6 +389,33 @@ impl<'a> DFParser<'a> {
             Token::Word(w) => parse_file_compression_type(&w.value),
             unexpected => self.expected("one of GZIP, BZIP2", unexpected),
         }
+    }
+
+    fn parse_has_options(&mut self) -> bool {
+        self.consume_token(&Token::make_keyword("OPTIONS"))
+    }
+
+    //
+    fn parse_options(&mut self) -> Result<HashMap<String, String>, ParserError> {
+        let mut options: HashMap<String, String> = HashMap::new();
+        self.parser.expect_token(&Token::LParen)?;
+
+        loop {
+            let key = self.parser.parse_literal_string()?;
+            let value = self.parser.parse_literal_string()?;
+            options.insert(key.to_string(), value.to_string());
+            let comma = self.parser.consume_token(&Token::Comma);
+            if self.parser.consume_token(&Token::RParen) {
+                // allow a trailing comma, even though it's not in standard
+                break;
+            } else if !comma {
+                return self.expected(
+                    "',' or ')' after option definition",
+                    self.parser.peek_token(),
+                );
+            }
+        }
+        Ok(options)
     }
 
     fn consume_token(&mut self, expected: &Token) -> bool {
@@ -486,6 +523,7 @@ mod tests {
             table_partition_cols: vec![],
             if_not_exists: false,
             file_compression_type: "".to_string(),
+            options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
 
@@ -502,6 +540,7 @@ mod tests {
             table_partition_cols: vec![],
             if_not_exists: false,
             file_compression_type: "".to_string(),
+            options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
 
@@ -518,6 +557,7 @@ mod tests {
             table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
             if_not_exists: false,
             file_compression_type: "".to_string(),
+            options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
 
@@ -537,6 +577,7 @@ mod tests {
                 table_partition_cols: vec![],
                 if_not_exists: false,
                 file_compression_type: "".to_string(),
+                options: HashMap::new(),
             });
             expect_parse_ok(sql, expected)?;
         }
@@ -557,6 +598,7 @@ mod tests {
                 table_partition_cols: vec![],
                 if_not_exists: false,
                 file_compression_type: file_compression_type.to_owned(),
+                options: HashMap::new(),
             });
             expect_parse_ok(sql, expected)?;
         }
@@ -573,6 +615,7 @@ mod tests {
             table_partition_cols: vec![],
             if_not_exists: false,
             file_compression_type: "".to_string(),
+            options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
 
@@ -588,6 +631,7 @@ mod tests {
             table_partition_cols: vec![],
             if_not_exists: false,
             file_compression_type: "".to_string(),
+            options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
 
@@ -603,6 +647,7 @@ mod tests {
             table_partition_cols: vec![],
             if_not_exists: false,
             file_compression_type: "".to_string(),
+            options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
 
@@ -619,6 +664,7 @@ mod tests {
             table_partition_cols: vec![],
             if_not_exists: true,
             file_compression_type: "".to_string(),
+            options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
 
@@ -626,6 +672,48 @@ mod tests {
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int) LOCATION 'foo.csv'";
         expect_parse_error(sql, "sql parser error: Expected ',' or ')' after partition definition, found: int");
+
+        // positive case: additional options (one entry) can be specified
+        let sql =
+            "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1') LOCATION 'blahblah'";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![],
+            file_type: "X".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "blahblah".into(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            file_compression_type: "".to_string(),
+            options: HashMap::from([("k1".into(), "v1".into())]),
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // positive case: additional options (multiple entries) can be specified
+        let sql =
+            "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2) LOCATION 'blahblah'";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![],
+            file_type: "X".to_string(),
+            has_header: false,
+            delimiter: ',',
+            location: "blahblah".into(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+            file_compression_type: "".to_string(),
+            options: HashMap::from([
+                ("k1".into(), "v1".into()),
+                ("k2".into(), "v2".into()),
+            ]),
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // Error cases: partition column does not support type
+        let sql =
+            "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2, k3) LOCATION 'blahblah'";
+        expect_parse_error(sql, "sql parser error: Expected literal string, found: )");
 
         Ok(())
     }

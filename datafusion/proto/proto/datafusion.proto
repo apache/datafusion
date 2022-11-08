@@ -176,6 +176,7 @@ message CreateExternalTableNode {
   string delimiter = 8;
   string definition = 9;
   string file_compression_type = 10;
+  map<string, string> options = 11;
 }
 
 message CreateCatalogSchemaNode {
