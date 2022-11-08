@@ -506,7 +506,7 @@ impl SessionContext {
                     cmd.file_type
                 ))
             })?;
-        let table = (*factory).create(&state, cmd.location.as_str()).await?;
+        let table = (*factory).create(&state, cmd).await?;
         self.register_table(cmd.name.as_str(), table)?;
         let plan = LogicalPlanBuilder::empty(false).build()?;
         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))

@@ -494,6 +494,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             table_partition_cols,
             if_not_exists,
             file_compression_type,
+            options,
         } = statement;
 
         // semantic checks
@@ -523,6 +524,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if_not_exists,
             definition,
             file_compression_type,
+            options,
         }))
     }
 
