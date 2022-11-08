@@ -53,7 +53,7 @@ async fn fixed_size_binary_columns() {
     let ctx = SessionContext::new();
     ctx.register_parquet(
         "t0",
-        "tests/parquet/test_binary.parquet",
+        "tests/parquet/data/test_binary.parquet",
         ParquetReadOptions::default(),
     )
     .await
