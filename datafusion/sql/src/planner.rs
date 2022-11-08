@@ -2975,7 +2975,7 @@ mod tests {
     }
 
     #[test]
-    fn cast_with_subquery() {
+    fn cast_from_subquery() {
         quick_test(
             "SELECT CAST (a AS FLOAT) FROM (SELECT 1 AS a)",
             "Projection: CAST(a AS Float32)\

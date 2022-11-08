@@ -27,6 +27,13 @@ async fn execute_sql(sql: &str) -> Vec<RecordBatch> {
 }
 
 #[tokio::test]
+async fn cast_from_subquery() -> Result<()> {
+    let actual = execute_sql("SELECT cast(c as varchar) FROM (SELECT 1 as c)").await;
+    assert_eq!(&DataType::Utf8, actual[0].schema().field(0).data_type());
+    Ok(())
+}
+
+#[tokio::test]
 async fn cast_tinyint() -> Result<()> {
     let actual = execute_sql("SELECT cast(10 as tinyint)").await;
     assert_eq!(&DataType::Int8, actual[0].schema().field(0).data_type());
