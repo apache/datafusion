@@ -165,19 +165,9 @@ fn adjust_input_keys_down_recursively(
                     )?))
                 }
             }
-            PartitionMode::CollectLeft => {
-                let new_right =
-                    adjust_input_keys_down_recursively(right.clone(), parent_required)?;
-                Ok(Arc::new(HashJoinExec::try_new(
-                    left.clone(),
-                    new_right,
-                    on.clone(),
-                    filter.clone(),
-                    join_type,
-                    PartitionMode::CollectLeft,
-                    null_equals_null,
-                )?))
-            }
+            PartitionMode::CollectLeft => plan.map_children(|plan| {
+                adjust_input_keys_down_recursively(plan, parent_required.clone())
+            }),
         }
     } else if let Some(SortMergeJoinExec {
         left,
@@ -256,9 +246,7 @@ fn adjust_input_keys_down_recursively(
     }) = plan_any.downcast_ref::<AggregateExec>()
     {
         if parent_required.is_empty() {
-            plan.map_children(|plan| {
-                adjust_input_keys_down_recursively(plan, parent_required.clone())
-            })
+            plan.map_children(|plan| adjust_input_keys_down_recursively(plan, vec![]))
         } else {
             match mode {
                 AggregateMode::FinalPartitioned | AggregateMode::Partial => {
@@ -279,7 +267,9 @@ fn adjust_input_keys_down_recursively(
                         || expr_list_eq_strict_order(&out_put_exprs, &parent_required)
                         || !group_by.null_expr().is_empty()
                     {
-                        Ok(plan)
+                        plan.map_children(|plan| {
+                            adjust_input_keys_down_recursively(plan, vec![])
+                        })
                     } else {
                         let new_positions =
                             expected_expr_positions(&out_put_exprs, &parent_required);
@@ -345,22 +335,31 @@ fn adjust_input_keys_down_recursively(
                                         )?))
                                     }
                                     AggregateMode::Partial => {
+                                        let new_input =
+                                            adjust_input_keys_down_recursively(
+                                                input.clone(),
+                                                vec![],
+                                            )?;
                                         Ok(Arc::new(AggregateExec::try_new(
                                             AggregateMode::Partial,
                                             new_group_by,
                                             aggr_expr.clone(),
-                                            input.clone(),
+                                            new_input,
                                             input_schema.clone(),
                                         )?))
                                     }
                                     _ => Ok(plan),
                                 }
                             }
-                            _ => Ok(plan),
+                            None => plan.map_children(|plan| {
+                                adjust_input_keys_down_recursively(plan, vec![])
+                            }),
                         }
                     }
                 }
-                _ => Ok(plan),
+                _ => plan.map_children(|plan| {
+                    adjust_input_keys_down_recursively(plan, vec![])
+                }),
             }
         }
     } else if let Some(ProjectionExec { expr, .. }) =
@@ -390,7 +389,7 @@ fn adjust_input_keys_down_recursively(
                 adjust_input_keys_down_recursively(plan, new_required.clone())
             })
         } else {
-            Ok(plan)
+            plan.map_children(|plan| adjust_input_keys_down_recursively(plan, vec![]))
         }
     } else {
         plan.map_children(|plan| {
