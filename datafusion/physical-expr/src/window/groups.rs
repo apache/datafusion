@@ -75,7 +75,6 @@ impl WindowFrameGroups {
             return Ok(());
         }
         if self.group_start_indices.is_empty() {
-            // TODO: Do we need to check for self.window_frame_end_idx <= current_window_frame_end_idx?
             self.initialize_window_frame_start(item_columns)?;
         }
         while !self.reached_end
