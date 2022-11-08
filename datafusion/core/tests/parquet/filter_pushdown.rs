@@ -30,12 +30,12 @@ use std::time::Instant;
 
 use arrow::compute::concat_batches;
 use arrow::record_batch::RecordBatch;
-use datafusion::logical_expr::{lit, Expr};
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::MetricsSet;
-use datafusion::prelude::{col, SessionContext};
+use datafusion::prelude::{col, lit, lit_timestamp_nano, Expr, SessionContext};
 use datafusion_optimizer::utils::{conjunction, disjunction, split_conjunction};
 use itertools::Itertools;
+use parquet::file::properties::WriterProperties;
 use parquet_test_utils::{ParquetScanOptions, TestParquetFile};
 use tempfile::TempDir;
 use test_utils::AccessLogGenerator;
@@ -43,24 +43,29 @@ use test_utils::AccessLogGenerator;
 /// how many rows of generated data to write to our parquet file (arbitrary)
 const NUM_ROWS: usize = 53819;
 
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    // enable logging so RUST_LOG works
+    let _ = env_logger::try_init();
+}
+
 #[cfg(not(target_family = "windows"))]
 #[tokio::test]
 async fn single_file() {
     // Only create the parquet file once as it is fairly large
+
     let tempdir = TempDir::new().unwrap();
 
     let generator = AccessLogGenerator::new().with_row_limit(Some(NUM_ROWS));
 
-    // TODO: set the max page rows with some various / arbitrary sizes 8311
-    // (using https://github.com/apache/arrow-rs/issues/2941) to ensure we get multiple pages
-    let page_size = None;
-    let row_group_size = None;
+    // default properties
+    let props = WriterProperties::builder().build();
     let file = tempdir.path().join("data.parquet");
 
     let start = Instant::now();
     println!("Writing test data to {:?}", file);
-    let test_parquet_file =
-        TestParquetFile::try_new(file, generator, page_size, row_group_size).unwrap();
+    let test_parquet_file = TestParquetFile::try_new(file, props, generator).unwrap();
     println!(
         "Completed generating test data in {:?}",
         Instant::now() - start
@@ -225,12 +230,92 @@ async fn single_file() {
         .run()
         .await;
 }
+
+#[cfg(not(target_family = "windows"))]
+#[tokio::test]
+async fn single_file_small_data_pages() {
+    let tempdir = TempDir::new().unwrap();
+
+    let generator = AccessLogGenerator::new().with_row_limit(Some(NUM_ROWS));
+
+    // set the max page rows with arbitrary sizes 8311 to increase
+    // effectiveness of page filtering
+    let props = WriterProperties::builder()
+        .set_data_page_row_count_limit(8311)
+        .build();
+    let file = tempdir.path().join("data_8311.parquet");
+
+    let start = Instant::now();
+    println!("Writing test data to {:?}", file);
+    let test_parquet_file = TestParquetFile::try_new(file, props, generator).unwrap();
+    println!(
+        "Completed generating test data in {:?}",
+        Instant::now() - start
+    );
+
+    // The statistics on the 'pod' column are as follows:
+    //
+    // parquet-tools dump -d ~/Downloads/data_8311.parquet
+    //
+    // ...
+    // pod TV=53819 RL=0 DL=0 DS:                 8 DE:PLAIN
+    // ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // page 0:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: aqcathnxqsphdhgjtgvxsfyiwbmhlmg, max: bvjjmytpfzdfsvlzfhbunasihjgxpesbmxv, num_nulls not defined] CRC:[none] SZ:7 VC:9216
+    // page 1:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: bvjjmytpfzdfsvlzfhbunasihjgxpesbmxv, max: bxyubzxbbmhroqhrdzttngxcpwwgkpaoizvgzd, num_nulls not defined] CRC:[none] SZ:7 VC:9216
+    // page 2:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: bxyubzxbbmhroqhrdzttngxcpwwgkpaoizvgzd, max: djzdyiecnumrsrcbizwlqzdhnpoiqdh, num_nulls not defined] CRC:[none] SZ:10 VC:9216
+    // page 3:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: djzdyiecnumrsrcbizwlqzdhnpoiqdh, max: fktdcgtmzvoedpwhfevcvvrtaurzgex, num_nulls not defined] CRC:[none] SZ:7 VC:9216
+    // page 4:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: fktdcgtmzvoedpwhfevcvvrtaurzgex, max: fwtdpgtxwqkkgtgvthhwycrvjiizdifyp, num_nulls not defined] CRC:[none] SZ:7 VC:9216
+    // page 5:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: fwtdpgtxwqkkgtgvthhwycrvjiizdifyp, max: iadnalqpdzthpifrvewossmpqibgtsuin, num_nulls not defined] CRC:[none] SZ:7 VC:7739
+    //
+    // This test currently fails due to https://github.com/apache/arrow-datafusion/issues/3833
+    // (page index pruning not implemented for byte array)
+
+    // TestCase::new(&test_parquet_file)
+    //     .with_name("selective")
+    //     // predicagte is chosen carefully to prune pages 0, 1, 2, 3, 4
+    //     // pod = 'iadnalqpdzthpifrvewossmpqibgtsuin'
+    //     .with_filter(col("pod").eq(lit("iadnalqpdzthpifrvewossmpqibgtsuin")))
+    //     .with_pushdown_expected(PushdownExpected::Some)
+    //     .with_page_index_filtering_expected(PageIndexFilteringExpected::Some)
+    //     .with_expected_rows(2574)
+    //     .run()
+    //     .await;
+
+    // time TV=53819 RL=0 DL=0 DS:                7092 DE:PLAIN
+    // --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // page 0:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.004133888, num_nulls not defined] CRC:[none] SZ:13844 VC:9216
+    // page 1:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.006397952, num_nulls not defined] CRC:[none] SZ:14996 VC:9216
+    // page 2:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.005650432, num_nulls not defined] CRC:[none] SZ:14996 VC:9216
+    // page 3:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.004269056, num_nulls not defined] CRC:[none] SZ:14996 VC:9216
+    // page 4:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.007261184, num_nulls not defined] CRC:[none] SZ:14996 VC:9216
+    // page 5:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.005330944, num_nulls not defined] CRC:[none] SZ:12601 VC:7739
+    TestCase::new(&test_parquet_file)
+        .with_name("selective")
+        // predicagte is chosen carefully to prune pages
+        // time > 1970-01-01T00:00:00.004300000
+        .with_filter(col("time").gt(lit_timestamp_nano(4300000)))
+        .with_pushdown_expected(PushdownExpected::Some)
+        .with_page_index_filtering_expected(PageIndexFilteringExpected::Some)
+        .with_expected_rows(9745)
+        .run()
+        .await;
+}
+
 /// Expected pushdown behavior
 #[derive(Debug, Clone, Copy)]
 enum PushdownExpected {
     /// Did not expect filter pushdown to filter any rows
     None,
     /// Expected that some rows were filtered by pushdown
+    Some,
+}
+
+/// Expected pushdown behavior
+#[derive(Debug, Clone, Copy)]
+enum PageIndexFilteringExpected {
+    /// How many pages were expected to be pruned
+    None,
+    /// Expected that more than 0 were pruned
     Some,
 }
 
@@ -243,6 +328,10 @@ struct TestCase<'a> {
     filter: Expr,
     /// Did we expect the pushdown filtering to have filtered any rows?
     pushdown_expected: PushdownExpected,
+
+    /// Did we expect page filtering to filter out pages
+    page_index_filtering_expected: PageIndexFilteringExpected,
+
     /// How many rows are expected to pass the predicate overall?
     expected_rows: usize,
 }
@@ -255,6 +344,7 @@ impl<'a> TestCase<'a> {
             // default to a filter that passes everything
             filter: lit(true),
             pushdown_expected: PushdownExpected::None,
+            page_index_filtering_expected: PageIndexFilteringExpected::None,
             expected_rows: 0,
         }
     }
@@ -271,8 +361,17 @@ impl<'a> TestCase<'a> {
     }
 
     /// Set the expected predicate pushdown
-    fn with_pushdown_expected(mut self, pushdown_expected: PushdownExpected) -> Self {
-        self.pushdown_expected = pushdown_expected;
+    fn with_pushdown_expected(mut self, v: PushdownExpected) -> Self {
+        self.pushdown_expected = v;
+        self
+    }
+
+    /// Set the expected page filtering
+    fn with_page_index_filtering_expected(
+        mut self,
+        v: PageIndexFilteringExpected,
+    ) -> Self {
+        self.page_index_filtering_expected = v;
         self
     }
 
@@ -307,8 +406,6 @@ impl<'a> TestCase<'a> {
                     reorder_filters: false,
                     enable_page_index: false,
                 },
-                // always expect no pushdown
-                PushdownExpected::None,
                 filter,
             )
             .await;
@@ -320,7 +417,6 @@ impl<'a> TestCase<'a> {
                     reorder_filters: false,
                     enable_page_index: false,
                 },
-                self.pushdown_expected,
                 filter,
             )
             .await;
@@ -334,46 +430,42 @@ impl<'a> TestCase<'a> {
                     reorder_filters: true,
                     enable_page_index: false,
                 },
-                self.pushdown_expected,
                 filter,
             )
             .await;
 
         assert_eq!(no_pushdown, pushdown_and_reordering);
 
-        // page index filtering is not correct:
-        // https://github.com/apache/arrow-datafusion/issues/4002
-        // when it is fixed we can add these tests too
+        let page_index_only = self
+            .read_with_options(
+                ParquetScanOptions {
+                    pushdown_filters: false,
+                    reorder_filters: false,
+                    enable_page_index: true,
+                },
+                filter,
+            )
+            .await;
+        assert_eq!(no_pushdown, page_index_only);
 
-        // let page_index_only = self
-        //     .read_with_options(
-        //         ParquetScanOptions {
-        //             pushdown_filters: false,
-        //             reorder_filters: false,
-        //             enable_page_index: true,
-        //         },
-        //     )
-        //     .await;
-        //assert_eq!(no_pushdown, page_index_only);
+        let pushdown_reordering_and_page_index = self
+            .read_with_options(
+                ParquetScanOptions {
+                    pushdown_filters: true,
+                    reorder_filters: true,
+                    enable_page_index: true,
+                },
+                filter,
+            )
+            .await;
 
-        // let pushdown_reordering_and_page_index = self
-        //     .read_with_options(
-        //         ParquetScanOptions {
-        //             pushdown_filters: false,
-        //             reorder_filters: false,
-        //             enable_page_index: true,
-        //         },
-        //     )
-        //     .await;
-
-        //assert_eq!(no_pushdown, pushdown_reordering_and_page_index);
+        assert_eq!(no_pushdown, pushdown_reordering_and_page_index);
     }
 
     /// Reads data from a test parquet file using the specified scan options
     async fn read_with_options(
         &self,
         scan_options: ParquetScanOptions,
-        pushdown_expected: PushdownExpected,
         filter: &Expr,
     ) -> RecordBatch {
         println!("  scan options: {scan_options:?}");
@@ -403,6 +495,14 @@ impl<'a> TestCase<'a> {
         // verify expected pushdown
         let metrics =
             TestParquetFile::parquet_metrics(exec).expect("found parquet metrics");
+
+        let pushdown_expected = if scan_options.pushdown_filters {
+            self.pushdown_expected
+        } else {
+            // if filter pushdown is not enabled we don't expect it to filter rows
+            PushdownExpected::None
+        };
+
         let pushdown_rows_filtered = get_value(&metrics, "pushdown_rows_filtered");
         println!("  pushdown_rows_filtered: {}", pushdown_rows_filtered);
 
@@ -414,6 +514,29 @@ impl<'a> TestCase<'a> {
                 assert!(
                     pushdown_rows_filtered > 0,
                     "Expected to filter rows via pushdown, but none were"
+                );
+            }
+        };
+
+        let page_index_rows_filtered = get_value(&metrics, "page_index_rows_filtered");
+        println!(" page_index_rows_filtered: {}", page_index_rows_filtered);
+
+        let page_index_filtering_expected = if scan_options.enable_page_index {
+            self.page_index_filtering_expected
+        } else {
+            // if page index filtering is not enabled, don't expect it
+            // to filter rows
+            PageIndexFilteringExpected::None
+        };
+
+        match page_index_filtering_expected {
+            PageIndexFilteringExpected::None => {
+                assert_eq!(page_index_rows_filtered, 0);
+            }
+            PageIndexFilteringExpected::Some => {
+                assert!(
+                    page_index_rows_filtered > 0,
+                    "Expected to filter rows via page index but none were",
                 );
             }
         };

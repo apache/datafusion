@@ -80,7 +80,7 @@ async fn query_cte_incorrect() -> Result<()> {
     assert!(plan.is_err());
     assert_eq!(
         format!("{}", plan.unwrap_err()),
-        "Error during planning: 'datafusion.public.t' not found"
+        "Error during planning: table 'datafusion.public.t' not found"
     );
 
     // forward referencing
@@ -89,7 +89,7 @@ async fn query_cte_incorrect() -> Result<()> {
     assert!(plan.is_err());
     assert_eq!(
         format!("{}", plan.unwrap_err()),
-        "Error during planning: 'datafusion.public.u' not found"
+        "Error during planning: table 'datafusion.public.u' not found"
     );
 
     // wrapping should hide u
@@ -98,7 +98,7 @@ async fn query_cte_incorrect() -> Result<()> {
     assert!(plan.is_err());
     assert_eq!(
         format!("{}", plan.unwrap_err()),
-        "Error during planning: 'datafusion.public.u' not found"
+        "Error during planning: table 'datafusion.public.u' not found"
     );
 
     Ok(())

@@ -321,6 +321,98 @@ mod test {
         Expr::from_bytes(&bytes).unwrap();
     }
 
+    fn roundtrip_expr(expr: &Expr) -> Expr {
+        let bytes = expr.to_bytes().unwrap();
+        Expr::from_bytes(&bytes).unwrap()
+    }
+
+    #[test]
+    fn exact_roundtrip_linearized_binary_expr() {
+        // (((A AND B) AND C) AND D)
+        let expr_ordered = col("A").and(col("B")).and(col("C")).and(col("D"));
+        assert_eq!(expr_ordered, roundtrip_expr(&expr_ordered));
+
+        // Ensure that no other variation becomes equal
+        let other_variants = vec![
+            // (((B AND A) AND C) AND D)
+            col("B").and(col("A")).and(col("C")).and(col("D")),
+            // (((A AND C) AND B) AND D)
+            col("A").and(col("C")).and(col("B")).and(col("D")),
+            // (((A AND B) AND D) AND C)
+            col("A").and(col("B")).and(col("D")).and(col("C")),
+            // A AND (B AND (C AND D)))
+            col("A").and(col("B").and(col("C").and(col("D")))),
+        ];
+        for case in other_variants {
+            // Each variant is still equal to itself
+            assert_eq!(case, roundtrip_expr(&case));
+
+            // But non of them is equal to the original
+            assert_ne!(expr_ordered, roundtrip_expr(&case));
+            assert_ne!(roundtrip_expr(&expr_ordered), roundtrip_expr(&case));
+        }
+    }
+
+    #[test]
+    fn roundtrip_deeply_nested_binary_expr() {
+        // We need more stack space so this doesn't overflow in dev builds
+        std::thread::Builder::new()
+            .stack_size(10_000_000)
+            .spawn(|| {
+                let n = 100;
+                // a < 5
+                let basic_expr = col("a").lt(lit(5i32));
+                // (a < 5) OR (a < 5) OR (a < 5) OR ...
+                let or_chain = (0..n)
+                    .fold(basic_expr.clone(), |expr, _| expr.or(basic_expr.clone()));
+                // (a < 5) OR (a < 5) AND (a < 5) OR (a < 5) AND (a < 5) AND (a < 5) OR ...
+                let expr =
+                    (0..n).fold(or_chain.clone(), |expr, _| expr.and(or_chain.clone()));
+
+                // Should work fine.
+                let bytes = expr.to_bytes().unwrap();
+
+                let decoded_expr = Expr::from_bytes(&bytes).expect(
+                    "serialization worked, so deserialization should work as well",
+                );
+                assert_eq!(decoded_expr, expr);
+            })
+            .expect("spawning thread")
+            .join()
+            .expect("joining thread");
+    }
+
+    #[test]
+    fn roundtrip_deeply_nested_binary_expr_reverse_order() {
+        // We need more stack space so this doesn't overflow in dev builds
+        std::thread::Builder::new()
+            .stack_size(10_000_000)
+            .spawn(|| {
+                let n = 100;
+
+                // a < 5
+                let expr_base = col("a").lt(lit(5i32));
+
+                // ((a < 5 AND a < 5) AND a < 5) AND ...
+                let and_chain =
+                    (0..n).fold(expr_base.clone(), |expr, _| expr.and(expr_base.clone()));
+
+                // a < 5 AND (a < 5 AND (a < 5 AND ...))
+                let expr = expr_base.and(and_chain);
+
+                // Should work fine.
+                let bytes = expr.to_bytes().unwrap();
+
+                let decoded_expr = Expr::from_bytes(&bytes).expect(
+                    "serialization worked, so deserialization should work as well",
+                );
+                assert_eq!(decoded_expr, expr);
+            })
+            .expect("spawning thread")
+            .join()
+            .expect("joining thread");
+    }
+
     #[test]
     fn roundtrip_deeply_nested() {
         // we need more stack space so this doesn't overflow in dev builds
@@ -332,7 +424,8 @@ mod test {
                 println!("testing: {n}");
 
                 let expr_base = col("a").lt(lit(5i32));
-                let expr = (0..n).fold(expr_base.clone(), |expr, _| expr.and(expr_base.clone()));
+                // Generate a tree of AND and OR expressions (no subsequent ANDs or ORs).
+                let expr = (0..n).fold(expr_base.clone(), |expr, n| if n % 2 == 0 { expr.and(expr_base.clone()) } else { expr.or(expr_base.clone()) });
 
                 // Convert it to an opaque form
                 let bytes = match expr.to_bytes() {

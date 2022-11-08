@@ -22,7 +22,7 @@ use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_optimizer::utils::split_conjunction;
-use log::{debug, error};
+use log::{debug, error, trace};
 use parquet::{
     arrow::arrow_reader::{RowSelection, RowSelector},
     errors::ParquetError,
@@ -143,6 +143,9 @@ pub(crate) fn build_page_filter(
                         }),
                     );
                 } else {
+                    trace!(
+                        "Did not have enough metadata to prune with page indexes, falling back, falling back to all rows",
+                    );
                     // fallback select all rows
                     let all_selected =
                         vec![RowSelector::select(groups[*r].num_rows() as usize)];
@@ -150,8 +153,9 @@ pub(crate) fn build_page_filter(
                 }
             }
             debug!(
-                "Use filter and page index create RowSelection {:?} from predicate:{:?}",
-                &selectors, predicate
+                "Use filter and page index create RowSelection {:?} from predicate: {:?}",
+                &selectors,
+                predicate.predicate_expr(),
             );
             row_selections.push_back(selectors.into_iter().flatten().collect::<Vec<_>>());
         }
@@ -321,7 +325,7 @@ fn prune_pages_in_one_row_group(
                 assert_eq!(row_vec.len(), values.len());
                 let mut sum_row = *row_vec.first().unwrap();
                 let mut selected = *values.first().unwrap();
-
+                trace!("Pruned to to {:?} using {:?}", values, pruning_stats);
                 for (i, &f) in values.iter().skip(1).enumerate() {
                     if f == selected {
                         sum_row += *row_vec.get(i).unwrap();
@@ -376,6 +380,7 @@ fn create_row_count_in_each_page(
 
 /// Wraps one col page_index in one rowGroup statistics in a way
 /// that implements [`PruningStatistics`]
+#[derive(Debug)]
 struct PagesPruningStatistics<'a> {
     col_page_indexes: &'a Index,
     col_offset_indexes: &'a Vec<PageLocation>,
