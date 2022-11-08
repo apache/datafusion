@@ -582,8 +582,8 @@ impl DefaultPhysicalPlanner {
                         );
                     }
 
-                    let window_exprs = window_expr.iter().map(|elem|{elem}).collect_vec();
-                    let mut non_inc_sort_keys = remove_redundant_order_bys(&sort_keys, &window_exprs)?;
+                    let window_exprs = window_expr.iter().collect_vec();
+                    let non_inc_sort_keys = remove_redundant_order_bys(&sort_keys, &window_exprs)?;
                     // We will receive this information from source
                     let mut is_stream = true;
                     let non_inc_sort_keys = if is_stream {

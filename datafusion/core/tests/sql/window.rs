@@ -28,6 +28,9 @@ fn append_to_the_content(batch: &RecordBatch, content: &mut String) -> Result<()
             if col < batch.num_columns() - 1 {
                 res += ", ";
             }
+            if column.is_null(row) {
+                res.pop();
+            }
             // println!("{}", a);
         }
         // println!("{}", res);
@@ -74,11 +77,20 @@ fn mock_data_running_test() -> Result<(SchemaRef, Vec<RecordBatch>)> {
         (String::from("is_sorted"), String::from("true")),
         (String::from("is_ascending"), String::from("false")),
     ])));
+
+    let mut nonmonothonic_inc_field =
+        Field::new("nonmonothonic_inc", DataType::Int32, false);
+    nonmonothonic_inc_field.set_metadata(Some(BTreeMap::from([
+        (String::from("is_sorted"), String::from("true")),
+        (String::from("is_ascending"), String::from("true")),
+    ])));
+
     let schema = Arc::new(Schema::new(vec![
         ts_field,
         inc_field,
         desc_field,
         equal_field,
+        nonmonothonic_inc_field,
     ]));
 
     let batch = RecordBatch::try_new(
@@ -119,6 +131,13 @@ fn mock_data_running_test() -> Result<(SchemaRef, Vec<RecordBatch>)> {
                 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
                 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
                 100, 100,
+            ])),
+            Arc::new(Int32Array::from_slice(&[
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2,
+                2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,
+                4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7,
+                7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9,
+                9, 9, 9, 9,
             ])),
         ],
     )?;
@@ -1899,7 +1918,6 @@ SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED 
 
     /// This example demonstrates executing a simple query against a Memtable
     #[tokio::test]
-    #[ignore]
     async fn test_window_frame_first_value_last_value() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
@@ -1910,7 +1928,9 @@ SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED 
         ctx.register_table("users", Arc::new(mem_table))?;
 
         let sql = "SELECT
-FIRST_VALUE(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING)
+            FIRST_VALUE(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING),
+            LAST_VALUE(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING),
+            NTH_VALUE(inc_col, 5) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING)
             FROM users AS user_
             ";
 
@@ -1924,12 +1944,79 @@ FIRST_VALUE(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLL
         }
         println!("{}", res_calc);
         let postgre_ref = fs::read_to_string(
-            "tests/postgrerefs/test_window_frame_running_unbounded.csv",
+            "tests/postgrerefs/test_window_frame_first_value_last_value.csv",
         )
         .unwrap();
         assert_eq!(postgre_ref, res_calc);
-        // save_data_to_file("test_result.csv", res_calc).unwrap();
+        Ok(())
+    }
 
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
+    async fn test_window_frame_row_number() -> Result<()> {
+        let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        let task_ctx = ctx.task_ctx();
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("users", Arc::new(mem_table))?;
+
+        let sql = "SELECT
+          inc_col,
+          ROW_NUMBER() OVER(ORDER BY inc_col RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING) AS rn1,
+          ROW_NUMBER() OVER(ORDER BY inc_col ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as rn2
+            FROM users AS user_
+            ";
+
+        let dataframe = ctx.sql(sql).await?;
+
+        let mut stream = dataframe.execute_stream().await.unwrap();
+        let mut res_calc = "".to_string();
+        while let Some(result) = stream.next().await {
+            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
+            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+        }
+        println!("{}", res_calc);
+        let postgre_ref =
+            fs::read_to_string("tests/postgrerefs/test_window_frame_row_number.csv")
+                .unwrap();
+        assert_eq!(postgre_ref, res_calc);
+        Ok(())
+    }
+
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
+    async fn test_window_frame_rank() -> Result<()> {
+        let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        let task_ctx = ctx.task_ctx();
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("users", Arc::new(mem_table))?;
+
+        let sql = "SELECT
+          inc_col,
+          RANK() OVER(ORDER BY nonmonothonic_inc RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING) AS rn1,
+          RANK() OVER(ORDER BY nonmonothonic_inc ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as rn2,
+          DENSE_RANK() OVER(ORDER BY nonmonothonic_inc RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING) AS dense_rank1,
+          DENSE_RANK() OVER(ORDER BY nonmonothonic_inc ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as dense_rank2
+            FROM users AS user_
+            ";
+
+        let dataframe = ctx.sql(sql).await?;
+
+        let mut stream = dataframe.execute_stream().await.unwrap();
+        let mut res_calc = "".to_string();
+        while let Some(result) = stream.next().await {
+            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
+            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+        }
+        println!("{}", res_calc);
+        let postgre_ref =
+            fs::read_to_string("tests/postgrerefs/test_window_frame_rank.csv").unwrap();
+        assert_eq!(postgre_ref, res_calc);
         Ok(())
     }
 
@@ -1973,9 +2060,8 @@ FIRST_VALUE(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLL
         ctx.register_table("users", Arc::new(mem_table))?;
 
         let sql = "SELECT
-            SUM(inc_col) OVER(PARTITION BY inc_col ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
-            FROM users AS user_
-            ORDER BY ts";
+FIRST_VALUE(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING)
+            FROM users AS user_";
 
         let dataframe = ctx.sql(sql).await?;
         let df = dataframe.explain(false, false)?;

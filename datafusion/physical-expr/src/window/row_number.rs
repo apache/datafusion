@@ -18,12 +18,12 @@
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::BuiltInWindowFunctionExpr;
+use crate::window::{AggregateWindowAccumulatorState, BuiltInWindowFunctionExpr};
 use crate::PhysicalExpr;
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -78,6 +78,15 @@ impl PartitionEvaluator for NumRowsEvaluator {
         Ok(Arc::new(UInt64Array::from_iter_values(
             1..(num_rows as u64) + 1,
         )))
+    }
+
+    /// evaluate window function result inside given range
+    fn evaluate_stream(
+        &self,
+        state: &mut AggregateWindowAccumulatorState,
+    ) -> Result<ScalarValue> {
+        let n_row = (state.last_idx + state.n_retracted + 1) as u64;
+        Ok(ScalarValue::UInt64(Some(n_row)))
     }
 }
 

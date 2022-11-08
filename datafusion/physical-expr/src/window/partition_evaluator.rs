@@ -17,7 +17,9 @@
 
 //! partition evaluation module
 
+use crate::window::AggregateWindowAccumulatorState;
 use arrow::array::ArrayRef;
+use arrow::compute::SortColumn;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use std::ops::Range;
@@ -92,6 +94,28 @@ pub trait PartitionEvaluator {
     fn evaluate_inside_range(&self, _range: Range<usize>) -> Result<ScalarValue> {
         Err(DataFusionError::NotImplemented(
             "evaluate_inside_range is not implemented by default".into(),
+        ))
+    }
+
+    /// evaluate window function result inside given range
+    fn evaluate_stream(
+        &self,
+        _state: &mut AggregateWindowAccumulatorState,
+    ) -> Result<ScalarValue> {
+        Err(DataFusionError::NotImplemented(
+            "evaluate_stream is not implemented by default".into(),
+        ))
+    }
+
+    /// evaluate window function result inside given range
+    fn evaluate_stream_rank(
+        &self,
+        _state: &mut AggregateWindowAccumulatorState,
+        _sort_partition_points: &Vec<Range<usize>>,
+        _columns: &Vec<SortColumn>,
+    ) -> Result<ScalarValue> {
+        Err(DataFusionError::NotImplemented(
+            "evaluate_stream is not implemented by default".into(),
         ))
     }
 }

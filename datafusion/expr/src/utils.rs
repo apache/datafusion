@@ -251,7 +251,7 @@ pub fn decide_col_sorting(
                 nulls_first: _nulls_first,
             } => {
                 let field_str = expr.to_string();
-                let field_name = field_str.split(".").last();
+                let field_name = field_str.split('.').last();
                 if let Some(field_name) = field_name {
                     Ok(get_decision_flags(input_schema, field_name))
                 } else {
@@ -309,20 +309,18 @@ pub fn get_decision_flags(
     None
 }
 
-pub fn is_all_window_functions_aggregator(exprs: &Vec<&Expr>) -> bool {
+pub fn is_all_window_functions_aggregator(exprs: &[&Expr]) -> bool {
     let mut res = true;
-    for expr in exprs.into_iter() {
+    for expr in exprs.iter() {
         let is_aggregate = match expr {
             Expr::WindowFunction { fun, .. } => match fun {
-                WindowFunction::AggregateFunction(aggregate_function) => true,
-                WindowFunction::BuiltInWindowFunction(builtin_window_function) => false,
+                WindowFunction::AggregateFunction(_) => true,
+                WindowFunction::BuiltInWindowFunction(_) => false,
             },
             Expr::Alias(inside_expr, _) => match &**inside_expr {
                 Expr::WindowFunction { fun, .. } => match fun {
-                    WindowFunction::AggregateFunction(aggregate_function) => true,
-                    WindowFunction::BuiltInWindowFunction(builtin_window_function) => {
-                        false
-                    }
+                    WindowFunction::AggregateFunction(_) => true,
+                    WindowFunction::BuiltInWindowFunction(_) => false,
                 },
                 _ => {
                     println!("expr: {:?}", expr);
@@ -341,7 +339,7 @@ pub fn is_all_window_functions_aggregator(exprs: &Vec<&Expr>) -> bool {
 
 pub fn remove_redundant_order_bys(
     sort_keys: &WindowSortKeys,
-    exprs: &Vec<&Expr>,
+    exprs: &[&Expr],
 ) -> Result<WindowSortKeys> {
     let is_all_aggregate = is_all_window_functions_aggregator(exprs);
     let mut non_inc_sort_keys = vec![];
@@ -352,9 +350,7 @@ pub fn remove_redundant_order_bys(
     } in sort_keys.iter()
     {
         let can_skip = if let Some(column_info) = column_info {
-            let sort_fields = get_sort_fields(&expr)?;
-            // println!("column info: {:?}", column_info);
-            // println!("sort_fields: {:?}", sort_fields);
+            let sort_fields = get_sort_fields(expr)?;
             column_info.is_sorted
                 && !column_info.is_nullable
                 && (is_all_aggregate
@@ -373,29 +369,6 @@ pub fn remove_redundant_order_bys(
     Ok(non_inc_sort_keys)
 }
 
-pub fn optimize_window_frame_groups(
-    groups: Vec<(WindowSortKeys, Vec<&Expr>)>,
-    input_schema: &Option<DFSchemaRef>,
-) -> Result<Vec<(WindowSortKeys, Vec<Expr>)>> {
-    let mut first_to_do = vec![];
-    let mut to_keep_same = vec![];
-    for (sort_keys, exprs) in groups {
-        let non_inc_sort_keys = remove_redundant_order_bys(&sort_keys, &exprs)?;
-        // make it first element (bottom at logical plan)
-        if non_inc_sort_keys.is_empty() && !sort_keys.is_empty() {
-            let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-            first_to_do.push((non_inc_sort_keys, exprs));
-            // TODO: change ORDER BY direction aligned with the column
-        } else {
-            let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-            to_keep_same.push((sort_keys, exprs));
-        }
-    }
-    // since iterator will be reversed we are appending first to do to last
-    let res = [to_keep_same, first_to_do].concat();
-    Ok(res)
-}
-
 /// Generate a sort key for a given window expr's partition_by and order_bu expr
 pub fn generate_sort_key(
     partition_by: &[Expr],
@@ -411,7 +384,7 @@ pub fn generate_sort_key(
         // partition by columns.
         let elem = WindowSortKey {
             expr,
-            column_info: column_info,
+            column_info,
             is_partition: true,
         };
         if !sort_key.contains(&elem) {
@@ -423,7 +396,7 @@ pub fn generate_sort_key(
         let column_info = decide_col_sorting(input_schema, expr)?;
         let elem = WindowSortKey {
             expr: expr.clone(),
-            column_info: column_info,
+            column_info,
             is_partition: false,
         };
         if !sort_key.contains(&elem) {

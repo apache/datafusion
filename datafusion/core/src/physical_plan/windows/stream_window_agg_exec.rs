@@ -24,16 +24,15 @@ use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::{
-    common, ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan,
-    Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
+    common, ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
 use arrow::array::Array;
 use arrow::compute::concat;
-use arrow::util::pretty::print_batches;
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
-    error::{ArrowError, Result as ArrowResult},
+    error::Result as ArrowResult,
     record_batch::RecordBatch,
 };
 use datafusion_common::bisect::get_current_ts;
@@ -47,7 +46,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use datafusion_expr::utils::{WindowSortKey, WindowSortKeys};
+use datafusion_expr::utils::WindowSortKeys;
 use datafusion_physical_expr::window::{
     AggregateWindowAccumulatorState, WindowAccumulatorResult,
 };
@@ -288,7 +287,7 @@ impl WindowAggStream {
         baseline_metrics: BaselineMetrics,
     ) -> Self {
         let mut state = vec![];
-        for i in 0..window_expr.len() {
+        for _i in 0..window_expr.len() {
             let cur_expr_state = WindowAggState {
                 accumulator_results: vec![],
                 accumulator_state: HashMap::new(),
@@ -337,7 +336,7 @@ impl WindowAggStream {
     }
 
     fn get_generated_result_for_current_partition(
-        window_agg_result: &Vec<WindowAccumulatorResult>,
+        window_agg_result: &[WindowAccumulatorResult],
         partition_row_state: &Vec<ScalarValue>,
     ) -> (Option<ArrayRef>, usize) {
         if let Some(idx) = window_agg_result.iter().position(
@@ -400,8 +399,9 @@ impl WindowAggStream {
                 .filter(|WindowAccumulatorResult { partition_id, .. }| {
                     !partition_rows_state.contains(partition_id)
                 })
-                .map(|elem| elem.clone())
+                .cloned()
                 .collect();
+
             res.append(&mut a);
             *accumulator_results = res;
         }
@@ -438,9 +438,9 @@ impl WindowAggStream {
                     }
                 }
                 if running_length == len_to_show {
-                    columns_to_show.push(ret.ok_or(DataFusionError::Execution(
-                        "Should contain something".to_string(),
-                    ))?);
+                    columns_to_show.push(ret.ok_or_else(|| {
+                        DataFusionError::Execution("Should contain something".to_string())
+                    })?);
                     break;
                 }
                 assert!(running_length < len_to_show);
@@ -452,7 +452,7 @@ impl WindowAggStream {
     /// retracts sections in the batch state that are no longer needed during
     /// window frame range calculations
     fn retract_state(
-        state: &mut Vec<WindowAggState>,
+        state: &mut [WindowAggState],
         batch_state: &mut HashMap<Vec<ScalarValue>, (u64, RecordBatch)>,
     ) {
         // Fill the earliest boundary for each partition range in the batch state
@@ -478,7 +478,7 @@ impl WindowAggStream {
             if let Some((ts, record_batch)) = batch_state.get(partition_row) {
                 let new_record_batch =
                     record_batch.slice(*offset, record_batch.num_rows() - offset);
-                batch_state.insert(partition_row.clone(), (ts.clone(), new_record_batch));
+                batch_state.insert(partition_row.clone(), (*ts, new_record_batch));
                 for WindowAggState {
                     accumulator_state, ..
                 } in state.iter_mut()
@@ -488,7 +488,8 @@ impl WindowAggStream {
                             (state.last_range.0 - offset, state.last_range.1 - offset);
                         state.cur_range =
                             (state.cur_range.0 - offset, state.cur_range.1 - offset);
-                        state.last_idx = state.last_idx - offset;
+                        state.last_idx -= offset;
+                        state.n_retracted += offset;
                     } else {
                         panic!("should have this partition");
                     }
@@ -500,7 +501,7 @@ impl WindowAggStream {
     }
 
     fn retract_showed_elements_from_state(
-        state: &mut Vec<WindowAggState>,
+        state: &mut [WindowAggState],
         len_showed: usize,
     ) {
         for WindowAggState {
@@ -566,8 +567,8 @@ impl WindowAggStream {
             let len_to_show = self.calc_len_to_show();
 
             let len_batch = batch.num_rows();
-            let n_to_keep = len_batch - len_to_show;
             println!("len to show: {:?}, n_batch: {}", len_to_show, len_batch);
+            let n_to_keep = len_batch - len_to_show;
             if len_to_show > 0 {
                 let batch_to_show = batch
                     .columns()
@@ -622,10 +623,11 @@ impl WindowAggStream {
         let result = match ready!(self.input.poll_next_unpin(cx)) {
             Some(Ok(batch)) => {
                 // all window expressions have same other than window frame boundaries hence we can use any one of the window expressions
-                let window_expr =
-                    self.window_expr.first().ok_or(DataFusionError::Execution(
+                let window_expr = self.window_expr.first().ok_or_else(|| {
+                    DataFusionError::Execution(
                         "window expr cannot be empty to support streaming".to_string(),
-                    ))?;
+                    )
+                })?;
                 let partition_columns = window_expr.partition_columns(&batch)?;
                 let num_rows = batch.num_rows();
                 if num_rows > 0 {
@@ -652,7 +654,7 @@ impl WindowAggStream {
                                 self.input.schema(),
                             )?;
                             self.batch_state
-                                .insert(partition_row.clone(), (ts.clone(), res.clone()));
+                                .insert(partition_row.clone(), (*ts, res.clone()));
                         } else {
                             let ts = get_current_ts();
                             self.batch_state
@@ -664,7 +666,7 @@ impl WindowAggStream {
                 self.batch = Some(if let Some(state_batch) = &self.batch {
                     common::append_new_batch(state_batch, &batch, self.input.schema())?
                 } else {
-                    batch.clone()
+                    batch
                 });
                 self.compute_aggregates(false)
             }

@@ -20,13 +20,11 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::iter::IntoIterator;
-use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::Array;
-use arrow::compute::{concat, SortOptions};
+use arrow::compute::SortOptions;
 use arrow::record_batch::RecordBatch;
-use arrow::util::pretty::print_batches;
 use arrow::{array::ArrayRef, datatypes::Field};
 
 use datafusion_common::Result;
@@ -185,7 +183,7 @@ impl WindowExpr for AggregateWindowExpr {
                 accumulator.set_state(aggregate_state)?;
                 state.clone()
             } else {
-                let state = AggregateWindowAccumulatorState::new();
+                let state = AggregateWindowAccumulatorState::default();
                 window_accumulators.insert(partition_row.clone(), state.clone());
                 state.clone()
             };
@@ -217,9 +215,8 @@ impl WindowExpr for AggregateWindowExpr {
         results.sort_by(|(ts_l, _), (ts_r, _)| ts_l.partial_cmp(ts_r).unwrap());
         let results = results
             .into_iter()
-            .map(|(ts, elem)| elem)
+            .map(|(_ts, elem)| elem)
             .collect::<Vec<WindowAccumulatorResult>>();
-        println!("len results: {:?}", results.len());
         Ok(results)
     }
 
@@ -235,8 +232,8 @@ impl WindowExpr for AggregateWindowExpr {
         &self,
         state: &mut AggregateWindowAccumulatorState,
         accumulator: &mut Box<dyn Accumulator>,
-        value_slice: &Vec<ArrayRef>,
-        order_bys: &Vec<ArrayRef>,
+        value_slice: &[ArrayRef],
+        order_bys: &[ArrayRef],
         is_end: bool,
         window_sort_keys: &WindowSortKeys,
     ) -> Result<Option<ArrayRef>> {
@@ -249,11 +246,11 @@ impl WindowExpr for AggregateWindowExpr {
         for i in state.last_idx..length {
             state.cur_range = self.calculate_range(
                 &self.window_frame,
-                &order_bys,
+                order_bys,
                 &sort_options,
                 length,
                 i,
-                &window_sort_keys,
+                window_sort_keys,
             )?;
             // exit if range end index is length, need kind of flag to stop
             if state.cur_range.1 == length && !is_end {

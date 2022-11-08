@@ -28,7 +28,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use datafusion_expr::utils::WindowSortKeys;
 use datafusion_expr::{Accumulator, AggregateState, WindowFrameBound};
@@ -76,8 +75,8 @@ pub trait WindowExpr: Send + Sync + Debug {
             Vec<ScalarValue>,
             AggregateWindowAccumulatorState,
         >,
-        window_sort_keys: &WindowSortKeys,
-        is_end: bool,
+        _window_sort_keys: &WindowSortKeys,
+        _is_end: bool,
     ) -> Result<Vec<WindowAccumulatorResult>> {
         Err(DataFusionError::Internal(
             "evaluate stream is not implemented".to_string(),
@@ -162,16 +161,7 @@ pub trait WindowExpr: Send + Sync + Debug {
                                 .descending;
                             let is_physical_descending = !column_info.is_ascending;
                             if is_physical_descending != is_descending {
-                                let new_window_frame =
-                                    get_reversed_window_frame(&window_frame)?;
-                                // println!("old window frame: {:?}", window_frame);
-                                // println!("new window frame: {:?}", new_window_frame);
-
-                                // println!(
-                                //     "is_descending: {:?}, is_physical_descending: {:?}",
-                                //     is_descending, is_physical_descending
-                                // );
-                                new_window_frame
+                                get_reversed_window_frame(window_frame)?
                             } else {
                                 Arc::clone(window_frame)
                             }
@@ -340,8 +330,8 @@ pub trait WindowExpr: Send + Sync + Debug {
         &self,
         _state: &mut AggregateWindowAccumulatorState,
         _accumulator: &mut Box<dyn Accumulator>,
-        _value_slice: &Vec<ArrayRef>,
-        _order_bys: &Vec<ArrayRef>,
+        _value_slice: &[ArrayRef],
+        _order_bys: &[ArrayRef],
         _is_end: bool,
         _window_sort_keys: &WindowSortKeys,
     ) -> Result<Option<ArrayRef>> {
@@ -406,7 +396,7 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
     };
     let new_sort_options = if !window_sort_keys.is_empty() {
         sort_options
-            .into_iter()
+            .iter()
             .map(|elem| {
                 let descending =
                     if let Some(column_info) = window_sort_keys[0].column_info {
@@ -416,7 +406,7 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
                     };
                 SortOptions {
                     nulls_first: elem.nulls_first,
-                    descending: descending,
+                    descending,
                 }
             })
             .collect::<Vec<SortOptions>>()
@@ -454,24 +444,17 @@ fn get_reversed_window_frame(window_frame: &WindowFrame) -> Result<Arc<WindowFra
     Ok(Arc::new(new_window_frame))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AggregateWindowAccumulatorState {
     pub last_range: (usize, usize),
     pub cur_range: (usize, usize),
     pub last_idx: usize,
+    pub n_retracted: usize,
     pub aggregate_state: Vec<AggregateState>,
-}
 
-impl AggregateWindowAccumulatorState {
-    /// create a new aggregate window function expression
-    pub fn new() -> Self {
-        Self {
-            last_range: (0, 0),
-            cur_range: (0, 0),
-            last_idx: 0,
-            aggregate_state: vec![],
-        }
-    }
+    pub last_rank_data: Vec<ScalarValue>,
+    pub last_rank_boundary: usize,
+    pub n_rank: usize,
 }
 
 #[derive(Debug, Clone)]
