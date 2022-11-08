@@ -256,7 +256,9 @@ fn adjust_input_keys_down_recursively(
     }) = plan_any.downcast_ref::<AggregateExec>()
     {
         if parent_required.is_empty() {
-            Ok(plan)
+            plan.map_children(|plan| {
+                adjust_input_keys_down_recursively(plan, parent_required.clone())
+            })
         } else {
             match mode {
                 AggregateMode::FinalPartitioned | AggregateMode::Partial => {
@@ -390,8 +392,6 @@ fn adjust_input_keys_down_recursively(
         } else {
             Ok(plan)
         }
-    } else if parent_required.is_empty() {
-        Ok(plan)
     } else {
         plan.map_children(|plan| {
             adjust_input_keys_down_recursively(plan, parent_required.clone())
@@ -806,11 +806,16 @@ struct JoinKeyPairs {
 
 #[cfg(test)]
 mod tests {
+    use crate::physical_plan::filter::FilterExec;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_expr::logical_plan::JoinType;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::binary;
+    use datafusion_physical_expr::expressions::lit;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::{expressions, PhysicalExpr};
+    use std::ops::Deref;
 
     use super::*;
     use crate::config::ConfigOptions;
@@ -1411,8 +1416,19 @@ mod tests {
             &JoinType::Inner,
         );
 
-        // Output partition need to respect the Alias and should not introduce additional RepartitionExec
+        let predicate: Arc<dyn PhysicalExpr> = binary(
+            col("c", top_join.schema().deref())?,
+            Operator::Gt,
+            lit(1i64),
+            top_join.schema().deref(),
+        )?;
+
+        let filter_top_join: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, top_join)?);
+
+        // The bottom joins' join key ordering is adjusted based on the top join. And the top join should not introduce additional RepartitionExec
         let expected = &[
+            "FilterExec: c@6 > 1",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"B\", index: 2 }, Column { name: \"b1\", index: 6 }), (Column { name: \"C\", index: 3 }, Column { name: \"c\", index: 2 }), (Column { name: \"AA\", index: 1 }, Column { name: \"a1\", index: 5 })]",
             "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 }), (Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 })]",
@@ -1428,7 +1444,7 @@ mod tests {
             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
             "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
         ];
-        assert_optimized!(expected, top_join);
+        assert_optimized!(expected, filter_top_join);
         Ok(())
     }
 
