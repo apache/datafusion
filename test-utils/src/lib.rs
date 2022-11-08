@@ -16,7 +16,8 @@
 // under the License.
 
 //! Common functions used for testing
-use arrow::{array::Int32Array, record_batch::RecordBatch};
+use arrow::record_batch::RecordBatch;
+use datafusion_common::cast::as_int32_array;
 use rand::prelude::StdRng;
 use rand::Rng;
 
@@ -32,12 +33,7 @@ pub fn batches_to_vec(batches: &[RecordBatch]) -> Vec<Option<i32>> {
         .iter()
         .flat_map(|batch| {
             assert_eq!(batch.num_columns(), 1);
-            batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .iter()
+            as_int32_array(batch.column(0)).unwrap().iter()
         })
         .collect()
 }

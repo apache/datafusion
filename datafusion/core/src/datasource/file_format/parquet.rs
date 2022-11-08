@@ -587,11 +587,12 @@ mod tests {
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{
         Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
-        Int32Array, StringArray, TimestampNanosecondArray,
+        StringArray, TimestampNanosecondArray,
     };
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
     use bytes::Bytes;
+    use datafusion_common::cast::as_int32_array;
     use datafusion_common::ScalarValue;
     use futures::stream::BoxStream;
     use futures::StreamExt;
@@ -975,11 +976,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
+        let array = as_int32_array(batches[0].column(0))?;
         let mut values: Vec<i32> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));

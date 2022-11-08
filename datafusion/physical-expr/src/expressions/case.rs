@@ -395,6 +395,7 @@ mod tests {
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
+    use datafusion_common::cast::as_int32_array;
     use datafusion_common::ScalarValue;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
@@ -417,10 +418,7 @@ mod tests {
             schema.as_ref(),
         )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("failed to downcast to Int32Array");
+        let result = as_int32_array(&result)?;
 
         let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
 
@@ -448,10 +446,7 @@ mod tests {
             schema.as_ref(),
         )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("failed to downcast to Int32Array");
+        let result = as_int32_array(&result)?;
 
         let expected =
             &Int32Array::from(vec![Some(123), Some(999), Some(999), Some(456)]);
@@ -523,10 +518,7 @@ mod tests {
             schema.as_ref(),
         )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("failed to downcast to Int32Array");
+        let result = as_int32_array(&result)?;
 
         let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
 
@@ -605,10 +597,7 @@ mod tests {
             schema.as_ref(),
         )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("failed to downcast to Int32Array");
+        let result = as_int32_array(&result)?;
 
         let expected =
             &Int32Array::from(vec![Some(123), Some(999), Some(999), Some(456)]);

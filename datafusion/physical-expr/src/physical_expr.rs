@@ -224,7 +224,7 @@ mod tests {
 
     use super::*;
     use arrow::array::Int32Array;
-    use datafusion_common::Result;
+    use datafusion_common::{cast::as_int32_array, Result};
 
     #[test]
     fn scatter_int() -> Result<()> {
@@ -235,7 +235,7 @@ mod tests {
         let expected =
             Int32Array::from_iter(vec![Some(1), Some(10), None, None, Some(11)]);
         let result = scatter(&mask, truthy.as_ref())?;
-        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        let result = as_int32_array(&result)?;
 
         assert_eq!(&expected, result);
         Ok(())
@@ -250,7 +250,7 @@ mod tests {
         let expected =
             Int32Array::from_iter(vec![Some(1), None, Some(10), None, None, None]);
         let result = scatter(&mask, truthy.as_ref())?;
-        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        let result = as_int32_array(&result)?;
 
         assert_eq!(&expected, result);
         Ok(())
@@ -266,7 +266,7 @@ mod tests {
         // output should treat nulls as though they are false
         let expected = Int32Array::from_iter(vec![None, None, Some(1), Some(10), None]);
         let result = scatter(&mask, truthy.as_ref())?;
-        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        let result = as_int32_array(&result)?;
 
         assert_eq!(&expected, result);
         Ok(())

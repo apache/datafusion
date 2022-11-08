@@ -182,6 +182,7 @@ mod tests {
     use crate::expressions::Column;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::cast::as_int32_array;
     use datafusion_common::Result;
 
     fn test_i32_result(expr: WindowShift, expected: Int32Array) -> Result<()> {
@@ -191,7 +192,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
         let result = expr.create_evaluator(&batch)?.evaluate(vec![0..8])?;
         assert_eq!(1, result.len());
-        let result = result[0].as_any().downcast_ref::<Int32Array>().unwrap();
+        let result = as_int32_array(&result[0])?;
         assert_eq!(expected, *result);
         Ok(())
     }
