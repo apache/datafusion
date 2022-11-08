@@ -150,68 +150,59 @@ impl WindowExpr for BuiltInWindowExpr {
     /// evaluate the window function values against the batch
     fn evaluate_stream(
         &self,
-        batch: &Option<RecordBatch>,
-        batch_state: &HashMap<Vec<ScalarValue>, RecordBatch>,
+        batch_state: &HashMap<Vec<ScalarValue>, (u64, RecordBatch)>,
         window_accumulators: &mut HashMap<
             Vec<ScalarValue>,
             AggregateWindowAccumulatorState,
         >,
         window_sort_keys: &WindowSortKeys,
+        is_end: bool,
     ) -> Result<Vec<WindowAccumulatorResult>> {
-        if let Some(batch) = batch {
+        let mut row_wise_results = vec![];
+        for (partition_row, (ts, batch)) in batch_state {
             let evaluator = self.expr.create_evaluator(batch)?;
             let num_rows = batch.num_rows();
             let partition_columns = self.partition_columns(batch)?;
-            let partition_points =
-                self.evaluate_partition_points(num_rows, &partition_columns)?;
-            let partition_rows = partition_points
-                .iter()
-                .map(|partition_range| {
-                    let partition_row = partition_columns
-                        .iter()
-                        .map(|arr| {
-                            ScalarValue::try_from_array(
-                                &arr.values,
-                                partition_range.start,
-                            )
-                        })
-                        .collect::<Result<Vec<ScalarValue>>>()
-                        .unwrap();
-                    partition_row
-                })
-                .collect::<Vec<_>>();
-            // let partition_points = self
-            //     .evaluate_partition_points(num_rows, &self.partition_columns(batch)?)?;
-            let results = if evaluator.include_rank() {
-                let sort_partition_points =
-                    self.evaluate_partition_points(num_rows, &self.sort_columns(batch)?)?;
-                evaluator.evaluate_with_rank(partition_points, sort_partition_points)?
+            let sort_options: Vec<SortOptions> =
+                self.order_by.iter().map(|o| o.options).collect();
+            let columns = self.sort_columns(batch)?;
+            let order_columns: Vec<&ArrayRef> =
+                columns.iter().map(|s| &s.values).collect();
+            // Sort values, this will make the same partitions consecutive. Also, within the partition
+            // range, values will be sorted.
+            let order_bys = &order_columns[self.partition_by.len()..];
+            let window_frame = if !order_bys.is_empty() && self.window_frame.is_none() {
+                // OVER (ORDER BY a) case
+                // We create an implicit window for ORDER BY.
+                Some(Arc::new(WindowFrame::default()))
             } else {
-                evaluator.evaluate(partition_points)?
+                self.window_frame.clone()
             };
-            let results = results
-                .into_iter()
-                .enumerate()
-                .map(|(i, elem)| {
-                    let length = elem.len();
-                    WindowAccumulatorResult {
-                        partition_id: partition_rows[i].clone(),
-                        col: Some(elem),
-                        n_partition_range: length,
-                    }
-                    // (Some(elem), (0, length), partition_rows[i].clone())
-                })
+
+            let slice_order_bys = order_bys
+                .iter()
+                .map(|v| v.slice(0, num_rows))
                 .collect::<Vec<_>>();
-            Ok(results)
-            // Ok(Some(concat(&results).map_err(DataFusionError::ArrowError)?))
-        } else {
-            Ok(vec![WindowAccumulatorResult {
-                partition_id: vec![],
-                col: None,
-                n_partition_range: 0,
-            }])
-            // Ok(vec![(None, (0, 0), vec![])])
-            // Err(DataFusionError::Internal("None is received".to_string()))
+            // We iterate on each row to calculate window frame range and and window function result
+            for idx in 0..num_rows {
+                let range = self.calculate_range(
+                    &window_frame,
+                    &slice_order_bys,
+                    &sort_options,
+                    num_rows,
+                    idx,
+                    &vec![],
+                )?;
+                let range = Range {
+                    start: range.0,
+                    end: range.1,
+                };
+                let value = evaluator.evaluate_inside_range(range)?;
+                row_wise_results.push(value.to_array());
+            }
         }
+        Err(DataFusionError::NotImplemented(
+            "not implemented stream builtin".to_string(),
+        ))
     }
 }

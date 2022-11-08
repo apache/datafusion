@@ -21,6 +21,7 @@ use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::ArrayRef;
 use arrow::compute::SortOptions;
 use std::cmp::Ordering;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// This function compares two tuples depending on the given sort options.
 fn compare(
@@ -82,6 +83,13 @@ pub fn bisect<const SIDE: bool>(
         }
     }
     Ok(low)
+}
+
+pub fn get_current_ts() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .subsec_nanos() as u64
 }
 
 #[cfg(test)]

@@ -71,13 +71,13 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// evaluate the window function values against the batch
     fn evaluate_stream(
         &self,
-        _batch: &Option<RecordBatch>,
-        _batch_state: &HashMap<Vec<ScalarValue>, RecordBatch>,
+        _batch_state: &HashMap<Vec<ScalarValue>, (u64, RecordBatch)>,
         _window_accumulators: &mut HashMap<
             Vec<ScalarValue>,
             AggregateWindowAccumulatorState,
         >,
         window_sort_keys: &WindowSortKeys,
+        is_end: bool,
     ) -> Result<Vec<WindowAccumulatorResult>> {
         Err(DataFusionError::Internal(
             "evaluate stream is not implemented".to_string(),
@@ -340,6 +340,8 @@ pub trait WindowExpr: Send + Sync + Debug {
         &self,
         _state: &mut AggregateWindowAccumulatorState,
         _accumulator: &mut Box<dyn Accumulator>,
+        _value_slice: &Vec<ArrayRef>,
+        _order_bys: &Vec<ArrayRef>,
         _is_end: bool,
         _window_sort_keys: &WindowSortKeys,
     ) -> Result<Option<ArrayRef>> {
@@ -454,30 +456,20 @@ fn get_reversed_window_frame(window_frame: &WindowFrame) -> Result<Arc<WindowFra
 
 #[derive(Debug, Clone)]
 pub struct AggregateWindowAccumulatorState {
-    pub value_slice: Vec<ArrayRef>,
-    pub order_bys: Vec<ArrayRef>,
     pub last_range: (usize, usize),
     pub cur_range: (usize, usize),
     pub last_idx: usize,
     pub aggregate_state: Vec<AggregateState>,
-    pub insert_time: u64,
 }
 
 impl AggregateWindowAccumulatorState {
     /// create a new aggregate window function expression
     pub fn new() -> Self {
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .subsec_nanos() as u64;
         Self {
-            value_slice: vec![],
-            order_bys: vec![],
             last_range: (0, 0),
             cur_range: (0, 0),
             last_idx: 0,
             aggregate_state: vec![],
-            insert_time: ts,
         }
     }
 }
@@ -486,5 +478,5 @@ impl AggregateWindowAccumulatorState {
 pub struct WindowAccumulatorResult {
     pub partition_id: Vec<ScalarValue>,
     pub col: Option<ArrayRef>,
-    pub n_partition_range: usize,
+    pub num_rows: usize,
 }

@@ -36,7 +36,8 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use datafusion_common::ScalarValue;
+use datafusion_common::bisect::get_current_ts;
+use datafusion_common::{DataFusionError, ScalarValue};
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use std::any::Any;
@@ -238,8 +239,8 @@ fn compute_window_aggregates(
     window_expr: &[Arc<dyn WindowExpr>],
     window_sort_keys: &WindowSortKeys,
     state: &mut [WindowAggState],
-    batch: &Option<RecordBatch>,
-    batch_state: &HashMap<Vec<ScalarValue>, RecordBatch>,
+    batch_state: &HashMap<Vec<ScalarValue>, (u64, RecordBatch)>,
+    is_end: bool,
 ) -> Result<Vec<Vec<WindowAccumulatorResult>>> {
     window_expr
         .iter()
@@ -247,10 +248,10 @@ fn compute_window_aggregates(
         .map(|(idx, window_expr)| {
             let mut accumulator_state = state[idx].accumulator_state.clone();
             let res = window_expr.evaluate_stream(
-                batch,
                 batch_state,
                 &mut accumulator_state,
                 window_sort_keys,
+                is_end,
             );
             state[idx].accumulator_state = accumulator_state;
             res
@@ -269,7 +270,7 @@ pub struct WindowAggStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     batch: Option<RecordBatch>,
-    batch_state: HashMap<Vec<ScalarValue>, RecordBatch>,
+    batch_state: HashMap<Vec<ScalarValue>, (u64, RecordBatch)>,
     state: Vec<WindowAggState>,
     finished: bool,
     window_expr: Vec<Arc<dyn WindowExpr>>,
@@ -319,18 +320,14 @@ impl WindowAggStream {
                     ..
                 } = window_agg_state;
                 for accumulator_result in accumulator_results {
-                    let WindowAccumulatorResult {
-                        col,
-                        n_partition_range,
-                        ..
-                    } = accumulator_result;
+                    let WindowAccumulatorResult { col, num_rows, .. } =
+                        accumulator_result;
                     let cur_len = if let Some(col) = col { col.len() } else { 0 };
                     min_len += cur_len;
-                    if cur_len < *n_partition_range {
+                    if cur_len < *num_rows {
                         break;
-                    } else {
-                        assert_eq!(cur_len, *n_partition_range);
                     }
+                    assert!(cur_len <= *num_rows);
                 }
                 min_len
             })
@@ -339,10 +336,27 @@ impl WindowAggStream {
             .unwrap_or(0)
     }
 
+    fn get_generated_result_for_current_partition(
+        window_agg_result: &Vec<WindowAccumulatorResult>,
+        partition_row_state: &Vec<ScalarValue>,
+    ) -> (Option<ArrayRef>, usize) {
+        if let Some(idx) = window_agg_result.iter().position(
+            |WindowAccumulatorResult { partition_id, .. }| {
+                partition_id == partition_row_state
+            },
+        ) {
+            let WindowAccumulatorResult { col, num_rows, .. } =
+                window_agg_result[idx].clone();
+            (col, num_rows)
+        } else {
+            (None, 0)
+        }
+    }
+
     fn concat_state_with_new_results(
         state: &mut Vec<WindowAggState>,
         window_agg_results: &Vec<Vec<WindowAccumulatorResult>>,
-    ) {
+    ) -> Result<()> {
         assert_eq!(window_agg_results.len(), state.len());
         for (
             i,
@@ -353,61 +367,34 @@ impl WindowAggStream {
         ) in state.iter_mut().enumerate()
         {
             let window_agg_result = &window_agg_results[i];
-            let partition_rows: Vec<Vec<ScalarValue>> = window_agg_result
-                .iter()
-                .map(|WindowAccumulatorResult { partition_id, .. }| partition_id.clone())
-                .collect();
             let partition_rows_state: Vec<Vec<ScalarValue>> = accumulator_results
                 .iter()
                 .map(|WindowAccumulatorResult { partition_id, .. }| partition_id.clone())
                 .collect();
-            let mut res: Vec<WindowAccumulatorResult> = accumulator_results
-                .iter()
-                .enumerate()
-                .map(
-                    |(
-                        j,
-                        WindowAccumulatorResult {
-                            partition_id: partition_row_state,
-                            col: col_state,
-                            n_partition_range: n_partition_range_state,
-                        },
-                    )| {
-                        // we assume that one of the newly calculated partition row would be equal
-                        let (calc_col, n_partition_range) = if let Some(idx) =
-                            partition_rows
-                                .iter()
-                                .position(|elem| elem == partition_row_state)
-                        {
-                            let WindowAccumulatorResult {
-                                partition_id: _part,
-                                col,
-                                n_partition_range,
-                            } = window_agg_result[idx].clone();
-                            (col, n_partition_range)
-                        } else {
-                            (None, 0)
-                        };
-                        // let state_range_length = range_state.1 - range_state.0;
-                        // let cur_range_length = cur_range.1 - cur_range.0;
-                        let new_n_partition_range =
-                            n_partition_range_state + n_partition_range;
-                        let res = match (col_state, calc_col) {
-                            (None, None) => None,
-                            (None, Some(part)) => Some(part.clone()),
-                            (Some(elem), None) => Some(elem.clone()),
-                            (Some(elem), Some(part)) => {
-                                Some(arrow::compute::concat(&[elem, &part]).unwrap())
-                            }
-                        };
-                        WindowAccumulatorResult {
-                            partition_id: partition_row_state.clone(),
-                            col: res,
-                            n_partition_range: new_n_partition_range,
-                        }
-                    },
-                )
-                .collect();
+            let mut res = vec![];
+            for WindowAccumulatorResult {
+                partition_id: partition_row_state,
+                col: col_state,
+                ..
+            } in accumulator_results.iter()
+            {
+                let (calc_col, num_rows) =
+                    Self::get_generated_result_for_current_partition(
+                        window_agg_result,
+                        partition_row_state,
+                    );
+                let col = match (col_state, calc_col) {
+                    (None, None) => None,
+                    (None, Some(part)) => Some(part),
+                    (Some(elem), None) => Some(elem.clone()),
+                    (Some(elem), Some(part)) => Some(concat(&[elem, &part])?),
+                };
+                res.push(WindowAccumulatorResult {
+                    partition_id: partition_row_state.clone(),
+                    col,
+                    num_rows,
+                });
+            }
             let mut a: Vec<WindowAccumulatorResult> = window_agg_result
                 .iter()
                 .filter(|WindowAccumulatorResult { partition_id, .. }| {
@@ -418,63 +405,98 @@ impl WindowAggStream {
             res.append(&mut a);
             *accumulator_results = res;
         }
+        Ok(())
     }
 
-    fn calc_columns_to_show(&self, len_to_show: usize) -> Vec<ArrayRef> {
-        let columns_to_show: Vec<ArrayRef> = self
-            .state
-            .iter()
-            .enumerate()
-            .map(
-                |(
-                    i,
-                    WindowAggState {
-                        accumulator_state,
-                        accumulator_results,
-                    },
-                )| {
-                    let mut ret = None;
-                    let mut running_length = 0;
-                    for accumulator_result in accumulator_results {
-                        // let (col_state, range_state, _) = &window_agg_state[j];
-                        let WindowAccumulatorResult { col: col_state, .. } =
-                            accumulator_result;
-                        if running_length < len_to_show {
-                            ret = match (ret, col_state) {
-                                (None, None) => None,
-                                (Some(ret), Some(col_state)) => {
-                                    let n_to_use = min(
-                                        len_to_show - running_length,
-                                        col_state.len(),
-                                    );
-                                    running_length += n_to_use;
-                                    Some(
-                                        concat(&[&ret, &col_state.slice(0, n_to_use)])
-                                            .unwrap(),
-                                    )
-                                }
-                                (None, Some(col_state)) => {
-                                    let n_to_use = min(
-                                        len_to_show - running_length,
-                                        col_state.len(),
-                                    );
-                                    running_length += n_to_use;
-                                    Some(col_state.slice(0, n_to_use))
-                                }
-                                (Some(res), None) => Some(res),
-                            }
+    fn calc_columns_to_show(&self, len_to_show: usize) -> Result<Vec<ArrayRef>> {
+        let mut columns_to_show = vec![];
+        for WindowAggState {
+            accumulator_results,
+            ..
+        } in self.state.iter()
+        {
+            let mut ret = None;
+            let mut running_length = 0;
+            for accumulator_result in accumulator_results {
+                let WindowAccumulatorResult { col: col_state, .. } = accumulator_result;
+                if running_length < len_to_show {
+                    ret = match (ret, col_state) {
+                        (None, None) => None,
+                        (Some(ret), Some(col_state)) => {
+                            let n_to_use =
+                                min(len_to_show - running_length, col_state.len());
+                            running_length += n_to_use;
+                            Some(concat(&[&ret, &col_state.slice(0, n_to_use)])?)
                         }
-                        if running_length == len_to_show {
-                            // println!("return chunk with length");
-                            return ret.unwrap();
+                        (None, Some(col_state)) => {
+                            let n_to_use =
+                                min(len_to_show - running_length, col_state.len());
+                            running_length += n_to_use;
+                            Some(col_state.slice(0, n_to_use))
                         }
-                        assert!(running_length < len_to_show);
+                        (Some(res), None) => Some(res),
                     }
-                    panic!("Err it should early return")
-                },
-            )
-            .collect();
-        columns_to_show
+                }
+                if running_length == len_to_show {
+                    columns_to_show.push(ret.ok_or(DataFusionError::Execution(
+                        "Should contain something".to_string(),
+                    ))?);
+                    break;
+                }
+                assert!(running_length < len_to_show);
+            }
+        }
+        Ok(columns_to_show)
+    }
+
+    /// retracts sections in the batch state that are no longer needed during
+    /// window frame range calculations
+    fn retract_state(
+        state: &mut Vec<WindowAggState>,
+        batch_state: &mut HashMap<Vec<ScalarValue>, (u64, RecordBatch)>,
+    ) {
+        // Fill the earliest boundary for each partition range in the batch state
+        // For instance in window frame one uses [10, 20] and window frame 2 uses [5, 15]
+        // We retract only first 5.
+        let mut retract_state: HashMap<Vec<ScalarValue>, usize> = HashMap::new();
+        for WindowAggState {
+            accumulator_state, ..
+        } in state.iter_mut()
+        {
+            for (partition_row, value) in accumulator_state {
+                if let Some(state) = retract_state.get_mut(partition_row) {
+                    if value.last_range.0 < *state {
+                        *state = value.last_range.0;
+                    }
+                } else {
+                    retract_state.insert(partition_row.clone(), value.last_range.0);
+                }
+            }
+        }
+
+        for (partition_row, offset) in retract_state.iter() {
+            if let Some((ts, record_batch)) = batch_state.get(partition_row) {
+                let new_record_batch =
+                    record_batch.slice(*offset, record_batch.num_rows() - offset);
+                batch_state.insert(partition_row.clone(), (ts.clone(), new_record_batch));
+                for WindowAggState {
+                    accumulator_state, ..
+                } in state.iter_mut()
+                {
+                    if let Some(state) = accumulator_state.get_mut(partition_row) {
+                        state.last_range =
+                            (state.last_range.0 - offset, state.last_range.1 - offset);
+                        state.cur_range =
+                            (state.cur_range.0 - offset, state.cur_range.1 - offset);
+                        state.last_idx = state.last_idx - offset;
+                    } else {
+                        panic!("should have this partition");
+                    }
+                }
+            } else {
+                panic!("should have this partition");
+            }
+        }
     }
 
     fn retract_showed_elements_from_state(
@@ -492,13 +514,13 @@ impl WindowAggStream {
                 let WindowAccumulatorResult {
                     partition_id,
                     col,
-                    n_partition_range,
+                    num_rows,
                 } = accumulator_result;
                 if running_length >= len_showed {
                     ret.push(WindowAccumulatorResult {
                         partition_id: partition_id.clone(),
                         col: col.clone(),
-                        n_partition_range: *n_partition_range,
+                        num_rows: *num_rows,
                     });
                 } else {
                     match col {
@@ -507,15 +529,12 @@ impl WindowAggStream {
                                 let n_to_keep = col.len() + running_length - len_showed;
                                 let slice_start = col.len() - n_to_keep;
                                 // keep last n_to_keep values
-                                let new_n_partition_range =
-                                    n_partition_range + running_length - len_showed;
+                                let new_num_rows = num_rows + running_length - len_showed;
                                 ret.push(WindowAccumulatorResult {
                                     partition_id: partition_id.clone(),
                                     col: Some(col.slice(slice_start, n_to_keep)),
-                                    n_partition_range: new_n_partition_range,
+                                    num_rows: new_num_rows,
                                 });
-                            } else {
-                                // ret.push((None, (0, 0), partition_row));
                             }
                             running_length += col.len();
                         }
@@ -530,10 +549,7 @@ impl WindowAggStream {
         }
     }
 
-    fn compute_aggregates(
-        &mut self,
-        batch_inc: &Option<RecordBatch>,
-    ) -> ArrowResult<RecordBatch> {
+    fn compute_aggregates(&mut self, is_end: bool) -> ArrowResult<RecordBatch> {
         // record compute time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
@@ -543,17 +559,15 @@ impl WindowAggStream {
                 &self.window_expr,
                 &self.window_sort_keys.clone(),
                 &mut self.state,
-                batch_inc,
-                // self.batch
                 &self.batch_state,
-            )
-            .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
-            Self::concat_state_with_new_results(&mut self.state, &window_agg_results);
+                is_end,
+            )?;
+            Self::concat_state_with_new_results(&mut self.state, &window_agg_results)?;
             let len_to_show = self.calc_len_to_show();
 
             let len_batch = batch.num_rows();
             let n_to_keep = len_batch - len_to_show;
-
+            println!("len to show: {:?}, n_batch: {}", len_to_show, len_batch);
             if len_to_show > 0 {
                 let batch_to_show = batch
                     .columns()
@@ -561,7 +575,7 @@ impl WindowAggStream {
                     .map(|elem| elem.slice(0, len_to_show))
                     .collect::<Vec<_>>();
 
-                let mut columns_to_show = self.calc_columns_to_show(len_to_show);
+                let mut columns_to_show = self.calc_columns_to_show(len_to_show)?;
                 let batch_to_keep = batch
                     .columns()
                     .iter()
@@ -569,6 +583,7 @@ impl WindowAggStream {
                     .collect::<Vec<_>>();
                 self.batch = Some(RecordBatch::try_new(batch.schema(), batch_to_keep)?);
                 Self::retract_showed_elements_from_state(&mut self.state, len_to_show);
+                Self::retract_state(&mut self.state, &mut self.batch_state);
 
                 columns_to_show.extend_from_slice(&batch_to_show);
 
@@ -606,17 +621,16 @@ impl WindowAggStream {
 
         let result = match ready!(self.input.poll_next_unpin(cx)) {
             Some(Ok(batch)) => {
-                let window_expr = if let Some(window_expr) = self.window_expr.first() {
-                    window_expr
-                } else {
-                    panic!("empty window expr");
-                };
+                // all window expressions have same other than window frame boundaries hence we can use any one of the window expressions
+                let window_expr =
+                    self.window_expr.first().ok_or(DataFusionError::Execution(
+                        "window expr cannot be empty to support streaming".to_string(),
+                    ))?;
                 let partition_columns = window_expr.partition_columns(&batch)?;
                 let num_rows = batch.num_rows();
                 if num_rows > 0 {
                     let partition_points = window_expr
                         .evaluate_partition_points(num_rows, &partition_columns)?;
-                    // println!("n_rows: {}, partition points:{:?}", num_rows, partition_points);
                     for partition_range in partition_points {
                         let partition_row = partition_columns
                             .iter()
@@ -631,32 +645,33 @@ impl WindowAggStream {
                             partition_range.start,
                             partition_range.end - partition_range.start,
                         );
-                        if let Some(state) = self.batch_state.get_mut(&partition_row) {
+                        if let Some((ts, state)) = self.batch_state.get(&partition_row) {
                             let res = common::append_new_batch(
                                 state,
                                 &batch_chunk,
                                 self.input.schema(),
                             )?;
-                            self.batch_state.insert(partition_row.clone(), res);
+                            self.batch_state
+                                .insert(partition_row.clone(), (ts.clone(), res.clone()));
                         } else {
-                            self.batch_state.insert(partition_row.clone(), batch_chunk);
+                            let ts = get_current_ts();
+                            self.batch_state
+                                .insert(partition_row.clone(), (ts, batch_chunk));
                         };
-                        // println!("n_rows: {}", self.batch_state.get(&partition_row).unwrap().num_rows());
                     }
                 }
-                // println!("batch state: {:?}", self.batch_state);
 
                 self.batch = Some(if let Some(state_batch) = &self.batch {
                     common::append_new_batch(state_batch, &batch, self.input.schema())?
                 } else {
                     batch.clone()
                 });
-                self.compute_aggregates(&Some(batch))
+                self.compute_aggregates(false)
             }
             Some(Err(e)) => Err(e),
             None => {
                 self.finished = true;
-                self.compute_aggregates(&None)
+                self.compute_aggregates(true)
             }
         };
         Poll::Ready(Some(result))

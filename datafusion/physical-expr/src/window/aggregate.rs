@@ -167,21 +167,18 @@ impl WindowExpr for AggregateWindowExpr {
 
     fn evaluate_stream(
         &self,
-        _batch: &Option<RecordBatch>,
-        batch_state: &HashMap<Vec<ScalarValue>, RecordBatch>,
+        batch_state: &HashMap<Vec<ScalarValue>, (u64, RecordBatch)>,
         window_accumulators: &mut HashMap<
             Vec<ScalarValue>,
             AggregateWindowAccumulatorState,
         >,
         window_sort_keys: &WindowSortKeys,
+        is_end: bool,
     ) -> Result<Vec<WindowAccumulatorResult>> {
         let window_sort_keys =
             window_sort_keys[self.partition_by.len()..window_sort_keys.len()].to_vec();
-        let is_end = _batch.is_none();
         let mut results = vec![];
-        for (partition_row, partition_batch) in batch_state.iter() {
-            // println!("partition_row: {:?}", partition_row);
-            // print_batches(&vec![partition_batch.clone()])?;
+        for (partition_row, (ts, partition_batch)) in batch_state.iter() {
             let mut accumulator = self.aggregate.create_accumulator()?;
             let mut state = if let Some(state) = window_accumulators.get(partition_row) {
                 let aggregate_state = state.aggregate_state.clone();
@@ -193,11 +190,6 @@ impl WindowExpr for AggregateWindowExpr {
                 state.clone()
             };
             let num_rows = partition_batch.num_rows();
-            // let partition_columns = self.partition_columns(partition_batch)?;
-            let partition_range = Range {
-                start: 0,
-                end: num_rows,
-            };
 
             let values = self.evaluate_args(partition_batch)?;
 
@@ -206,29 +198,28 @@ impl WindowExpr for AggregateWindowExpr {
                 columns.iter().map(|s| s.values.clone()).collect();
             let order_bys = order_bys[self.partition_by.len()..order_bys.len()].to_vec();
 
-            update_state(&mut state, &values, &order_bys, &partition_range)?;
-            window_accumulators.insert(partition_row.clone(), state.clone());
-
             let res = self.calculate_running_window(
                 &mut state,
                 &mut accumulator,
+                &values,
+                &order_bys,
                 is_end,
                 &window_sort_keys,
             )?;
             let res = WindowAccumulatorResult {
                 partition_id: partition_row.clone(),
                 col: res,
-                n_partition_range: partition_range.end - partition_range.start,
+                num_rows,
             };
             window_accumulators.insert(partition_row.clone(), state.clone());
-            results.push((state.insert_time, res));
+            results.push((*ts, res));
         }
-        let tss = results.iter().map(|(ts, _)| *ts).collect::<Vec<u64>>();
-        println!("tss: {:?}", tss);
         results.sort_by(|(ts_l, _), (ts_r, _)| ts_l.partial_cmp(ts_r).unwrap());
-        let tss = results.iter().map(|(ts, _)| *ts).collect::<Vec<u64>>();
-        println!("tss: {:?}", tss);
-        let results = results.into_iter().map(|(ts, elem)| elem).collect();
+        let results = results
+            .into_iter()
+            .map(|(ts, elem)| elem)
+            .collect::<Vec<WindowAccumulatorResult>>();
+        println!("len results: {:?}", results.len());
         Ok(results)
     }
 
@@ -244,33 +235,26 @@ impl WindowExpr for AggregateWindowExpr {
         &self,
         state: &mut AggregateWindowAccumulatorState,
         accumulator: &mut Box<dyn Accumulator>,
+        value_slice: &Vec<ArrayRef>,
+        order_bys: &Vec<ArrayRef>,
         is_end: bool,
         window_sort_keys: &WindowSortKeys,
     ) -> Result<Option<ArrayRef>> {
         // We iterate on each row to perform a running calculation.
         // First, cur_range is calculated, then it is compared with last_range.
-        let length = state.value_slice[0].len();
-        let slice_order_columns = state
-            .order_bys
-            .iter()
-            .map(|v| v.slice(0, length))
-            .collect::<Vec<_>>();
+        let length = value_slice[0].len();
         let sort_options: Vec<SortOptions> =
             self.order_by.iter().map(|o| o.options).collect();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
         for i in state.last_idx..length {
             state.cur_range = self.calculate_range(
                 &self.window_frame,
-                &slice_order_columns,
+                &order_bys,
                 &sort_options,
                 length,
                 i,
                 &window_sort_keys,
             )?;
-            // println!(
-            //     "cur range: {:?}, last range: {:?}, last idx: {:?}",
-            //     state.cur_range, state.last_range, state.last_idx
-            // );
             // exit if range end index is length, need kind of flag to stop
             if state.cur_range.1 == length && !is_end {
                 state.cur_range = state.last_range;
@@ -284,8 +268,7 @@ impl WindowExpr for AggregateWindowExpr {
                 // Accumulate any new rows that have entered the window:
                 let update_bound = state.cur_range.1 - state.last_range.1;
                 if update_bound > 0 {
-                    let update: Vec<ArrayRef> = state
-                        .value_slice
+                    let update: Vec<ArrayRef> = value_slice
                         .iter()
                         .map(|v| v.slice(state.last_range.1, update_bound))
                         .collect();
@@ -294,8 +277,7 @@ impl WindowExpr for AggregateWindowExpr {
                 // Remove rows that have now left the window:
                 let retract_bound = state.cur_range.0 - state.last_range.0;
                 if retract_bound > 0 {
-                    let retract: Vec<ArrayRef> = state
-                        .value_slice
+                    let retract: Vec<ArrayRef> = value_slice
                         .iter()
                         .map(|v| v.slice(state.last_range.0, retract_bound))
                         .collect();
@@ -307,21 +289,6 @@ impl WindowExpr for AggregateWindowExpr {
             state.last_range = state.cur_range;
             state.last_idx = i + 1;
         }
-        // let n_to_keep = length - state.last_range.0;
-        // state.value_slice = state
-        //     .value_slice
-        //     .iter()
-        //     .map(|elem| elem.slice(state.last_range.0, n_to_keep))
-        //     .collect::<Vec<_>>();
-        //
-        // state.order_bys = state
-        //     .order_bys
-        //     .iter()
-        //     .map(|elem| elem.slice(state.last_range.0, n_to_keep))
-        //     .collect::<Vec<_>>();
-        // state.last_idx -= state.last_range.0;
-        // state.cur_range = (0, state.cur_range.1 - state.cur_range.0);
-        // state.last_range = (0, state.last_range.1 - state.last_range.0);
         state.aggregate_state = accumulator.state()?;
 
         if !row_wise_results.is_empty() {
@@ -332,42 +299,4 @@ impl WindowExpr for AggregateWindowExpr {
             Ok(None)
         }
     }
-}
-
-fn update_state(
-    state: &mut AggregateWindowAccumulatorState,
-    values: &Vec<ArrayRef>,
-    order_bys: &Vec<ArrayRef>,
-    value_range: &Range<usize>,
-) -> Result<()> {
-    let length = value_range.end - value_range.start;
-    let value_slice = values
-        .iter()
-        .map(|v| v.slice(value_range.start, length))
-        .collect::<Vec<_>>();
-    let order_bys = order_bys
-        .iter()
-        .map(|v| v.slice(value_range.start, length))
-        .collect::<Vec<_>>();
-
-    if state.value_slice.is_empty() {
-        state.value_slice = value_slice;
-        state.order_bys = order_bys;
-    } else {
-        // state.value_slice = state
-        //     .value_slice
-        //     .iter()
-        //     .enumerate()
-        //     .map(|(i, elem)| concat(&[elem.as_ref(), value_slice[i].as_ref()]).unwrap())
-        //     .collect();
-        // state.order_bys = state
-        //     .order_bys
-        //     .iter()
-        //     .enumerate()
-        //     .map(|(i, elem)| concat(&[elem.as_ref(), order_bys[i].as_ref()]).unwrap())
-        //     .collect();
-        state.value_slice = value_slice;
-        state.order_bys = order_bys;
-    }
-    Ok(())
 }
