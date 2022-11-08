@@ -22,7 +22,9 @@ use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use crate::physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
+use crate::physical_plan::joins::{
+    CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
+};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
@@ -30,6 +32,7 @@ use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use crate::prelude::SessionConfig;
+use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::expressions::NoOp;
@@ -165,10 +168,49 @@ fn adjust_input_keys_down_recursively(
                     )?))
                 }
             }
-            PartitionMode::CollectLeft => plan.map_children(|plan| {
-                adjust_input_keys_down_recursively(plan, parent_required.clone())
-            }),
+            PartitionMode::CollectLeft => {
+                let new_left = adjust_input_keys_down_recursively(left.clone(), vec![])?;
+                let new_right = match join_type {
+                    JoinType::Inner | JoinType::Right => try_push_required_to_right(
+                        parent_required,
+                        right.clone(),
+                        left.schema().fields().len(),
+                    )?,
+                    JoinType::RightSemi | JoinType::RightAnti => {
+                        adjust_input_keys_down_recursively(
+                            right.clone(),
+                            parent_required.clone(),
+                        )?
+                    }
+                    JoinType::Left
+                    | JoinType::LeftSemi
+                    | JoinType::LeftAnti
+                    | JoinType::Full => {
+                        adjust_input_keys_down_recursively(right.clone(), vec![])?
+                    }
+                };
+
+                Ok(Arc::new(HashJoinExec::try_new(
+                    new_left,
+                    new_right,
+                    on.clone(),
+                    filter.clone(),
+                    join_type,
+                    PartitionMode::CollectLeft,
+                    null_equals_null,
+                )?))
+            }
         }
+    } else if let Some(CrossJoinExec { left, right, .. }) =
+        plan_any.downcast_ref::<CrossJoinExec>()
+    {
+        let new_left = adjust_input_keys_down_recursively(left.clone(), vec![])?;
+        let new_right = try_push_required_to_right(
+            parent_required,
+            right.clone(),
+            left.schema().fields().len(),
+        )?;
+        Ok(Arc::new(CrossJoinExec::try_new(new_left, new_right)?))
     } else if let Some(SortMergeJoinExec {
         left,
         right,
@@ -249,6 +291,9 @@ fn adjust_input_keys_down_recursively(
             plan.map_children(|plan| adjust_input_keys_down_recursively(plan, vec![]))
         } else {
             match mode {
+                AggregateMode::Final => plan.map_children(|plan| {
+                    adjust_input_keys_down_recursively(plan, vec![])
+                }),
                 AggregateMode::FinalPartitioned | AggregateMode::Partial => {
                     let out_put_columns = group_by
                         .expr()
@@ -357,9 +402,6 @@ fn adjust_input_keys_down_recursively(
                         }
                     }
                 }
-                _ => plan.map_children(|plan| {
-                    adjust_input_keys_down_recursively(plan, vec![])
-                }),
             }
         }
     } else if let Some(ProjectionExec { expr, .. }) =
@@ -367,6 +409,7 @@ fn adjust_input_keys_down_recursively(
     {
         // For Projection, we need to transform the columns to the columns before the Projection
         // And then to push down the requirements
+        // Construct a mapping from new name to the the orginal Column
         let mut column_mapping = HashMap::new();
         for (expression, name) in expr.iter() {
             if let Some(column) = expression.as_any().downcast_ref::<Column>() {
@@ -391,10 +434,45 @@ fn adjust_input_keys_down_recursively(
         } else {
             plan.map_children(|plan| adjust_input_keys_down_recursively(plan, vec![]))
         }
+    } else if plan_any.downcast_ref::<RepartitionExec>().is_some()
+        || plan_any.downcast_ref::<CoalescePartitionsExec>().is_some()
+    {
+        plan.map_children(|plan| adjust_input_keys_down_recursively(plan, vec![]))
     } else {
         plan.map_children(|plan| {
             adjust_input_keys_down_recursively(plan, parent_required.clone())
         })
+    }
+}
+
+fn try_push_required_to_right(
+    parent_required: Vec<Arc<dyn PhysicalExpr>>,
+    right: Arc<dyn ExecutionPlan>,
+    left_columns_len: usize,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let new_required: Vec<Arc<dyn PhysicalExpr>> = parent_required
+        .iter()
+        .filter_map(|r| {
+            if let Some(col) = r.as_any().downcast_ref::<Column>() {
+                if col.index() >= left_columns_len {
+                    Some(
+                        Arc::new(Column::new(col.name(), col.index() - left_columns_len))
+                            as Arc<dyn PhysicalExpr>,
+                    )
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // if the parent required are all comming from the right side, the requirements can be pushdown
+    if new_required.len() == parent_required.len() {
+        adjust_input_keys_down_recursively(right.clone(), new_required)
+    } else {
+        adjust_input_keys_down_recursively(right.clone(), vec![])
     }
 }
 
