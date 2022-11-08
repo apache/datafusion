@@ -47,8 +47,8 @@ fn case_when() -> Result<()> {
 
     let sql = "SELECT CASE WHEN col_uint32 > 0 THEN 1 ELSE 0 END FROM test";
     let plan = test_sql(sql)?;
-    let expected = "Projection: CASE WHEN CAST(test.col_uint32 AS Int64) > Int64(0) THEN Int64(1) ELSE Int64(0) END\
-    \n  TableScan: test projection=[col_uint32]";
+    let expected = "Projection: CASE WHEN test.col_uint32 > UInt32(0) THEN Int64(1) ELSE Int64(0) END AS CASE WHEN test.col_uint32 > Int64(0) THEN Int64(1) ELSE Int64(0) END\
+                    \n  TableScan: test projection=[col_uint32]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
 }
@@ -91,7 +91,7 @@ fn unsigned_target_type() -> Result<()> {
     let sql = "SELECT col_utf8 FROM test WHERE col_uint32 > 0";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_utf8\
-                    \n  Filter: CAST(test.col_uint32 AS Int64) > Int64(0)\
+                    \n  Filter: test.col_uint32 > UInt32(0)\
                     \n    TableScan: test projection=[col_uint32, col_utf8]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
