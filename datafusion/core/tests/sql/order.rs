@@ -214,7 +214,7 @@ async fn sort_empty() -> Result<()> {
 #[tokio::test]
 async fn sort_with_lots_of_repetition_values() -> Result<()> {
     let ctx = SessionContext::new();
-    let filename = "tests/parquet/repeat_much.snappy.parquet";
+    let filename = "tests/parquet/data/repeat_much.snappy.parquet";
 
     ctx.register_parquet("rep", filename, ParquetReadOptions::default())
         .await?;

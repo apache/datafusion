@@ -272,7 +272,7 @@ async fn single_file_small_data_pages() {
 
     // TestCase::new(&test_parquet_file)
     //     .with_name("selective")
-    //     // predicagte is chosen carefully to prune pages 0, 1, 2, 3, 4
+    //     // predicate is chosen carefully to prune pages 0, 1, 2, 3, 4
     //     // pod = 'iadnalqpdzthpifrvewossmpqibgtsuin'
     //     .with_filter(col("pod").eq(lit("iadnalqpdzthpifrvewossmpqibgtsuin")))
     //     .with_pushdown_expected(PushdownExpected::Some)
@@ -291,7 +291,7 @@ async fn single_file_small_data_pages() {
     // page 5:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.005330944, num_nulls not defined] CRC:[none] SZ:12601 VC:7739
     TestCase::new(&test_parquet_file)
         .with_name("selective")
-        // predicagte is chosen carefully to prune pages
+        // predicate is chosen carefully to prune pages 1, 2, 4, and 5
         // time > 1970-01-01T00:00:00.004300000
         .with_filter(col("time").gt(lit_timestamp_nano(4300000)))
         .with_pushdown_expected(PushdownExpected::Some)
