@@ -130,6 +130,7 @@ mod tests {
     use super::*;
     use arrow::array::Int32Array;
     use arrow::datatypes::*;
+    use datafusion_common::cast::as_int32_array;
     use datafusion_common::Result;
 
     #[test]
@@ -144,7 +145,7 @@ mod tests {
         assert_eq!("42", format!("{}", literal_expr));
 
         let literal_array = literal_expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let literal_array = literal_array.as_any().downcast_ref::<Int32Array>().unwrap();
+        let literal_array = as_int32_array(&literal_array)?;
 
         // note that the contents of the literal array are unrelated to the batch contents except for the length of the array
         assert_eq!(literal_array.len(), 5); // 5 rows in the batch

@@ -770,7 +770,7 @@ mod tests {
         datatypes::{DataType, Field, Schema},
     };
     use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_common::{DFField, ToDFSchema};
+    use datafusion_common::{cast::as_int32_array, DFField, ToDFSchema};
     use datafusion_expr::*;
     use datafusion_physical_expr::{
         execution_props::ExecutionProps, functions::make_scalar_function,
@@ -891,14 +891,8 @@ mod tests {
         let return_type = Arc::new(DataType::Int32);
 
         let fun = |args: &[ArrayRef]| {
-            let arg0 = &args[0]
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .expect("cast failed");
-            let arg1 = &args[1]
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .expect("cast failed");
+            let arg0 = as_int32_array(&args[0])?;
+            let arg1 = as_int32_array(&args[1])?;
 
             // 2. perform the computation
             let array = arg0

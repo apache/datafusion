@@ -21,7 +21,7 @@
 //! kernels in arrow-rs such as `as_boolean_array` do.
 
 use crate::DataFusionError;
-use arrow::array::{Array, Date32Array, StructArray};
+use arrow::array::{Array, Date32Array, Int32Array, StructArray};
 
 // Downcast ArrayRef to Date32Array
 pub fn as_date32_array(array: &dyn Array) -> Result<&Date32Array, DataFusionError> {
@@ -38,6 +38,16 @@ pub fn as_struct_array(array: &dyn Array) -> Result<&StructArray, DataFusionErro
     array.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
         DataFusionError::Internal(format!(
             "Expected a StructArray, got: {}",
+            array.data_type()
+        ))
+    })
+}
+
+// Downcast ArrayRef to Int32Array
+pub fn as_int32_array(array: &dyn Array) -> Result<&Int32Array, DataFusionError> {
+    array.as_any().downcast_ref::<Int32Array>().ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "Expected a Int32Array, got: {}",
             array.data_type()
         ))
     })

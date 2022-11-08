@@ -173,6 +173,7 @@ mod tests {
     use crate::expressions::Column;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::cast::as_int32_array;
     use datafusion_common::Result;
 
     fn test_i32_result(expr: NthValue, expected: Int32Array) -> Result<()> {
@@ -194,7 +195,7 @@ mod tests {
             .into_iter()
             .collect::<Result<Vec<ScalarValue>>>()?;
         let result = ScalarValue::iter_to_array(result.into_iter())?;
-        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        let result = as_int32_array(&result)?;
         assert_eq!(expected, *result);
         Ok(())
     }
