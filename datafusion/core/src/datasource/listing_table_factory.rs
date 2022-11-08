@@ -30,6 +30,7 @@ use crate::datasource::listing::{
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 use async_trait::async_trait;
+use datafusion_expr::CreateExternalTable;
 use std::sync::Arc;
 
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
@@ -49,7 +50,7 @@ impl TableProviderFactory for ListingTableFactory {
     async fn create(
         &self,
         state: &SessionState,
-        url: &str,
+        cmd: &CreateExternalTable,
     ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
         let file_extension = self.file_type.get_ext();
 
@@ -68,7 +69,7 @@ impl TableProviderFactory for ListingTableFactory {
             table_partition_cols: vec![],
         };
 
-        let table_path = ListingTableUrl::parse(url)?;
+        let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = options.infer_schema(state, &table_path).await?;
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
