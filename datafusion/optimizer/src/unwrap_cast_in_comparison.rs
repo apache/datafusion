@@ -32,7 +32,7 @@ use datafusion_expr::{
 };
 use std::sync::Arc;
 
-/// [`UnwrapCastInComparison`] Attempts to remove casts from
+/// [`UnwrapCastInComparison`] attempts to remove casts from
 /// comparisons to literals ([`ScalarValue`]s) by applying the casts
 /// to the literals if possible. It is inspired by the optimizer rule
 /// `UnwrapCastInBinaryComparison` of Spark.
@@ -45,10 +45,12 @@ use std::sync::Arc;
 /// The rule is applied to expressions of the following forms:
 ///
 /// 1. `cast(left_expr as data_type) comparison_op literal_expr`
-/// 2. `cast(literal_expr) IN (expr1, expr2, ...)`
+/// 2. `literal_expr comparison_op cast(left_expr as data_type)`
+/// 3. `cast(literal_expr) IN (expr1, expr2, ...)`
+/// 4. `literal_expr IN (cast(expr1) , cast(expr2), ...)`
 ///
 /// If the expression matches one of the forms above, the rule will
-/// ensure the value of `literal` is in within range(min,max) of the
+/// ensure the value of `literal` is in within range(min, max) of the
 /// expr's data_type, and if the scalar is within range, the literal
 /// will be casted to the data type of expr on the other side, and the
 /// cast will be removed from the other side.
