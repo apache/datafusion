@@ -1818,6 +1818,10 @@ impl ContextProvider for SessionState {
             .as_ref()
             .and_then(|provider| provider.get(&provider_type)?.get_type(variable_names))
     }
+
+    fn get_config_option(&self, variable: &str) -> Option<ScalarValue> {
+        self.config.config_options.read().get(variable)
+    }
 }
 
 impl FunctionRegistry for SessionState {
