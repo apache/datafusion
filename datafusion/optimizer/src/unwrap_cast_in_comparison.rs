@@ -727,7 +727,7 @@ mod tests {
 
     #[test]
     fn test_try_cast_to_type_nulls() {
-        // test values that can be cast to/from all integer types
+        // test that nulls can be cast to/from all integer types
         let scalars = vec![
             ScalarValue::Int8(None),
             ScalarValue::Int16(None),
