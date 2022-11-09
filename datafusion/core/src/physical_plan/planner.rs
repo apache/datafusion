@@ -63,7 +63,7 @@ use datafusion_expr::expr::{
     Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
-use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
+use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
@@ -72,7 +72,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::{debug, trace};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::Arc;
 
@@ -906,8 +906,7 @@ impl DefaultPhysicalPlanner {
                     let join_filter = match filter {
                         Some(expr) => {
                             // Extract columns from filter expression
-                            let mut cols = HashSet::new();
-                            expr_to_columns(expr, &mut cols)?;
+                            let cols = expr.to_columns()?;
 
                             // Collect left & right field indices
                             let left_field_indices = cols.iter()
