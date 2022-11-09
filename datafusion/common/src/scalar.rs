@@ -128,19 +128,15 @@ impl PartialEq for ScalarValue {
             (Decimal128(_, _, _), _) => false,
             (Boolean(v1), Boolean(v2)) => v1.eq(v2),
             (Boolean(_), _) => false,
-            (Float32(v1), Float32(v2)) => {
-                match (v1, v2) {
-                    (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
-                    _ => v1.eq(v2),
-                }
-            }
+            (Float32(v1), Float32(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
+                _ => v1.eq(v2),
+            },
             (Float32(_), _) => false,
-            (Float64(v1), Float64(v2)) => {
-                match (v1, v2) {
-                    (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
-                    _ => v1.eq(v2),
-                }
-            }
+            (Float64(v1), Float64(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
+                _ => v1.eq(v2),
+            },
             (Float64(_), _) => false,
             (Int8(v1), Int8(v2)) => v1.eq(v2),
             (Int8(_), _) => false,
