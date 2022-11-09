@@ -975,9 +975,9 @@ mod test {
     use crate::arrow::array::Array;
     use crate::arrow::datatypes::{Field, TimeUnit};
     use crate::avro_to_arrow::{Reader, ReaderBuilder};
-    use arrow::array::{Int64Array, ListArray, TimestampMicrosecondArray};
+    use arrow::array::{ListArray, TimestampMicrosecondArray};
     use arrow::datatypes::DataType;
-    use datafusion_common::cast::as_int32_array;
+    use datafusion_common::cast::{as_int32_array, as_int64_array};
     use std::fs::File;
 
     fn build_reader(name: &str, batch_size: usize) -> Reader<File> {
@@ -1048,9 +1048,7 @@ mod test {
 
         assert_eq!(
             6,
-            array
-                .as_any()
-                .downcast_ref::<Int64Array>()
+            as_int64_array(&array)
                 .unwrap()
                 .iter()
                 .flatten()
