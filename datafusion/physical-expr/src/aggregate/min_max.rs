@@ -1121,8 +1121,8 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Time32(TimeUnit::Second),
-            Max,
-            ScalarValue::Time32Second(Some(5))
+            Min,
+            ScalarValue::Time32Second(Some(1))
         )
     }
 
@@ -1143,8 +1143,8 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Time32(TimeUnit::Millisecond),
-            Max,
-            ScalarValue::Time32Millisecond(Some(5))
+            Min,
+            ScalarValue::Time32Millisecond(Some(1))
         )
     }
 
@@ -1164,9 +1164,9 @@ mod tests {
         let a: ArrayRef = Arc::new(Time64MicrosecondArray::from(vec![1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
-            DataType::Time64(TimeUnit::Nanosecond),
-            Max,
-            ScalarValue::Time64Nanosecond(Some(5))
+            DataType::Time64(TimeUnit::Microsecond),
+            Min,
+            ScalarValue::Time64Microsecond(Some(1))
         )
     }
 
@@ -1187,8 +1187,8 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Time64(TimeUnit::Nanosecond),
-            Max,
-            ScalarValue::Time64Nanosecond(Some(5))
+            Min,
+            ScalarValue::Time64Nanosecond(Some(1))
         )
     }
 

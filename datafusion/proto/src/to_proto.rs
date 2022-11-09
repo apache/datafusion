@@ -1188,6 +1188,9 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
 
+            // Since the protos only support Time64 and always interpret it to nanosecond accuracy,
+            // all ScalarValues of types Time32 and Time64 are adapted into a Time64Value, taking
+            // into account the necessary conversion into nanoseconds
             datafusion::scalar::ScalarValue::Time32Second(v) => {
                 create_proto_scalar(v, PrimitiveScalarType::Time64, |v| {
                     Value::Time64Value(*v as i64 * 1_000_000_000)

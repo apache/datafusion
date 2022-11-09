@@ -513,6 +513,20 @@ fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
         .or_else(|| null_coercion(lhs_type, rhs_type))
 }
 
+/// Checks if the TimeUnit associated with a Time32 or Time64 type is consistent,
+/// as Time32 can only be used to Second and Millisecond accuracy, while Time64
+/// is exclusively used to Microsecond and Nanosecond accuracy
+fn is_time_with_valid_unit(datatype: DataType) -> bool {
+    use arrow::datatypes::DataType::*;
+    match datatype {
+        Time32(TimeUnit::Second)
+        | Time32(TimeUnit::Millisecond)
+        | Time64(TimeUnit::Microsecond)
+        | Time64(TimeUnit::Nanosecond) => true,
+        _ => false,
+    }
+}
+
 /// Coercion rules for Temporal columns: the type that both lhs and rhs can be
 /// casted to for the purpose of a date computation
 fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
@@ -524,21 +538,21 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         (Date32, Utf8) => Some(Date32),
         (Utf8, Date64) => Some(Date64),
         (Date64, Utf8) => Some(Date64),
-        (Utf8, Time32(unit)) => match check_time_unit(Time32(unit.clone())) {
-            None => None,
-            Some(unit) => Some(Time32(unit)),
+        (Utf8, Time32(unit)) => match is_time_with_valid_unit(Time32(unit.clone())) {
+            false => None,
+            true => Some(Time32(unit.clone())),
         },
-        (Time32(unit), Utf8) => match check_time_unit(Time32(unit.clone())) {
-            None => None,
-            Some(unit) => Some(Time32(unit)),
+        (Time32(unit), Utf8) => match is_time_with_valid_unit(Time32(unit.clone())) {
+            false => None,
+            true => Some(Time32(unit.clone())),
         },
-        (Utf8, Time64(unit)) => match check_time_unit(Time64(unit.clone())) {
-            None => None,
-            Some(unit) => Some(Time64(unit)),
+        (Utf8, Time64(unit)) => match is_time_with_valid_unit(Time64(unit.clone())) {
+            false => None,
+            true => Some(Time64(unit.clone())),
         },
-        (Time64(unit), Utf8) => match check_time_unit(Time64(unit.clone())) {
-            None => None,
-            Some(unit) => Some(Time64(unit)),
+        (Time64(unit), Utf8) => match is_time_with_valid_unit(Time64(unit.clone())) {
+            false => None,
+            true => Some(Time64(unit.clone())),
         },
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
@@ -636,17 +650,6 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
                 None
             }
         }
-        _ => None,
-    }
-}
-
-fn check_time_unit(datatype: DataType) -> Option<TimeUnit> {
-    use arrow::datatypes::DataType::*;
-    match datatype {
-        Time32(TimeUnit::Second) => Some(TimeUnit::Second),
-        Time32(TimeUnit::Millisecond) => Some(TimeUnit::Millisecond),
-        Time64(TimeUnit::Microsecond) => Some(TimeUnit::Microsecond),
-        Time64(TimeUnit::Nanosecond) => Some(TimeUnit::Nanosecond),
         _ => None,
     }
 }
