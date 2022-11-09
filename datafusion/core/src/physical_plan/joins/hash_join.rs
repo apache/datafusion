@@ -24,9 +24,10 @@ use arrow::{
     array::{
         as_dictionary_array, as_string_array, ArrayData, ArrayRef, BooleanArray,
         Date32Array, Date64Array, Decimal128Array, DictionaryArray, LargeStringArray,
-        PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
-        UInt64Builder, Time32SecondArray, Time32MillisecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        PrimitiveArray, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampSecondArray, UInt32BufferBuilder,
+        UInt32Builder, UInt64BufferBuilder, UInt64Builder,
     },
     compute,
     datatypes::{
