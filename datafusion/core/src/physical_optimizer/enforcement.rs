@@ -711,6 +711,9 @@ fn expected_expr_positions(
     current: &[Arc<dyn PhysicalExpr>],
     expected: &[Arc<dyn PhysicalExpr>],
 ) -> Option<Vec<usize>> {
+    if current.is_empty() || expected.is_empty() {
+        return None;
+    }
     let mut indexes: Vec<usize> = vec![];
     let mut current = current.to_vec();
     for expr in expected.iter() {
