@@ -129,17 +129,15 @@ impl PartialEq for ScalarValue {
             (Boolean(v1), Boolean(v2)) => v1.eq(v2),
             (Boolean(_), _) => false,
             (Float32(v1), Float32(v2)) => {
-                // Handle NaN == NaN as true manually like in OrderedFloat
                 match (v1, v2) {
-                    (Some(f1), Some(f2)) => f1.total_cmp(f2).is_eq(),
+                    (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
                     _ => v1.eq(v2),
                 }
             }
             (Float32(_), _) => false,
             (Float64(v1), Float64(v2)) => {
-                // Handle NaN == NaN as true manually like in OrderedFloat
                 match (v1, v2) {
-                    (Some(f1), Some(f2)) => f1.total_cmp(f2).is_eq(),
+                    (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
                     _ => v1.eq(v2),
                 }
             }
@@ -221,9 +219,9 @@ impl PartialOrd for ScalarValue {
             (Decimal128(_, _, _), _) => None,
             (Boolean(v1), Boolean(v2)) => v1.partial_cmp(v2),
             (Boolean(_), _) => None,
-            (Float32(v1), Float32(v2)) => v1.partial_cmp(v2),
+            (Float32(Some(f1)), Float32(Some(f2))) => Some(f1.total_cmp(f2)),
             (Float32(_), _) => None,
-            (Float64(v1), Float64(v2)) => v1.partial_cmp(v2),
+            (Float64(Some(f1)), Float64(Some(f2))) => Some(f1.total_cmp(f2)),
             (Float64(_), _) => None,
             (Int8(v1), Int8(v2)) => v1.partial_cmp(v2),
             (Int8(_), _) => None,
@@ -617,6 +615,7 @@ where
     intermediate.add(Duration::milliseconds(ms as i64))
 }
 
+//Float wrapper over f32/f64. Just because we cannot build std::hash::Hash for floats directly we have to do it through type wrapper
 struct Fl<T>(T);
 
 macro_rules! hash_float_value {
