@@ -29,7 +29,7 @@ use crate::physical_plan::ExecutionPlan;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
-use datafusion_expr::{Expr, TableType};
+use datafusion_expr::{CreateExternalTable, Expr, TableType};
 
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record
@@ -284,11 +284,11 @@ pub struct TestTableFactory {}
 impl TableProviderFactory for TestTableFactory {
     async fn create(
         &self,
-        _state: &SessionState,
-        url: &str,
+        _: &SessionState,
+        cmd: &CreateExternalTable,
     ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(TestTableProvider {
-            url: url.to_string(),
+            url: cmd.location.to_string(),
         }))
     }
 }

@@ -585,6 +585,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     if_not_exists: create_extern_table.if_not_exists,
                     file_compression_type: create_extern_table.file_compression_type.to_string(),
                     definition,
+                    options: create_extern_table.options.clone(),
                 }))
             }
             LogicalPlanType::CreateView(create_view) => {
@@ -1197,6 +1198,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 if_not_exists,
                 definition,
                 file_compression_type,
+                options,
             }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
                     protobuf::CreateExternalTableNode {
@@ -1210,6 +1212,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         delimiter: String::from(*delimiter),
                         definition: definition.clone().unwrap_or_default(),
                         file_compression_type: file_compression_type.to_string(),
+                        options: options.clone(),
                     },
                 )),
             }),

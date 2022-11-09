@@ -259,6 +259,8 @@ pub struct CreateExternalTableNode {
     pub definition: ::prost::alloc::string::String,
     #[prost(string, tag="10")]
     pub file_compression_type: ::prost::alloc::string::String,
+    #[prost(map="string, string", tag="11")]
+    pub options: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateCatalogSchemaNode {
