@@ -31,11 +31,9 @@ fn append_to_the_content(batch: &RecordBatch, content: &mut String) -> Result<()
             if column.is_null(row) {
                 res.pop();
             }
-            // println!("{}", a);
         }
-        // println!("{}", res);
         content.push_str(&res);
-        content.push_str("\n");
+        content.push('\n');
     }
     Ok(())
 }
@@ -1592,24 +1590,12 @@ async fn test_window_frame_nth_value_aggregate() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::{
-        execute_to_batches, execute_with_partition, register_aggregate_csv,
-        register_aggregate_null_cases_csv,
-    };
-    use arrow::array::Int32Array;
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::record_batch::RecordBatch;
-    use arrow::util::display::array_value_to_string;
+    use crate::sql::{execute_to_batches, register_aggregate_csv};
     use arrow::util::pretty::print_batches;
     use datafusion::assert_batches_eq;
     use datafusion::datasource::MemTable;
-    use datafusion::physical_plan::common;
     use datafusion::prelude::{SessionConfig, SessionContext};
-    use datafusion_common::from_slice::FromSlice;
-    use datafusion_common::Result;
-    use datafusion_common::ScalarValue;
     use futures::StreamExt;
-    use std::collections::BTreeMap;
     use std::fs;
     use std::sync::Arc;
 
@@ -1618,7 +1604,6 @@ mod tests {
     async fn test_window_frame_running() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
-        let task_ctx = ctx.task_ctx();
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
@@ -1647,13 +1632,13 @@ mod tests {
         let mut stream = dataframe.execute_stream().await.unwrap();
         let mut res_calc = "".to_string();
         while let Some(result) = stream.next().await {
-            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
-            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+            let result = result.map_err(DataFusionError::ArrowError)?;
+            append_to_the_content(&result, &mut res_calc).unwrap();
+            print_batches(&[result])?;
         }
         println!("{}", res_calc);
         let postgre_ref = fs::read_to_string("tests/postgrerefs/test1.csv").unwrap();
         assert_eq!(postgre_ref, res_calc);
-        // save_data_to_file("test_result.csv", res_calc).unwrap();
 
         Ok(())
     }
@@ -1662,10 +1647,7 @@ mod tests {
     #[tokio::test]
     async fn test_window_frame_running_partition_by() -> Result<()> {
         let config = SessionConfig::new().with_repartition_windows(false);
-        // let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
-        // let ctx = SessionContext::new();
-        let task_ctx = ctx.task_ctx();
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
@@ -1673,8 +1655,8 @@ mod tests {
 
         let sql = "SELECT
             SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
-SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING),
-SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 10 FOLLOWING)
+            SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING),
+            SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 10 FOLLOWING)
             FROM users AS user_
             ";
         let dataframe = ctx.sql(sql).await?;
@@ -1682,9 +1664,9 @@ SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING 
         let mut stream = dataframe.execute_stream().await.unwrap();
         let mut res_calc = "".to_string();
         while let Some(result) = stream.next().await {
-            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
-
-            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+            let result = result.map_err(DataFusionError::ArrowError)?;
+            append_to_the_content(&result, &mut res_calc).unwrap();
+            print_batches(&[result])?;
         }
         println!("{}", res_calc);
         let postgre_ref = fs::read_to_string(
@@ -1701,7 +1683,6 @@ SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING 
     async fn test_window_frame_running_partition_by_repartitioned() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
-        let task_ctx = ctx.task_ctx();
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
@@ -1716,17 +1697,16 @@ SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING 
         let dataframe = ctx.sql(sql).await?;
 
         let mut stream = dataframe.execute_stream().await.unwrap();
-        let mut combined_res: std::option::Option<RecordBatch> = None;
         let mut res_calc = "".to_string();
         while let Some(result) = stream.next().await {
-            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
-            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+            let result = result.map_err(DataFusionError::ArrowError)?;
+            append_to_the_content(&result, &mut res_calc).unwrap();
+            print_batches(&[result])?;
         }
         println!("{}", res_calc);
         let postgre_ref =
             fs::read_to_string("tests/postgrerefs/partition_by_inc.csv").unwrap();
         assert_eq!(postgre_ref, res_calc);
-        // save_data_to_file("test_result.csv", res_calc).unwrap();
         Ok(())
     }
 
@@ -1735,7 +1715,6 @@ SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING 
     async fn test_window_frame_running_conflicting_window() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
-        let task_ctx = ctx.task_ctx();
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
@@ -1759,13 +1738,13 @@ SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING 
         let mut stream = dataframe.execute_stream().await.unwrap();
         let mut res_calc = "".to_string();
         while let Some(result) = stream.next().await {
-            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
-            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+            let result = result.map_err(DataFusionError::ArrowError)?;
+            append_to_the_content(&result, &mut res_calc).unwrap();
+            print_batches(&[result])?;
         }
         println!("{}", res_calc);
         let postgre_ref = fs::read_to_string("tests/postgrerefs/test2.csv").unwrap();
         assert_eq!(postgre_ref, res_calc);
-        // save_data_to_file("test_result.csv", res_calc).unwrap();
         Ok(())
     }
 
@@ -1774,7 +1753,6 @@ SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING 
     async fn test_window_frame_running_unbounded_query() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
-        let task_ctx = ctx.task_ctx();
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
@@ -1795,8 +1773,9 @@ SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING 
         let mut stream = dataframe.execute_stream().await.unwrap();
         let mut res_calc = "".to_string();
         while let Some(result) = stream.next().await {
-            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
-            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+            let result = result.map_err(DataFusionError::ArrowError)?;
+            append_to_the_content(&result, &mut res_calc).unwrap();
+            print_batches(&[result])?;
         }
         println!("{}", res_calc);
         let postgre_ref = fs::read_to_string(
@@ -1804,7 +1783,6 @@ SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING 
         )
         .unwrap();
         assert_eq!(postgre_ref, res_calc);
-        // save_data_to_file("test_result.csv", res_calc).unwrap();
         Ok(())
     }
 
@@ -1815,7 +1793,6 @@ SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING 
         // let config = SessionConfig::new();
         let config = SessionConfig::new().with_target_partitions(1);
         let ctx = SessionContext::with_config(config);
-        let task_ctx = ctx.task_ctx();
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
@@ -1831,14 +1808,14 @@ SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING 
         let mut stream = dataframe.execute_stream().await.unwrap();
         let mut res_calc = "".to_string();
         while let Some(result) = stream.next().await {
-            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
-            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+            let result = result.map_err(DataFusionError::ArrowError)?;
+            append_to_the_content(&result, &mut res_calc).unwrap();
+            print_batches(&[result])?;
         }
         println!("{}", res_calc);
         let postgre_ref =
             fs::read_to_string("tests/postgrerefs/partition_by_inc.csv").unwrap();
         assert_eq!(postgre_ref, res_calc);
-        // save_data_to_file("test_result.csv", res_calc).unwrap();
         Ok(())
     }
 
@@ -1847,7 +1824,6 @@ SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING 
     async fn test_window_frame_running_reversed() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
-        let task_ctx = ctx.task_ctx();
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
@@ -1864,8 +1840,9 @@ SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN 1 PRECEDING and 10 FOLLOWI
         let mut stream = dataframe.execute_stream().await.unwrap();
         let mut res_calc = "".to_string();
         while let Some(result) = stream.next().await {
-            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
-            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+            let result = result.map_err(DataFusionError::ArrowError)?;
+            append_to_the_content(&result, &mut res_calc).unwrap();
+            print_batches(&[result])?;
         }
         println!("{}", res_calc);
         let postgre_ref = fs::read_to_string(
@@ -1873,7 +1850,6 @@ SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN 1 PRECEDING and 10 FOLLOWI
         )
         .unwrap();
         assert_eq!(postgre_ref, res_calc);
-        // save_data_to_file("test_result.csv", res_calc).unwrap();
 
         Ok(())
     }
@@ -1883,7 +1859,6 @@ SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN 1 PRECEDING and 10 FOLLOWI
     async fn test_window_frame_running_unbounded() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
-        let task_ctx = ctx.task_ctx();
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
@@ -1902,8 +1877,9 @@ SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED 
         let mut stream = dataframe.execute_stream().await.unwrap();
         let mut res_calc = "".to_string();
         while let Some(result) = stream.next().await {
-            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
-            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+            let result = result.map_err(DataFusionError::ArrowError)?;
+            append_to_the_content(&result, &mut res_calc).unwrap();
+            print_batches(&[result])?;
         }
         println!("{}", res_calc);
         let postgre_ref = fs::read_to_string(
@@ -1911,7 +1887,6 @@ SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED 
         )
         .unwrap();
         assert_eq!(postgre_ref, res_calc);
-        // save_data_to_file("test_result.csv", res_calc).unwrap();
 
         Ok(())
     }
@@ -1921,7 +1896,6 @@ SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED 
     async fn test_window_frame_first_value_last_value() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
-        let task_ctx = ctx.task_ctx();
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
@@ -1939,8 +1913,9 @@ SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED 
         let mut stream = dataframe.execute_stream().await.unwrap();
         let mut res_calc = "".to_string();
         while let Some(result) = stream.next().await {
-            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
-            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+            let result = result.map_err(DataFusionError::ArrowError)?;
+            append_to_the_content(&result, &mut res_calc).unwrap();
+            print_batches(&[result])?;
         }
         println!("{}", res_calc);
         let postgre_ref = fs::read_to_string(
@@ -1956,7 +1931,6 @@ SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED 
     async fn test_window_frame_row_number() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
-        let task_ctx = ctx.task_ctx();
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
@@ -1974,8 +1948,9 @@ SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED 
         let mut stream = dataframe.execute_stream().await.unwrap();
         let mut res_calc = "".to_string();
         while let Some(result) = stream.next().await {
-            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
-            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+            let result = result.map_err(DataFusionError::ArrowError)?;
+            append_to_the_content(&result, &mut res_calc).unwrap();
+            print_batches(&[result])?;
         }
         println!("{}", res_calc);
         let postgre_ref =
@@ -1990,7 +1965,6 @@ SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED 
     async fn test_window_frame_rank() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
-        let task_ctx = ctx.task_ctx();
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
@@ -2010,12 +1984,50 @@ SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED 
         let mut stream = dataframe.execute_stream().await.unwrap();
         let mut res_calc = "".to_string();
         while let Some(result) = stream.next().await {
-            append_to_the_content(result.as_ref().unwrap(), &mut res_calc).unwrap();
-            print_batches(&vec![result.as_ref().unwrap().clone()])?;
+            let result = result.map_err(DataFusionError::ArrowError)?;
+            append_to_the_content(&result, &mut res_calc).unwrap();
+            print_batches(&[result])?;
         }
         println!("{}", res_calc);
         let postgre_ref =
             fs::read_to_string("tests/postgrerefs/test_window_frame_rank.csv").unwrap();
+        assert_eq!(postgre_ref, res_calc);
+        Ok(())
+    }
+
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
+    async fn test_window_frame_lag_lead() -> Result<()> {
+        let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("users", Arc::new(mem_table))?;
+
+        let sql = "SELECT
+          inc_col,
+          LAG(inc_col, 1, 1001) OVER(ORDER BY nonmonothonic_inc RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING) AS lag1,
+          LEAD(inc_col, -1, 1001) OVER(ORDER BY nonmonothonic_inc RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING) AS lead1,
+          LAG(inc_col, 2, 1002) OVER(ORDER BY nonmonothonic_inc ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lag2,
+          LEAD(inc_col, 3, 1003) OVER(ORDER BY nonmonothonic_inc RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING) AS lead2,
+          LEAD(inc_col, 4, 1004) OVER(ORDER BY nonmonothonic_inc ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lead3
+            FROM users AS user_
+            ";
+
+        let dataframe = ctx.sql(sql).await?;
+
+        let mut stream = dataframe.execute_stream().await.unwrap();
+        let mut res_calc = "".to_string();
+        while let Some(result) = stream.next().await {
+            let result = result.map_err(DataFusionError::ArrowError)?;
+            append_to_the_content(&result, &mut res_calc).unwrap();
+            print_batches(&[result])?;
+        }
+        println!("{}", res_calc);
+        let postgre_ref =
+            fs::read_to_string("tests/postgrerefs/test_window_frame_lag_lead.csv")
+                .unwrap();
         assert_eq!(postgre_ref, res_calc);
         Ok(())
     }
@@ -2054,7 +2066,6 @@ SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED 
     async fn show_physical_plan() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
-        let task_ctx = ctx.task_ctx();
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
         ctx.register_table("users", Arc::new(mem_table))?;

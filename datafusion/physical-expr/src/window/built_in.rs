@@ -195,8 +195,10 @@ impl WindowExpr for BuiltInWindowExpr {
                     &window_sort_keys,
                 )?;
                 if !evaluator.uses_window_frame() {
-                    state.cur_range = (state.last_idx, state.last_idx + 1);
+                    // state.cur_range = (state.last_idx, state.last_idx + 1);
+                    state.cur_range = evaluator.get_range(&state)?;
                 }
+                println!("cur range: {:?}", state.cur_range);
                 // exit if range end index is length, need kind of flag to stop
                 if state.cur_range.1 == num_rows && !is_end {
                     state.cur_range = state.last_range;
@@ -214,24 +216,17 @@ impl WindowExpr for BuiltInWindowExpr {
                     };
                     let res = if evaluator.uses_window_frame() {
                         evaluator.evaluate_inside_range(range)?
+                    } else if evaluator.include_rank() {
+                        let columns = self.sort_columns(partition_batch)?;
+                        let sort_partition_points =
+                            self.evaluate_partition_points(num_rows, &columns)?;
+                        evaluator.evaluate_stream_rank(
+                            &mut state,
+                            &sort_partition_points,
+                            &columns,
+                        )?
                     } else {
-                        if evaluator.include_rank() {
-                            let columns = self.sort_columns(partition_batch)?;
-                            let sort_partition_points =
-                                self.evaluate_partition_points(num_rows, &columns)?;
-
-                            println!("{:?}", sort_partition_points);
-                            println!("state: {:?}", state);
-                            // println!("{:?}", partition_batch);
-                            evaluator.evaluate_stream_rank(
-                                &mut state,
-                                &sort_partition_points,
-                                &columns,
-                            )?
-                            // panic!("rank implementation is not done yet");
-                        } else {
-                            evaluator.evaluate_stream(&mut state)?
-                        }
+                        evaluator.evaluate_stream(&mut state)?
                     };
                     row_wise_results.push(res);
                 }

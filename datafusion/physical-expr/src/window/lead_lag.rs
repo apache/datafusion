@@ -19,15 +19,16 @@
 //! at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::BuiltInWindowFunctionExpr;
+use crate::window::{AggregateWindowAccumulatorState, BuiltInWindowFunctionExpr};
 use crate::PhysicalExpr;
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use std::any::Any;
+use std::cmp::min;
 use std::ops::Neg;
 use std::ops::Range;
 use std::sync::Arc;
@@ -173,6 +174,60 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         let value = &self.values[0];
         let value = value.slice(partition.start, partition.end - partition.start);
         shift_with_default_value(&value, self.shift_offset, &self.default_value)
+    }
+
+    fn get_range(
+        &self,
+        state: &AggregateWindowAccumulatorState,
+    ) -> Result<(usize, usize)> {
+        if self.shift_offset > 0 {
+            let start = if state.last_idx > self.shift_offset as usize {
+                state.last_idx - self.shift_offset as usize
+            } else {
+                0
+            };
+            Ok((start, state.last_idx + 1))
+        } else {
+            let end = state.last_idx + (-self.shift_offset) as usize;
+            let n_rows = self.values[0].len();
+            let end = min(end, n_rows);
+            Ok((state.last_idx, end))
+        }
+    }
+
+    fn evaluate_stream(
+        &self,
+        state: &mut AggregateWindowAccumulatorState,
+    ) -> Result<ScalarValue> {
+        println!(
+            "self offset: {:?}, default value: {:?} state: {:?}",
+            self.shift_offset, self.default_value, state
+        );
+        let dtype = self.values[0].data_type();
+        let idx = state.last_idx as i64 - self.shift_offset;
+        if idx < 0 || idx as usize >= self.values[0].len() {
+            get_default_value(&self.default_value, dtype)
+        } else {
+            ScalarValue::try_from_array(&self.values[0], idx as usize)
+        }
+    }
+}
+
+fn get_default_value(
+    default_value: &Option<ScalarValue>,
+    dtype: &DataType,
+) -> Result<ScalarValue> {
+    if let Some(val) = default_value {
+        match val {
+            ScalarValue::Int64(Some(val)) => {
+                ScalarValue::try_from_string(val.to_string(), dtype)
+            }
+            _ => Err(DataFusionError::Internal(
+                "Expects default value to have Int64 type".to_string(),
+            )),
+        }
+    } else {
+        Ok(ScalarValue::try_from(dtype)?)
     }
 }
 

@@ -80,6 +80,13 @@ impl PartitionEvaluator for NumRowsEvaluator {
         )))
     }
 
+    fn get_range(
+        &self,
+        state: &AggregateWindowAccumulatorState,
+    ) -> Result<(usize, usize)> {
+        Ok((state.last_idx, state.last_idx + 1))
+    }
+
     /// evaluate window function result inside given range
     fn evaluate_stream(
         &self,

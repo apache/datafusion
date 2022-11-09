@@ -21,13 +21,12 @@
 use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::{AggregateWindowAccumulatorState, BuiltInWindowFunctionExpr};
 use crate::PhysicalExpr;
-use arrow::array::{Array, ArrayRef};
+use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
 use arrow::compute::SortColumn;
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use itertools::Itertools;
 use std::any::Any;
 use std::iter;
 use std::ops::Range;
@@ -113,6 +112,13 @@ impl PartitionEvaluator for RankEvaluator {
         true
     }
 
+    fn get_range(
+        &self,
+        state: &AggregateWindowAccumulatorState,
+    ) -> Result<(usize, usize)> {
+        Ok((state.last_idx, state.last_idx + 1))
+    }
+
     fn evaluate_partition(&self, _partition: Range<usize>) -> Result<ArrayRef> {
         unreachable!("rank evaluation must be called with evaluate_partition_with_rank")
     }
@@ -121,8 +127,8 @@ impl PartitionEvaluator for RankEvaluator {
     fn evaluate_stream_rank(
         &self,
         state: &mut AggregateWindowAccumulatorState,
-        sort_partition_points: &Vec<Range<usize>>,
-        columns: &Vec<SortColumn>,
+        sort_partition_points: &[Range<usize>],
+        columns: &[SortColumn],
     ) -> Result<ScalarValue> {
         let chunk_idx = sort_partition_points
             .iter()
@@ -149,12 +155,10 @@ impl PartitionEvaluator for RankEvaluator {
             state.last_rank_data = last_row;
             state.last_rank_boundary = state.n_retracted + cur_chunk.start;
             state.n_rank = sort_partition_points.len();
-        } else {
-            if state.last_rank_data != last_row {
-                state.last_rank_data = last_row;
-                state.last_rank_boundary = state.n_retracted + cur_chunk.start;
-                state.n_rank += 1
-            }
+        } else if state.last_rank_data != last_row {
+            state.last_rank_data = last_row;
+            state.last_rank_boundary = state.n_retracted + cur_chunk.start;
+            state.n_rank += 1
         }
         match self.rank_type {
             RankType::Basic => Ok(ScalarValue::UInt64(Some(

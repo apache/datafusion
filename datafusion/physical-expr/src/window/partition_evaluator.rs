@@ -52,6 +52,15 @@ pub trait PartitionEvaluator {
         false
     }
 
+    fn get_range(
+        &self,
+        _state: &AggregateWindowAccumulatorState,
+    ) -> Result<(usize, usize)> {
+        Err(DataFusionError::NotImplemented(
+            "get_range is not implemented for this window function".to_string(),
+        ))
+    }
+
     /// evaluate the partition evaluator against the partitions
     fn evaluate(&self, partition_points: Vec<Range<usize>>) -> Result<Vec<ArrayRef>> {
         partition_points
@@ -111,8 +120,8 @@ pub trait PartitionEvaluator {
     fn evaluate_stream_rank(
         &self,
         _state: &mut AggregateWindowAccumulatorState,
-        _sort_partition_points: &Vec<Range<usize>>,
-        _columns: &Vec<SortColumn>,
+        _sort_partition_points: &[Range<usize>],
+        _columns: &[SortColumn],
     ) -> Result<ScalarValue> {
         Err(DataFusionError::NotImplemented(
             "evaluate_stream is not implemented by default".into(),
