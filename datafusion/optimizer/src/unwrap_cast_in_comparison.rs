@@ -32,25 +32,42 @@ use datafusion_expr::{
 };
 use std::sync::Arc;
 
-/// The rule can be used to the numeric binary comparison with literal expr, like below pattern:
-/// `cast(left_expr as data_type) comparison_op literal_expr` or `literal_expr comparison_op cast(right_expr as data_type)`.
-/// The data type of two sides must be equal, and must be signed numeric type now, and will support more data type later.
+/// [`UnwrapCastInComparison`] attempts to remove casts from
+/// comparisons to literals ([`ScalarValue`]s) by applying the casts
+/// to the literals if possible. It is inspired by the optimizer rule
+/// `UnwrapCastInBinaryComparison` of Spark.
 ///
-/// If the binary comparison expr match above rules, the optimizer will check if the value of `literal`
-/// is in within range(min,max) which is the range(min,max) of the data type for `left_expr` or `right_expr`.
+/// Removing casts often improves performance because:
+/// 1. The cast is done once (to the literal) rather than to every value
+/// 2. Can enable other optimizations such as predicate pushdown that
+///    don't support casting
 ///
-/// If this is true, the literal expr will be casted to the data type of expr on the other side, and the result of
-/// binary comparison will be `left_expr comparison_op cast(literal_expr, left_data_type)` or
-/// `cast(literal_expr, right_data_type) comparison_op right_expr`. For better optimization,
-/// the expr of `cast(literal_expr, target_type)` will be precomputed and converted to the new expr `new_literal_expr`
-/// which data type is `target_type`.
-/// If this false, do nothing.
+/// The rule is applied to expressions of the following forms:
 ///
-/// This is inspired by the optimizer rule `UnwrapCastInBinaryComparison` of Spark.
+/// 1. `cast(left_expr as data_type) comparison_op literal_expr`
+/// 2. `literal_expr comparison_op cast(left_expr as data_type)`
+/// 3. `cast(literal_expr) IN (expr1, expr2, ...)`
+/// 4. `literal_expr IN (cast(expr1) , cast(expr2), ...)`
+///
+/// If the expression matches one of the forms above, the rule will
+/// ensure the value of `literal` is in within range(min, max) of the
+/// expr's data_type, and if the scalar is within range, the literal
+/// will be casted to the data type of expr on the other side, and the
+/// cast will be removed from the other side.
+///
 /// # Example
 ///
-/// `Filter: cast(c1 as INT64) > INT64(10)` will be optimized to `Filter: c1 > CAST(INT64(10) AS INT32),
-/// and continue to be converted to `Filter: c1 > INT32(10)`, if the DataType of c1 is INT32.
+/// If the DataType of c1 is INT32. Given the filter
+///
+/// ```text
+/// Filter: cast(c1 as INT64) > INT64(10)`
+/// ```
+///
+/// This rule will remove the cast and rewrite the expression to:
+///
+/// ```text
+/// Filter: c1 > INT32(10)
+/// ```
 ///
 #[derive(Default)]
 pub struct UnwrapCastInComparison {}
