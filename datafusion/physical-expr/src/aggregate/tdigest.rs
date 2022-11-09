@@ -608,7 +608,8 @@ impl TDigest {
 
         let max = cast_scalar_f64!(&state[3]);
         let min = cast_scalar_f64!(&state[4]);
-        assert!(max.is_nan() || min.is_nan() || max >= min);
+
+        assert!(max.total_cmp(&min).is_ge());
 
         Self {
             max_size,
@@ -696,7 +697,7 @@ mod tests {
     #[test]
     fn test_merge_unsorted_against_uniform_distro() {
         let t = TDigest::new(100);
-        let values: Vec<_> = (1..=1_000_000).map(f64::from).map(|v| v as f64).collect();
+        let values: Vec<_> = (1..=1_000_000).map(f64::from).collect();
 
         let t = t.merge_unsorted_f64(values);
 
@@ -711,7 +712,7 @@ mod tests {
     #[test]
     fn test_merge_unsorted_against_skewed_distro() {
         let t = TDigest::new(100);
-        let mut values: Vec<_> = (1..=600_000).map(f64::from).map(|v| v as f64).collect();
+        let mut values: Vec<_> = (1..=600_000).map(f64::from).collect();
         values.resize(1_000_000, 1_000_000_f64);
 
         let t = t.merge_unsorted_f64(values);
@@ -728,7 +729,7 @@ mod tests {
 
         for _ in 1..=100 {
             let t = TDigest::new(100);
-            let values: Vec<_> = (1..=1_000).map(f64::from).map(|v| v as f64).collect();
+            let values: Vec<_> = (1..=1_000).map(f64::from).collect();
             let t = t.merge_unsorted_f64(values);
             digests.push(t)
         }

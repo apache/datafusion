@@ -131,7 +131,7 @@ impl PartialEq for ScalarValue {
             (Float32(v1), Float32(v2)) => {
                 // Handle NaN == NaN as true manually like in OrderedFloat
                 match (v1, v2) {
-                    (Some(f1), Some(f2)) if f1.is_nan() && f2.is_nan() => true,
+                    (Some(f1), Some(f2)) => f1.total_cmp(f2).is_eq(),
                     _ => v1.eq(v2),
                 }
             }
@@ -139,7 +139,7 @@ impl PartialEq for ScalarValue {
             (Float64(v1), Float64(v2)) => {
                 // Handle NaN == NaN as true manually like in OrderedFloat
                 match (v1, v2) {
-                    (Some(f1), Some(f2)) if f1.is_nan() && f2.is_nan() => true,
+                    (Some(f1), Some(f2)) => f1.total_cmp(f2).is_eq(),
                     _ => v1.eq(v2),
                 }
             }
