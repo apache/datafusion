@@ -19,7 +19,6 @@ mod adapter;
 mod kernels;
 mod kernels_arrow;
 
-use std::cmp::Ordering;
 use std::convert::TryInto;
 use std::{any::Any, sync::Arc};
 
@@ -75,8 +74,8 @@ use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::{ExprBoundaries, PhysicalExpr, PhysicalExprStats};
-use datafusion_common::{ColumnStatistics, ScalarValue};
+use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
+use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::binary_operator_data_type;
 use datafusion_expr::{ColumnarValue, Operator};
@@ -643,14 +642,6 @@ impl PhysicalExpr for BinaryExpr {
             .map(|a| ColumnarValue::Array(a))
     }
 
-    fn expr_stats(&self) -> Arc<dyn PhysicalExprStats> {
-        Arc::new(BinaryExprStats {
-            op: self.op,
-            left: Arc::clone(self.left()),
-            right: Arc::clone(self.right()),
-        })
-    }
-
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![self.left.clone(), self.right.clone()]
     }
@@ -665,6 +656,39 @@ impl PhysicalExpr for BinaryExpr {
             children[1].clone(),
         )))
     }
+
+    /// Return the boundaries of this binary expression's result.
+    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
+        match &self.op {
+            Operator::Eq
+            | Operator::Gt
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::GtEq => {
+                // We currently only support comparison when we know at least one of the sides are
+                // a known value (a scalar). This includes predicates like a > 20 or 5 > a.
+                let left_boundaries = self.left.boundaries(context)?;
+                let right_boundaries = self.right.boundaries(context)?;
+                let (op, left, right) = match right_boundaries.reduce() {
+                    Some(right_value) => {
+                        // We know the right side is a scalar, so we can use the operator as is
+                        (self.op, self.left.clone(), right_value)
+                    }
+                    None => {
+                        // If not, we have to swap the operator and left/right (since this means
+                        // left has to be a scalar).
+                        (
+                            self.op.swap()?,
+                            self.right.clone(),
+                            left_boundaries.reduce()?,
+                        )
+                    }
+                };
+                analyze_expr_scalar_comparison(&op, context, &left, right)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl PartialEq<dyn Any> for BinaryExpr {
@@ -676,76 +700,35 @@ impl PartialEq<dyn Any> for BinaryExpr {
     }
 }
 
-struct BinaryExprStats {
-    op: Operator,
-    left: Arc<dyn PhysicalExpr>,
-    right: Arc<dyn PhysicalExpr>,
-}
-
-impl PhysicalExprStats for BinaryExprStats {
-    fn boundaries(&self, columns: &[ColumnStatistics]) -> Option<ExprBoundaries> {
-        match &self.op {
-            Operator::Eq
-            | Operator::Gt
-            | Operator::Lt
-            | Operator::LtEq
-            | Operator::GtEq => {
-                let l_bounds = self.left.expr_stats().boundaries(columns)?;
-                let r_bounds = self.right.expr_stats().boundaries(columns)?;
-                match (l_bounds.reduce(), r_bounds.reduce()) {
-                    (_, Some(r)) => compare_left_boundaries(&self.op, &l_bounds, r),
-                    (Some(scalar_value), _) => {
-                        compare_left_boundaries(&self.op.swap()?, &r_bounds, scalar_value)
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    }
-}
-
-// Compute the bounds of a comparison predicate (>, >=, <, <=) between
-// two expressions (one of which must have a single value). Returns new
-// expression boundary that represents the result of this comparison.
-fn compare_left_boundaries(
+// Analyze the comparison between an expression (on the left) and a scalar value
+// (on the right). The new boundaries will indicate whether it is always true, always
+// false, or unknown (with a probablistic selectivity value attached).
+fn analyze_expr_scalar_comparison(
     op: &Operator,
-    lhs_expr_bounds: &ExprBoundaries,
-    rhs_scalar_value: ScalarValue,
+    context: &AnalysisContext,
+    left: &Arc<dyn PhysicalExpr>,
+    right: ScalarValue,
 ) -> Option<ExprBoundaries> {
-    let variadic_min = lhs_expr_bounds.min_value.clone();
-    let variadic_max = lhs_expr_bounds.max_value.clone();
+    let left_bounds = left.boundaries(context)?;
+    let left_min = left_bounds.min_value;
+    let left_max = left_bounds.max_value;
 
     // Direct selectivity is applicable when we can determine that this comparison will
     // always be true or false (e.g. `x > 10` where the `x`'s min value is 11 or `a < 5`
-    // where the `a`'s max value is 4) (with the assuption that min/max are correct).
-    assert!(!matches!(
-        variadic_min.partial_cmp(&variadic_max),
-        Some(Ordering::Greater)
-    ));
+    // where the `a`'s max value is 4).
     let (always_selects, never_selects) = match op {
-        Operator::Lt => (
-            rhs_scalar_value > variadic_max,
-            rhs_scalar_value <= variadic_min,
-        ),
-        Operator::LtEq => (
-            rhs_scalar_value >= variadic_max,
-            rhs_scalar_value < variadic_min,
-        ),
-        Operator::Gt => (
-            rhs_scalar_value < variadic_min,
-            rhs_scalar_value >= variadic_max,
-        ),
-        Operator::GtEq => (
-            rhs_scalar_value <= variadic_min,
-            rhs_scalar_value > variadic_max,
-        ),
+        Operator::Lt => (right > left_max, right <= left_min),
+        Operator::LtEq => (right >= left_max, right < left_min),
+        Operator::Gt => (right < left_min, right >= left_max),
+        Operator::GtEq => (right <= left_min, right > left_max),
         Operator::Eq => (
             // Since min/max can be artificial (e.g. the min or max value of a column
-            // might be just a guess), we can't assume variadic_min == literal_value
-            // would always select.
+            // might be under/over the real value), we can't assume if the right equals
+            // to any left.min / left.max values it is always going to be selected. But
+            // we can assume that if the range(left) doesn't overlap with right, it is
+            // never going to be selected.
             false,
-            rhs_scalar_value < variadic_min || rhs_scalar_value > variadic_max,
+            right < left_min || right > left_max,
         ),
         _ => unreachable!(),
     };
@@ -763,12 +746,12 @@ fn compare_left_boundaries(
             // assumes a uniform distribution by default.
 
             // Our [min, max] is inclusive, so we need to add 1 to the difference.
-            let total_range = variadic_max.distance(&variadic_min)? + 1;
+            let total_range = left_max.distance(&left_min)? + 1;
             let overlap_between_boundaries = match op {
-                Operator::Lt => rhs_scalar_value.distance(&variadic_min)?,
-                Operator::Gt => variadic_max.distance(&rhs_scalar_value)?,
-                Operator::LtEq => rhs_scalar_value.distance(&variadic_min)? + 1,
-                Operator::GtEq => variadic_max.distance(&rhs_scalar_value)? + 1,
+                Operator::Lt => right.distance(&left_min)?,
+                Operator::Gt => left_max.distance(&right)?,
+                Operator::LtEq => right.distance(&left_min)? + 1,
+                Operator::GtEq => left_max.distance(&right)? + 1,
                 Operator::Eq => 1,
                 _ => unreachable!(),
             };
@@ -779,49 +762,19 @@ fn compare_left_boundaries(
 
     // The selectivity can't be be greater than 1.0.
     assert!(selectivity <= 1.0);
-    let distinct_count = lhs_expr_bounds
-        .distinct_count
-        .map(|distinct_count| (distinct_count as f64 * selectivity).round() as usize);
 
-    // Now, we know what is the upper/lower bound is for this column after the
-    // predicate is applied.
-    let (new_min, new_max) = match op {
-        // TODO: for lt/gt, we technically should shrink the possibility space
-        // by one since a < 5 means that 5 is not a possible value for `a`. However,
-        // it is currently tricky to do so (e.g. for floats, we can get away with 4.999
-        // so we need a smarter logic to find out what is the closest value that is
-        // different from the scalar_value).
-        Operator::Lt | Operator::LtEq => {
-            // We only want to update the upper bound when we know it will help us (e.g.
-            // it is actually smaller than what we have right now) and it is a valid
-            // value (e.g. [0, 100] < -100 would update the boundaries to [0, -100] if
-            // there weren't the selectivity check).
-            if rhs_scalar_value < variadic_max && selectivity > 0.0 {
-                (variadic_min, rhs_scalar_value)
-            } else {
-                (variadic_min, variadic_max)
-            }
-        }
-        Operator::Gt | Operator::GtEq => {
-            // Same as above, but this time we want to limit the lower bound.
-            if rhs_scalar_value > variadic_min && selectivity > 0.0 {
-                (rhs_scalar_value, variadic_max)
-            } else {
-                (variadic_min, variadic_max)
-            }
-        }
-        // For equality, we don't have the range problem so even if the selectivity
-        // is 0.0, we can still update the boundaries.
-        Operator::Eq => (rhs_scalar_value.clone(), rhs_scalar_value),
-        _ => unreachable!(),
+    let (pred_min, pred_max, pred_distinct) = match (always_selects, never_selects) {
+        (false, true) => (false, false, 1),
+        (true, false) => (true, true, 1),
+        _ => (false, true, 2),
     };
 
-    Some(ExprBoundaries {
-        min_value: new_min,
-        max_value: new_max,
-        distinct_count,
-        selectivity: Some(selectivity),
-    })
+    Some(ExprBoundaries::new_with_selectivity(
+        ScalarValue::Boolean(Some(pred_min)),
+        ScalarValue::Boolean(Some(pred_max)),
+        Some(pred_distinct),
+        Some(selectivity),
+    ))
 }
 
 /// unwrap underlying (non dictionary) value, if any, to pass to a scalar kernel
@@ -1119,7 +1072,7 @@ mod tests {
     use crate::expressions::try_cast;
     use crate::expressions::{col, lit};
     use arrow::datatypes::{ArrowNumericType, Field, Int32Type, SchemaRef};
-    use datafusion_common::Result;
+    use datafusion_common::{ColumnStatistics, Result, Statistics};
     use datafusion_expr::type_coercion::binary::coerce_types;
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
@@ -2917,11 +2870,33 @@ mod tests {
         Ok(())
     }
 
+    /// Return a pair of (schema, statistics) for a table with a single column (called "a") with
+    /// the same type as the `min_value`/`max_value`.
+    fn get_test_table_stats(
+        min_value: ScalarValue,
+        max_value: ScalarValue,
+    ) -> (Schema, Statistics) {
+        assert!(min_value.get_datatype() == max_value.get_datatype());
+        let schema = Schema::new(vec![Field::new("a", min_value.get_datatype(), false)]);
+        let columns = vec![ColumnStatistics {
+            min_value: Some(min_value),
+            max_value: Some(max_value),
+            null_count: None,
+            distinct_count: None,
+        }];
+        let statistics = Statistics {
+            column_statistics: Some(columns),
+            ..Default::default()
+        };
+        (schema, statistics)
+    }
+
     #[test]
-    fn test_comparison_result_estimate_generic() -> Result<()> {
-        let col_min = 1;
-        let col_max = 100;
-        let col_distinct = None;
+    fn test_analyze_expr_scalar_comparison() -> Result<()> {
+        // A table where the column 'a' has a min of 1, a max of 100.
+        let (schema, statistics) =
+            get_test_table_stats(ScalarValue::from(1i64), ScalarValue::from(100i64));
+
         let cases = [
             // (operator, rhs), (expected selectivity, expected min, expected max)
             // -------------------------------------------------------------------
@@ -2993,88 +2968,103 @@ mod tests {
             ((Operator::GtEq, 200), (0.0, 1, 100)),
         ];
 
-        for ((operator, rhs), (exp_selectivity, exp_min, exp_max)) in cases {
-            let lhs = ExprBoundaries::new(
-                ScalarValue::Int64(Some(col_max)),
-                ScalarValue::Int64(Some(col_min)),
-                col_distinct,
-            );
-            let rhs_as_scalar = ScalarValue::Int64(Some(rhs));
+        for ((operator, rhs), (exp_selectivity, _, _)) in cases {
+            let context = AnalysisContext::from_statistics(&schema, statistics.clone());
+            let left = col("a", &schema).unwrap();
+            let right = ScalarValue::Int64(Some(rhs));
             let boundaries =
-                compare_left_boundaries(&operator, &lhs, rhs_as_scalar.clone())
+                analyze_expr_scalar_comparison(&operator, &context, &left, right)
                     .expect("this case should not return None");
+
             assert_eq!(
                 boundaries
                     .selectivity
                     .expect("compare_left_boundaries must produce a selectivity value"),
                 exp_selectivity
             );
-            assert_eq!(boundaries.min_value, ScalarValue::Int64(Some(exp_min)));
-            assert_eq!(boundaries.max_value, ScalarValue::Int64(Some(exp_max)));
+
+            if exp_selectivity == 1.0 {
+                // When the expected selectivity is 1.0, the resulting expression
+                // should always be true.
+                assert_eq!(boundaries.reduce(), Some(ScalarValue::Boolean(Some(true))));
+            } else if exp_selectivity == 0.0 {
+                // When the expected selectivity is 0.0, the resulting expression
+                // should always be false.
+                assert_eq!(boundaries.reduce(), Some(ScalarValue::Boolean(Some(false))));
+            } else {
+                // Otherwise, it should be [false, true] (since we don't know anything for sure)
+                assert_eq!(boundaries.min_value, ScalarValue::Boolean(Some(false)));
+                assert_eq!(boundaries.max_value, ScalarValue::Boolean(Some(true)));
+            }
         }
         Ok(())
     }
 
     #[test]
     fn test_comparison_result_estimate_different_type() -> Result<()> {
-        let col_min = 1.3;
-        let col_max = 50.7;
+        // A table where the column 'a' has a min of 1.3, a max of 50.7.
+        let (schema, statistics) =
+            get_test_table_stats(ScalarValue::from(1.3), ScalarValue::from(50.7));
         let distance = 50.0; // rounded distance is (max - min) + 1
-        let col_distinct = Some(25);
 
         // Since the generic version already covers all the paths, we can just
         // test a small subset of the cases.
         let cases = [
-            // (operator, rhs), (expected selectivity, expected min, expected max, expected distinct)
-            // --------------------------------------------------------------------------------------
+            // (operator, rhs), (expected selectivity, expected min, expected max)
+            // -------------------------------------------------------------------
             //
             // Table:
             //   - a (min = 1.3, max = 50.7, distinct_count = 25)
             //
             // Never selects (out of range)
-            ((Operator::Eq, 1.1), (0.0, 1.1, 1.1, 0)),
-            ((Operator::Eq, 50.75), (0.0, 50.75, 50.75, 0)),
-            ((Operator::Lt, 1.3), (0.0, 1.3, 50.7, 0)),
-            ((Operator::LtEq, 1.29), (0.0, 1.3, 50.7, 0)),
-            ((Operator::Gt, 50.7), (0.0, 1.3, 50.7, 0)),
-            ((Operator::GtEq, 50.75), (0.0, 1.3, 50.7, 0)),
+            ((Operator::Eq, 1.1), (0.0, 1.1, 1.1)),
+            ((Operator::Eq, 50.75), (0.0, 50.75, 50.75)),
+            ((Operator::Lt, 1.3), (0.0, 1.3, 50.7)),
+            ((Operator::LtEq, 1.29), (0.0, 1.3, 50.7)),
+            ((Operator::Gt, 50.7), (0.0, 1.3, 50.7)),
+            ((Operator::GtEq, 50.75), (0.0, 1.3, 50.7)),
             // Always selects
-            ((Operator::Lt, 50.75), (1.0, 1.3, 50.7, 25)),
-            ((Operator::LtEq, 50.75), (1.0, 1.3, 50.7, 25)),
-            ((Operator::Gt, 1.29), (1.0, 1.3, 50.7, 25)),
-            ((Operator::GtEq, 1.3), (1.0, 1.3, 50.7, 25)),
+            ((Operator::Lt, 50.75), (1.0, 1.3, 50.7)),
+            ((Operator::LtEq, 50.75), (1.0, 1.3, 50.7)),
+            ((Operator::Gt, 1.29), (1.0, 1.3, 50.7)),
+            ((Operator::GtEq, 1.3), (1.0, 1.3, 50.7)),
             // Partial selection (the x in 'x/distance' is basically the rounded version of
             // the bound distance, as per the implementation).
-            ((Operator::Eq, 27.8), (1.0 / distance, 27.8, 27.8, 1)),
-            ((Operator::Lt, 5.2), (4.0 / distance, 1.3, 5.2, 2)), // On a uniform distribution, this is {2.6, 3.9}
-            ((Operator::LtEq, 1.3), (1.0 / distance, 1.3, 1.3, 1)),
-            ((Operator::Gt, 45.5), (5.0 / distance, 45.5, 50.7, 3)), // On a uniform distribution, this is {46.8, 48.1, 49.4}
-            ((Operator::GtEq, 50.7), (1.0 / distance, 50.7, 50.7, 1)),
+            ((Operator::Eq, 27.8), (1.0 / distance, 27.8, 27.8)),
+            ((Operator::Lt, 5.2), (4.0 / distance, 1.3, 5.2)), // On a uniform distribution, this is {2.6, 3.9}
+            ((Operator::LtEq, 1.3), (1.0 / distance, 1.3, 1.3)),
+            ((Operator::Gt, 45.5), (5.0 / distance, 45.5, 50.7)), // On a uniform distribution, this is {46.8, 48.1, 49.4}
+            ((Operator::GtEq, 50.7), (1.0 / distance, 50.7, 50.7)),
         ];
 
-        for ((operator, rhs), (exp_selectivity, exp_min, exp_max, exp_dist)) in cases {
-            let lhs = ExprBoundaries::new(
-                ScalarValue::Float64(Some(col_max)),
-                ScalarValue::Float64(Some(col_min)),
-                col_distinct,
-            );
-            let rhs_as_scalar = ScalarValue::Float64(Some(rhs));
-            let boundaries = compare_left_boundaries(&operator, &lhs, rhs_as_scalar)
-                .expect("this case should not return None");
+        for ((operator, rhs), (exp_selectivity, _, _)) in cases {
+            let context = AnalysisContext::from_statistics(&schema, statistics.clone());
+            let left = col("a", &schema).unwrap();
+            let right = ScalarValue::from(rhs);
+            let boundaries =
+                analyze_expr_scalar_comparison(&operator, &context, &left, right)
+                    .expect("this case should not return None");
+
             assert_eq!(
                 boundaries
                     .selectivity
                     .expect("compare_left_boundaries must produce a selectivity value"),
                 exp_selectivity
             );
-            assert_eq!(boundaries.min_value, ScalarValue::Float64(Some(exp_min)));
-            assert_eq!(boundaries.max_value, ScalarValue::Float64(Some(exp_max)));
-            assert_eq!(
-                boundaries
-                    .distinct_count
-                    .expect("this test expects distinct_count != NULL"),
-                exp_dist
-            );
+
+            if exp_selectivity == 1.0 {
+                // When the expected selectivity is 1.0, the resulting expression
+                // should always be true.
+                assert_eq!(boundaries.reduce(), Some(ScalarValue::from(true)));
+            } else if exp_selectivity == 0.0 {
+                // When the expected selectivity is 0.0, the resulting expression
+                // should always be false.
+                assert_eq!(boundaries.reduce(), Some(ScalarValue::from(false)));
+            } else {
+                // Otherwise, it should be [false, true] (since we don't know anything for sure)
+                assert_eq!(boundaries.min_value, ScalarValue::from(false));
+                assert_eq!(boundaries.max_value, ScalarValue::from(true));
+            }
         }
         Ok(())
     }
@@ -3082,30 +3072,23 @@ mod tests {
     #[test]
     fn test_binary_expression_boundaries() -> Result<()> {
         // A table where the column 'a' has a min of 1, a max of 100.
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let columns = [ColumnStatistics {
-            min_value: Some(ScalarValue::Int32(Some(1))),
-            max_value: Some(ScalarValue::Int32(Some(100))),
-            null_count: Some(0),
-            distinct_count: Some(100),
-        }];
+        let (schema, statistics) =
+            get_test_table_stats(ScalarValue::from(1), ScalarValue::from(100));
 
         // expression: "a >= 25"
-        let lt = binary_simple(
-            col("a", &schema)?,
+        let a = col("a", &schema).unwrap();
+        let gt = binary_simple(
+            a.clone(),
             Operator::GtEq,
-            lit(ScalarValue::Int32(Some(25))),
+            lit(ScalarValue::from(25)),
             &schema,
         );
 
-        let stats = lt.expr_stats();
-        let boundaries = stats
-            .boundaries(&columns)
+        let context = AnalysisContext::from_statistics(&schema, statistics);
+        let predicate_boundaries = gt
+            .boundaries(&context)
             .expect("boundaries should not be None");
-        assert_eq!(boundaries.min_value, ScalarValue::Int32(Some(25)));
-        assert_eq!(boundaries.max_value, ScalarValue::Int32(Some(100)));
-        assert_eq!(boundaries.distinct_count, Some(76));
-        assert_eq!(boundaries.selectivity, Some(0.76));
+        assert_eq!(predicate_boundaries.selectivity, Some(0.76));
 
         Ok(())
     }
@@ -3117,30 +3100,23 @@ mod tests {
         // doing the computation).
 
         // A table where the column 'a' has a min of 1, a max of 100.
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let columns = [ColumnStatistics {
-            min_value: Some(ScalarValue::Int32(Some(1))),
-            max_value: Some(ScalarValue::Int32(Some(100))),
-            null_count: Some(0),
-            distinct_count: Some(100),
-        }];
+        let (schema, statistics) =
+            get_test_table_stats(ScalarValue::from(1), ScalarValue::from(100));
 
         // expression: "50 >= a"
-        let lt = binary_simple(
-            lit(ScalarValue::Int32(Some(50))),
+        let a = col("a", &schema).unwrap();
+        let gt = binary_simple(
+            lit(ScalarValue::from(50)),
             Operator::GtEq,
-            col("a", &schema)?,
+            a.clone(),
             &schema,
         );
 
-        let stats = lt.expr_stats();
-        let boundaries = stats
-            .boundaries(&columns)
+        let context = AnalysisContext::from_statistics(&schema, statistics);
+        let predicate_boundaries = gt
+            .boundaries(&context)
             .expect("boundaries should not be None");
-        assert_eq!(boundaries.min_value, ScalarValue::Int32(Some(1)));
-        assert_eq!(boundaries.max_value, ScalarValue::Int32(Some(50)));
-        assert_eq!(boundaries.distinct_count, Some(50));
-        assert_eq!(boundaries.selectivity, Some(0.50));
+        assert_eq!(predicate_boundaries.selectivity, Some(0.5));
 
         Ok(())
     }

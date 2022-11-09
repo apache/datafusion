@@ -26,9 +26,9 @@ use arrow::{
 };
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::{ExprBoundaries, PhysicalExpr, PhysicalExprStats};
+use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
+use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_common::{ColumnStatistics, Result};
 use datafusion_expr::{ColumnarValue, Expr};
 
 /// Represents a literal value
@@ -73,12 +73,6 @@ impl PhysicalExpr for Literal {
         Ok(ColumnarValue::Scalar(self.value.clone()))
     }
 
-    fn expr_stats(&self) -> Arc<dyn PhysicalExprStats> {
-        Arc::new(LiteralExprStats {
-            value: self.value.clone(),
-        })
-    }
-
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![]
     }
@@ -89,6 +83,17 @@ impl PhysicalExpr for Literal {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
     }
+
+    #[allow(unused_variables)]
+    /// Return the boundaries of this literal expression (which is the same as
+    /// the value it represents).
+    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
+        Some(ExprBoundaries::new(
+            self.value.clone(),
+            self.value.clone(),
+            Some(1),
+        ))
+    }
 }
 
 impl PartialEq<dyn Any> for Literal {
@@ -97,23 +102,6 @@ impl PartialEq<dyn Any> for Literal {
             .downcast_ref::<Self>()
             .map(|x| self == x)
             .unwrap_or(false)
-    }
-}
-
-struct LiteralExprStats {
-    value: ScalarValue,
-}
-
-impl PhysicalExprStats for LiteralExprStats {
-    #[allow(unused_variables)]
-    /// A literal's boundaries are the same as its value's boundaries (since it is a
-    /// scalar, both min/max are the same).
-    fn boundaries(&self, columns: &[ColumnStatistics]) -> Option<ExprBoundaries> {
-        Some(ExprBoundaries::new(
-            self.value.clone(),
-            self.value.clone(),
-            Some(1),
-        ))
     }
 }
 
@@ -157,10 +145,12 @@ mod tests {
     }
 
     #[test]
-    fn literal_stats() -> Result<()> {
+    fn literal_bounds_analysis() -> Result<()> {
+        let schema = Schema::new(vec![]);
+        let context = AnalysisContext::new(&schema, vec![]);
+
         let literal_expr = lit(42i32);
-        let stats = literal_expr.expr_stats();
-        let boundaries = stats.boundaries(&[]).unwrap();
+        let boundaries = literal_expr.boundaries(&context).unwrap();
         assert_eq!(boundaries.min_value, ScalarValue::Int32(Some(42)));
         assert_eq!(boundaries.max_value, ScalarValue::Int32(Some(42)));
         assert_eq!(boundaries.distinct_count, Some(1));
