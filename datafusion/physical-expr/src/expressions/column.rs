@@ -26,8 +26,8 @@ use arrow::{
 };
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::{ExprBoundaries, PhysicalExpr, PhysicalExprStats};
-use datafusion_common::{ColumnStatistics, DataFusionError, Result};
+use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// Represents the column at a given index in a RecordBatch
@@ -92,11 +92,6 @@ impl PhysicalExpr for Column {
         Ok(ColumnarValue::Array(batch.column(self.index).clone()))
     }
 
-    /// Return the statistics for this expression
-    fn expr_stats(&self) -> Arc<dyn PhysicalExprStats> {
-        Arc::new(ColumnExprStats { index: self.index })
-    }
-
     fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         vec![]
     }
@@ -106,6 +101,12 @@ impl PhysicalExpr for Column {
         _children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
+    }
+
+    /// Return the boundaries of this column, if known.
+    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
+        assert!(self.index < context.column_boundaries.len());
+        context.column_boundaries[self.index].clone()
     }
 }
 
@@ -118,7 +119,19 @@ impl PartialEq<dyn Any> for Column {
     }
 }
 
-/// Represents the unknown column without index
+impl Column {
+    fn bounds_check(&self, input_schema: &Schema) -> Result<()> {
+        if self.index < input_schema.fields.len() {
+            Ok(())
+        } else {
+            Err(DataFusionError::Internal(format!(
+                "PhysicalExpr Column references column '{}' at index {} (zero-based) but input schema only has {} columns: {:?}",
+                self.name,
+                self.index, input_schema.fields.len(), input_schema.fields().iter().map(|f| f.name().clone()).collect::<Vec<String>>())))
+        }
+    }
+}
+
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct UnKnownColumn {
     name: String,
@@ -188,36 +201,6 @@ impl PartialEq<dyn Any> for UnKnownColumn {
     }
 }
 
-#[derive(Debug, Clone)]
-struct ColumnExprStats {
-    index: usize,
-}
-
-impl PhysicalExprStats for ColumnExprStats {
-    /// Retrieve the boundaries of this column from the given column-level statistics.
-    fn boundaries(&self, columns: &[ColumnStatistics]) -> Option<ExprBoundaries> {
-        let column = &columns[self.index];
-        Some(ExprBoundaries::new(
-            column.max_value.as_ref()?.clone(),
-            column.min_value.as_ref()?.clone(),
-            column.distinct_count,
-        ))
-    }
-}
-
-impl Column {
-    fn bounds_check(&self, input_schema: &Schema) -> Result<()> {
-        if self.index < input_schema.fields.len() {
-            Ok(())
-        } else {
-            Err(DataFusionError::Internal(format!(
-                "PhysicalExpr Column references column '{}' at index {} (zero-based) but input schema only has {} columns: {:?}",
-                self.name,
-                self.index, input_schema.fields.len(), input_schema.fields().iter().map(|f| f.name().clone()).collect::<Vec<String>>())))
-        }
-    }
-}
-
 /// Create a column expression
 pub fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(Column::new_with_schema(name, schema)?))
@@ -226,11 +209,11 @@ pub fn col(name: &str, schema: &Schema) -> Result<Arc<dyn PhysicalExpr>> {
 #[cfg(test)]
 mod test {
     use crate::expressions::Column;
-    use crate::PhysicalExpr;
+    use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use datafusion_common::{ColumnStatistics, Result, ScalarValue};
+    use datafusion_common::{ColumnStatistics, Result, ScalarValue, Statistics};
     use std::sync::Arc;
 
     #[test]
@@ -269,41 +252,73 @@ mod test {
         Ok(())
     }
 
-    #[test]
-    fn stats() -> Result<()> {
-        let columns = [
+    /// Returns a pair of (schema, statistics) for a table of:
+    /// - a => Stats(range=[1, 100], distinct=15)
+    /// - b => unknown
+    /// - c => Stats(range=[1, 100], distinct=unknown)
+    fn get_test_table_stats() -> (Schema, Statistics) {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]);
+
+        let columns = vec![
             ColumnStatistics {
                 min_value: Some(ScalarValue::Int32(Some(1))),
                 max_value: Some(ScalarValue::Int32(Some(100))),
                 distinct_count: Some(15),
                 ..Default::default()
             },
+            ColumnStatistics::default(),
             ColumnStatistics {
                 min_value: Some(ScalarValue::Int32(Some(1))),
-                max_value: Some(ScalarValue::Int32(Some(100))),
-                distinct_count: Some(75),
-                ..Default::default()
-            },
-            ColumnStatistics {
-                min_value: Some(ScalarValue::Int32(Some(1))),
-                max_value: Some(ScalarValue::Int32(Some(100))),
+                max_value: Some(ScalarValue::Int32(Some(75))),
                 distinct_count: None,
                 ..Default::default()
             },
         ];
 
+        let statistics = Statistics {
+            column_statistics: Some(columns),
+            ..Default::default()
+        };
+
+        (schema, statistics)
+    }
+
+    #[test]
+    fn stats_bounds_analysis() -> Result<()> {
+        let (schema, statistics) = get_test_table_stats();
+        let context = AnalysisContext::from_statistics(&schema, statistics);
+
         let cases = [
-            // (name, index, expected distinct count)
-            ("col0", 0, Some(15)),
-            ("col1", 1, Some(75)),
-            ("col2", 2, None),
+            // (name, index, expected boundaries)
+            (
+                "a",
+                0,
+                Some(ExprBoundaries::new(
+                    ScalarValue::Int32(Some(1)),
+                    ScalarValue::Int32(Some(100)),
+                    Some(15),
+                )),
+            ),
+            ("b", 1, None),
+            (
+                "c",
+                2,
+                Some(ExprBoundaries::new(
+                    ScalarValue::Int32(Some(1)),
+                    ScalarValue::Int32(Some(75)),
+                    None,
+                )),
+            ),
         ];
 
         for (name, index, expected) in cases {
             let col = Column::new(name, index);
-            let stats = col.expr_stats();
-            let boundaries = stats.boundaries(&columns).unwrap();
-            assert_eq!(boundaries.distinct_count, expected);
+            let boundaries = col.boundaries(&context);
+            assert_eq!(boundaries, expected);
         }
 
         Ok(())
