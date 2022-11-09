@@ -2396,7 +2396,7 @@ impl TryFrom<ScalarValue> for i32 {
     }
 }
 
-// special implementation for i64 because of Date64, Time64 and Timestamp
+// special implementation for i64 because of Date64, Time64, Time64 and Timestamp
 impl TryFrom<ScalarValue> for i64 {
     type Error = DataFusionError;
 
