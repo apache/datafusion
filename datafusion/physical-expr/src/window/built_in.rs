@@ -17,7 +17,7 @@
 
 //! Physical exec for built-in window function expressions.
 
-use super::window_frame_state::{WindowFrameState, WindowFrameStateImpl};
+use super::window_frame_state::WindowFrameState;
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};

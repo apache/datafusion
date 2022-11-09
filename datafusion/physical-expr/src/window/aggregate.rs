@@ -33,7 +33,7 @@ use datafusion_expr::WindowFrame;
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use crate::{window::WindowExpr, AggregateExpr};
 
-use super::window_frame_state::{WindowFrameState, WindowFrameStateImpl};
+use super::window_frame_state::WindowFrameState;
 
 /// A window expr that takes the form of an aggregate function
 #[derive(Debug)]

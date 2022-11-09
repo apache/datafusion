@@ -28,28 +28,18 @@ use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-pub trait WindowFrameStateImpl: Debug {
-    /// We use start and end bounds to calculate current row's starting and ending range.
-    fn calculate_range(
-        &mut self,
-        window_frame: &Option<Arc<WindowFrame>>,
-        range_columns: &[ArrayRef],
-        sort_options: &[SortOptions],
-        length: usize,
-        idx: usize,
-    ) -> Result<(usize, usize)>;
-}
-
+/// This object stores the window frame state for use in incremental calculations.
 #[derive(Debug)]
 pub enum WindowFrameState {
     Rows(WindowFrameStateRows),
     Range(WindowFrameStateRange),
     Groups(WindowFrameStateGroups),
-    NoFrame(WindowFrameStateNoFrame),
+    Default,
 }
 
-impl WindowFrameStateImpl for WindowFrameState {
-    fn calculate_range(
+impl WindowFrameState {
+    /// This function calculates beginning/ending indices for the frame of the current row.
+    pub fn calculate_range(
         &mut self,
         window_frame: &Option<Arc<WindowFrame>>,
         range_columns: &[ArrayRef],
@@ -79,19 +69,12 @@ impl WindowFrameStateImpl for WindowFrameState {
                 length,
                 idx,
             ),
-            WindowFrameState::NoFrame(ref mut frame) => frame.calculate_range(
-                window_frame,
-                range_columns,
-                sort_options,
-                length,
-                idx,
-            ),
+            WindowFrameState::Default => Ok((0, length)),
         }
     }
-}
 
-impl WindowFrameState {
-    pub fn new(window_frame: &Option<Arc<WindowFrame>>) -> WindowFrameState {
+    /// Create a new default state for the given window frame.
+    pub fn new(window_frame: &Option<Arc<WindowFrame>>) -> Self {
         if let Some(window_frame) = window_frame {
             match window_frame.units {
                 WindowFrameUnits::Rows => {
@@ -105,31 +88,17 @@ impl WindowFrameState {
                 }
             }
         } else {
-            WindowFrameState::NoFrame(WindowFrameStateNoFrame::default())
+            WindowFrameState::Default
         }
     }
 }
 
-#[derive(Debug, Default)]
-pub struct WindowFrameStateNoFrame {}
-
-impl WindowFrameStateImpl for WindowFrameStateNoFrame {
-    fn calculate_range(
-        &mut self,
-        _window_frame: &Option<Arc<WindowFrame>>,
-        _range_columns: &[ArrayRef],
-        _sort_options: &[SortOptions],
-        length: usize,
-        _idx: usize,
-    ) -> Result<(usize, usize)> {
-        Ok((0, length))
-    }
-}
-
+/// This empty struct reflects the stateless nature of row-based window frames.
 #[derive(Debug, Default)]
 pub struct WindowFrameStateRows {}
 
-impl WindowFrameStateImpl for WindowFrameStateRows {
+impl WindowFrameStateRows {
+    /// This function calculates beginning/ending indices for the frame of the current row.
     fn calculate_range(
         &mut self,
         window_frame: &Option<Arc<WindowFrame>>,
@@ -203,11 +172,13 @@ impl WindowFrameStateImpl for WindowFrameStateRows {
 }
 
 /// This structure encapsulates all the state information we require as we
-/// scan ranges of data while processing window frames.
+/// scan ranges of data while processing window frames. Currently we calculate
+/// things from scratch every time, but we will make this incremental in the future.
 #[derive(Debug, Default)]
 pub struct WindowFrameStateRange {}
 
-impl WindowFrameStateImpl for WindowFrameStateRange {
+impl WindowFrameStateRange {
+    /// This function calculates beginning/ending indices for the frame of the current row.
     fn calculate_range(
         &mut self,
         window_frame: &Option<Arc<WindowFrame>>,
@@ -290,9 +261,10 @@ impl WindowFrameStateImpl for WindowFrameStateRange {
             Ok((0, length))
         }
     }
-}
 
-impl WindowFrameStateRange {
+    /// This function does the heavy lifting when finding range boundaries. It is meant to be
+    /// called twice, in succession, to get window frame start and end indices (with `BISECT_SIDE`
+    /// supplied as false and true, respectively).
     fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
         &mut self,
         range_columns: &[ArrayRef],
@@ -338,31 +310,30 @@ impl WindowFrameStateRange {
     }
 }
 
-/// In GROUPS mode, rows with duplicate sorting values are grouped together.
-/// Therefore, there must be an ORDER BY clause in the window definition to use GROUPS mode.
-/// The syntax is as follows:
-///     GROUPS frame_start [ frame_exclusion ]
-///     GROUPS BETWEEN frame_start AND frame_end [ frame_exclusion ]
-/// The optional frame_exclusion specifier is not yet supported.
-/// The frame_start and frame_end parameters allow us to specify which rows the window
-/// frame starts and ends with. They accept the following values:
-///    - UNBOUNDED PRECEDING: Start with the first row of the partition. Possible only in frame_start.
-///    - offset PRECEDING: When used in frame_start, it refers to the first row of the group
-///                        that comes "offset" groups before the current group (i.e. the group
-///                        containing the current row). When used in frame_end, it refers to the
-///                        last row of the group that comes "offset" groups before the current group.
-///    - CURRENT ROW: When used in frame_start, it refers to the first row of the group containing
-///                   the current row. When used in frame_end, it refers to the last row of the group
-///                   containing the current row.
-///    - offset FOLLOWING: When used in frame_start, it refers to the first row of the group
-///                        that comes "offset" groups after the current group (i.e. the group
-///                        containing the current row). When used in frame_end, it refers to the
-///                        last row of the group that comes "offset" groups after the current group.
-///    - UNBOUNDED FOLLOWING: End with the last row of the partition. Possible only in frame_end.
+// In GROUPS mode, rows with duplicate sorting values are grouped together.
+// Therefore, there must be an ORDER BY clause in the window definition to use GROUPS mode.
+// The syntax is as follows:
+//     GROUPS frame_start [ frame_exclusion ]
+//     GROUPS BETWEEN frame_start AND frame_end [ frame_exclusion ]
+// The optional frame_exclusion specifier is not yet supported.
+// The frame_start and frame_end parameters allow us to specify which rows the window
+// frame starts and ends with. They accept the following values:
+//    - UNBOUNDED PRECEDING: Start with the first row of the partition. Possible only in frame_start.
+//    - offset PRECEDING: When used in frame_start, it refers to the first row of the group
+//                        that comes "offset" groups before the current group (i.e. the group
+//                        containing the current row). When used in frame_end, it refers to the
+//                        last row of the group that comes "offset" groups before the current group.
+//    - CURRENT ROW: When used in frame_start, it refers to the first row of the group containing
+//                   the current row. When used in frame_end, it refers to the last row of the group
+//                   containing the current row.
+//    - offset FOLLOWING: When used in frame_start, it refers to the first row of the group
+//                        that comes "offset" groups after the current group (i.e. the group
+//                        containing the current row). When used in frame_end, it refers to the
+//                        last row of the group that comes "offset" groups after the current group.
+//    - UNBOUNDED FOLLOWING: End with the last row of the partition. Possible only in frame_end.
 
-/// This structure encapsulates all the state information we require as we
-/// scan groups of data while processing window frames.
-
+// This structure encapsulates all the state information we require as we
+// scan groups of data while processing window frames.
 #[derive(Debug, Default)]
 pub struct WindowFrameStateGroups {
     current_group_idx: u64,
@@ -373,7 +344,8 @@ pub struct WindowFrameStateGroups {
     window_frame_start_idx: u64,
 }
 
-impl WindowFrameStateImpl for WindowFrameStateGroups {
+impl WindowFrameStateGroups {
+    /// This function calculates beginning/ending indices for the frame of the current row.
     fn calculate_range(
         &mut self,
         window_frame: &Option<Arc<WindowFrame>>,
@@ -469,13 +441,11 @@ impl WindowFrameStateImpl for WindowFrameStateGroups {
             Ok((0, length))
         }
     }
-}
 
-impl WindowFrameStateGroups {
-    /// This function is the main public interface of WindowFrameStateGroups. It is meant to be
+    /// This function does the heavy lifting when finding group boundaries. It is meant to be
     /// called twice, in succession, to get window frame start and end indices (with `BISECT_SIDE`
     /// supplied as false and true, respectively).
-    pub fn calculate_index_of_group<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
+    fn calculate_index_of_group<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
         &mut self,
         range_columns: &[ArrayRef],
         idx: usize,
