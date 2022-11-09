@@ -29,6 +29,7 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortExec;
+use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
 use crate::prelude::SessionConfig;
@@ -328,6 +329,8 @@ fn adjust_input_keys_down_recursively(
                                     PhysicalGroupBy::new_single(new_group_exprs);
                                 match mode {
                                     AggregateMode::FinalPartitioned => {
+                                        // Since the input of FinalPartitioned should be the Partial AggregateExec and they should
+                                        // share the same column order, it's safe to call adjust_input_keys_down_recursively here
                                         let new_input =
                                             adjust_input_keys_down_recursively(
                                                 input.clone(),
@@ -436,6 +439,7 @@ fn adjust_input_keys_down_recursively(
         }
     } else if plan_any.downcast_ref::<RepartitionExec>().is_some()
         || plan_any.downcast_ref::<CoalescePartitionsExec>().is_some()
+        || plan_any.downcast_ref::<WindowAggExec>().is_some()
     {
         plan.map_children(|plan| adjust_input_keys_down_recursively(plan, vec![]))
     } else {
@@ -509,7 +513,8 @@ fn reorder_join_keys_to_inputs(
                     join_key_pairs,
                     Some(left.output_partitioning()),
                     Some(right.output_partitioning()),
-                    &plan.equivalence_properties(),
+                    &left.equivalence_properties(),
+                    &right.equivalence_properties(),
                 ) {
                     if !new_positions.is_empty() {
                         let new_join_on = new_join_conditions(&left_keys, &right_keys);
@@ -555,7 +560,8 @@ fn reorder_join_keys_to_inputs(
             join_key_pairs,
             Some(left.output_partitioning()),
             Some(right.output_partitioning()),
-            &plan.equivalence_properties(),
+            &left.equivalence_properties(),
+            &right.equivalence_properties(),
         ) {
             if !new_positions.is_empty() {
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
@@ -585,37 +591,29 @@ fn reorder_join_keys_to_inputs(
     }
 }
 
-/// Reorder the current join keys ordering based on either left partition or right partition.
+/// Reorder the current join keys ordering based on either left partition or right partition
 fn reorder_current_join_keys(
     join_keys: JoinKeyPairs,
     left_partition: Option<Partitioning>,
     right_partition: Option<Partitioning>,
-    equivalence_properties: &EquivalenceProperties,
+    left_equivalence_properties: &EquivalenceProperties,
+    right_equivalence_properties: &EquivalenceProperties,
 ) -> Option<(JoinKeyPairs, Vec<usize>)> {
-    match (left_partition.clone(), right_partition.clone()) {
+    match (left_partition, right_partition.clone()) {
         (Some(Partitioning::Hash(left_exprs, _)), _) => {
-            try_reorder(join_keys.clone(), left_exprs, equivalence_properties).or_else(
-                || {
+            try_reorder(join_keys.clone(), left_exprs, left_equivalence_properties)
+                .or_else(|| {
                     reorder_current_join_keys(
                         join_keys,
                         None,
                         right_partition,
-                        equivalence_properties,
+                        left_equivalence_properties,
+                        right_equivalence_properties,
                     )
-                },
-            )
+                })
         }
         (_, Some(Partitioning::Hash(right_exprs, _))) => {
-            try_reorder(join_keys.clone(), right_exprs, equivalence_properties).or_else(
-                || {
-                    reorder_current_join_keys(
-                        join_keys,
-                        left_partition,
-                        None,
-                        equivalence_properties,
-                    )
-                },
-            )
+            try_reorder(join_keys, right_exprs, right_equivalence_properties)
         }
         _ => None,
     }
@@ -626,79 +624,82 @@ fn try_reorder(
     expected: Vec<Arc<dyn PhysicalExpr>>,
     equivalence_properties: &EquivalenceProperties,
 ) -> Option<(JoinKeyPairs, Vec<usize>)> {
+    let mut normalized_expected = vec![];
+    let mut normalized_left_keys = vec![];
+    let mut normalized_right_keys = vec![];
     if join_keys.left_keys.len() != expected.len() {
         return None;
     }
-    if expr_list_eq_strict_order(&expected, &join_keys.left_keys) {
+    if expr_list_eq_strict_order(&expected, &join_keys.left_keys)
+        || expr_list_eq_strict_order(&expected, &join_keys.right_keys)
+    {
         return Some((join_keys, vec![]));
+    } else if !equivalence_properties.classes().is_empty() {
+        normalized_expected = expected
+            .iter()
+            .map(|e| {
+                normalize_expr_with_equivalence_properties(
+                    e.clone(),
+                    equivalence_properties.classes(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(normalized_expected.len(), expected.len());
+
+        normalized_left_keys = join_keys
+            .left_keys
+            .iter()
+            .map(|e| {
+                normalize_expr_with_equivalence_properties(
+                    e.clone(),
+                    equivalence_properties.classes(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(join_keys.left_keys.len(), normalized_left_keys.len());
+
+        normalized_right_keys = join_keys
+            .right_keys
+            .iter()
+            .map(|e| {
+                normalize_expr_with_equivalence_properties(
+                    e.clone(),
+                    equivalence_properties.classes(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(join_keys.right_keys.len(), normalized_right_keys.len());
+
+        if expr_list_eq_strict_order(&normalized_expected, &normalized_left_keys)
+            || expr_list_eq_strict_order(&normalized_expected, &normalized_right_keys)
+        {
+            return Some((join_keys, vec![]));
+        }
     }
-    let new_positions = expected_expr_positions(&join_keys.left_keys, &expected);
-    match new_positions {
-        Some(positions) => {
-            let mut new_right_keys = vec![];
-            for pos in positions.iter() {
-                new_right_keys.push(join_keys.right_keys[*pos].clone());
-            }
-            Some((
-                JoinKeyPairs {
-                    left_keys: expected,
-                    right_keys: new_right_keys,
-                },
-                positions,
-            ))
+
+    let new_positions = expected_expr_positions(&join_keys.left_keys, &expected)
+        .or_else(|| expected_expr_positions(&join_keys.right_keys, &expected))
+        .or_else(|| expected_expr_positions(&normalized_left_keys, &normalized_expected))
+        .or_else(|| {
+            expected_expr_positions(&normalized_right_keys, &normalized_expected)
+        });
+
+    if let Some(positions) = new_positions {
+        let mut new_left_keys = vec![];
+        let mut new_right_keys = vec![];
+        for pos in positions.iter() {
+            new_left_keys.push(join_keys.left_keys[*pos].clone());
+            new_right_keys.push(join_keys.right_keys[*pos].clone());
         }
-        None => {
-            if !equivalence_properties.classes().is_empty() {
-                let normalized_expected = expected
-                    .iter()
-                    .map(|e| {
-                        normalize_expr_with_equivalence_properties(
-                            e.clone(),
-                            equivalence_properties.classes(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let normalized_left_keys = join_keys
-                    .left_keys
-                    .iter()
-                    .map(|e| {
-                        normalize_expr_with_equivalence_properties(
-                            e.clone(),
-                            equivalence_properties.classes(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                if expr_list_eq_strict_order(&normalized_expected, &normalized_left_keys)
-                {
-                    Some((join_keys, vec![]))
-                } else {
-                    let new_positions = expected_expr_positions(
-                        &normalized_left_keys,
-                        &normalized_expected,
-                    );
-                    match new_positions {
-                        Some(positions) => {
-                            let mut new_left_keys = vec![];
-                            let mut new_right_keys = vec![];
-                            for pos in positions.iter() {
-                                new_left_keys.push(join_keys.left_keys[*pos].clone());
-                                new_right_keys.push(join_keys.right_keys[*pos].clone());
-                            }
-                            Some((
-                                JoinKeyPairs {
-                                    left_keys: new_left_keys,
-                                    right_keys: new_right_keys,
-                                },
-                                positions,
-                            ))
-                        }
-                        None => None,
-                    }
-                }
-            } else {
-                None
-            }
-        }
+        Some((
+            JoinKeyPairs {
+                left_keys: new_left_keys,
+                right_keys: new_right_keys,
+            },
+            positions,
+        ))
+    } else {
+        None
     }
 }
 
@@ -1051,6 +1052,21 @@ mod tests {
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent().to_string();
+            let actual_lines = trim_plan_display(&plan);
+
+            assert_eq!(
+                &expected_lines, &actual_lines,
+                "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+                expected_lines, actual_lines
+            );
+        };
+    }
+
+    macro_rules! assert_plan_txt {
+        ($EXPECTED_LINES: expr, $PLAN: expr) => {
+            let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
+            // Now format correctly
+            let plan = displayable($PLAN.as_ref()).indent().to_string();
             let actual_lines = trim_plan_display(&plan);
 
             assert_eq!(
@@ -1440,7 +1456,7 @@ mod tests {
                 Column::new_with_schema("c1", &right.schema()).unwrap(),
             ),
         ];
-        let top_left_join =
+        let bottom_left_join =
             hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner);
 
         // Projection(a as A, a as AA, b as B, c as C)
@@ -1450,7 +1466,8 @@ mod tests {
             ("b".to_string(), "B".to_string()),
             ("c".to_string(), "C".to_string()),
         ];
-        let projection = projection_exec_with_alias(top_left_join, alias_pairs);
+        let bottom_left_projection =
+            projection_exec_with_alias(bottom_left_join, alias_pairs);
 
         // Join on (c == c1 and b == b1 and a == a1)
         let join_on = vec![
@@ -1467,28 +1484,28 @@ mod tests {
                 Column::new_with_schema("a1", &right.schema()).unwrap(),
             ),
         ];
-        let top_right_join =
+        let bottom_right_join =
             hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner);
 
         // Join on (B == b1 and C == c and AA = a1)
         let top_join_on = vec![
             (
-                Column::new_with_schema("B", &projection.schema()).unwrap(),
-                Column::new_with_schema("b1", &top_right_join.schema()).unwrap(),
+                Column::new_with_schema("B", &bottom_left_projection.schema()).unwrap(),
+                Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
             ),
             (
-                Column::new_with_schema("C", &projection.schema()).unwrap(),
-                Column::new_with_schema("c", &top_right_join.schema()).unwrap(),
+                Column::new_with_schema("C", &bottom_left_projection.schema()).unwrap(),
+                Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
             ),
             (
-                Column::new_with_schema("AA", &projection.schema()).unwrap(),
-                Column::new_with_schema("a1", &top_right_join.schema()).unwrap(),
+                Column::new_with_schema("AA", &bottom_left_projection.schema()).unwrap(),
+                Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
             ),
         ];
 
         let top_join = hash_join_exec(
-            projection.clone(),
-            top_right_join,
+            bottom_left_projection.clone(),
+            bottom_right_join,
             &top_join_on,
             &JoinType::Inner,
         );
@@ -1522,6 +1539,248 @@ mod tests {
             "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, filter_top_join);
+        Ok(())
+    }
+
+    #[test]
+    fn reorder_join_keys_to_left_input() -> Result<()> {
+        let left = parquet_exec();
+        let alias_pairs: Vec<(String, String)> = vec![
+            ("a".to_string(), "a1".to_string()),
+            ("b".to_string(), "b1".to_string()),
+            ("c".to_string(), "c1".to_string()),
+        ];
+        let right = projection_exec_with_alias(parquet_exec(), alias_pairs);
+
+        // Join on (a == a1 and b == b1 and c == c1)
+        let join_on = vec![
+            (
+                Column::new_with_schema("a", &schema()).unwrap(),
+                Column::new_with_schema("a1", &right.schema()).unwrap(),
+            ),
+            (
+                Column::new_with_schema("b", &schema()).unwrap(),
+                Column::new_with_schema("b1", &right.schema()).unwrap(),
+            ),
+            (
+                Column::new_with_schema("c", &schema()).unwrap(),
+                Column::new_with_schema("c1", &right.schema()).unwrap(),
+            ),
+        ];
+        let bottom_left_join = ensure_distribution_and_ordering(
+            hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
+            10,
+        );
+
+        // Projection(a as A, a as AA, b as B, c as C)
+        let alias_pairs: Vec<(String, String)> = vec![
+            ("a".to_string(), "A".to_string()),
+            ("a".to_string(), "AA".to_string()),
+            ("b".to_string(), "B".to_string()),
+            ("c".to_string(), "C".to_string()),
+        ];
+        let bottom_left_projection =
+            projection_exec_with_alias(bottom_left_join, alias_pairs);
+
+        // Join on (c == c1 and b == b1 and a == a1)
+        let join_on = vec![
+            (
+                Column::new_with_schema("c", &schema()).unwrap(),
+                Column::new_with_schema("c1", &right.schema()).unwrap(),
+            ),
+            (
+                Column::new_with_schema("b", &schema()).unwrap(),
+                Column::new_with_schema("b1", &right.schema()).unwrap(),
+            ),
+            (
+                Column::new_with_schema("a", &schema()).unwrap(),
+                Column::new_with_schema("a1", &right.schema()).unwrap(),
+            ),
+        ];
+        let bottom_right_join = ensure_distribution_and_ordering(
+            hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
+            10,
+        );
+
+        // Join on (B == b1 and C == c and AA = a1)
+        let top_join_on = vec![
+            (
+                Column::new_with_schema("B", &bottom_left_projection.schema()).unwrap(),
+                Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+            ),
+            (
+                Column::new_with_schema("C", &bottom_left_projection.schema()).unwrap(),
+                Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+            ),
+            (
+                Column::new_with_schema("AA", &bottom_left_projection.schema()).unwrap(),
+                Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+            ),
+        ];
+
+        let join_types = vec![
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+        ];
+
+        for join_type in join_types {
+            let top_join = hash_join_exec(
+                bottom_left_projection.clone(),
+                bottom_right_join.clone(),
+                &top_join_on,
+                &join_type,
+            );
+            let top_join_plan =
+                format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(Column {{ name: \"AA\", index: 1 }}, Column {{ name: \"a1\", index: 5 }}), (Column {{ name: \"B\", index: 2 }}, Column {{ name: \"b1\", index: 6 }}), (Column {{ name: \"C\", index: 3 }}, Column {{ name: \"c\", index: 2 }})]", &join_type);
+
+            let reordered = reorder_join_keys_to_inputs(top_join);
+
+            // The top joins' join key ordering is adjusted based on the children inputs.
+            let expected = &[
+                top_join_plan.as_str(),
+                "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
+                "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 })]",
+                "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 }, Column { name: \"c\", index: 2 }], 10)",
+                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }, Column { name: \"b1\", index: 1 }, Column { name: \"c1\", index: 2 }], 10)",
+                "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
+                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 })]",
+                "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }, Column { name: \"b\", index: 1 }, Column { name: \"a\", index: 0 }], 10)",
+                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 2 }, Column { name: \"b1\", index: 1 }, Column { name: \"a1\", index: 0 }], 10)",
+                "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
+                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            ];
+
+            assert_plan_txt!(expected, reordered);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn reorder_join_keys_to_right_input() -> Result<()> {
+        let left = parquet_exec();
+        let alias_pairs: Vec<(String, String)> = vec![
+            ("a".to_string(), "a1".to_string()),
+            ("b".to_string(), "b1".to_string()),
+            ("c".to_string(), "c1".to_string()),
+        ];
+        let right = projection_exec_with_alias(parquet_exec(), alias_pairs);
+
+        // Join on (a == a1 and b == b1)
+        let join_on = vec![
+            (
+                Column::new_with_schema("a", &schema()).unwrap(),
+                Column::new_with_schema("a1", &right.schema()).unwrap(),
+            ),
+            (
+                Column::new_with_schema("b", &schema()).unwrap(),
+                Column::new_with_schema("b1", &right.schema()).unwrap(),
+            ),
+        ];
+        let bottom_left_join = ensure_distribution_and_ordering(
+            hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
+            10,
+        );
+
+        // Projection(a as A, a as AA, b as B, c as C)
+        let alias_pairs: Vec<(String, String)> = vec![
+            ("a".to_string(), "A".to_string()),
+            ("a".to_string(), "AA".to_string()),
+            ("b".to_string(), "B".to_string()),
+            ("c".to_string(), "C".to_string()),
+        ];
+        let bottom_left_projection =
+            projection_exec_with_alias(bottom_left_join, alias_pairs);
+
+        // Join on (c == c1 and b == b1 and a == a1)
+        let join_on = vec![
+            (
+                Column::new_with_schema("c", &schema()).unwrap(),
+                Column::new_with_schema("c1", &right.schema()).unwrap(),
+            ),
+            (
+                Column::new_with_schema("b", &schema()).unwrap(),
+                Column::new_with_schema("b1", &right.schema()).unwrap(),
+            ),
+            (
+                Column::new_with_schema("a", &schema()).unwrap(),
+                Column::new_with_schema("a1", &right.schema()).unwrap(),
+            ),
+        ];
+        let bottom_right_join = ensure_distribution_and_ordering(
+            hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
+            10,
+        );
+
+        // Join on (B == b1 and C == c and AA = a1)
+        let top_join_on = vec![
+            (
+                Column::new_with_schema("B", &bottom_left_projection.schema()).unwrap(),
+                Column::new_with_schema("b1", &bottom_right_join.schema()).unwrap(),
+            ),
+            (
+                Column::new_with_schema("C", &bottom_left_projection.schema()).unwrap(),
+                Column::new_with_schema("c", &bottom_right_join.schema()).unwrap(),
+            ),
+            (
+                Column::new_with_schema("AA", &bottom_left_projection.schema()).unwrap(),
+                Column::new_with_schema("a1", &bottom_right_join.schema()).unwrap(),
+            ),
+        ];
+
+        let join_types = vec![
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+        ];
+
+        for join_type in join_types {
+            let top_join = hash_join_exec(
+                bottom_left_projection.clone(),
+                bottom_right_join.clone(),
+                &top_join_on,
+                &join_type,
+            );
+            let top_join_plan =
+                format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(Column {{ name: \"C\", index: 3 }}, Column {{ name: \"c\", index: 2 }}), (Column {{ name: \"B\", index: 2 }}, Column {{ name: \"b1\", index: 6 }}), (Column {{ name: \"AA\", index: 1 }}, Column {{ name: \"a1\", index: 5 }})]", &join_type);
+
+            let reordered = reorder_join_keys_to_inputs(top_join);
+
+            // The top joins' join key ordering is adjusted based on the children inputs.
+            let expected = &[
+                top_join_plan.as_str(),
+                "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
+                "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 })]",
+                "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 }], 10)",
+                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }, Column { name: \"b1\", index: 1 }], 10)",
+                "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
+                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 })]",
+                "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }, Column { name: \"b\", index: 1 }, Column { name: \"a\", index: 0 }], 10)",
+                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 2 }, Column { name: \"b1\", index: 1 }, Column { name: \"a1\", index: 0 }], 10)",
+                "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
+                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            ];
+
+            assert_plan_txt!(expected, reordered);
+        }
+
         Ok(())
     }
 
