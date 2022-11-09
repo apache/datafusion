@@ -24,6 +24,9 @@ use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
+use crate::cast::as_struct_array;
+use crate::delta::shift_months;
+use crate::error::{DataFusionError, Result};
 use arrow::{
     array::*,
     compute::kernels::cast::{cast, cast_with_options, CastOptions},
@@ -37,11 +40,6 @@ use arrow::{
     },
 };
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
-use ordered_float::OrderedFloat;
-
-use crate::cast::as_struct_array;
-use crate::delta::shift_months;
-use crate::error::{DataFusionError, Result};
 
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part of arrow's `Array`.
@@ -619,8 +617,22 @@ where
     intermediate.add(Duration::milliseconds(ms as i64))
 }
 
-// manual implementation of `Hash` that uses OrderedFloat to
-// get defined behavior for floating point
+struct Fl<T>(T);
+
+macro_rules! hash_float_value {
+    ($(($t:ty, $i:ty)),+) => {
+        $(impl std::hash::Hash for Fl<$t> {
+            #[inline]
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                state.write(&<$i>::from_ne_bytes(self.0.to_ne_bytes()).to_ne_bytes())
+            }
+        })+
+    };
+}
+
+hash_float_value!((f64, u64), (f32, u32));
+
+// manual implementation of `Hash`
 impl std::hash::Hash for ScalarValue {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         use ScalarValue::*;
@@ -631,14 +643,8 @@ impl std::hash::Hash for ScalarValue {
                 s.hash(state)
             }
             Boolean(v) => v.hash(state),
-            Float32(v) => {
-                let v = v.map(OrderedFloat);
-                v.hash(state)
-            }
-            Float64(v) => {
-                let v = v.map(OrderedFloat);
-                v.hash(state)
-            }
+            Float32(v) => v.map(Fl).hash(state),
+            Float64(v) => v.map(Fl).hash(state),
             Int8(v) => v.hash(state),
             Int16(v) => v.hash(state),
             Int32(v) => v.hash(state),
