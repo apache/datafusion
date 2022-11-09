@@ -168,6 +168,7 @@ mod tests {
         Int64Array, Int64Builder, ListBuilder, StringBuilder, StructArray, StructBuilder,
     };
     use arrow::{array::StringArray, datatypes::Field};
+    use datafusion_common::cast::as_int64_array;
     use datafusion_common::Result;
 
     fn build_utf8_lists(list_of_lists: Vec<Vec<Option<&str>>>) -> GenericListArray<i32> {
@@ -343,10 +344,7 @@ mod tests {
         let result = get_field_expr
             .evaluate(&batch)?
             .into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("failed to downcast to Int64Array");
+        let result = as_int64_array(&result)?;
         let expected = &Int64Array::from(expected_ints);
         assert_eq!(expected, result);
 
