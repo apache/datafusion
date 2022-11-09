@@ -867,7 +867,8 @@ mod tests {
                 ),
             };
 
-            // Note that datafusion ignores timezones for comparisons
+            // Datafusion ignores timezones for comparisons of ScalarValue
+            // so double check it here
             assert_eq!(lit_tz_none, lit_tz_utc);
 
             // e.g. DataType::Timestamp(_, None)
