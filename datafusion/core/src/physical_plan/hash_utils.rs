@@ -318,7 +318,10 @@ pub fn create_hashes<'a>(
 ) -> Result<&'a mut Vec<u64>> {
     // combine hashes with `combine_hashes` if we have more than 1 column
 
-    use arrow::array::{BinaryArray, LargeBinaryArray};
+    use arrow::array::{
+        BinaryArray, LargeBinaryArray, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray,
+    };
     let multi_col = arrays.len() > 1;
 
     for col in arrays {
@@ -462,6 +465,46 @@ pub fn create_hashes<'a>(
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 hash_array_primitive!(
                     TimestampNanosecondArray,
+                    col,
+                    i64,
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
+            DataType::Time32(TimeUnit::Second) => {
+                hash_array_primitive!(
+                    Time32SecondArray,
+                    col,
+                    i32,
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                hash_array_primitive!(
+                    Time32MillisecondArray,
+                    col,
+                    i32,
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                hash_array_primitive!(
+                    Time64MicrosecondArray,
+                    col,
+                    i64,
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                hash_array_primitive!(
+                    Time64NanosecondArray,
                     col,
                     i64,
                     hashes_buffer,
