@@ -24,13 +24,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use arrow::compute::interleave;
 use arrow::error::ArrowError;
 use arrow::row::{RowConverter, SortField};
 use arrow::{
-    array::{make_array as make_arrow_array, MutableArrayData},
-    datatypes::SchemaRef,
-    error::Result as ArrowResult,
-    record_batch::RecordBatch,
+    datatypes::SchemaRef, error::Result as ArrowResult, record_batch::RecordBatch,
 };
 use futures::stream::{Fuse, FusedStream};
 use futures::{Stream, StreamExt};
@@ -447,67 +445,35 @@ impl SortPreservingMergeStream {
     fn build_record_batch(&mut self) -> ArrowResult<RecordBatch> {
         // Mapping from stream index to the index of the first buffer from that stream
         let mut buffer_idx = 0;
-        let mut stream_to_buffer_idx = Vec::with_capacity(self.batches.len());
+        let mut stream_to_array_idx = Vec::with_capacity(self.batches.len());
 
         for batches in &self.batches {
-            stream_to_buffer_idx.push(buffer_idx);
+            stream_to_array_idx.push(buffer_idx);
             buffer_idx += batches.len();
         }
 
-        let columns = self
-            .schema
-            .fields()
+        let selection: Vec<_> = self
+            .in_progress
             .iter()
-            .enumerate()
-            .map(|(column_idx, field)| {
-                let arrays = self
+            .map(|x| {
+                let array_idx = stream_to_array_idx[x.stream_idx] + x.batch_idx;
+                (array_idx, x.row_idx)
+            })
+            .collect();
+
+        let columns = (0..self.schema.fields().len())
+            .map(|column_idx| {
+                let arrays: Vec<_> = self
                     .batches
                     .iter()
                     .flat_map(|batch| {
-                        batch.iter().map(|batch| batch.column(column_idx).data())
+                        batch.iter().map(|batch| batch.column(column_idx).as_ref())
                     })
                     .collect();
 
-                let mut array_data = MutableArrayData::new(
-                    arrays,
-                    field.is_nullable(),
-                    self.in_progress.len(),
-                );
-
-                if self.in_progress.is_empty() {
-                    return make_arrow_array(array_data.freeze());
-                }
-
-                let first = &self.in_progress[0];
-                let mut buffer_idx =
-                    stream_to_buffer_idx[first.stream_idx] + first.batch_idx;
-                let mut start_row_idx = first.row_idx;
-                let mut end_row_idx = start_row_idx + 1;
-
-                for row_index in self.in_progress.iter().skip(1) {
-                    let next_buffer_idx =
-                        stream_to_buffer_idx[row_index.stream_idx] + row_index.batch_idx;
-
-                    if next_buffer_idx == buffer_idx && row_index.row_idx == end_row_idx {
-                        // subsequent row in same batch
-                        end_row_idx += 1;
-                        continue;
-                    }
-
-                    // emit current batch of rows for current buffer
-                    array_data.extend(buffer_idx, start_row_idx, end_row_idx);
-
-                    // start new batch of rows
-                    buffer_idx = next_buffer_idx;
-                    start_row_idx = row_index.row_idx;
-                    end_row_idx = start_row_idx + 1;
-                }
-
-                // emit final batch of rows
-                array_data.extend(buffer_idx, start_row_idx, end_row_idx);
-                make_arrow_array(array_data.freeze())
+                interleave(&arrays, &selection)
             })
-            .collect();
+            .collect::<ArrowResult<Vec<_>>>()?;
 
         self.in_progress.clear();
 
