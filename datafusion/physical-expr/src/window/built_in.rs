@@ -17,6 +17,7 @@
 
 //! Physical exec for built-in window function expressions.
 
+use super::window_frame_state::{WindowFrameState, WindowFrameStateImpl};
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
@@ -30,8 +31,6 @@ use datafusion_expr::WindowFrame;
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
-
-use crate::window::groups::WindowFrameGroups;
 
 /// A window expr that takes the form of a built in window function
 #[derive(Debug)]
@@ -115,12 +114,11 @@ impl WindowExpr for BuiltInWindowExpr {
                     .iter()
                     .map(|v| v.slice(partition_range.start, length))
                     .collect::<Vec<_>>();
-                let mut window_frame_groups = WindowFrameGroups::default();
+                let mut window_frame_state = WindowFrameState::new(&window_frame);
                 // We iterate on each row to calculate window frame range and and window function result
                 for idx in 0..length {
-                    let range = self.calculate_range(
+                    let range = window_frame_state.calculate_range(
                         &window_frame,
-                        &mut window_frame_groups,
                         &slice_order_bys,
                         &sort_options,
                         num_rows,
