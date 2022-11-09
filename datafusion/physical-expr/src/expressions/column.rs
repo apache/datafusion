@@ -290,7 +290,7 @@ mod test {
     #[test]
     fn stats_bounds_analysis() -> Result<()> {
         let (schema, statistics) = get_test_table_stats();
-        let context = AnalysisContext::from_statistics(&schema, statistics);
+        let context = AnalysisContext::from_statistics(&schema, &statistics);
 
         let cases = [
             // (name, index, expected boundaries)

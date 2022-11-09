@@ -38,7 +38,7 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
-use datafusion_physical_expr::split_conjunction;
+use datafusion_physical_expr::{split_conjunction, AnalysisContext};
 
 use log::debug;
 
@@ -168,9 +168,27 @@ impl ExecutionPlan for FilterExec {
         Some(self.metrics.clone_inner())
     }
 
-    /// The output statistics of a filtering operation are unknown
+    /// The output statistics of a filtering operation can be estimated if the
+    /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Statistics {
-        Statistics::default()
+        let input_stats = self.input.statistics();
+        let analysis_ctx =
+            AnalysisContext::from_statistics(self.input.schema().as_ref(), &input_stats);
+
+        let predicate_selectivity = self
+            .predicate
+            .boundaries(&analysis_ctx)
+            .and_then(|bounds| bounds.selectivity);
+
+        match predicate_selectivity {
+            Some(selectivity) => Statistics {
+                num_rows: input_stats
+                    .num_rows
+                    .map(|num_rows| (num_rows as f64 * selectivity).ceil() as usize),
+                ..Default::default()
+            },
+            None => Statistics::default(),
+        }
     }
 }
 
@@ -282,9 +300,14 @@ mod tests {
     use crate::physical_plan::{collect, with_new_children_if_necessary};
     use crate::prelude::SessionContext;
     use crate::test;
+    use crate::test::exec::StatisticsExec;
     use crate::test_util;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ColumnStatistics;
+    use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use std::iter::Iterator;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn simple_predicate() -> Result<()> {
@@ -377,6 +400,110 @@ mod tests {
         assert_eq!(1, ne_pairs.len());
         assert_eq!(ne_pairs[0].0.name(), "c1");
         assert_eq!(ne_pairs[0].1.name(), "c13");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_basic_expr() -> Result<()> {
+        // Table:
+        //      a: min=1, max=100
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(100),
+                column_statistics: Some(vec![ColumnStatistics {
+                    min_value: Some(ScalarValue::Int32(Some(1))),
+                    max_value: Some(ScalarValue::Int32(Some(100))),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+            schema.clone(),
+        ));
+
+        // a <= 25
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(col("a", &schema)?, Operator::LtEq, lit(25i32), &schema)?;
+
+        // WHERE a <= 25
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+
+        let statistics = filter.statistics();
+        assert_eq!(statistics.num_rows, Some(25));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    // This test requires propagation of column boundaries from the comparison analysis
+    // to the analysis context. This is not yet implemented.
+    async fn test_filter_statistics_column_level_basic_expr() -> Result<()> {
+        // Table:
+        //      a: min=1, max=100
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(100),
+                column_statistics: Some(vec![ColumnStatistics {
+                    min_value: Some(ScalarValue::Int32(Some(1))),
+                    max_value: Some(ScalarValue::Int32(Some(100))),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+            schema.clone(),
+        ));
+
+        // a <= 25
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(col("a", &schema)?, Operator::LtEq, lit(25i32), &schema)?;
+
+        // WHERE a <= 25
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+
+        let statistics = filter.statistics();
+        assert_eq!(statistics.num_rows, Some(25));
+        assert_eq!(
+            statistics.column_statistics,
+            Some(vec![ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(1))),
+                max_value: Some(ScalarValue::Int32(Some(25))),
+                ..Default::default()
+            }])
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_when_input_stats_missing() -> Result<()> {
+        // Table:
+        //      a: min=???, max=??? (missing)
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                column_statistics: Some(vec![ColumnStatistics {
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+            schema.clone(),
+        ));
+
+        // a <= 25
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(col("a", &schema)?, Operator::LtEq, lit(25i32), &schema)?;
+
+        // WHERE a <= 25
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+
+        let statistics = filter.statistics();
+        assert_eq!(statistics.num_rows, None);
 
         Ok(())
     }
