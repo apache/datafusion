@@ -1299,3 +1299,32 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
 
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
+<<<<<<< HEAD
+=======
+
+// Does not check if list subtypes are valid
+fn is_valid_scalar_type_no_list_check(datatype: &DataType) -> bool {
+    match datatype {
+        DataType::Boolean
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::LargeUtf8
+        | DataType::Utf8
+        | DataType::Date32 => true,
+        DataType::Time64(time_unit) => {
+            matches!(time_unit, TimeUnit::Microsecond | TimeUnit::Nanosecond)
+        }
+
+        DataType::List(_) => true,
+        _ => false,
+    }
+}
+>>>>>>> Implement Time32 and Time64 in hash_join and hash_util
