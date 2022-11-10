@@ -324,8 +324,7 @@ fn extract_or_clauses_for_join(
             // If nothing can be extracted from any sub clauses, do nothing for this OR clause.
             if let (Some(left_expr), Some(right_expr)) = (left_expr, right_expr) {
                 let predicate = or(left_expr, right_expr);
-                let mut columns: HashSet<Column> = HashSet::new();
-                expr_to_columns(&predicate, &mut columns).ok().unwrap();
+                let columns = predicate.to_columns().ok().unwrap();
 
                 exprs.push(predicate);
                 expr_columns.push(columns);
@@ -388,8 +387,7 @@ fn extract_or_clause(expr: &Expr, schema_columns: &HashSet<Column>) -> Option<Ex
             }
         }
         _ => {
-            let mut columns: HashSet<Column> = HashSet::new();
-            expr_to_columns(expr, &mut columns).ok().unwrap();
+            let columns = expr.to_columns().ok().unwrap();
 
             if schema_columns
                 .intersection(&columns)
@@ -541,8 +539,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             utils::split_conjunction_owned(predicate)
                 .into_iter()
                 .try_for_each::<_, Result<()>>(|predicate| {
-                    let mut columns: HashSet<Column> = HashSet::new();
-                    expr_to_columns(&predicate, &mut columns)?;
+                    let columns = predicate.to_columns()?;
                     state.filters.push((predicate, columns));
                     Ok(())
                 })?;
@@ -664,11 +661,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
                     predicates
                         .into_iter()
-                        .map(|e| {
-                            let mut accum = HashSet::new();
-                            expr_to_columns(e, &mut accum)?;
-                            Ok((e.clone(), accum))
-                        })
+                        .map(|e| Ok((e.clone(), e.to_columns()?)))
                         .collect::<Result<Vec<_>>>()
                 })
                 .unwrap_or_else(|| Ok(vec![]))?;
