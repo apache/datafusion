@@ -24,14 +24,14 @@ use datafusion_common::bisect::bisect;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use std::any::Any;
 use std::cmp::min;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
 
 use datafusion_expr::utils::WindowSortKeys;
-use datafusion_expr::{Accumulator, AggregateState, WindowFrameBound};
+use datafusion_expr::{AggregateState, WindowFrameBound};
 use datafusion_expr::{WindowFrame, WindowFrameUnits};
+use indexmap::IndexMap;
 
 /// A window expression that:
 /// * knows its resulting field
@@ -70,14 +70,11 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// evaluate the window function values against the batch
     fn evaluate_stream(
         &self,
-        _batch_state: &HashMap<Vec<ScalarValue>, (u64, RecordBatch)>,
-        _window_accumulators: &mut HashMap<
-            Vec<ScalarValue>,
-            AggregateWindowAccumulatorState,
-        >,
+        _batch_state: &BatchState,
+        _window_accumulators: &mut WindowAggState,
         _window_sort_keys: &WindowSortKeys,
         _is_end: bool,
-    ) -> Result<Vec<WindowAccumulatorResult>> {
+    ) -> Result<()> {
         Err(DataFusionError::Internal(
             "evaluate stream is not implemented".to_string(),
         ))
@@ -325,20 +322,6 @@ pub trait WindowExpr: Send + Sync + Debug {
             Ok((0, length))
         }
     }
-
-    fn calculate_running_window(
-        &self,
-        _state: &mut AggregateWindowAccumulatorState,
-        _accumulator: &mut Box<dyn Accumulator>,
-        _value_slice: &[ArrayRef],
-        _order_bys: &[ArrayRef],
-        _is_end: bool,
-        _window_sort_keys: &WindowSortKeys,
-    ) -> Result<Option<ArrayRef>> {
-        Err(DataFusionError::NotImplemented(
-            "running window calculation is not implemented".to_string(),
-        ))
-    }
 }
 
 fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
@@ -445,21 +428,32 @@ fn get_reversed_window_frame(window_frame: &WindowFrame) -> Result<Arc<WindowFra
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct AggregateWindowAccumulatorState {
-    pub last_range: (usize, usize),
-    pub cur_range: (usize, usize),
-    pub last_idx: usize,
-    pub n_retracted: usize,
-    pub aggregate_state: Vec<AggregateState>,
-
+pub struct RankState {
     pub last_rank_data: Vec<ScalarValue>,
     pub last_rank_boundary: usize,
     pub n_rank: usize,
 }
 
-#[derive(Debug, Clone)]
-pub struct WindowAccumulatorResult {
-    pub partition_id: Vec<ScalarValue>,
+#[derive(Debug, Clone, Default)]
+pub enum BuiltinWindowState {
+    Rank(RankState),
+    #[default]
+    Default,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct WindowState {
+    pub last_range: (usize, usize),
+    pub cur_range: (usize, usize),
+    pub last_idx: usize,
+    pub n_retracted: usize,
+    pub aggregate_state: Vec<AggregateState>,
+    pub builtin_window_state: BuiltinWindowState,
+    // Keeps the results
     pub col: Option<ArrayRef>,
     pub num_rows: usize,
 }
+
+pub type PartitionKey = Vec<ScalarValue>;
+pub type WindowAggState = IndexMap<PartitionKey, WindowState>;
+pub type BatchState = IndexMap<PartitionKey, RecordBatch>;

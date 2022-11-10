@@ -18,7 +18,7 @@
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::{AggregateWindowAccumulatorState, BuiltInWindowFunctionExpr};
+use crate::window::{BuiltInWindowFunctionExpr, WindowState};
 use crate::PhysicalExpr;
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
@@ -73,27 +73,21 @@ impl BuiltInWindowFunctionExpr for RowNumber {
 pub(crate) struct NumRowsEvaluator {}
 
 impl PartitionEvaluator for NumRowsEvaluator {
+    fn get_range(&self, state: &WindowState) -> Result<(usize, usize)> {
+        Ok((state.last_idx, state.last_idx + 1))
+    }
+
+    /// evaluate window function result inside given range
+    fn evaluate_stream(&self, state: &WindowState) -> Result<ScalarValue> {
+        let n_row = (state.last_idx + state.n_retracted + 1) as u64;
+        Ok(ScalarValue::UInt64(Some(n_row)))
+    }
+
     fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
         let num_rows = partition.end - partition.start;
         Ok(Arc::new(UInt64Array::from_iter_values(
             1..(num_rows as u64) + 1,
         )))
-    }
-
-    fn get_range(
-        &self,
-        state: &AggregateWindowAccumulatorState,
-    ) -> Result<(usize, usize)> {
-        Ok((state.last_idx, state.last_idx + 1))
-    }
-
-    /// evaluate window function result inside given range
-    fn evaluate_stream(
-        &self,
-        state: &mut AggregateWindowAccumulatorState,
-    ) -> Result<ScalarValue> {
-        let n_row = (state.last_idx + state.n_retracted + 1) as u64;
-        Ok(ScalarValue::UInt64(Some(n_row)))
     }
 }
 

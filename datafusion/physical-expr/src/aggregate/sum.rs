@@ -249,18 +249,30 @@ impl Accumulator for SumAccumulator {
         ])
     }
 
-    fn set_state(&mut self, state_data: Vec<AggregateState>) -> Result<()> {
-        match &state_data[0] {
+    fn set_state(&mut self, state_data: &[AggregateState]) -> Result<()> {
+        let sum_state = &state_data[0];
+        let count_state = &state_data[1];
+        match sum_state {
             AggregateState::Scalar(val) => {
                 self.sum = val.clone();
             }
-            _ => todo!(),
+            sum_state => {
+                return Err(DataFusionError::Execution(format!(
+                    "Unexpected State received for sum {:?}",
+                    sum_state
+                )))
+            }
         }
-        match &state_data[1] {
+        match count_state {
             AggregateState::Scalar(ScalarValue::UInt64(Some(val))) => {
                 self.count = *val;
             }
-            _ => todo!(),
+            count_state => {
+                return Err(DataFusionError::Execution(format!(
+                    "Unexpected State received for count {:?}",
+                    count_state
+                )))
+            }
         }
         Ok(())
     }

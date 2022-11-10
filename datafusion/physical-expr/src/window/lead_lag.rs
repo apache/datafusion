@@ -19,7 +19,7 @@
 //! at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::{AggregateWindowAccumulatorState, BuiltInWindowFunctionExpr};
+use crate::window::{BuiltInWindowFunctionExpr, WindowState};
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
 use arrow::compute::cast;
@@ -170,16 +170,7 @@ fn shift_with_default_value(
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {
-    fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
-        let value = &self.values[0];
-        let value = value.slice(partition.start, partition.end - partition.start);
-        shift_with_default_value(&value, self.shift_offset, &self.default_value)
-    }
-
-    fn get_range(
-        &self,
-        state: &AggregateWindowAccumulatorState,
-    ) -> Result<(usize, usize)> {
+    fn get_range(&self, state: &WindowState) -> Result<(usize, usize)> {
         if self.shift_offset > 0 {
             let start = if state.last_idx > self.shift_offset as usize {
                 state.last_idx - self.shift_offset as usize
@@ -195,14 +186,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         }
     }
 
-    fn evaluate_stream(
-        &self,
-        state: &mut AggregateWindowAccumulatorState,
-    ) -> Result<ScalarValue> {
-        println!(
-            "self offset: {:?}, default value: {:?} state: {:?}",
-            self.shift_offset, self.default_value, state
-        );
+    fn evaluate_stream(&self, state: &WindowState) -> Result<ScalarValue> {
         let dtype = self.values[0].data_type();
         let idx = state.last_idx as i64 - self.shift_offset;
         if idx < 0 || idx as usize >= self.values[0].len() {
@@ -210,6 +194,12 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         } else {
             ScalarValue::try_from_array(&self.values[0], idx as usize)
         }
+    }
+
+    fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
+        let value = &self.values[0];
+        let value = value.slice(partition.start, partition.end - partition.start);
+        shift_with_default_value(&value, self.shift_offset, &self.default_value)
     }
 }
 

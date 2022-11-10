@@ -19,7 +19,7 @@
 //! that can evaluated at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::BuiltInWindowFunctionExpr;
+use crate::window::{BuiltInWindowFunctionExpr, WindowState};
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
@@ -164,6 +164,14 @@ impl PartitionEvaluator for NthValueEvaluator {
                 }
             }
         }
+    }
+
+    fn evaluate_stream(&self, state: &WindowState) -> Result<ScalarValue> {
+        let range = Range {
+            start: state.cur_range.0,
+            end: state.cur_range.1,
+        };
+        self.evaluate_inside_range(range)
     }
 }
 

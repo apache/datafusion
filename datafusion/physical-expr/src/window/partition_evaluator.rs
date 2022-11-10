@@ -17,9 +17,9 @@
 
 //! partition evaluation module
 
-use crate::window::AggregateWindowAccumulatorState;
+use crate::window::window_expr::BuiltinWindowState;
+use crate::window::WindowState;
 use arrow::array::ArrayRef;
-use arrow::compute::SortColumn;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
 use std::ops::Range;
@@ -52,10 +52,27 @@ pub trait PartitionEvaluator {
         false
     }
 
-    fn get_range(
-        &self,
-        _state: &AggregateWindowAccumulatorState,
-    ) -> Result<(usize, usize)> {
+    fn state(&self) -> Result<BuiltinWindowState> {
+        // If we do not use state we just return Default
+        Ok(BuiltinWindowState::Default)
+    }
+
+    fn set_state(&mut self, _state: &BuiltinWindowState) -> Result<()> {
+        // If we do not use state, set_state does nothing
+        Ok(())
+    }
+
+    fn update_state(
+        &mut self,
+        _state: &WindowState,
+        _range_columns: &[ArrayRef],
+        _sort_partition_points: &[Range<usize>],
+    ) -> Result<()> {
+        // If we do not use state, update_state does nothing
+        Ok(())
+    }
+
+    fn get_range(&self, _state: &WindowState) -> Result<(usize, usize)> {
         Err(DataFusionError::NotImplemented(
             "get_range is not implemented for this window function".to_string(),
         ))
@@ -67,6 +84,13 @@ pub trait PartitionEvaluator {
             .into_iter()
             .map(|partition| self.evaluate_partition(partition))
             .collect()
+    }
+
+    /// evaluate window function result inside given range
+    fn evaluate_stream(&self, _state: &WindowState) -> Result<ScalarValue> {
+        Err(DataFusionError::NotImplemented(
+            "evaluate_stream is not implemented by default".into(),
+        ))
     }
 
     /// evaluate the partition evaluator against the partitions with rank information
@@ -103,28 +127,6 @@ pub trait PartitionEvaluator {
     fn evaluate_inside_range(&self, _range: Range<usize>) -> Result<ScalarValue> {
         Err(DataFusionError::NotImplemented(
             "evaluate_inside_range is not implemented by default".into(),
-        ))
-    }
-
-    /// evaluate window function result inside given range
-    fn evaluate_stream(
-        &self,
-        _state: &mut AggregateWindowAccumulatorState,
-    ) -> Result<ScalarValue> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate_stream is not implemented by default".into(),
-        ))
-    }
-
-    /// evaluate window function result inside given range
-    fn evaluate_stream_rank(
-        &self,
-        _state: &mut AggregateWindowAccumulatorState,
-        _sort_partition_points: &[Range<usize>],
-        _columns: &[SortColumn],
-    ) -> Result<ScalarValue> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate_stream is not implemented by default".into(),
         ))
     }
 }

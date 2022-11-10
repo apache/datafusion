@@ -19,7 +19,9 @@
 
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
-use crate::window::{AggregateWindowAccumulatorState, WindowAccumulatorResult};
+use crate::window::common::concat_cols;
+use crate::window::window_expr::BatchState;
+use crate::window::{WindowAggState, WindowState};
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use arrow::array::Array;
 use arrow::compute::{concat, SortOptions};
@@ -30,7 +32,6 @@ use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::utils::WindowSortKeys;
 use datafusion_expr::WindowFrame;
 use std::any::Any;
-use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -150,55 +151,52 @@ impl WindowExpr for BuiltInWindowExpr {
     /// evaluate the window function values against the batch
     fn evaluate_stream(
         &self,
-        batch_state: &HashMap<Vec<ScalarValue>, (u64, RecordBatch)>,
-        window_accumulators: &mut HashMap<
-            Vec<ScalarValue>,
-            AggregateWindowAccumulatorState,
-        >,
+        batch_state: &BatchState,
+        window_accumulators: &mut WindowAggState,
         window_sort_keys: &WindowSortKeys,
         is_end: bool,
-    ) -> Result<Vec<WindowAccumulatorResult>> {
+    ) -> Result<()> {
         let window_sort_keys =
             window_sort_keys[self.partition_by.len()..window_sort_keys.len()].to_vec();
         let sort_options: Vec<SortOptions> =
             self.order_by.iter().map(|o| o.options).collect();
-        let mut results = vec![];
-        for (partition_row, (ts, partition_batch)) in batch_state.iter() {
-            let evaluator = self.expr.create_evaluator(partition_batch)?;
+        for (partition_row, partition_batch) in batch_state.iter() {
+            let mut evaluator = self.expr.create_evaluator(partition_batch)?;
             let mut state = if let Some(state) = window_accumulators.get(partition_row) {
                 state.clone()
             } else {
-                let state = AggregateWindowAccumulatorState::default();
+                let state = WindowState::default();
                 window_accumulators.insert(partition_row.clone(), state.clone());
                 state.clone()
             };
+            evaluator.set_state(&state.builtin_window_state)?;
             let num_rows = partition_batch.num_rows();
 
-            // let value_slice = self.evaluate_args(partition_batch)?;
-
             let columns = self.sort_columns(partition_batch)?;
+            let sort_partition_points =
+                self.evaluate_partition_points(num_rows, &columns)?;
             let order_bys: Vec<ArrayRef> =
                 columns.iter().map(|s| s.values.clone()).collect();
             let order_bys = order_bys[self.partition_by.len()..order_bys.len()].to_vec();
 
-            //---------------
             // We iterate on each row to perform a running calculation.
             // First, cur_range is calculated, then it is compared with last_range.
             let mut row_wise_results: Vec<ScalarValue> = vec![];
-            for i in state.last_idx..num_rows {
-                state.cur_range = self.calculate_range(
-                    &self.window_frame,
-                    &order_bys,
-                    &sort_options,
-                    num_rows,
-                    i,
-                    &window_sort_keys,
-                )?;
-                if !evaluator.uses_window_frame() {
-                    // state.cur_range = (state.last_idx, state.last_idx + 1);
-                    state.cur_range = evaluator.get_range(&state)?;
-                }
-                println!("cur range: {:?}", state.cur_range);
+            for idx in state.last_idx..num_rows {
+                state.cur_range = if !evaluator.uses_window_frame() {
+                    evaluator.get_range(&state)?
+                } else {
+                    self.calculate_range(
+                        &self.window_frame,
+                        &order_bys,
+                        &sort_options,
+                        num_rows,
+                        idx,
+                        &window_sort_keys,
+                    )?
+                };
+
+                evaluator.update_state(&state, &order_bys, &sort_partition_points)?;
                 // exit if range end index is length, need kind of flag to stop
                 if state.cur_range.1 == num_rows && !is_end {
                     state.cur_range = state.last_range;
@@ -209,50 +207,24 @@ impl WindowExpr for BuiltInWindowExpr {
                     row_wise_results
                         .push(ScalarValue::try_from(self.expr.field()?.data_type())?)
                 } else {
-                    // Accumulate any new rows that have entered the window:
-                    let range = Range {
-                        start: state.cur_range.0,
-                        end: state.cur_range.1,
-                    };
-                    let res = if evaluator.uses_window_frame() {
-                        evaluator.evaluate_inside_range(range)?
-                    } else if evaluator.include_rank() {
-                        let columns = self.sort_columns(partition_batch)?;
-                        let sort_partition_points =
-                            self.evaluate_partition_points(num_rows, &columns)?;
-                        evaluator.evaluate_stream_rank(
-                            &mut state,
-                            &sort_partition_points,
-                            &columns,
-                        )?
-                    } else {
-                        evaluator.evaluate_stream(&mut state)?
-                    };
+                    let res = evaluator.evaluate_stream(&state)?;
                     row_wise_results.push(res);
                 }
                 state.last_range = state.cur_range;
-                state.last_idx = i + 1;
+                state.last_idx = idx + 1;
             }
-            let res = if !row_wise_results.is_empty() {
+            let col = if !row_wise_results.is_empty() {
                 Some(ScalarValue::iter_to_array(row_wise_results.into_iter())?)
             } else {
                 None
             };
-            //---------------
 
-            let res = WindowAccumulatorResult {
-                partition_id: partition_row.clone(),
-                col: res,
-                num_rows,
-            };
+            state.col = concat_cols(state.col, col)?;
+            state.num_rows = num_rows;
+
+            state.builtin_window_state = evaluator.state()?;
             window_accumulators.insert(partition_row.clone(), state.clone());
-            results.push((*ts, res));
         }
-        results.sort_by(|(ts_l, _), (ts_r, _)| ts_l.partial_cmp(ts_r).unwrap());
-        let results = results
-            .into_iter()
-            .map(|(_ts, elem)| elem)
-            .collect::<Vec<WindowAccumulatorResult>>();
-        Ok(results)
+        Ok(())
     }
 }

@@ -125,13 +125,19 @@ impl Accumulator for CountAccumulator {
         )))])
     }
 
-    fn set_state(&mut self, state_data: Vec<AggregateState>) -> Result<()> {
+    fn set_state(&mut self, state_data: &[AggregateState]) -> Result<()> {
         // TODO set state for all accumulators
-        match &state_data[0] {
+        let count_state = &state_data[0];
+        match count_state {
             AggregateState::Scalar(ScalarValue::Int64(Some(val))) => {
                 self.count = *val;
             }
-            _ => todo!(),
+            count_state => {
+                return Err(DataFusionError::Execution(format!(
+                    "Unexpected State received for count {:?}",
+                    count_state
+                )))
+            }
         }
         Ok(())
     }

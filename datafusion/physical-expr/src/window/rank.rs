@@ -19,11 +19,11 @@
 //! at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::{AggregateWindowAccumulatorState, BuiltInWindowFunctionExpr};
+use crate::window::window_expr::{BuiltinWindowState, RankState};
+use crate::window::{BuiltInWindowFunctionExpr, WindowState};
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
-use arrow::compute::SortColumn;
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
@@ -99,12 +99,14 @@ impl BuiltInWindowFunctionExpr for Rank {
     ) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(RankEvaluator {
             rank_type: self.rank_type,
+            state: RankState::default(),
         }))
     }
 }
 
 pub(crate) struct RankEvaluator {
     rank_type: RankType,
+    state: RankState,
 }
 
 impl PartitionEvaluator for RankEvaluator {
@@ -112,63 +114,68 @@ impl PartitionEvaluator for RankEvaluator {
         true
     }
 
-    fn get_range(
-        &self,
-        state: &AggregateWindowAccumulatorState,
-    ) -> Result<(usize, usize)> {
+    fn get_range(&self, state: &WindowState) -> Result<(usize, usize)> {
         Ok((state.last_idx, state.last_idx + 1))
     }
 
-    fn evaluate_partition(&self, _partition: Range<usize>) -> Result<ArrayRef> {
-        unreachable!("rank evaluation must be called with evaluate_partition_with_rank")
+    fn state(&self) -> Result<BuiltinWindowState> {
+        Ok(BuiltinWindowState::Rank(self.state.clone()))
     }
 
-    /// evaluate window function result inside given range
-    fn evaluate_stream_rank(
-        &self,
-        state: &mut AggregateWindowAccumulatorState,
+    fn set_state(&mut self, state: &BuiltinWindowState) -> Result<()> {
+        match &state {
+            BuiltinWindowState::Default => {
+                self.state = RankState::default();
+            }
+            BuiltinWindowState::Rank(rank_state) => {
+                self.state = rank_state.clone();
+            }
+        }
+        Ok(())
+    }
+
+    fn update_state(
+        &mut self,
+        state: &WindowState,
+        range_columns: &[ArrayRef],
         sort_partition_points: &[Range<usize>],
-        columns: &[SortColumn],
-    ) -> Result<ScalarValue> {
+    ) -> Result<()> {
         let chunk_idx = sort_partition_points
             .iter()
             .position(|elem| elem.start <= state.last_idx && state.last_idx < elem.end)
             .unwrap();
         let cur_chunk = sort_partition_points[chunk_idx].clone();
-        let mut first_row = vec![];
-        for column in columns {
-            first_row.push(ScalarValue::try_from_array(
-                &column.values,
-                cur_chunk.start,
-            )?)
-        }
         let mut last_row = vec![];
-        for column in columns {
-            last_row.push(ScalarValue::try_from_array(
-                &column.values,
-                cur_chunk.end - 1,
-            )?)
+        for column in range_columns {
+            last_row.push(ScalarValue::try_from_array(column, cur_chunk.end - 1)?)
         }
-        println!("first row: {:?}", first_row);
-        println!("last row: {:?}", last_row);
-        if state.last_rank_data.is_empty() {
-            state.last_rank_data = last_row;
-            state.last_rank_boundary = state.n_retracted + cur_chunk.start;
-            state.n_rank = sort_partition_points.len();
-        } else if state.last_rank_data != last_row {
-            state.last_rank_data = last_row;
-            state.last_rank_boundary = state.n_retracted + cur_chunk.start;
-            state.n_rank += 1
+        if self.state.last_rank_data.is_empty() {
+            self.state.last_rank_data = last_row;
+            self.state.last_rank_boundary = state.n_retracted + cur_chunk.start;
+            self.state.n_rank = sort_partition_points.len();
+        } else if self.state.last_rank_data != last_row {
+            self.state.last_rank_data = last_row;
+            self.state.last_rank_boundary = state.n_retracted + cur_chunk.start;
+            self.state.n_rank += 1
         }
+        Ok(())
+    }
+
+    /// evaluate window function result inside given range
+    fn evaluate_stream(&self, _state: &WindowState) -> Result<ScalarValue> {
         match self.rank_type {
             RankType::Basic => Ok(ScalarValue::UInt64(Some(
-                state.last_rank_boundary as u64 + 1,
+                self.state.last_rank_boundary as u64 + 1,
             ))),
-            RankType::Dense => Ok(ScalarValue::UInt64(Some(state.n_rank as u64))),
+            RankType::Dense => Ok(ScalarValue::UInt64(Some(self.state.n_rank as u64))),
             RankType::Percent => Err(DataFusionError::Execution(
                 "Cannot Run Percent_RANK in streaming case".to_string(),
             )),
         }
+    }
+
+    fn evaluate_partition(&self, _partition: Range<usize>) -> Result<ArrayRef> {
+        unreachable!("rank evaluation must be called with evaluate_partition_with_rank")
     }
 
     fn evaluate_partition_with_rank(

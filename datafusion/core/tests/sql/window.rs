@@ -288,7 +288,6 @@ async fn window() -> Result<()> {
         4,
     )
     .await?;
-
     // result in one batch, although e.g. having 2 batches do not change
     // result semantics, having a len=1 assertion upfront keeps surprises
     // at bay
@@ -1591,9 +1590,7 @@ async fn test_window_frame_nth_value_aggregate() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::{execute_to_batches, register_aggregate_csv};
     use arrow::util::pretty::print_batches;
-    use datafusion::assert_batches_eq;
     use datafusion::datasource::MemTable;
     use datafusion::prelude::{SessionConfig, SessionContext};
     use futures::StreamExt;
@@ -1790,39 +1787,6 @@ mod tests {
 
     /// This example demonstrates executing a simple query against a Memtable
     #[tokio::test]
-    #[ignore]
-    async fn test_window_frame_running_partition_by_experiment() -> Result<()> {
-        // let config = SessionConfig::new();
-        let config = SessionConfig::new().with_target_partitions(1);
-        let ctx = SessionContext::with_config(config);
-        let (schema, batches) = mock_data_running_test()?;
-        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
-
-        ctx.register_table("users", Arc::new(mem_table))?;
-
-        let sql = " SELECT
-            SUM(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
-            FROM users AS user_
-            ";
-
-        let dataframe = ctx.sql(sql).await?;
-
-        let mut stream = dataframe.execute_stream().await.unwrap();
-        let mut res_calc = "".to_string();
-        while let Some(result) = stream.next().await {
-            let result = result.map_err(DataFusionError::ArrowError)?;
-            append_to_the_content(&result, &mut res_calc).unwrap();
-            print_batches(&[result])?;
-        }
-        println!("{}", res_calc);
-        let postgre_ref =
-            fs::read_to_string("tests/postgrerefs/partition_by_inc.csv").unwrap();
-        assert_eq!(postgre_ref, res_calc);
-        Ok(())
-    }
-
-    /// This example demonstrates executing a simple query against a Memtable
-    #[tokio::test]
     async fn test_window_frame_running_reversed() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
@@ -1866,14 +1830,20 @@ SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN 1 PRECEDING and 10 FOLLOWI
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
         ctx.register_table("users", Arc::new(mem_table))?;
-
+        //
+        //         let sql = "SELECT
+        // SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN UNBOUNDED PRECEDING and 1 FOLLOWING),
+        // SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING),
+        // SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED FOLLOWING)
+        //             FROM users AS user_
+        //             ORDER BY ts
+        //             ";
         let sql = "SELECT
-SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN UNBOUNDED PRECEDING and 1 FOLLOWING),
-SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING),
-SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED FOLLOWING)
-            FROM users AS user_
-            ORDER BY ts
-            ";
+    SUM(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) as inc_sum1,
+    SUM(desc_col) OVER(ORDER BY desc_col DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) as desc_sum1,
+    SUM(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING AND 10 FOLLOWING) as inc_sum2,
+    SUM(desc_col) OVER(ORDER BY desc_col DESC RANGE BETWEEN 10 PRECEDING AND 10 FOLLOWING) as desc_sum2
+FROM users AS user";
 
         let dataframe = ctx.sql(sql).await?;
 
@@ -2035,36 +2005,6 @@ SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED 
         Ok(())
     }
 
-    /// This example demonstrates executing a simple query against a Memtable
-    #[tokio::test]
-    #[ignore]
-    async fn test_window_frame_first_value_last_value_aggregate() -> Result<()> {
-        // let config = SessionConfig::new().with_repartition_windows(false);
-        let config = SessionConfig::new();
-        let ctx = SessionContext::with_config(config);
-        // let ctx = SessionContext::new();
-        register_aggregate_csv(&ctx).await?;
-        let sql = "SELECT
-               FIRST_VALUE(c4) OVER(ORDER BY c9 ASC RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING)
-               FROM aggregate_test_100
-               ORDER BY c9
-               LIMIT 5";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+----------------------------+",
-            "| SUM(aggregate_test_100.c4) |",
-            "+----------------------------+",
-            "| -124618                    |",
-            "| 205080                     |",
-            "| -40819                     |",
-            "| -19517                     |",
-            "| 47246                      |",
-            "+----------------------------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-        Ok(())
-    }
-
     #[tokio::test]
     async fn show_physical_plan() -> Result<()> {
         let config = SessionConfig::new();
@@ -2074,8 +2014,10 @@ SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED 
         ctx.register_table("users", Arc::new(mem_table))?;
 
         let sql = "SELECT
-FIRST_VALUE(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING)
-            FROM users AS user_";
+            SUM(inc_col) OVER(PARTITION BY inc_col ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+            SUM(inc_col) OVER(PARTITION BY desc_col ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+            FROM users AS user_
+            ORDER BY ts";
 
         let dataframe = ctx.sql(sql).await?;
         let df = dataframe.explain(false, false)?;

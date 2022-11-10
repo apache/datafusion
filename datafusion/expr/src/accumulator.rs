@@ -37,7 +37,7 @@ pub trait Accumulator: Send + Sync + Debug {
     fn state(&self) -> Result<Vec<AggregateState>>;
 
     /// Set state for accumulator
-    fn set_state(&mut self, _state_data: Vec<AggregateState>) -> Result<()> {
+    fn set_state(&mut self, _state_data: &[AggregateState]) -> Result<()> {
         // TODO set state for all accumulators
         Err(DataFusionError::Internal(
             "Set state should be implemented for aggregate functions when used with incremental queries".to_string()

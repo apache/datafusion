@@ -596,16 +596,12 @@ impl DefaultPhysicalPlanner {
                         if non_inc_sort_keys.is_empty() {
                             non_inc_sort_keys
                         } else {
-                            // we may raise error here
+                            // TODO: Raise error here
                             sort_keys.clone()
                         }
                     } else{
                         sort_keys.clone()
                     };
-
-                    println!("sort keys: {:?}", sort_keys);
-                    println!("non_inc_sort keys: {:?}", non_inc_sort_keys);
-                    println!("schema: {:?}", input.schema());
 
                     let non_inc_sort_keys = non_inc_sort_keys.iter().map(|window_sort_key|{
                         window_sort_key.expr.clone()
@@ -664,8 +660,7 @@ impl DefaultPhysicalPlanner {
                             )
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    println!("window expr: {:?}", window_expr);
-                    if is_stream{
+                    if is_stream {
                         Ok(Arc::new(StreamWindowAggExec::try_new(
                             window_expr,
                             input_exec,

@@ -18,6 +18,7 @@
 mod aggregate;
 mod built_in;
 mod built_in_window_function_expr;
+mod common;
 pub(crate) mod cume_dist;
 pub(crate) mod lead_lag;
 pub(crate) mod nth_value;
@@ -29,6 +30,8 @@ mod window_expr;
 pub use aggregate::AggregateWindowExpr;
 pub use built_in::BuiltInWindowExpr;
 pub use built_in_window_function_expr::BuiltInWindowFunctionExpr;
-pub use window_expr::AggregateWindowAccumulatorState;
-pub use window_expr::WindowAccumulatorResult;
+pub use window_expr::BatchState;
+pub use window_expr::PartitionKey;
+pub use window_expr::WindowAggState;
 pub use window_expr::WindowExpr;
+pub use window_expr::WindowState;
