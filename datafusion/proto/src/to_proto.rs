@@ -1188,30 +1188,49 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
 
-            // Since the protos only support Time64 and always interpret it to nanosecond accuracy,
-            // all ScalarValues of types Time32 and Time64 are adapted into a Time64Value, taking
-            // into account the necessary conversion into nanoseconds
             datafusion::scalar::ScalarValue::Time32Second(v) => {
-                create_proto_scalar(v, PrimitiveScalarType::Time64, |v| {
-                    Value::Time64Value(*v as i64 * 1_000_000_000)
+                create_proto_scalar(v, PrimitiveScalarType::Time32Second, |v| {
+                    Value::Time32Value(protobuf::ScalarTime32Value {
+                        value: Some(
+                            protobuf::scalar_time32_value::Value::Time32SecondValue(*v),
+                        ),
+                    })
                 })
             }
 
             datafusion::scalar::ScalarValue::Time32Millisecond(v) => {
-                create_proto_scalar(v, PrimitiveScalarType::Time64, |v| {
-                    Value::Time64Value(*v as i64 * 1_000_000)
+                create_proto_scalar(v, PrimitiveScalarType::Time32Millisecond, |v| {
+                    Value::Time32Value(protobuf::ScalarTime32Value {
+                        value: Some(
+                            protobuf::scalar_time32_value::Value::Time32MillisecondValue(
+                                *v,
+                            ),
+                        ),
+                    })
                 })
             }
 
             datafusion::scalar::ScalarValue::Time64Microsecond(v) => {
-                create_proto_scalar(v, PrimitiveScalarType::Time64, |v| {
-                    Value::Time64Value(*v * 1_000)
+                create_proto_scalar(v, PrimitiveScalarType::Time64Microsecond, |v| {
+                    Value::Time64Value(protobuf::ScalarTime64Value {
+                        value: Some(
+                            protobuf::scalar_time64_value::Value::Time64MicrosecondValue(
+                                *v,
+                            ),
+                        ),
+                    })
                 })
             }
 
             datafusion::scalar::ScalarValue::Time64Nanosecond(v) => {
-                create_proto_scalar(v, PrimitiveScalarType::Time64, |v| {
-                    Value::Time64Value(*v)
+                create_proto_scalar(v, PrimitiveScalarType::Time64Nanosecond, |v| {
+                    Value::Time64Value(protobuf::ScalarTime64Value {
+                        value: Some(
+                            protobuf::scalar_time64_value::Value::Time64NanosecondValue(
+                                *v,
+                            ),
+                        ),
+                    })
                 })
             }
 
