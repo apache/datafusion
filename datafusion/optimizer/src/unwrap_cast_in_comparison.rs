@@ -32,25 +32,42 @@ use datafusion_expr::{
 };
 use std::sync::Arc;
 
-/// The rule can be used to the numeric binary comparison with literal expr, like below pattern:
-/// `cast(left_expr as data_type) comparison_op literal_expr` or `literal_expr comparison_op cast(right_expr as data_type)`.
-/// The data type of two sides must be equal, and must be signed numeric type now, and will support more data type later.
+/// [`UnwrapCastInComparison`] attempts to remove casts from
+/// comparisons to literals ([`ScalarValue`]s) by applying the casts
+/// to the literals if possible. It is inspired by the optimizer rule
+/// `UnwrapCastInBinaryComparison` of Spark.
 ///
-/// If the binary comparison expr match above rules, the optimizer will check if the value of `literal`
-/// is in within range(min,max) which is the range(min,max) of the data type for `left_expr` or `right_expr`.
+/// Removing casts often improves performance because:
+/// 1. The cast is done once (to the literal) rather than to every value
+/// 2. Can enable other optimizations such as predicate pushdown that
+///    don't support casting
 ///
-/// If this is true, the literal expr will be casted to the data type of expr on the other side, and the result of
-/// binary comparison will be `left_expr comparison_op cast(literal_expr, left_data_type)` or
-/// `cast(literal_expr, right_data_type) comparison_op right_expr`. For better optimization,
-/// the expr of `cast(literal_expr, target_type)` will be precomputed and converted to the new expr `new_literal_expr`
-/// which data type is `target_type`.
-/// If this false, do nothing.
+/// The rule is applied to expressions of the following forms:
 ///
-/// This is inspired by the optimizer rule `UnwrapCastInBinaryComparison` of Spark.
+/// 1. `cast(left_expr as data_type) comparison_op literal_expr`
+/// 2. `literal_expr comparison_op cast(left_expr as data_type)`
+/// 3. `cast(literal_expr) IN (expr1, expr2, ...)`
+/// 4. `literal_expr IN (cast(expr1) , cast(expr2), ...)`
+///
+/// If the expression matches one of the forms above, the rule will
+/// ensure the value of `literal` is in within range(min, max) of the
+/// expr's data_type, and if the scalar is within range, the literal
+/// will be casted to the data type of expr on the other side, and the
+/// cast will be removed from the other side.
+///
 /// # Example
 ///
-/// `Filter: cast(c1 as INT64) > INT64(10)` will be optimized to `Filter: c1 > CAST(INT64(10) AS INT32),
-/// and continue to be converted to `Filter: c1 > INT32(10)`, if the DataType of c1 is INT32.
+/// If the DataType of c1 is INT32. Given the filter
+///
+/// ```text
+/// Filter: cast(c1 as INT64) > INT64(10)`
+/// ```
+///
+/// This rule will remove the cast and rewrite the expression to:
+///
+/// ```text
+/// Filter: c1 > INT32(10)
+/// ```
 ///
 #[derive(Default)]
 pub struct UnwrapCastInComparison {}
@@ -379,8 +396,10 @@ fn try_cast_literal_to_type(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::unwrap_cast_in_comparison::UnwrapCastExprRewriter;
-    use arrow::datatypes::DataType;
+    use arrow::compute::{cast_with_options, CastOptions};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, ScalarValue};
     use datafusion_expr::expr_rewriter::ExprRewritable;
     use datafusion_expr::{cast, col, in_list, lit, try_cast, Expr};
@@ -652,5 +671,197 @@ mod tests {
 
     fn null_decimal(precision: u8, scale: u8) -> Expr {
         lit(ScalarValue::Decimal128(None, precision, scale))
+    }
+
+    #[test]
+    fn test_try_cast_to_type_nulls() {
+        // test values that can be cast to/from all integer types
+        let scalars = vec![
+            ScalarValue::Int8(None),
+            ScalarValue::Int16(None),
+            ScalarValue::Int32(None),
+            ScalarValue::Int64(None),
+            ScalarValue::Decimal128(None, 3, 0),
+            ScalarValue::Decimal128(None, 8, 2),
+        ];
+
+        for s1 in &scalars {
+            for s2 in &scalars {
+                expect_cast(
+                    s1.clone(),
+                    s2.get_datatype(),
+                    ExpectedCast::Value(s2.clone()),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_try_cast_to_type_int_in_range() {
+        // test values that can be cast to/from all integer types
+        let scalars = vec![
+            ScalarValue::Int8(Some(123)),
+            ScalarValue::Int16(Some(123)),
+            ScalarValue::Int32(Some(123)),
+            ScalarValue::Int64(Some(123)),
+            ScalarValue::Decimal128(Some(123), 3, 0),
+            ScalarValue::Decimal128(Some(12300), 8, 2),
+        ];
+
+        for s1 in &scalars {
+            for s2 in &scalars {
+                expect_cast(
+                    s1.clone(),
+                    s2.get_datatype(),
+                    ExpectedCast::Value(s2.clone()),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_try_cast_to_type_int_out_of_range() {
+        let max_i64 = ScalarValue::Int64(Some(i64::MAX));
+        let max_u64 = ScalarValue::UInt64(Some(u64::MAX));
+        expect_cast(max_i64.clone(), DataType::Int8, ExpectedCast::NoValue);
+
+        expect_cast(max_i64.clone(), DataType::Int16, ExpectedCast::NoValue);
+
+        expect_cast(max_i64, DataType::Int32, ExpectedCast::NoValue);
+
+        expect_cast(max_u64, DataType::Int64, ExpectedCast::NoValue);
+
+        // decimal out of range
+        expect_cast(
+            ScalarValue::Decimal128(Some(99999999999999999999999999999999999900), 38, 0),
+            DataType::Int64,
+            ExpectedCast::NoValue,
+        );
+
+        expect_cast(
+            ScalarValue::Decimal128(Some(-9999999999999999999999999999999999), 37, 1),
+            DataType::Int64,
+            ExpectedCast::NoValue,
+        );
+    }
+
+    #[test]
+    fn test_try_decimal_cast_in_range() {
+        expect_cast(
+            ScalarValue::Decimal128(Some(12300), 5, 2),
+            DataType::Decimal128(3, 0),
+            ExpectedCast::Value(ScalarValue::Decimal128(Some(123), 3, 0)),
+        );
+
+        expect_cast(
+            ScalarValue::Decimal128(Some(12300), 5, 2),
+            DataType::Decimal128(8, 0),
+            ExpectedCast::Value(ScalarValue::Decimal128(Some(123), 8, 0)),
+        );
+
+        expect_cast(
+            ScalarValue::Decimal128(Some(12300), 5, 2),
+            DataType::Decimal128(8, 5),
+            ExpectedCast::Value(ScalarValue::Decimal128(Some(12300000), 8, 5)),
+        );
+    }
+
+    #[test]
+    fn test_try_decimal_cast_out_of_range() {
+        // decimal would lose precision
+        expect_cast(
+            ScalarValue::Decimal128(Some(12345), 5, 2),
+            DataType::Decimal128(3, 0),
+            ExpectedCast::NoValue,
+        );
+
+        // decimal would lose precision
+        expect_cast(
+            ScalarValue::Decimal128(Some(12300), 5, 2),
+            DataType::Decimal128(2, 0),
+            ExpectedCast::NoValue,
+        );
+    }
+
+    #[test]
+    fn test_try_cast_to_type_unsupported() {
+        // int64 to list
+        expect_cast(
+            ScalarValue::Int64(Some(12345)),
+            DataType::List(Box::new(Field::new("f", DataType::Int32, true))),
+            ExpectedCast::NoValue,
+        );
+    }
+
+    #[derive(Debug, Clone)]
+    enum ExpectedCast {
+        /// test successfully cast value and it is as specified
+        Value(ScalarValue),
+        /// test returned OK, but could not cast the value
+        NoValue,
+    }
+
+    /// Runs try_cast_literal_to_type with the specified inputs and
+    /// ensure it computes the expected output, and ensures the
+    /// casting is consistent with the Arrow kernels
+    fn expect_cast(
+        literal: ScalarValue,
+        target_type: DataType,
+        expected_result: ExpectedCast,
+    ) {
+        let actual_result = try_cast_literal_to_type(&literal, &target_type);
+
+        println!("expect_cast: ");
+        println!("  {:?} --> {:?}", literal, target_type);
+        println!("  expected_result: {:?}", expected_result);
+        println!("  actual_result:   {:?}", actual_result);
+
+        match expected_result {
+            ExpectedCast::Value(expected_value) => {
+                let actual_value = actual_result
+                    .expect("Expected success but got error")
+                    .expect("Expected cast value but got None");
+
+                assert_eq!(actual_value, expected_value);
+
+                // Verify that calling the arrow
+                // cast kernel yields the same results
+                // input array
+                let literal_array = literal.to_array_of_size(1);
+                let expected_array = expected_value.to_array_of_size(1);
+                let cast_array = cast_with_options(
+                    &literal_array,
+                    &target_type,
+                    &CastOptions { safe: true },
+                )
+                .expect("Expected to be cast array with arrow cast kernel");
+
+                assert_eq!(
+                    &expected_array, &cast_array,
+                    "Result of casing {:?} with arrow was\n {:#?}\nbut expected\n{:#?}",
+                    literal, cast_array, expected_array
+                );
+
+                // Verify that for timestamp types the timezones are the same
+                // (ScalarValue::cmp doesn't account for timezones);
+                if let (
+                    DataType::Timestamp(left_unit, left_tz),
+                    DataType::Timestamp(right_unit, right_tz),
+                ) = (actual_value.get_datatype(), expected_value.get_datatype())
+                {
+                    assert_eq!(left_unit, right_unit);
+                    assert_eq!(left_tz, right_tz);
+                }
+            }
+            ExpectedCast::NoValue => {
+                let actual_value = actual_result.expect("Expected success but got error");
+
+                assert!(
+                    actual_value.is_none(),
+                    "Expected no cast value, but got {:?}",
+                    actual_value
+                );
+            }
+        }
     }
 }

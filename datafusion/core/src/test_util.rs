@@ -289,6 +289,7 @@ impl TableProviderFactory for TestTableFactory {
     ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
         Ok(Arc::new(TestTableProvider {
             url: cmd.location.to_string(),
+            schema: Arc::new(cmd.schema.as_ref().into()),
         }))
     }
 }
@@ -297,6 +298,8 @@ impl TableProviderFactory for TestTableFactory {
 pub struct TestTableProvider {
     /// URL of table files or folder
     pub url: String,
+    /// test table schema
+    pub schema: SchemaRef,
 }
 
 impl TestTableProvider {}
@@ -308,11 +311,7 @@ impl TableProvider for TestTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int64, true),
-            Field::new("b", DataType::Decimal128(15, 2), true),
-        ]);
-        Arc::new(schema)
+        self.schema.clone()
     }
 
     fn table_type(&self) -> TableType {
