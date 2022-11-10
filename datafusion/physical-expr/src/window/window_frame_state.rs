@@ -30,144 +30,137 @@ use std::sync::Arc;
 
 /// This object stores the window frame state for use in incremental calculations.
 #[derive(Debug)]
-pub enum WindowFrameState {
-    Rows(WindowFrameStateRows),
-    Range(WindowFrameStateRange),
-    Groups(WindowFrameStateGroups),
+pub enum WindowFrameContext<'a> {
+    // ROWS-frames are inherently stateless:
+    Rows(&'a Arc<WindowFrame>),
+    // RANGE-frames will soon have a stateful implementation that is more efficient than a stateless one:
+    Range {
+        window_frame: &'a Arc<WindowFrame>,
+        state: WindowFrameStateRange,
+    },
+    // GROUPS-frames have a stateful implementation that is more efficient than a stateless one:
+    Groups {
+        window_frame: &'a Arc<WindowFrame>,
+        state: WindowFrameStateGroups,
+    },
     Default,
 }
 
-impl WindowFrameState {
+impl<'a> WindowFrameContext<'a> {
+    /// Create a new default state for the given window frame.
+    pub fn new(window_frame: &'a Option<Arc<WindowFrame>>) -> Self {
+        if let Some(window_frame) = window_frame {
+            match window_frame.units {
+                WindowFrameUnits::Rows => WindowFrameContext::Rows(window_frame),
+                WindowFrameUnits::Range => WindowFrameContext::Range {
+                    window_frame,
+                    state: WindowFrameStateRange::default(),
+                },
+                WindowFrameUnits::Groups => WindowFrameContext::Groups {
+                    window_frame,
+                    state: WindowFrameStateGroups::default(),
+                },
+            }
+        } else {
+            WindowFrameContext::Default
+        }
+    }
+
     /// This function calculates beginning/ending indices for the frame of the current row.
     pub fn calculate_range(
         &mut self,
-        window_frame: &Option<Arc<WindowFrame>>,
         range_columns: &[ArrayRef],
         sort_options: &[SortOptions],
         length: usize,
         idx: usize,
     ) -> Result<(usize, usize)> {
         match *self {
-            WindowFrameState::Rows(ref mut frame) => frame.calculate_range(
-                window_frame,
-                range_columns,
-                sort_options,
-                length,
-                idx,
-            ),
-            WindowFrameState::Range(ref mut frame) => frame.calculate_range(
-                window_frame,
-                range_columns,
-                sort_options,
-                length,
-                idx,
-            ),
-            WindowFrameState::Groups(ref mut frame) => frame.calculate_range(
-                window_frame,
-                range_columns,
-                sort_options,
-                length,
-                idx,
-            ),
-            WindowFrameState::Default => Ok((0, length)),
-        }
-    }
-
-    /// Create a new default state for the given window frame.
-    pub fn new(window_frame: &Option<Arc<WindowFrame>>) -> Self {
-        if let Some(window_frame) = window_frame {
-            match window_frame.units {
-                WindowFrameUnits::Rows => {
-                    WindowFrameState::Rows(WindowFrameStateRows::default())
-                }
-                WindowFrameUnits::Range => {
-                    WindowFrameState::Range(WindowFrameStateRange::default())
-                }
-                WindowFrameUnits::Groups => {
-                    WindowFrameState::Groups(WindowFrameStateGroups::default())
-                }
+            WindowFrameContext::Rows(window_frame) => {
+                Self::calculate_range_rows(window_frame, length, idx)
             }
-        } else {
-            WindowFrameState::Default
+            WindowFrameContext::Range {
+                window_frame,
+                ref mut state,
+            } => state.calculate_range(
+                window_frame,
+                range_columns,
+                sort_options,
+                length,
+                idx,
+            ),
+            WindowFrameContext::Groups {
+                window_frame,
+                ref mut state,
+            } => state.calculate_range(
+                window_frame,
+                range_columns,
+                sort_options,
+                length,
+                idx,
+            ),
+            WindowFrameContext::Default => Ok((0, length)),
         }
     }
-}
 
-/// This empty struct reflects the stateless nature of row-based window frames.
-#[derive(Debug, Default)]
-pub struct WindowFrameStateRows {}
-
-impl WindowFrameStateRows {
     /// This function calculates beginning/ending indices for the frame of the current row.
-    fn calculate_range(
-        &mut self,
-        window_frame: &Option<Arc<WindowFrame>>,
-        _range_columns: &[ArrayRef],
-        _sort_options: &[SortOptions],
+    fn calculate_range_rows(
+        window_frame: &Arc<WindowFrame>,
         length: usize,
         idx: usize,
     ) -> Result<(usize, usize)> {
-        if let Some(window_frame) = window_frame {
-            let start = match window_frame.start_bound {
-                // UNBOUNDED PRECEDING
-                WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => 0,
-                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
-                    if idx >= n as usize {
-                        idx - n as usize
-                    } else {
-                        0
-                    }
+        let start = match window_frame.start_bound {
+            // UNBOUNDED PRECEDING
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => 0,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
+                if idx >= n as usize {
+                    idx - n as usize
+                } else {
+                    0
                 }
-                WindowFrameBound::CurrentRow => idx,
-                // UNBOUNDED FOLLOWING
-                WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
-                        window_frame
-                    )))
+            }
+            WindowFrameBound::CurrentRow => idx,
+            // UNBOUNDED FOLLOWING
+            WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
+                return Err(DataFusionError::Internal(format!(
+                    "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
+                    window_frame
+                )))
+            }
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
+                min(idx + n as usize, length)
+            }
+            // ERRONEOUS FRAMES
+            WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
+                return Err(DataFusionError::Internal("Rows should be Uint".to_string()))
+            }
+        };
+        let end = match window_frame.end_bound {
+            // UNBOUNDED PRECEDING
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
+                return Err(DataFusionError::Internal(format!(
+                    "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
+                    window_frame
+                )))
+            }
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
+                if idx >= n as usize {
+                    idx - n as usize + 1
+                } else {
+                    0
                 }
-                WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
-                    min(idx + n as usize, length)
-                }
-                // ERRONEOUS FRAMES
-                WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                    return Err(DataFusionError::Internal(
-                        "Rows should be Uint".to_string(),
-                    ))
-                }
-            };
-            let end = match window_frame.end_bound {
-                // UNBOUNDED PRECEDING
-                WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
-                        window_frame
-                    )))
-                }
-                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
-                    if idx >= n as usize {
-                        idx - n as usize + 1
-                    } else {
-                        0
-                    }
-                }
-                WindowFrameBound::CurrentRow => idx + 1,
-                // UNBOUNDED FOLLOWING
-                WindowFrameBound::Following(ScalarValue::UInt64(None)) => length,
-                WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
-                    min(idx + n as usize + 1, length)
-                }
-                // ERRONEOUS FRAMES
-                WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                    return Err(DataFusionError::Internal(
-                        "Rows should be Uint".to_string(),
-                    ))
-                }
-            };
-            Ok((start, end))
-        } else {
-            Ok((0, length))
-        }
+            }
+            WindowFrameBound::CurrentRow => idx + 1,
+            // UNBOUNDED FOLLOWING
+            WindowFrameBound::Following(ScalarValue::UInt64(None)) => length,
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
+                min(idx + n as usize + 1, length)
+            }
+            // ERRONEOUS FRAMES
+            WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
+                return Err(DataFusionError::Internal("Rows should be Uint".to_string()))
+            }
+        };
+        Ok((start, end))
     }
 }
 
@@ -181,85 +174,81 @@ impl WindowFrameStateRange {
     /// This function calculates beginning/ending indices for the frame of the current row.
     fn calculate_range(
         &mut self,
-        window_frame: &Option<Arc<WindowFrame>>,
+        window_frame: &Arc<WindowFrame>,
         range_columns: &[ArrayRef],
         sort_options: &[SortOptions],
         length: usize,
         idx: usize,
     ) -> Result<(usize, usize)> {
-        if let Some(window_frame) = window_frame {
-            let start = match &window_frame.start_bound {
-                WindowFrameBound::Preceding(n) => {
-                    if n.is_null() {
-                        // UNBOUNDED PRECEDING
-                        0
-                    } else {
-                        self.calculate_index_of_row::<true, true>(
-                            range_columns,
-                            sort_options,
-                            idx,
-                            Some(n),
-                        )?
-                    }
-                }
-                WindowFrameBound::CurrentRow => {
-                    if range_columns.is_empty() {
-                        0
-                    } else {
-                        self.calculate_index_of_row::<true, true>(
-                            range_columns,
-                            sort_options,
-                            idx,
-                            None,
-                        )?
-                    }
-                }
-                WindowFrameBound::Following(n) => self
-                    .calculate_index_of_row::<true, false>(
+        let start = match window_frame.start_bound {
+            WindowFrameBound::Preceding(ref n) => {
+                if n.is_null() {
+                    // UNBOUNDED PRECEDING
+                    0
+                } else {
+                    self.calculate_index_of_row::<true, true>(
                         range_columns,
                         sort_options,
                         idx,
                         Some(n),
-                    )?,
-            };
-            let end = match &window_frame.end_bound {
-                WindowFrameBound::Preceding(n) => self
-                    .calculate_index_of_row::<false, true>(
+                    )?
+                }
+            }
+            WindowFrameBound::CurrentRow => {
+                if range_columns.is_empty() {
+                    0
+                } else {
+                    self.calculate_index_of_row::<true, true>(
+                        range_columns,
+                        sort_options,
+                        idx,
+                        None,
+                    )?
+                }
+            }
+            WindowFrameBound::Following(ref n) => self
+                .calculate_index_of_row::<true, false>(
+                    range_columns,
+                    sort_options,
+                    idx,
+                    Some(n),
+                )?,
+        };
+        let end = match window_frame.end_bound {
+            WindowFrameBound::Preceding(ref n) => self
+                .calculate_index_of_row::<false, true>(
+                    range_columns,
+                    sort_options,
+                    idx,
+                    Some(n),
+                )?,
+            WindowFrameBound::CurrentRow => {
+                if range_columns.is_empty() {
+                    length
+                } else {
+                    self.calculate_index_of_row::<false, false>(
+                        range_columns,
+                        sort_options,
+                        idx,
+                        None,
+                    )?
+                }
+            }
+            WindowFrameBound::Following(ref n) => {
+                if n.is_null() {
+                    // UNBOUNDED FOLLOWING
+                    length
+                } else {
+                    self.calculate_index_of_row::<false, false>(
                         range_columns,
                         sort_options,
                         idx,
                         Some(n),
-                    )?,
-                WindowFrameBound::CurrentRow => {
-                    if range_columns.is_empty() {
-                        length
-                    } else {
-                        self.calculate_index_of_row::<false, false>(
-                            range_columns,
-                            sort_options,
-                            idx,
-                            None,
-                        )?
-                    }
+                    )?
                 }
-                WindowFrameBound::Following(n) => {
-                    if n.is_null() {
-                        // UNBOUNDED FOLLOWING
-                        length
-                    } else {
-                        self.calculate_index_of_row::<false, false>(
-                            range_columns,
-                            sort_options,
-                            idx,
-                            Some(n),
-                        )?
-                    }
-                }
-            };
-            Ok((start, end))
-        } else {
-            Ok((0, length))
-        }
+            }
+        };
+        Ok((start, end))
     }
 
     /// This function does the heavy lifting when finding range boundaries. It is meant to be
@@ -348,7 +337,7 @@ impl WindowFrameStateGroups {
     /// This function calculates beginning/ending indices for the frame of the current row.
     fn calculate_range(
         &mut self,
-        window_frame: &Option<Arc<WindowFrame>>,
+        window_frame: &Arc<WindowFrame>,
         range_columns: &[ArrayRef],
         _sort_options: &[SortOptions],
         length: usize,
@@ -359,87 +348,67 @@ impl WindowFrameStateGroups {
                 "GROUPS mode requires an ORDER BY clause".to_string(),
             ));
         }
-        if let Some(window_frame) = window_frame {
-            let start = match window_frame.start_bound {
-                // UNBOUNDED PRECEDING
-                WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => 0,
-                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => self
-                    .calculate_index_of_group::<true, true>(
-                        range_columns,
-                        idx,
-                        n,
-                        length,
-                    )?,
-                WindowFrameBound::CurrentRow => self
-                    .calculate_index_of_group::<true, true>(
-                        range_columns,
-                        idx,
-                        0,
-                        length,
-                    )?,
-                WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => self
-                    .calculate_index_of_group::<true, false>(
-                        range_columns,
-                        idx,
-                        n,
-                        length,
-                    )?,
-                // UNBOUNDED FOLLOWING
-                WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
-                        window_frame
-                    )))
-                }
-                // ERRONEOUS FRAMES
-                WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                    return Err(DataFusionError::Internal(
-                        "Groups should be Uint".to_string(),
-                    ))
-                }
-            };
-            let end = match window_frame.end_bound {
-                // UNBOUNDED PRECEDING
-                WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
-                        window_frame
-                    )))
-                }
-                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => self
-                    .calculate_index_of_group::<false, true>(
-                        range_columns,
-                        idx,
-                        n,
-                        length,
-                    )?,
-                WindowFrameBound::CurrentRow => self
-                    .calculate_index_of_group::<false, false>(
-                        range_columns,
-                        idx,
-                        0,
-                        length,
-                    )?,
-                WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => self
-                    .calculate_index_of_group::<false, false>(
-                        range_columns,
-                        idx,
-                        n,
-                        length,
-                    )?,
-                // UNBOUNDED FOLLOWING
-                WindowFrameBound::Following(ScalarValue::UInt64(None)) => length,
-                // ERRONEOUS FRAMES
-                WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
-                    return Err(DataFusionError::Internal(
-                        "Groups should be Uint".to_string(),
-                    ))
-                }
-            };
-            Ok((start, end))
-        } else {
-            Ok((0, length))
-        }
+        let start = match window_frame.start_bound {
+            // UNBOUNDED PRECEDING
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => 0,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => self
+                .calculate_index_of_group::<true, true>(range_columns, idx, n, length)?,
+            WindowFrameBound::CurrentRow => self.calculate_index_of_group::<true, true>(
+                range_columns,
+                idx,
+                0,
+                length,
+            )?,
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => self
+                .calculate_index_of_group::<true, false>(range_columns, idx, n, length)?,
+            // UNBOUNDED FOLLOWING
+            WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
+                return Err(DataFusionError::Internal(format!(
+                    "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
+                    window_frame
+                )))
+            }
+            // ERRONEOUS FRAMES
+            WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
+                return Err(DataFusionError::Internal(
+                    "Groups should be Uint".to_string(),
+                ))
+            }
+        };
+        let end = match window_frame.end_bound {
+            // UNBOUNDED PRECEDING
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
+                return Err(DataFusionError::Internal(format!(
+                    "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
+                    window_frame
+                )))
+            }
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => self
+                .calculate_index_of_group::<false, true>(range_columns, idx, n, length)?,
+            WindowFrameBound::CurrentRow => self
+                .calculate_index_of_group::<false, false>(
+                    range_columns,
+                    idx,
+                    0,
+                    length,
+                )?,
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => self
+                .calculate_index_of_group::<false, false>(
+                    range_columns,
+                    idx,
+                    n,
+                    length,
+                )?,
+            // UNBOUNDED FOLLOWING
+            WindowFrameBound::Following(ScalarValue::UInt64(None)) => length,
+            // ERRONEOUS FRAMES
+            WindowFrameBound::Preceding(_) | WindowFrameBound::Following(_) => {
+                return Err(DataFusionError::Internal(
+                    "Groups should be Uint".to_string(),
+                ))
+            }
+        };
+        Ok((start, end))
     }
 
     /// This function does the heavy lifting when finding group boundaries. It is meant to be
