@@ -28,20 +28,18 @@
 //! [Facebook's Folly TDigest]: https://github.com/facebook/folly/blob/main/folly/stats/TDigest.h
 
 use arrow::datatypes::DataType;
-use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use ordered_float::OrderedFloat;
 use std::cmp::Ordering;
 
 pub const DEFAULT_MAX_SIZE: usize = 100;
 
-// Cast a non-null [`ScalarValue::Float64`] to an [`OrderedFloat<f64>`], or
+// Cast a non-null [`ScalarValue::Float64`] to an [`f64`], or
 // panic.
 macro_rules! cast_scalar_f64 {
     ($value:expr ) => {
         match &$value {
-            ScalarValue::Float64(Some(v)) => OrderedFloat::from(*v),
+            ScalarValue::Float64(Some(v)) => *v,
             v => panic!("invalid type {:?}", v),
         }
     };
@@ -50,22 +48,22 @@ macro_rules! cast_scalar_f64 {
 /// This trait is implemented for each type a [`TDigest`] can operate on,
 /// allowing it to support both numerical rust types (obtained from
 /// `PrimitiveArray` instances), and [`ScalarValue`] instances.
-pub(crate) trait TryIntoOrderedF64 {
-    /// A fallible conversion of a possibly null `self` into a [`OrderedFloat<f64>`].
+pub(crate) trait TryIntoF64 {
+    /// A fallible conversion of a possibly null `self` into a [`f64`].
     ///
     /// If `self` is null, this method must return `Ok(None)`.
     ///
     /// If `self` cannot be coerced to the desired type, this method must return
     /// an `Err` variant.
-    fn try_as_f64(&self) -> Result<Option<OrderedFloat<f64>>>;
+    fn try_as_f64(&self) -> Result<Option<f64>>;
 }
 
-/// Generate an infallible conversion from `type` to an [`OrderedFloat<f64>`].
+/// Generate an infallible conversion from `type` to an [`f64`].
 macro_rules! impl_try_ordered_f64 {
     ($type:ty) => {
-        impl TryIntoOrderedF64 for $type {
-            fn try_as_f64(&self) -> Result<Option<OrderedFloat<f64>>> {
-                Ok(Some(OrderedFloat::from(*self as f64)))
+        impl TryIntoF64 for $type {
+            fn try_as_f64(&self) -> Result<Option<f64>> {
+                Ok(Some(*self as f64))
             }
         }
     };
@@ -82,33 +80,11 @@ impl_try_ordered_f64!(u32);
 impl_try_ordered_f64!(u16);
 impl_try_ordered_f64!(u8);
 
-impl TryIntoOrderedF64 for ScalarValue {
-    fn try_as_f64(&self) -> Result<Option<OrderedFloat<f64>>> {
-        match self {
-            ScalarValue::Float32(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
-            ScalarValue::Float64(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
-            ScalarValue::Int8(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
-            ScalarValue::Int16(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
-            ScalarValue::Int32(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
-            ScalarValue::Int64(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
-            ScalarValue::UInt8(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
-            ScalarValue::UInt16(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
-            ScalarValue::UInt32(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
-            ScalarValue::UInt64(v) => Ok(v.map(|v| OrderedFloat::from(v as f64))),
-
-            got => Err(DataFusionError::NotImplemented(format!(
-                "Support for 'TryIntoOrderedF64' for data type {} is not implemented",
-                got
-            ))),
-        }
-    }
-}
-
 /// Centroid implementation to the cluster mentioned in the paper.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Centroid {
-    mean: OrderedFloat<f64>,
-    weight: OrderedFloat<f64>,
+    mean: f64,
+    weight: f64,
 }
 
 impl PartialOrd for Centroid {
@@ -117,64 +93,56 @@ impl PartialOrd for Centroid {
     }
 }
 
+impl Eq for Centroid {}
+
 impl Ord for Centroid {
     fn cmp(&self, other: &Centroid) -> Ordering {
-        self.mean.cmp(&other.mean)
+        self.mean.total_cmp(&other.mean)
     }
 }
 
 impl Centroid {
-    pub(crate) fn new(
-        mean: impl Into<OrderedFloat<f64>>,
-        weight: impl Into<OrderedFloat<f64>>,
-    ) -> Self {
-        Centroid {
-            mean: mean.into(),
-            weight: weight.into(),
-        }
+    pub(crate) fn new(mean: f64, weight: f64) -> Self {
+        Centroid { mean, weight }
     }
 
     #[inline]
-    pub(crate) fn mean(&self) -> OrderedFloat<f64> {
+    pub(crate) fn mean(&self) -> f64 {
         self.mean
     }
 
     #[inline]
-    pub(crate) fn weight(&self) -> OrderedFloat<f64> {
+    pub(crate) fn weight(&self) -> f64 {
         self.weight
     }
 
-    pub(crate) fn add(
-        &mut self,
-        sum: impl Into<OrderedFloat<f64>>,
-        weight: impl Into<OrderedFloat<f64>>,
-    ) -> f64 {
-        let new_sum = sum.into() + self.weight * self.mean;
-        let new_weight = self.weight + weight.into();
+    pub(crate) fn add(&mut self, sum: f64, weight: f64) -> f64 {
+        let new_sum = sum + self.weight * self.mean;
+        let new_weight = self.weight + weight;
         self.weight = new_weight;
         self.mean = new_sum / new_weight;
-        new_sum.into_inner()
+        new_sum
     }
 }
 
 impl Default for Centroid {
     fn default() -> Self {
         Centroid {
-            mean: OrderedFloat::from(0.0),
-            weight: OrderedFloat::from(1.0),
+            mean: 0_f64,
+            weight: 1_f64,
         }
     }
 }
 
 /// T-Digest to be operated on.
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct TDigest {
     centroids: Vec<Centroid>,
     max_size: usize,
-    sum: OrderedFloat<f64>,
-    count: OrderedFloat<f64>,
-    max: OrderedFloat<f64>,
-    min: OrderedFloat<f64>,
+    sum: f64,
+    count: f64,
+    max: f64,
+    min: f64,
 }
 
 impl TDigest {
@@ -182,10 +150,10 @@ impl TDigest {
         TDigest {
             centroids: Vec::new(),
             max_size,
-            sum: OrderedFloat::from(0.0),
-            count: OrderedFloat::from(0.0),
-            max: OrderedFloat::from(std::f64::NAN),
-            min: OrderedFloat::from(std::f64::NAN),
+            sum: 0_f64,
+            count: 0_f64,
+            max: std::f64::NAN,
+            min: std::f64::NAN,
         }
     }
 
@@ -194,7 +162,7 @@ impl TDigest {
             centroids: vec![centroid.clone()],
             max_size,
             sum: centroid.mean * centroid.weight,
-            count: OrderedFloat::from(1.0),
+            count: 1_f64,
             max: centroid.mean,
             min: centroid.mean,
         }
@@ -202,17 +170,17 @@ impl TDigest {
 
     #[inline]
     pub(crate) fn count(&self) -> f64 {
-        self.count.into_inner()
+        self.count
     }
 
     #[inline]
     pub(crate) fn max(&self) -> f64 {
-        self.max.into_inner()
+        self.max
     }
 
     #[inline]
     pub(crate) fn min(&self) -> f64 {
-        self.min.into_inner()
+        self.min
     }
 
     #[inline]
@@ -226,16 +194,16 @@ impl Default for TDigest {
         TDigest {
             centroids: Vec::new(),
             max_size: 100,
-            sum: OrderedFloat::from(0.0),
-            count: OrderedFloat::from(0.0),
-            max: OrderedFloat::from(std::f64::NAN),
-            min: OrderedFloat::from(std::f64::NAN),
+            sum: 0_f64,
+            count: 0_f64,
+            max: std::f64::NAN,
+            min: std::f64::NAN,
         }
     }
 }
 
 impl TDigest {
-    fn k_to_q(k: f64, d: f64) -> OrderedFloat<f64> {
+    fn k_to_q(k: f64, d: f64) -> f64 {
         let k_div_d = k / d;
         if k_div_d >= 0.5 {
             let base = 1.0 - k_div_d;
@@ -243,14 +211,9 @@ impl TDigest {
         } else {
             2.0 * k_div_d * k_div_d
         }
-        .into()
     }
 
-    fn clamp(
-        v: OrderedFloat<f64>,
-        lo: OrderedFloat<f64>,
-        hi: OrderedFloat<f64>,
-    ) -> OrderedFloat<f64> {
+    fn clamp(v: f64, lo: f64, hi: f64) -> f64 {
         if v > hi {
             hi
         } else if v < lo {
@@ -261,19 +224,14 @@ impl TDigest {
     }
 
     #[cfg(test)]
-    pub(crate) fn merge_unsorted_f64(
-        &self,
-        unsorted_values: Vec<OrderedFloat<f64>>,
-    ) -> TDigest {
+    pub(crate) fn merge_unsorted_f64(&self, unsorted_values: Vec<f64>) -> TDigest {
         let mut values = unsorted_values;
-        values.sort();
+        values.sort_by(|a, b| a.total_cmp(b));
         self.merge_sorted_f64(&values)
     }
 
-    pub(crate) fn merge_sorted_f64(
-        &self,
-        sorted_values: &[OrderedFloat<f64>],
-    ) -> TDigest {
+    pub(crate) fn merge_sorted_f64(&self, sorted_values: &[f64]) -> TDigest {
+        dbg!(&sorted_values);
         #[cfg(debug_assertions)]
         debug_assert!(is_sorted(sorted_values), "unsorted input to TDigest");
 
@@ -282,14 +240,14 @@ impl TDigest {
         }
 
         let mut result = TDigest::new(self.max_size());
-        result.count = OrderedFloat::from(self.count() + (sorted_values.len() as f64));
+        result.count = self.count() + (sorted_values.len() as f64);
 
         let maybe_min = *sorted_values.first().unwrap();
         let maybe_max = *sorted_values.last().unwrap();
 
         if self.count() > 0.0 {
-            result.min = std::cmp::min(self.min, maybe_min);
-            result.max = std::cmp::max(self.max, maybe_max);
+            result.min = self.min.min(maybe_min);
+            result.max = self.max.max(maybe_max);
         } else {
             result.min = maybe_min;
             result.max = maybe_max;
@@ -318,8 +276,8 @@ impl TDigest {
 
         let mut weight_so_far = curr.weight();
 
-        let mut sums_to_merge = OrderedFloat::from(0.0);
-        let mut weights_to_merge = OrderedFloat::from(0.0);
+        let mut sums_to_merge = 0_f64;
+        let mut weights_to_merge = 0_f64;
 
         while iter_centroids.peek().is_some() || iter_sorted_values.peek().is_some() {
             let next: Centroid = if let Some(c) = iter_centroids.peek() {
@@ -341,11 +299,9 @@ impl TDigest {
                 sums_to_merge += next_sum;
                 weights_to_merge += next.weight();
             } else {
-                result.sum = OrderedFloat::from(
-                    result.sum.into_inner() + curr.add(sums_to_merge, weights_to_merge),
-                );
-                sums_to_merge = 0.0.into();
-                weights_to_merge = 0.0.into();
+                result.sum += curr.add(sums_to_merge, weights_to_merge);
+                sums_to_merge = 0_f64;
+                weights_to_merge = 0_f64;
 
                 compressed.push(curr.clone());
                 q_limit_times_count =
@@ -355,9 +311,7 @@ impl TDigest {
             }
         }
 
-        result.sum = OrderedFloat::from(
-            result.sum.into_inner() + curr.add(sums_to_merge, weights_to_merge),
-        );
+        result.sum += curr.add(sums_to_merge, weights_to_merge);
         compressed.push(curr);
         compressed.shrink_to_fit();
         compressed.sort();
@@ -423,8 +377,8 @@ impl TDigest {
         let mut starts: Vec<usize> = Vec::with_capacity(digests.len());
 
         let mut count: f64 = 0.0;
-        let mut min = OrderedFloat::from(std::f64::INFINITY);
-        let mut max = OrderedFloat::from(std::f64::NEG_INFINITY);
+        let mut min = std::f64::INFINITY;
+        let mut max = std::f64::NEG_INFINITY;
 
         let mut start: usize = 0;
         for digest in digests.iter() {
@@ -432,8 +386,8 @@ impl TDigest {
 
             let curr_count: f64 = digest.count();
             if curr_count > 0.0 {
-                min = std::cmp::min(min, digest.min);
-                max = std::cmp::max(max, digest.max);
+                min = min.min(digest.min);
+                max = max.max(digest.max);
                 count += curr_count;
                 for centroid in &digest.centroids {
                     centroids.push(centroid.clone());
@@ -472,8 +426,8 @@ impl TDigest {
         let mut iter_centroids = centroids.iter_mut();
         let mut curr = iter_centroids.next().unwrap();
         let mut weight_so_far = curr.weight();
-        let mut sums_to_merge = OrderedFloat::from(0.0);
-        let mut weights_to_merge = OrderedFloat::from(0.0);
+        let mut sums_to_merge = 0_f64;
+        let mut weights_to_merge = 0_f64;
 
         for centroid in iter_centroids {
             weight_so_far += centroid.weight();
@@ -482,11 +436,9 @@ impl TDigest {
                 sums_to_merge += centroid.mean() * centroid.weight();
                 weights_to_merge += centroid.weight();
             } else {
-                result.sum = OrderedFloat::from(
-                    result.sum.into_inner() + curr.add(sums_to_merge, weights_to_merge),
-                );
-                sums_to_merge = OrderedFloat::from(0.0);
-                weights_to_merge = OrderedFloat::from(0.0);
+                result.sum += curr.add(sums_to_merge, weights_to_merge);
+                sums_to_merge = 0_f64;
+                weights_to_merge = 0_f64;
                 compressed.push(curr.clone());
                 q_limit_times_count =
                     Self::k_to_q(k_limit, max_size as f64) * (count as f64);
@@ -495,14 +447,12 @@ impl TDigest {
             }
         }
 
-        result.sum = OrderedFloat::from(
-            result.sum.into_inner() + curr.add(sums_to_merge, weights_to_merge),
-        );
+        result.sum += curr.add(sums_to_merge, weights_to_merge);
         compressed.push(curr.clone());
         compressed.shrink_to_fit();
         compressed.sort();
 
-        result.count = OrderedFloat::from(count as f64);
+        result.count = count as f64;
         result.min = min;
         result.max = max;
         result.centroids = compressed;
@@ -516,7 +466,7 @@ impl TDigest {
         }
 
         let count_ = self.count;
-        let rank = OrderedFloat::from(q) * count_;
+        let rank = q * count_;
 
         let mut pos: usize;
         let mut t;
@@ -542,7 +492,7 @@ impl TDigest {
             }
 
             pos = self.centroids.len() - 1;
-            t = OrderedFloat::from(0.0);
+            t = 0_f64;
 
             for (k, centroid) in self.centroids.iter().enumerate() {
                 if rank < t + centroid.weight() {
@@ -554,7 +504,7 @@ impl TDigest {
             }
         }
 
-        let mut delta = OrderedFloat::from(0.0);
+        let mut delta = 0_f64;
         let mut min = self.min;
         let mut max = self.max;
 
@@ -575,7 +525,7 @@ impl TDigest {
 
         let value = self.centroids[pos].mean()
             + ((rank - t) / self.centroids[pos].weight() - 0.5) * delta;
-        Self::clamp(value, min, max).into_inner()
+        Self::clamp(value, min, max)
     }
 
     /// This method decomposes the [`TDigest`] and its [`Centroid`] instances
@@ -618,16 +568,16 @@ impl TDigest {
         let centroids: Vec<_> = self
             .centroids
             .iter()
-            .flat_map(|c| [c.mean().into_inner(), c.weight().into_inner()])
+            .flat_map(|c| [c.mean(), c.weight()])
             .map(|v| ScalarValue::Float64(Some(v)))
             .collect();
 
         vec![
             ScalarValue::UInt64(Some(self.max_size as u64)),
-            ScalarValue::Float64(Some(self.sum.into_inner())),
-            ScalarValue::Float64(Some(self.count.into_inner())),
-            ScalarValue::Float64(Some(self.max.into_inner())),
-            ScalarValue::Float64(Some(self.min.into_inner())),
+            ScalarValue::Float64(Some(self.sum)),
+            ScalarValue::Float64(Some(self.count)),
+            ScalarValue::Float64(Some(self.max)),
+            ScalarValue::Float64(Some(self.min)),
             ScalarValue::new_list(Some(centroids), DataType::Float64),
         ]
     }
@@ -658,7 +608,8 @@ impl TDigest {
 
         let max = cast_scalar_f64!(&state[3]);
         let min = cast_scalar_f64!(&state[4]);
-        assert!(max >= min);
+
+        assert!(max.total_cmp(&min).is_ge());
 
         Self {
             max_size,
@@ -672,8 +623,8 @@ impl TDigest {
 }
 
 #[cfg(debug_assertions)]
-fn is_sorted(values: &[OrderedFloat<f64>]) -> bool {
-    values.windows(2).all(|w| w[0] <= w[1])
+fn is_sorted(values: &[f64]) -> bool {
+    values.windows(2).all(|w| w[0].total_cmp(&w[1]).is_le())
 }
 
 #[cfg(test)]
@@ -716,9 +667,7 @@ mod tests {
 
     #[test]
     fn test_int64_uniform() {
-        let values = (1i64..=1000)
-            .map(|v| OrderedFloat::from(v as f64))
-            .collect();
+        let values = (1i64..=1000).map(|v| v as f64).collect();
 
         let t = TDigest::new(100);
         let t = t.merge_unsorted_f64(values);
@@ -737,7 +686,7 @@ mod tests {
         let mut t = TDigest::new(10);
 
         for v in vals {
-            t = t.merge_unsorted_f64(vec![OrderedFloat::from(v as f64)]);
+            t = t.merge_unsorted_f64(vec![v as f64]);
         }
 
         assert_error_bounds!(t, quantile = 0.5, want = 1.0);
@@ -748,10 +697,7 @@ mod tests {
     #[test]
     fn test_merge_unsorted_against_uniform_distro() {
         let t = TDigest::new(100);
-        let values: Vec<_> = (1..=1_000_000)
-            .map(f64::from)
-            .map(|v| OrderedFloat::from(v as f64))
-            .collect();
+        let values: Vec<_> = (1..=1_000_000).map(f64::from).collect();
 
         let t = t.merge_unsorted_f64(values);
 
@@ -766,13 +712,8 @@ mod tests {
     #[test]
     fn test_merge_unsorted_against_skewed_distro() {
         let t = TDigest::new(100);
-        let mut values: Vec<_> = (1..=600_000)
-            .map(f64::from)
-            .map(|v| OrderedFloat::from(v as f64))
-            .collect();
-        for _ in 0..400_000 {
-            values.push(OrderedFloat::from(1_000_000_f64));
-        }
+        let mut values: Vec<_> = (1..=600_000).map(f64::from).collect();
+        values.resize(1_000_000, 1_000_000_f64);
 
         let t = t.merge_unsorted_f64(values);
 
@@ -788,10 +729,7 @@ mod tests {
 
         for _ in 1..=100 {
             let t = TDigest::new(100);
-            let values: Vec<_> = (1..=1_000)
-                .map(f64::from)
-                .map(|v| OrderedFloat::from(v as f64))
-                .collect();
+            let values: Vec<_> = (1..=1_000).map(f64::from).collect();
             let t = t.merge_unsorted_f64(values);
             digests.push(t)
         }

@@ -24,6 +24,9 @@ use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
+use crate::cast::as_struct_array;
+use crate::delta::shift_months;
+use crate::error::{DataFusionError, Result};
 use arrow::{
     array::*,
     compute::kernels::cast::{cast, cast_with_options, CastOptions},
@@ -37,11 +40,6 @@ use arrow::{
     },
 };
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
-use ordered_float::OrderedFloat;
-
-use crate::cast::as_struct_array;
-use crate::delta::shift_months;
-use crate::error::{DataFusionError, Result};
 
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part of arrow's `Array`.
@@ -116,8 +114,7 @@ pub enum ScalarValue {
     Dictionary(Box<DataType>, Box<ScalarValue>),
 }
 
-// manual implementation of `PartialEq` that uses OrderedFloat to
-// get defined behavior for floating point
+// manual implementation of `PartialEq`
 impl PartialEq for ScalarValue {
     fn eq(&self, other: &Self) -> bool {
         use ScalarValue::*;
@@ -131,17 +128,15 @@ impl PartialEq for ScalarValue {
             (Decimal128(_, _, _), _) => false,
             (Boolean(v1), Boolean(v2)) => v1.eq(v2),
             (Boolean(_), _) => false,
-            (Float32(v1), Float32(v2)) => {
-                let v1 = v1.map(OrderedFloat);
-                let v2 = v2.map(OrderedFloat);
-                v1.eq(&v2)
-            }
+            (Float32(v1), Float32(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
+                _ => v1.eq(v2),
+            },
             (Float32(_), _) => false,
-            (Float64(v1), Float64(v2)) => {
-                let v1 = v1.map(OrderedFloat);
-                let v2 = v2.map(OrderedFloat);
-                v1.eq(&v2)
-            }
+            (Float64(v1), Float64(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
+                _ => v1.eq(v2),
+            },
             (Float64(_), _) => false,
             (Int8(v1), Int8(v2)) => v1.eq(v2),
             (Int8(_), _) => false,
@@ -201,8 +196,7 @@ impl PartialEq for ScalarValue {
     }
 }
 
-// manual implementation of `PartialOrd` that uses OrderedFloat to
-// get defined behavior for floating point
+// manual implementation of `PartialOrd`
 impl PartialOrd for ScalarValue {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         use ScalarValue::*;
@@ -221,17 +215,15 @@ impl PartialOrd for ScalarValue {
             (Decimal128(_, _, _), _) => None,
             (Boolean(v1), Boolean(v2)) => v1.partial_cmp(v2),
             (Boolean(_), _) => None,
-            (Float32(v1), Float32(v2)) => {
-                let v1 = v1.map(OrderedFloat);
-                let v2 = v2.map(OrderedFloat);
-                v1.partial_cmp(&v2)
-            }
+            (Float32(v1), Float32(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
+                _ => v1.partial_cmp(v2),
+            },
             (Float32(_), _) => None,
-            (Float64(v1), Float64(v2)) => {
-                let v1 = v1.map(OrderedFloat);
-                let v2 = v2.map(OrderedFloat);
-                v1.partial_cmp(&v2)
-            }
+            (Float64(v1), Float64(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
+                _ => v1.partial_cmp(v2),
+            },
             (Float64(_), _) => None,
             (Int8(v1), Int8(v2)) => v1.partial_cmp(v2),
             (Int8(_), _) => None,
@@ -625,8 +617,23 @@ where
     intermediate.add(Duration::milliseconds(ms as i64))
 }
 
-// manual implementation of `Hash` that uses OrderedFloat to
-// get defined behavior for floating point
+//Float wrapper over f32/f64. Just because we cannot build std::hash::Hash for floats directly we have to do it through type wrapper
+struct Fl<T>(T);
+
+macro_rules! hash_float_value {
+    ($(($t:ty, $i:ty)),+) => {
+        $(impl std::hash::Hash for Fl<$t> {
+            #[inline]
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                state.write(&<$i>::from_ne_bytes(self.0.to_ne_bytes()).to_ne_bytes())
+            }
+        })+
+    };
+}
+
+hash_float_value!((f64, u64), (f32, u32));
+
+// manual implementation of `Hash`
 impl std::hash::Hash for ScalarValue {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         use ScalarValue::*;
@@ -637,14 +644,8 @@ impl std::hash::Hash for ScalarValue {
                 s.hash(state)
             }
             Boolean(v) => v.hash(state),
-            Float32(v) => {
-                let v = v.map(OrderedFloat);
-                v.hash(state)
-            }
-            Float64(v) => {
-                let v = v.map(OrderedFloat);
-                v.hash(state)
-            }
+            Float32(v) => v.map(Fl).hash(state),
+            Float64(v) => v.map(Fl).hash(state),
             Int8(v) => v.hash(state),
             Int16(v) => v.hash(state),
             Int32(v) => v.hash(state),
