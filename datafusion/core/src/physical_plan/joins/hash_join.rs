@@ -118,15 +118,15 @@ type JoinLeftData = (JoinHashMap, RecordBatch);
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
-    left: Arc<dyn ExecutionPlan>,
+    pub(crate) left: Arc<dyn ExecutionPlan>,
     /// right (probe) side which are filtered by the hash table
-    right: Arc<dyn ExecutionPlan>,
+    pub(crate) right: Arc<dyn ExecutionPlan>,
     /// Set of common columns used to join on
-    on: Vec<(Column, Column)>,
+    pub(crate) on: Vec<(Column, Column)>,
     /// Filters which are applied while finding matching rows
-    filter: Option<JoinFilter>,
+    pub(crate) filter: Option<JoinFilter>,
     /// How the join is performed
-    join_type: JoinType,
+    pub(crate) join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Build-side data
@@ -134,13 +134,13 @@ pub struct HashJoinExec {
     /// Shares the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Partitioning mode to use
-    mode: PartitionMode,
+    pub(crate) mode: PartitionMode,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// If null_equals_null is true, null == null else null != null
-    null_equals_null: bool,
+    pub(crate) null_equals_null: bool,
 }
 
 /// Metrics for HashJoinExec
@@ -337,6 +337,7 @@ impl ExecutionPlan for HashJoinExec {
             self.right.equivalence_properties(),
             left_columns_len,
             self.on(),
+            self.schema(),
         )
     }
 
@@ -447,9 +448,14 @@ async fn collect_left_input(
 ) -> Result<JoinLeftData> {
     let schema = left.schema();
     let start = Instant::now();
-
     // merge all left parts into a single stream
-    let merge = CoalescePartitionsExec::new(left);
+    let merge = {
+        if left.output_partitioning().partition_count() != 1 {
+            Arc::new(CoalescePartitionsExec::new(left))
+        } else {
+            left
+        }
+    };
     let stream = merge.execute(0, context)?;
 
     // This operation performs 2 steps at once:
