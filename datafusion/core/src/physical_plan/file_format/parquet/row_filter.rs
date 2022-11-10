@@ -33,6 +33,8 @@ use std::sync::Arc;
 
 use crate::physical_plan::metrics;
 
+use super::ParquetFileMetrics;
+
 /// This module contains utilities for enabling the pushdown of DataFusion filter predicates (which
 /// can be any DataFusion `Expr` that evaluates to a `BooleanArray`) to the parquet decoder level in `arrow-rs`.
 /// DataFusion will use a `ParquetRecordBatchStream` to read data from parquet into arrow `RecordBatch`es.
@@ -309,9 +311,11 @@ pub fn build_row_filter(
     table_schema: &Schema,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
-    rows_filtered: &metrics::Count,
-    time: &metrics::Time,
+    file_metrics: &ParquetFileMetrics,
 ) -> Result<Option<RowFilter>> {
+    let rows_filtered = &file_metrics.pushdown_rows_filtered;
+    let time = &file_metrics.pushdown_eval_time;
+
     let predicates = split_conjunction_owned(expr);
 
     let mut candidates: Vec<FilterCandidate> = predicates

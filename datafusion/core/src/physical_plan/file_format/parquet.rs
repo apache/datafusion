@@ -414,8 +414,7 @@ impl FileOpener for ParquetOpener {
                     table_schema.as_ref(),
                     builder.metadata(),
                     reorder_predicates,
-                    &file_metrics.pushdown_rows_filtered,
-                    &file_metrics.pushdown_eval_time,
+                    &file_metrics,
                 );
 
                 match row_filter {
