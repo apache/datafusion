@@ -73,7 +73,6 @@ use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
-use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
@@ -82,6 +81,7 @@ use crate::config::{
 };
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
+use crate::physical_optimizer::enforcement::BasicEnforcement;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
@@ -1227,6 +1227,8 @@ pub struct SessionConfig {
     pub parquet_pruning: bool,
     /// Should DataFusion collect statistics after listing files
     pub collect_statistics: bool,
+    /// Should DataFusion optimizer run a top down process to reorder the join keys
+    pub top_down_join_key_reordering: bool,
     /// Configuration options
     pub config_options: Arc<RwLock<ConfigOptions>>,
     /// Opaque extensions.
@@ -1246,6 +1248,7 @@ impl Default for SessionConfig {
             repartition_windows: true,
             parquet_pruning: true,
             collect_statistics: false,
+            top_down_join_key_reordering: true,
             config_options: Arc::new(RwLock::new(ConfigOptions::new())),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
@@ -1568,6 +1571,7 @@ impl SessionState {
             Arc::new(AggregateStatistics::new()),
             Arc::new(HashBuildProbeOrder::new()),
         ];
+        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
         if config
             .config_options
             .read()
@@ -1585,7 +1589,8 @@ impl SessionState {
             )));
         }
         physical_optimizers.push(Arc::new(Repartition::new()));
-        physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
+        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
+        // physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
 
         SessionState {
             session_id,

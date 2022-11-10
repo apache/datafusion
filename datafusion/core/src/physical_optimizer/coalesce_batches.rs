@@ -23,7 +23,7 @@ use crate::{
     physical_optimizer::PhysicalOptimizerRule,
     physical_plan::{
         coalesce_batches::CoalesceBatchesExec, filter::FilterExec, joins::HashJoinExec,
-        repartition::RepartitionExec, with_new_children_if_necessary,
+        repartition::RepartitionExec, rewrite::TreeNodeRewritable,
     },
 };
 use std::sync::Arc;
@@ -48,34 +48,25 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
         _config: &crate::execution::context::SessionConfig,
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
-        if plan.children().is_empty() {
-            // leaf node, children cannot be replaced
-            Ok(plan.clone())
-        } else {
-            // recurse down first
-            let children = plan
-                .children()
-                .iter()
-                .map(|child| self.optimize(child.clone(), _config))
-                .collect::<Result<Vec<_>>>()?;
-            let plan = with_new_children_if_necessary(plan, children)?;
+        let target_batch_size = self.target_batch_size;
+        plan.transform_up(&|plan| {
+            let plan_any = plan.as_any();
             // The goal here is to detect operators that could produce small batches and only
             // wrap those ones with a CoalesceBatchesExec operator. An alternate approach here
             // would be to build the coalescing logic directly into the operators
             // See https://github.com/apache/arrow-datafusion/issues/139
-            let plan_any = plan.as_any();
             let wrap_in_coalesce = plan_any.downcast_ref::<FilterExec>().is_some()
                 || plan_any.downcast_ref::<HashJoinExec>().is_some()
                 || plan_any.downcast_ref::<RepartitionExec>().is_some();
-            Ok(if wrap_in_coalesce {
-                Arc::new(CoalesceBatchesExec::new(
+            if wrap_in_coalesce {
+                Some(Arc::new(CoalesceBatchesExec::new(
                     plan.clone(),
-                    self.target_batch_size,
-                ))
+                    target_batch_size,
+                )))
             } else {
-                plan.clone()
-            })
-        }
+                None
+            }
+        })
     }
 
     fn name(&self) -> &str {

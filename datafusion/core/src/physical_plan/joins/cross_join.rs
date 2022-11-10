@@ -29,9 +29,9 @@ use arrow::record_batch::RecordBatch;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
-    ColumnStatistics, DisplayFormatType, EquivalenceProperties, ExecutionPlan,
-    Partitioning, PhysicalSortExpr, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
+    ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
+    ExecutionPlan, Partitioning, PhysicalSortExpr, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
@@ -51,9 +51,9 @@ type JoinLeftData = RecordBatch;
 #[derive(Debug)]
 pub struct CrossJoinExec {
     /// left (build) side which gets loaded in memory
-    left: Arc<dyn ExecutionPlan>,
+    pub(crate) left: Arc<dyn ExecutionPlan>,
     /// right (probe) side which are combined with left side
-    right: Arc<dyn ExecutionPlan>,
+    pub(crate) right: Arc<dyn ExecutionPlan>,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Build-side data
@@ -110,7 +110,13 @@ async fn load_left_input(
     let start = Instant::now();
 
     // merge all left parts into a single stream
-    let merge = CoalescePartitionsExec::new(left.clone());
+    let merge = {
+        if left.output_partitioning().partition_count() != 1 {
+            Arc::new(CoalescePartitionsExec::new(left.clone()))
+        } else {
+            left.clone()
+        }
+    };
     let stream = merge.execute(0, context)?;
 
     // Load all batches and count the rows
@@ -156,6 +162,13 @@ impl ExecutionPlan for CrossJoinExec {
         )?))
     }
 
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![
+            Distribution::SinglePartition,
+            Distribution::UnspecifiedDistribution,
+        ]
+    }
+
     // TODO optimize CrossJoin implementation to generate M * N partitions
     fn output_partitioning(&self) -> Partitioning {
         let left_columns_len = self.left.schema().fields.len();
@@ -176,6 +189,7 @@ impl ExecutionPlan for CrossJoinExec {
             self.left.equivalence_properties(),
             self.right.equivalence_properties(),
             left_columns_len,
+            self.schema(),
         )
     }
 
