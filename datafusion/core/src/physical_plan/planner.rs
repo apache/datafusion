@@ -64,7 +64,8 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{
-    expand_wildcard, expr_to_columns, remove_redundant_order_bys,
+    can_run_frame_in_streaming, expand_wildcard, expr_to_columns,
+    remove_redundant_order_bys,
 };
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_optimizer::utils::unalias;
@@ -581,11 +582,16 @@ impl DefaultPhysicalPlanner {
                             "all window expressions shall have the same sort keys, as guaranteed by logical planning"
                         );
                     }
-
+                    println!("window expr: {:?}", window_expr);
                     let window_exprs = window_expr.iter().collect_vec();
                     let non_inc_sort_keys = remove_redundant_order_bys(&sort_keys, &window_exprs)?;
                     // We will receive this information from source
                     let mut is_stream = true;
+                    if is_stream && !can_run_frame_in_streaming(&window_expr[0])? {
+                        //TODO: Raise error
+                        println!("should have raise error");
+                        // return Err(DataFusionError::Execution("Window Frame should be bounded to support streaming".to_string()));
+                    }
                     let non_inc_sort_keys = if is_stream {
                         if non_inc_sort_keys.is_empty() {
                             non_inc_sort_keys
@@ -658,6 +664,7 @@ impl DefaultPhysicalPlanner {
                             )
                         })
                         .collect::<Result<Vec<_>>>()?;
+                    println!("window expr: {:?}", window_expr);
                     if is_stream{
                         Ok(Arc::new(StreamWindowAggExec::try_new(
                             window_expr,

@@ -116,6 +116,31 @@ pub enum BuiltInWindowFunction {
     NthValue,
 }
 
+impl BuiltInWindowFunction {
+    pub fn is_window_frame_used(&self) -> bool {
+        matches!(
+            self,
+            BuiltInWindowFunction::FirstValue
+                | BuiltInWindowFunction::LastValue
+                | BuiltInWindowFunction::NthValue
+        )
+    }
+
+    pub fn can_run_streaming(&self) -> bool {
+        matches!(
+            self,
+            BuiltInWindowFunction::RowNumber
+                | BuiltInWindowFunction::Rank
+                | BuiltInWindowFunction::DenseRank
+                | BuiltInWindowFunction::Lag
+                | BuiltInWindowFunction::Lead
+                | BuiltInWindowFunction::FirstValue
+                | BuiltInWindowFunction::LastValue
+                | BuiltInWindowFunction::NthValue
+        )
+    }
+}
+
 impl FromStr for BuiltInWindowFunction {
     type Err = DataFusionError;
     fn from_str(name: &str) -> Result<BuiltInWindowFunction> {

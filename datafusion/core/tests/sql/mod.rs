@@ -752,7 +752,13 @@ async fn register_aggregate_csv(ctx: &SessionContext) -> Result<()> {
 
 /// Execute SQL and return results as a RecordBatch
 async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
-    ctx.sql(sql).await?.collect().await
+    let df = ctx.sql(sql).await?;
+
+    // let df = df.explain(false, false)?;
+    // // print the results
+    // df.show().await?;
+
+    df.collect().await
 }
 
 /// Execute query and return results as a Vec of RecordBatches or an error

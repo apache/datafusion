@@ -25,7 +25,10 @@ use crate::logical_plan::{
     Limit, Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union,
     Values, Window,
 };
-use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, WindowFunction};
+use crate::{
+    window_function, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
+    WindowFrameBound, WindowFunction,
+};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -335,6 +338,68 @@ pub fn is_all_window_functions_aggregator(exprs: &[&Expr]) -> bool {
         res = res && is_aggregate;
     }
     res
+}
+
+pub fn can_run_frame_in_streaming(expr: &Expr) -> Result<bool> {
+    let (window_frame, fun) = match expr {
+        Expr::WindowFunction {
+            window_frame, fun, ..
+        } => (window_frame, fun),
+        Expr::Alias(sub_expr, _alias) => match &**sub_expr {
+            Expr::WindowFunction {
+                window_frame, fun, ..
+            } => (window_frame, fun),
+            _ => {
+                return Err(DataFusionError::Execution(
+                    "Expects to get window frame".to_string(),
+                ))
+            }
+        },
+        _ => {
+            return Err(DataFusionError::Execution(
+                "Expects to get window frame".to_string(),
+            ))
+        }
+    };
+
+    let is_window_frame_used = match fun {
+        window_function::WindowFunction::AggregateFunction(_) => true,
+        window_function::WindowFunction::BuiltInWindowFunction(builtin_fn) => {
+            builtin_fn.is_window_frame_used()
+        }
+    };
+    let can_run_streaming = match fun {
+        window_function::WindowFunction::AggregateFunction(_) => true,
+        window_function::WindowFunction::BuiltInWindowFunction(builtin_fn) => {
+            builtin_fn.can_run_streaming()
+        }
+    };
+    let window_frame_bounded = if let Some(window_frame) = window_frame {
+        let is_start_bounded = match &window_frame.start_bound {
+            WindowFrameBound::Preceding(val) => !val.is_null(),
+            WindowFrameBound::CurrentRow => true,
+            WindowFrameBound::Following(val) => !val.is_null(),
+        };
+        let is_end_bounded = match &window_frame.end_bound {
+            WindowFrameBound::Preceding(val) => !val.is_null(),
+            WindowFrameBound::CurrentRow => true,
+            WindowFrameBound::Following(val) => !val.is_null(),
+        };
+        is_start_bounded && is_end_bounded
+    } else {
+        false
+    };
+    Ok(
+        match (
+            can_run_streaming,
+            is_window_frame_used,
+            window_frame_bounded,
+        ) {
+            (false, _, _) => false,
+            (_, false, _) => true,
+            (_, true, window_frame_bounded) => window_frame_bounded,
+        },
+    )
 }
 
 pub fn remove_redundant_order_bys(

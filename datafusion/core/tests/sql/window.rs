@@ -288,6 +288,7 @@ async fn window() -> Result<()> {
         4,
     )
     .await?;
+
     // result in one batch, although e.g. having 2 batches do not change
     // result semantics, having a len=1 assertion upfront keeps surprises
     // at bay
@@ -1750,6 +1751,7 @@ mod tests {
 
     /// This example demonstrates executing a simple query against a Memtable
     #[tokio::test]
+    #[ignore]
     async fn test_window_frame_running_unbounded_query() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
@@ -1856,6 +1858,7 @@ SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN 1 PRECEDING and 10 FOLLOWI
 
     /// This example demonstrates executing a simple query against a Memtable
     #[tokio::test]
+    #[ignore]
     async fn test_window_frame_running_unbounded() -> Result<()> {
         let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
