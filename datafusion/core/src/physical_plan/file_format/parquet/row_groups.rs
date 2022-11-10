@@ -42,7 +42,6 @@ pub(crate) fn prune_row_groups(
     predicate: Option<PruningPredicate>,
     metrics: &ParquetFileMetrics,
 ) -> Vec<usize> {
-    // TODO: Columnar pruning
     let mut filtered = Vec::with_capacity(groups.len());
     for (idx, metadata) in groups.iter().enumerate() {
         if let Some(range) = &range {
