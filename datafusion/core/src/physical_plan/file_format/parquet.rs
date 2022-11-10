@@ -71,8 +71,8 @@ pub struct ParquetExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    /// Externally provided ordering. If the sort order of the parquet
-    /// files is known. Up to the caller to be sure this is correct
+    /// The order in which the data is sorted in the parquet files, if
+    /// known.
     output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
@@ -113,6 +113,8 @@ impl ParquetExec {
         });
 
         let (projected_schema, projected_statistics) = base_config.project();
+
+        // For now, assume no ordering unless we are told otherwise.
         let output_ordering = None;
 
         Self {
@@ -127,14 +129,18 @@ impl ParquetExec {
         }
     }
 
-    /// Set the output ordering of this parquet exec that reflects the
-    /// order in the files (TODO if we can derive this from the
-    /// parquet metadata). for now set it manually
+    /// Specify the order of data that comes out of this
+    /// ParquetExec. Some systems store their parquet data in sorted
+    /// order, and DataFusion can take advantage of this sort order
+    /// sometimes to avoid resorting data in certain cases.
+    ///
+    /// At the time of writing, the sort order must be specified by
+    /// the creator as it is not knowable by just looking at the
+    /// ParquetFiles.
     pub fn with_output_ordering(mut self, output_ordering: Option<Vec<PhysicalSortExpr>>) -> Self {
         self.output_ordering = output_ordering;
         self
     }
-
 
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
