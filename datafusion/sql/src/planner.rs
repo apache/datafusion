@@ -31,8 +31,7 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::utils::{
     can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
-    expr_to_columns, find_aggregate_exprs, find_column_exprs, find_window_exprs,
-    COUNT_STAR_EXPANSION,
+    find_aggregate_exprs, find_column_exprs, find_window_exprs, COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
     and, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable, GetIndexedField,
@@ -690,8 +689,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let join_filter = filter
                     .into_iter()
                     .map(|expr| {
-                        let mut using_columns = HashSet::new();
-                        expr_to_columns(&expr, &mut using_columns)?;
+                        let using_columns = expr.to_columns()?;
 
                         normalize_col_with_schemas(
                             expr,

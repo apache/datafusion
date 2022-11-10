@@ -21,6 +21,7 @@ use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
+use crate::utils::expr_to_columns;
 use crate::window_frame;
 use crate::window_function;
 use crate::AggregateUDF;
@@ -30,6 +31,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::{plan_err, Column};
 use datafusion_common::{DataFusionError, ScalarValue};
+use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
 use std::hash::{BuildHasher, Hash, Hasher};
@@ -685,6 +687,14 @@ impl Expr {
             _ => plan_err!(format!("Could not coerce '{}' into Column!", self)),
         }
     }
+
+    /// Return all referenced columns of this expression.
+    pub fn to_columns(&self) -> Result<HashSet<Column>> {
+        let mut using_columns = HashSet::new();
+        expr_to_columns(self, &mut using_columns)?;
+
+        Ok(using_columns)
+    }
 }
 
 impl Not for Expr {
@@ -1277,6 +1287,7 @@ mod test {
     use crate::expr_fn::col;
     use crate::{case, lit, Expr};
     use arrow::datatypes::DataType;
+    use datafusion_common::Column;
     use datafusion_common::{Result, ScalarValue};
 
     #[test]
@@ -1326,5 +1337,27 @@ mod test {
         assert!(exp2 > exp1);
         assert!(exp2 > exp3);
         assert!(exp3 < exp2);
+    }
+
+    #[test]
+    fn test_collect_expr() -> Result<()> {
+        // single column
+        {
+            let expr = &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64));
+            let columns = expr.to_columns()?;
+            assert_eq!(1, columns.len());
+            assert!(columns.contains(&Column::from_name("a")));
+        }
+
+        // multiple columns
+        {
+            let expr = col("a") + col("b") + lit(1);
+            let columns = expr.to_columns()?;
+            assert_eq!(2, columns.len());
+            assert!(columns.contains(&Column::from_name("a")));
+            assert!(columns.contains(&Column::from_name("b")));
+        }
+
+        Ok(())
     }
 }
