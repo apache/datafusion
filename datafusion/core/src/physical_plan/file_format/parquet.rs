@@ -71,6 +71,9 @@ pub struct ParquetExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
+    /// Externally provided ordering. If the sort order of the parquet
+    /// files is known. Up to the caller to be sure this is correct
+    output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for pruning row groups
@@ -110,17 +113,28 @@ impl ParquetExec {
         });
 
         let (projected_schema, projected_statistics) = base_config.project();
+        let output_ordering = None;
 
         Self {
             base_config,
             projected_schema,
             projected_statistics,
+            output_ordering,
             metrics,
             pruning_predicate,
             metadata_size_hint,
             parquet_file_reader_factory: None,
         }
     }
+
+    /// Set the output ordering of this parquet exec that reflects the
+    /// order in the files (TODO if we can derive this from the
+    /// parquet metadata). for now set it manually
+    pub fn with_output_ordering(mut self, output_ordering: Option<Vec<PhysicalSortExpr>>) -> Self {
+        self.output_ordering = output_ordering;
+        self
+    }
+
 
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
@@ -236,7 +250,10 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        match self.output_ordering.as_ref() {
+            Some(order) => Some(&order),
+            None => None
+        }
     }
 
     fn with_new_children(
