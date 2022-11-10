@@ -39,7 +39,7 @@ use arrow::{
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 use ordered_float::OrderedFloat;
 
-use crate::cast::as_struct_array;
+use crate::cast::{as_decimal128_array, as_struct_array};
 use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
 
@@ -1881,13 +1881,22 @@ impl ScalarValue {
         index: usize,
         precision: u8,
         scale: u8,
-    ) -> ScalarValue {
-        let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-        if array.is_null(index) {
-            ScalarValue::Decimal128(None, precision, scale)
-        } else {
-            ScalarValue::Decimal128(Some(array.value(index)), precision, scale)
-        }
+    ) -> Result<ScalarValue> {
+        let array = match as_decimal128_array(array) {
+            Ok(array) => {
+                if array.is_null(index) {
+                    Ok(ScalarValue::Decimal128(None, precision, scale))
+                } else {
+                    Ok(ScalarValue::Decimal128(
+                        Some(array.value(index)),
+                        precision,
+                        scale,
+                    ))
+                }
+            }
+            Err(e) => Err(e),
+        };
+        array
     }
 
     /// Converts a value in `array` at `index` into a ScalarValue
@@ -1902,7 +1911,7 @@ impl ScalarValue {
             DataType::Decimal128(precision, scale) => {
                 ScalarValue::get_decimal_value_from_array(
                     array, index, *precision, *scale,
-                )
+                )?
             }
             DataType::Boolean => typed_cast!(array, index, BooleanArray, Boolean),
             DataType::Float64 => typed_cast!(array, index, Float64Array, Float64),
@@ -2073,14 +2082,14 @@ impl ScalarValue {
         value: &Option<i128>,
         precision: u8,
         scale: u8,
-    ) -> bool {
-        let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+    ) -> Result<bool> {
+        let array = as_decimal128_array(array)?;
         if array.precision() != precision || array.scale() != scale {
-            return false;
+            return Ok(false);
         }
         match value {
-            None => array.is_null(index),
-            Some(v) => !array.is_null(index) && array.value(index) == *v,
+            None => Ok(array.is_null(index)),
+            Some(v) => Ok(!array.is_null(index) && array.value(index) == *v),
         }
     }
 
@@ -2105,6 +2114,7 @@ impl ScalarValue {
         match self {
             ScalarValue::Decimal128(v, precision, scale) => {
                 ScalarValue::eq_array_decimal(array, index, v, *precision, *scale)
+                    .unwrap()
             }
             ScalarValue::Boolean(val) => {
                 eq_array_primitive!(array, index, BooleanArray, val)
@@ -2696,14 +2706,14 @@ mod tests {
 
         // decimal scalar to array
         let array = decimal_value.to_array();
-        let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        let array = as_decimal128_array(&array)?;
         assert_eq!(1, array.len());
         assert_eq!(DataType::Decimal128(10, 1), array.data_type().clone());
         assert_eq!(123i128, array.value(0));
 
         // decimal scalar to array with size
         let array = decimal_value.to_array_of_size(10);
-        let array_decimal = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        let array_decimal = as_decimal128_array(&array)?;
         assert_eq!(10, array.len());
         assert_eq!(DataType::Decimal128(10, 1), array.data_type().clone());
         assert_eq!(123i128, array_decimal.value(0));

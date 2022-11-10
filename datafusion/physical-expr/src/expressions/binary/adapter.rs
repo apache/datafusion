@@ -23,6 +23,7 @@ use std::sync::Arc;
 use super::kernels_arrow::*;
 use arrow::array::*;
 use arrow::datatypes::DataType;
+use datafusion_common::cast::as_decimal128_array;
 use datafusion_common::Result;
 
 /// create a `dyn_op` wrapper function for the specified operation
@@ -39,7 +40,7 @@ macro_rules! make_dyn_comp_op {
                     // arrow has native support
                     // https://github.com/apache/arrow-rs/issues/1200
                     (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => {
-                        [<$OP _decimal>](as_decimal_array(left), as_decimal_array(right))
+                        [<$OP _decimal>](as_decimal128_array(left).unwrap(), as_decimal128_array(right).unwrap())
                     },
                     // By default call the arrow kernel
                     _ => {
