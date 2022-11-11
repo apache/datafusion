@@ -20,9 +20,11 @@
 use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
+use arrow::compute::SortOptions;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use dashmap::DashMap;
+use datafusion_physical_expr::PhysicalSortExpr;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -38,6 +40,7 @@ use crate::datasource::{
     TableProvider, TableType,
 };
 use crate::logical_expr::TableProviderFilterPushDown;
+use crate::physical_plan;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
@@ -86,21 +89,15 @@ impl ListingTableConfig {
         }
     }
     /// Add `schema` to `ListingTableConfig`
-    pub fn with_schema(self, schema: SchemaRef) -> Self {
-        Self {
-            table_paths: self.table_paths,
-            file_schema: Some(schema),
-            options: self.options,
-        }
+    pub fn with_schema(mut self, file_schema: SchemaRef) -> Self {
+        self.file_schema = Some(file_schema);
+        self
     }
 
     /// Add `listing_options` to `ListingTableConfig`
-    pub fn with_listing_options(self, listing_options: ListingOptions) -> Self {
-        Self {
-            table_paths: self.table_paths,
-            file_schema: self.file_schema,
-            options: Some(listing_options),
-        }
+    pub fn with_listing_options(mut self, listing_options: ListingOptions) -> Self {
+        self.options = Some(listing_options);
+        self
     }
 
     fn infer_format(path: &str) -> Result<(Arc<dyn FileFormat>, String)> {
@@ -162,6 +159,7 @@ impl ListingTableConfig {
             file_extension,
             target_partitions: ctx.config.target_partitions,
             table_partition_cols: vec![],
+            file_sort_order: None,
         };
 
         Ok(Self {
@@ -220,6 +218,15 @@ pub struct ListingOptions {
     /// Group files to avoid that the number of partitions exceeds
     /// this limit
     pub target_partitions: usize,
+    /// Optional pre-known sort order. Must be `SortExpr`s.
+    ///
+    /// DataFusion may take advantage of this ordering to omit sorts
+    /// or use more efficient algorithms. Currently sortedness must be
+    /// provided if it is known by some external mechanism, but may in
+    /// the future be automatically determined, for example using
+    /// parquet metadata.
+    /// See <https://github.com/apache/arrow-datafusion/issues/4177>
+    pub file_sort_order: Option<Vec<Expr>>,
 }
 
 impl ListingOptions {
@@ -236,6 +243,7 @@ impl ListingOptions {
             table_partition_cols: vec![],
             collect_stat: true,
             target_partitions: 1,
+            file_sort_order: None,
         }
     }
 
@@ -361,6 +369,46 @@ impl ListingTable {
     pub fn options(&self) -> &ListingOptions {
         &self.options
     }
+
+    /// If file_sort_order is specified, creates the appropriate physical expressions
+    fn try_create_output_ordering(&self) -> Result<Option<Vec<PhysicalSortExpr>>> {
+        let file_sort_order =
+            if let Some(file_sort_order) = self.options.file_sort_order.as_ref() {
+                file_sort_order
+            } else {
+                return Ok(None);
+            };
+
+        // convert each expr to a physical sort expr
+        let sort_exprs = file_sort_order
+            .iter()
+            .map(|expr| {
+                if let Expr::Sort { expr, asc, nulls_first } = expr {
+                    if let Expr::Column(col) = expr.as_ref() {
+                        let expr = physical_plan::expressions::col(&col.name, self.table_schema.as_ref())?;
+                        Ok(PhysicalSortExpr {
+                            expr,
+                            options: SortOptions {
+                                descending: !asc,
+                                nulls_first: *nulls_first,
+                            },
+                        })
+                    }
+                    else {
+                        Err(DataFusionError::Plan(
+                            format!("Only support single column references in output_ordering, got {:?}", expr)
+                        ))
+                    }
+                } else {
+                    Err(DataFusionError::Plan(
+                        format!("Expected Expr::Sort in output_ordering, but got {:?}", expr)
+                    ))
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Some(sort_exprs))
+    }
 }
 
 #[async_trait]
@@ -405,6 +453,7 @@ impl TableProvider for ListingTable {
                     statistics,
                     projection: projection.clone(),
                     limit,
+                    output_ordering: self.try_create_output_ordering()?,
                     table_partition_cols: self.options.table_partition_cols.clone(),
                     config_options: ctx.config.config_options(),
                 },
@@ -566,6 +615,7 @@ mod tests {
             table_partition_cols: vec![String::from("p1")],
             target_partitions: 4,
             collect_stat: true,
+            file_sort_order: None,
         };
 
         let table_path = ListingTableUrl::parse("test:///table/").unwrap();
@@ -768,6 +818,7 @@ mod tests {
             table_partition_cols: vec![],
             target_partitions,
             collect_stat: true,
+            file_sort_order: None,
         };
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
@@ -805,6 +856,7 @@ mod tests {
             table_partition_cols: vec![],
             target_partitions,
             collect_stat: true,
+            file_sort_order: None,
         };
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);

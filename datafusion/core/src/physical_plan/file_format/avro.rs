@@ -235,6 +235,7 @@ mod tests {
             limit: None,
             table_partition_cols: vec![],
             config_options: ConfigOptions::new().into_shareable(),
+            output_ordering: None,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
@@ -305,6 +306,7 @@ mod tests {
             limit: None,
             table_partition_cols: vec![],
             config_options: ConfigOptions::new().into_shareable(),
+            output_ordering: None,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
@@ -374,6 +376,7 @@ mod tests {
             limit: None,
             table_partition_cols: vec!["date".to_owned()],
             config_options: ConfigOptions::new().into_shareable(),
+            output_ordering: None,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 

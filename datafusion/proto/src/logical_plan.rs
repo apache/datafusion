@@ -416,6 +416,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
 
+                let file_sort_order = scan
+                    .file_sort_order
+                    .iter()
+                    .map(|expr| parse_expr(expr, ctx))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                // Protobuf doesn't distinguish between "not present"
+                // and empty
+                let file_sort_order = if file_sort_order.is_empty() {
+                    None
+                } else {
+                    Some(file_sort_order)
+                };
+
                 let file_format: Arc<dyn FileFormat> =
                     match scan.file_format_type.as_ref().ok_or_else(|| {
                         proto_error(format!(
@@ -451,6 +465,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     table_partition_cols: scan.table_partition_cols.clone(),
                     collect_stat: scan.collect_stat,
                     target_partitions: scan.target_partitions as usize,
+                    file_sort_order,
                 };
 
                 let config =
@@ -871,18 +886,26 @@ impl AsLogicalPlan for LogicalPlanNode {
                             listing_table.options().format
                         )));
                     };
+
+                    let options = listing_table.options();
+                    let file_sort_order =
+                        if let Some(file_sort_order) = &options.file_sort_order {
+                            file_sort_order
+                                .iter()
+                                .map(|expr| expr.try_into())
+                                .collect::<Result<Vec<protobuf::LogicalExprNode>, _>>()?
+                        } else {
+                            vec![]
+                        };
+
                     Ok(protobuf::LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::ListingScan(
                             protobuf::ListingTableScanNode {
                                 file_format_type: Some(file_format_type),
                                 table_name: table_name.to_owned(),
-                                collect_stat: listing_table.options().collect_stat,
-                                file_extension: listing_table
-                                    .options()
-                                    .file_extension
-                                    .clone(),
-                                table_partition_cols: listing_table
-                                    .options()
+                                collect_stat: options.collect_stat,
+                                file_extension: options.file_extension.clone(),
+                                table_partition_cols: options
                                     .table_partition_cols
                                     .clone(),
                                 paths: listing_table
@@ -893,10 +916,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 schema: Some(schema),
                                 projection,
                                 filters,
-                                target_partitions: listing_table
-                                    .options()
-                                    .target_partitions
-                                    as u32,
+                                target_partitions: options.target_partitions as u32,
+                                file_sort_order,
                             },
                         )),
                     })

@@ -71,9 +71,6 @@ pub struct ParquetExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
-    /// The order in which the data is sorted in the parquet files, if
-    /// known.
-    output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for pruning row groups
@@ -114,32 +111,15 @@ impl ParquetExec {
 
         let (projected_schema, projected_statistics) = base_config.project();
 
-        // For now, assume no ordering unless we are told otherwise.
-        let output_ordering = None;
-
         Self {
             base_config,
             projected_schema,
             projected_statistics,
-            output_ordering,
             metrics,
             pruning_predicate,
             metadata_size_hint,
             parquet_file_reader_factory: None,
         }
-    }
-
-    /// Specify the order of data that comes out of this
-    /// ParquetExec. Some systems store their parquet data in sorted
-    /// order, and DataFusion can take advantage of this sort order
-    /// sometimes to avoid resorting data in certain cases.
-    ///
-    /// At the time of writing, the sort order must be specified by
-    /// the creator as it is not knowable by just looking at the
-    /// ParquetFiles.
-    pub fn with_output_ordering(mut self, output_ordering: Option<Vec<PhysicalSortExpr>>) -> Self {
-        self.output_ordering = output_ordering;
-        self
     }
 
     /// Ref to the base configs
@@ -256,10 +236,7 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        match self.output_ordering.as_ref() {
-            Some(order) => Some(&order),
-            None => None
-        }
+        self.base_config.output_ordering.as_deref()
     }
 
     fn with_new_children(
@@ -324,24 +301,29 @@ impl ExecutionPlan for ParquetExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                if let Some(pre) = &self.pruning_predicate {
-                    write!(
-                        f,
-                        "ParquetExec: limit={:?}, partitions={}, predicate={}, projection={}",
-                        self.base_config.limit,
-                        super::FileGroupsDisplay(&self.base_config.file_groups),
-                        pre.predicate_expr(),
-                        super::ProjectSchemaDisplay(&self.projected_schema),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "ParquetExec: limit={:?}, partitions={}, projection={}",
-                        self.base_config.limit,
-                        super::FileGroupsDisplay(&self.base_config.file_groups),
-                        super::ProjectSchemaDisplay(&self.projected_schema),
-                    )
-                }
+                let pruning_predicate_string = self
+                    .pruning_predicate
+                    .as_ref()
+                    // TODO change this to be pruning_predicate rather than 'predicate'
+                    // to avoid confusion
+                    // https://github.com/apache/arrow-datafusion/issues/4020
+                    .map(|pre| format!(", predicate={}", pre.predicate_expr()))
+                    .unwrap_or_default();
+
+                let output_ordering_string = self
+                    .output_ordering()
+                    .map(make_output_ordering_string)
+                    .unwrap_or_default();
+
+                write!(
+                    f,
+                    "ParquetExec: limit={:?}, partitions={}{}{}, projection={}",
+                    self.base_config.limit,
+                    super::FileGroupsDisplay(&self.base_config.file_groups),
+                    pruning_predicate_string,
+                    output_ordering_string,
+                    super::ProjectSchemaDisplay(&self.projected_schema),
+                )
             }
         }
     }
@@ -353,6 +335,20 @@ impl ExecutionPlan for ParquetExec {
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
     }
+}
+
+fn make_output_ordering_string(ordering: &[PhysicalSortExpr]) -> String {
+    use std::fmt::Write;
+    let mut w: String = ", output_ordering=[".into();
+
+    for (i, e) in ordering.iter().enumerate() {
+        if i > 0 {
+            write!(&mut w, ", ").unwrap()
+        }
+        write!(&mut w, "{}", e).unwrap()
+    }
+    write!(&mut w, "]").unwrap();
+    w
 }
 
 /// Implements [`FormatReader`] for a parquet file
@@ -754,6 +750,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
+                output_ordering: None,
             },
             predicate,
             None,
@@ -1283,6 +1280,7 @@ mod tests {
                     limit: None,
                     table_partition_cols: vec![],
                     config_options: ConfigOptions::new().into_shareable(),
+                    output_ordering: None,
                 },
                 None,
                 None,
@@ -1385,6 +1383,7 @@ mod tests {
                     "day".to_owned(),
                 ],
                 config_options: ConfigOptions::new().into_shareable(),
+                output_ordering: None,
             },
             None,
             None,
@@ -1444,6 +1443,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
+                output_ordering: None,
             },
             None,
             None,

@@ -39,6 +39,7 @@ async fn main() -> Result<()> {
         table_partition_cols: vec![],
         collect_stat: true,
         target_partitions: 1,
+        file_sort_order: None,
     };
 
     // Register a listing table - this will use all files in the directory as data sources

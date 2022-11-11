@@ -38,6 +38,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 pub use avro::AvroExec;
+use datafusion_physical_expr::PhysicalSortExpr;
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
@@ -100,6 +101,8 @@ pub struct FileScanConfig {
     pub limit: Option<usize>,
     /// The partitioning column names
     pub table_partition_cols: Vec<String>,
+    /// The order in which the data is sorted, if known.
+    pub output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Configuration options passed to the physical plans
     pub config_options: Arc<RwLock<ConfigOptions>>,
 }
@@ -710,6 +713,7 @@ mod tests {
             statistics,
             table_partition_cols,
             config_options: ConfigOptions::new().into_shareable(),
+            output_ordering: None,
         }
     }
 }

@@ -144,10 +144,7 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        debug!("Output ordering for union");
         let first_input_ordering = self.inputs[0].output_ordering();
-        debug!("First input ordering: {:?}", first_input_ordering);
-
         // If the Union is not partition aware and all the input ordering spec strictly equal with the first_input_ordering
         // Return the first_input_ordering as the output_ordering
         //
@@ -159,29 +156,17 @@ impl ExecutionPlan for UnionExec {
             && self
                 .inputs
                 .iter()
-            .map(|plan| {
-                debug!("  child: {:?}", plan);
-
-                let order = plan.output_ordering();
-                debug!("  ordering: {:?}", order);
-                order
-            })
-            .all(|ordering| {
-
-                let res = ordering.is_some()
-                    && sort_expr_list_eq_strict_order(
-                        ordering.unwrap(),
-                        first_input_ordering.unwrap(),
-                    );
-                debug!("  child ordering: {:?}", ordering);
-                debug!("  Result of comparing ordering is {}", res);
-                res
+                .map(|plan| plan.output_ordering())
+                .all(|ordering| {
+                    ordering.is_some()
+                        && sort_expr_list_eq_strict_order(
+                            ordering.unwrap(),
+                            first_input_ordering.unwrap(),
+                        )
                 })
         {
-            debug!("  Union output was sorted");
             first_input_ordering
         } else {
-            debug!("  Union output not sorted");
             None
         }
     }

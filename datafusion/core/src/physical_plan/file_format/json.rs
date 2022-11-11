@@ -328,6 +328,7 @@ mod tests {
                 limit: Some(3),
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
+                output_ordering: None,
             },
             file_compression_type.to_owned(),
         );
@@ -404,6 +405,7 @@ mod tests {
                 limit: Some(3),
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
+                output_ordering: None,
             },
             file_compression_type.to_owned(),
         );
@@ -450,6 +452,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
+                output_ordering: None,
             },
             file_compression_type.to_owned(),
         );

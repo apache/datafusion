@@ -18,6 +18,7 @@
 use std::{fs, path::Path};
 
 use ::parquet::arrow::ArrowWriter;
+use datafusion::datasource::listing::ListingOptions;
 use tempfile::TempDir;
 
 use super::*;
@@ -46,6 +47,82 @@ async fn parquet_query() {
     ];
 
     assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
+/// Test that if sort order is specified in ListingOptions, the sort
+/// expressions make it all the way down to the ParquetExec
+async fn parquet_with_sort_order_specified() {
+    let parquet_read_options = ParquetReadOptions::default();
+    let target_partitions = 1;
+
+    // The sort order is not specified
+    let options_no_sort = ListingOptions {
+        file_sort_order: None,
+        ..parquet_read_options.to_listing_options(target_partitions)
+    };
+
+    // The sort order is specified (not actually correct in this case)
+    let file_sort_order = [col("string_col"), col("int_col")]
+        .into_iter()
+        .map(|e| {
+            let ascending = true;
+            let nulls_first = false;
+            e.sort(ascending, nulls_first)
+        })
+        .collect::<Vec<_>>();
+
+    let options_sort = ListingOptions {
+        file_sort_order: Some(file_sort_order),
+        ..parquet_read_options.to_listing_options(target_partitions)
+    };
+
+    // This string appears in ParquetExec if the output ordering is
+    // specified
+    let expected_output_ordering =
+        "output_ordering=[string_col@9 ASC NULLS LAST, int_col@4 ASC NULLS LAST]";
+
+    // when sort not specified, should not appear in the explain plan
+    assert_not_contains!(
+        run_query_with_options(options_no_sort).await,
+        expected_output_ordering
+    );
+
+    // when sort IS specified, SHOULD appear in the explain plan
+    assert_contains!(
+        run_query_with_options(options_sort).await,
+        expected_output_ordering
+    );
+}
+
+/// Runs a limit query against a parquet file that was registered from options
+async fn run_query_with_options(options: ListingOptions) -> String {
+    let ctx = SessionContext::new();
+    let testdata = datafusion::test_util::parquet_test_data();
+    let table_path = format!("{}/alltypes_plain.parquet", testdata);
+
+    let provided_schema = None;
+    let sql_definition = None;
+    ctx.register_listing_table(
+        "t",
+        &table_path,
+        options.clone(),
+        provided_schema,
+        sql_definition,
+    )
+    .await
+    .unwrap();
+
+    let batches = ctx.sql("explain select int_col, string_col from t order by string_col, int_col limit 10")
+        .await
+        .expect("planing worked")
+        .collect()
+        .await
+        .expect("execution worked");
+
+    arrow::util::pretty::pretty_format_batches(&batches)
+        .unwrap()
+        .to_string()
 }
 
 #[tokio::test]

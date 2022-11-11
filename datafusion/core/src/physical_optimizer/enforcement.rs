@@ -41,7 +41,6 @@ use datafusion_physical_expr::{
     expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
     normalize_sort_expr_with_equivalence_properties, PhysicalExpr, PhysicalSortExpr,
 };
-use log::debug;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -810,11 +809,6 @@ fn ensure_distribution_and_ordering(
             }) {
                 child
             } else {
-                debug!("Adding SortExec to satisfy ordering");
-                debug!("  required ordering: {:?}", required);
-                debug!("  child ordering: {:?}", child.output_ordering());
-                debug!("  equivalence properties: {:?}", child.equivalence_properties());
-                debug!("  child: {:?}", child);
                 let sort_expr = required.unwrap().to_vec();
                 if child.output_partitioning().partition_count() > 1 {
                     Arc::new(SortExec::new_with_partitioning(
@@ -940,6 +934,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
+                output_ordering: None,
             },
             None,
             None,
