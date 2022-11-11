@@ -31,7 +31,7 @@ use crate::{
         Window,
     },
     utils::{
-        can_hash, expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+        can_hash, expand_qualified_wildcard, expand_wildcard,
         group_window_expr_by_sort_keys,
     },
     Expr, ExprSchemable, TableSource,
@@ -43,10 +43,7 @@ use datafusion_common::{
 };
 use std::any::Any;
 use std::convert::TryFrom;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -378,8 +375,7 @@ impl LogicalPlanBuilder {
             .clone()
             .into_iter()
             .try_for_each::<_, Result<()>>(|expr| {
-                let mut columns: HashSet<Column> = HashSet::new();
-                expr_to_columns(&expr, &mut columns)?;
+                let columns = expr.to_columns()?;
 
                 columns.into_iter().for_each(|c| {
                     if schema.field_from_column(&c).is_err() {

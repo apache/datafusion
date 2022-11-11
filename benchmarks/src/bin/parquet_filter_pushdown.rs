@@ -21,6 +21,7 @@ use datafusion::logical_expr::{lit, or, Expr};
 use datafusion::optimizer::utils::disjunction;
 use datafusion::physical_plan::collect;
 use datafusion::prelude::{col, SessionConfig, SessionContext};
+use parquet::file::properties::WriterProperties;
 use parquet_test_utils::{ParquetScanOptions, TestParquetFile};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -73,7 +74,19 @@ async fn main() -> Result<()> {
 
     let path = opt.path.join("logs.parquet");
 
-    let test_file = gen_data(path, opt.scale_factor, opt.page_size, opt.row_group_size)?;
+    let mut props_builder = WriterProperties::builder();
+
+    if let Some(s) = opt.page_size {
+        props_builder = props_builder
+            .set_data_pagesize_limit(s)
+            .set_write_batch_size(s);
+    }
+
+    if let Some(s) = opt.row_group_size {
+        props_builder = props_builder.set_max_row_group_size(s);
+    }
+
+    let test_file = gen_data(path, opt.scale_factor, props_builder.build())?;
 
     run_benchmarks(&mut ctx, &test_file, opt.iterations, opt.debug).await?;
 
@@ -137,14 +150,9 @@ async fn run_benchmarks(
             println!("Using scan options {:?}", scan_options);
             for i in 0..iterations {
                 let start = Instant::now();
-                let rows = exec_scan(
-                    ctx,
-                    test_file,
-                    filter_expr.clone(),
-                    scan_options.clone(),
-                    debug,
-                )
-                .await?;
+                let rows =
+                    exec_scan(ctx, test_file, filter_expr.clone(), *scan_options, debug)
+                        .await?;
                 println!(
                     "Iteration {} returned {} rows in {} ms",
                     i,
@@ -179,17 +187,11 @@ async fn exec_scan(
 fn gen_data(
     path: PathBuf,
     scale_factor: f32,
-    page_size: Option<usize>,
-    row_group_size: Option<usize>,
+    props: WriterProperties,
 ) -> Result<TestParquetFile> {
     let generator = AccessLogGenerator::new();
 
     let num_batches = 100_f32 * scale_factor;
 
-    TestParquetFile::try_new(
-        path,
-        generator.take(num_batches as usize),
-        page_size,
-        row_group_size,
-    )
+    TestParquetFile::try_new(path, props, generator.take(num_batches as usize))
 }

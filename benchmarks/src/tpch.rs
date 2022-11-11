@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    Array, ArrayRef, Decimal128Array, Float64Array, Int32Array, Int64Array, StringArray,
-};
+use arrow::array::{Array, ArrayRef, Decimal128Array, Float64Array, StringArray};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use std::fs;
@@ -26,7 +24,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use datafusion::common::cast::as_date32_array;
+use datafusion::common::cast::{as_date32_array, as_int32_array, as_int64_array};
 use datafusion::common::ScalarValue;
 use datafusion::logical_expr::Cast;
 use datafusion::prelude::*;
@@ -424,11 +422,11 @@ fn col_to_scalar(column: &ArrayRef, row_index: usize) -> ScalarValue {
     }
     match column.data_type() {
         DataType::Int32 => {
-            let array = column.as_any().downcast_ref::<Int32Array>().unwrap();
+            let array = as_int32_array(column).unwrap();
             ScalarValue::Int32(Some(array.value(row_index)))
         }
         DataType::Int64 => {
-            let array = column.as_any().downcast_ref::<Int64Array>().unwrap();
+            let array = as_int64_array(column).unwrap();
             ScalarValue::Int64(Some(array.value(row_index)))
         }
         DataType::Float64 => {

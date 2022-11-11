@@ -126,8 +126,8 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
             weights.len(),
             "invalid number of values in means and weights"
         );
-        let means_f64 = ApproxPercentileAccumulator::convert_to_ordered_float(means)?;
-        let weights_f64 = ApproxPercentileAccumulator::convert_to_ordered_float(weights)?;
+        let means_f64 = ApproxPercentileAccumulator::convert_to_float(means)?;
+        let weights_f64 = ApproxPercentileAccumulator::convert_to_float(weights)?;
         let mut digests: Vec<TDigest> = vec![];
         for (mean, weight) in means_f64.iter().zip(weights_f64.iter()) {
             digests.push(TDigest::new_with_centroid(

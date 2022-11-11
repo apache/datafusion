@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion_common::Statistics;
-use datafusion_expr::LogicalPlan;
+use datafusion_expr::{CreateExternalTable, LogicalPlan};
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
 use crate::arrow::datatypes::SchemaRef;
@@ -92,5 +92,9 @@ pub trait TableProvider: Sync + Send {
 #[async_trait]
 pub trait TableProviderFactory: Sync + Send {
     /// Create a TableProvider with the given url
-    async fn create(&self, url: &str) -> Result<Arc<dyn TableProvider>>;
+    async fn create(
+        &self,
+        ctx: &SessionState,
+        cmd: &CreateExternalTable,
+    ) -> Result<Arc<dyn TableProvider>>;
 }

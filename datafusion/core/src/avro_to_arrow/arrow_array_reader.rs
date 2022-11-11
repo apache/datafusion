@@ -975,8 +975,9 @@ mod test {
     use crate::arrow::array::Array;
     use crate::arrow::datatypes::{Field, TimeUnit};
     use crate::avro_to_arrow::{Reader, ReaderBuilder};
-    use arrow::array::{Int32Array, Int64Array, ListArray, TimestampMicrosecondArray};
+    use arrow::array::{ListArray, TimestampMicrosecondArray};
     use arrow::datatypes::DataType;
+    use datafusion_common::cast::{as_int32_array, as_int64_array};
     use std::fs::File;
 
     fn build_reader(name: &str, batch_size: usize) -> Reader<File> {
@@ -1047,9 +1048,7 @@ mod test {
 
         assert_eq!(
             6,
-            array
-                .as_any()
-                .downcast_ref::<Int64Array>()
+            as_int64_array(&array)
                 .unwrap()
                 .iter()
                 .flatten()
@@ -1080,11 +1079,7 @@ mod test {
             num_batches += 1;
             let batch_schema = batch.schema();
             assert_eq!(schema, batch_schema);
-            let a_array = batch
-                .column(col_id_index)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap();
+            let a_array = as_int32_array(batch.column(col_id_index)).unwrap();
             sum_id += (0..a_array.len()).map(|i| a_array.value(i)).sum::<i32>();
         }
         assert_eq!(8, sum_num_rows);

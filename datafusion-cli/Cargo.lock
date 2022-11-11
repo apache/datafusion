@@ -556,6 +556,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "5.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "907076dfda823b0b36d2a1bb5f90c96660a5bbcd7729e10727f07858f22c4edc"
+dependencies = [
+ "cfg-if",
+ "hashbrown",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
 name = "datafusion"
 version = "14.0.0"
 dependencies = [
@@ -566,6 +579,7 @@ dependencies = [
  "bytes",
  "bzip2",
  "chrono",
+ "dashmap",
  "datafusion-common",
  "datafusion-expr",
  "datafusion-optimizer",
@@ -581,7 +595,6 @@ dependencies = [
  "log",
  "num_cpus",
  "object_store",
- "ordered-float 3.3.0",
  "parking_lot",
  "parquet",
  "paste",
@@ -621,7 +634,6 @@ dependencies = [
  "arrow",
  "chrono",
  "object_store",
- "ordered-float 3.3.0",
  "parquet",
  "sqlparser",
 ]
@@ -671,7 +683,6 @@ dependencies = [
  "lazy_static",
  "md-5",
  "num-traits",
- "ordered-float 3.3.0",
  "paste",
  "rand",
  "regex",
@@ -1603,15 +1614,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ordered-float"
-version = "3.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f74e330193f90ec45e2b257fa3ef6df087784157ac1ad2c1e71c62837b03aa7"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
 name = "os_str_bytes"
 version = "6.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2246,7 +2248,7 @@ checksum = "09678c4cdbb4eed72e18b7c2af1329c69825ed16fcbac62d083fc3e2b0590ff0"
 dependencies = [
  "byteorder",
  "integer-encoding",
- "ordered-float 1.1.1",
+ "ordered-float",
 ]
 
 [[package]]

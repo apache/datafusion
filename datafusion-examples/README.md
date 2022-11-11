@@ -44,4 +44,4 @@ Run `git submodule update --init` to init test files.
 
 ## Distributed
 
-- [`flight-client.rs`](examples/flight-client.rs) and [`flight-server.rs`](examples/flight-server.rs): Run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol.
+- [`flight_client.rs`](examples/flight_client.rs) and [`flight_server.rs`](examples/flight_server.rs): Run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol.

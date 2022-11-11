@@ -260,37 +260,238 @@ async fn set_u64_variable_bad_value() {
 
 #[tokio::test]
 async fn set_time_zone() {
-    // we don't support changing time zone for now until all time zone issues fixed and related function completed
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
-    let ctx = SessionContext::new();
-
-    // for full variable name
-    let err = plan_and_collect(&ctx, "set datafusion.execution.time_zone = '8'")
+    plan_and_collect(&ctx, "SET datafusion.execution.time_zone = '+08:00'")
         .await
-        .unwrap_err();
+        .unwrap();
 
-    assert_eq!(
-        err.to_string(),
-        "Error during planning: Changing Time Zone isn't supported yet"
-    );
-
-    // for alias time zone
-    let err = plan_and_collect(&ctx, "set time zone = '8'")
+    let result = plan_and_collect(&ctx, "SHOW datafusion.execution.time_zone")
         .await
-        .unwrap_err();
+        .unwrap();
+    let expected = vec![
+        "+--------------------------------+---------+",
+        "| name                           | setting |",
+        "+--------------------------------+---------+",
+        "| datafusion.execution.time_zone | +08:00  |",
+        "+--------------------------------+---------+",
+    ];
+    assert_batches_eq!(expected, &result);
+}
 
-    assert_eq!(
-        err.to_string(),
-        "Error during planning: Changing Time Zone isn't supported yet"
-    );
+#[tokio::test]
+async fn set_time_zone_with_alias_variable_name() {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
-    // for alias timezone
-    let err = plan_and_collect(&ctx, "set timezone = '8'")
+    // TIME ZONE with space
+    plan_and_collect(&ctx, "SET TIME ZONE = '+08:00'")
         .await
-        .unwrap_err();
+        .unwrap();
 
-    assert_eq!(
-        err.to_string(),
-        "Error during planning: Changing Time Zone isn't supported yet"
-    );
+    let result = plan_and_collect(&ctx, "SHOW TIME ZONE").await.unwrap();
+    let expected = vec![
+        "+--------------------------------+---------+",
+        "| name                           | setting |",
+        "+--------------------------------+---------+",
+        "| datafusion.execution.time_zone | +08:00  |",
+        "+--------------------------------+---------+",
+    ];
+    assert_batches_eq!(expected, &result);
+
+    // TIMEZONE without space
+    plan_and_collect(&ctx, "SET TIMEZONE = '+07:00'")
+        .await
+        .unwrap();
+
+    let result = plan_and_collect(&ctx, "SHOW TIMEZONE").await.unwrap();
+    let expected = vec![
+        "+--------------------------------+---------+",
+        "| name                           | setting |",
+        "+--------------------------------+---------+",
+        "| datafusion.execution.time_zone | +07:00  |",
+        "+--------------------------------+---------+",
+    ];
+    assert_batches_eq!(expected, &result);
+}
+
+#[tokio::test]
+async fn set_time_zone_good_time_zone_format() {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
+    plan_and_collect(&ctx, "SET TIME ZONE = '+08:00'")
+        .await
+        .unwrap();
+
+    // casting UTF-8 to TimestampTZ isn't supported yet, add Timestamp as the middle layer for now
+    let result =
+        plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
+            .await
+            .unwrap();
+    let expected = vec![
+        "+-----------------------------+",
+        "| Utf8(\"2000-01-01T00:00:00\") |",
+        "+-----------------------------+",
+        "| 2000-01-01T08:00:00+08:00   |",
+        "+-----------------------------+",
+    ];
+    // this might break once https://github.com/apache/arrow-rs/issues/1936 fixed
+    assert_batches_eq!(expected, &result);
+
+    plan_and_collect(&ctx, "SET TIME ZONE = '-08:00'")
+        .await
+        .unwrap();
+
+    // casting UTF-8 to TimestampTZ isn't supported yet, add Timestamp as the middle layer for now
+    let result =
+        plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
+            .await
+            .unwrap();
+    let expected = vec![
+        "+-----------------------------+",
+        "| Utf8(\"2000-01-01T00:00:00\") |",
+        "+-----------------------------+",
+        "| 1999-12-31T16:00:00-08:00   |",
+        "+-----------------------------+",
+    ];
+    // this might break once https://github.com/apache/arrow-rs/issues/1936 fixed
+    assert_batches_eq!(expected, &result);
+
+    plan_and_collect(&ctx, "SET TIME ZONE = '+0800'")
+        .await
+        .unwrap();
+
+    // casting UTF-8 to TimestampTZ isn't supported yet, add Timestamp as the middle layer for now
+    let result =
+        plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
+            .await
+            .unwrap();
+    let expected = vec![
+        "+-----------------------------+",
+        "| Utf8(\"2000-01-01T00:00:00\") |",
+        "+-----------------------------+",
+        "| 2000-01-01T08:00:00+08:00   |",
+        "+-----------------------------+",
+    ];
+    // this might break once https://github.com/apache/arrow-rs/issues/1936 fixed
+    assert_batches_eq!(expected, &result);
+
+    plan_and_collect(&ctx, "SET TIME ZONE = '+08'")
+        .await
+        .unwrap();
+
+    // casting UTF-8 to TimestampTZ isn't supported yet, add Timestamp as the middle layer for now
+    let result =
+        plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
+            .await
+            .unwrap();
+    let expected = vec![
+        "+-----------------------------+",
+        "| Utf8(\"2000-01-01T00:00:00\") |",
+        "+-----------------------------+",
+        "| 2000-01-01T08:00:00+08:00   |",
+        "+-----------------------------+",
+    ];
+    // this might break once https://github.com/apache/arrow-rs/issues/1936 fixed
+    assert_batches_eq!(expected, &result);
+}
+
+#[tokio::test]
+async fn set_time_zone_bad_time_zone_format() {
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
+    plan_and_collect(&ctx, "SET TIME ZONE = '+08:00:00'")
+        .await
+        .unwrap();
+
+    // casting UTF-8 to TimestampTZ isn't supported yet, add Timestamp as the middle layer for now
+    let result =
+        plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
+            .await
+            .unwrap();
+    let expected = vec![
+        "+-----------------------------------------------------+",
+        "| Utf8(\"2000-01-01T00:00:00\")                         |",
+        "+-----------------------------------------------------+",
+        "| 2000-01-01T00:00:00 (Unknown Time Zone '+08:00:00') |",
+        "+-----------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &result);
+
+    plan_and_collect(&ctx, "SET TIME ZONE = '08:00'")
+        .await
+        .unwrap();
+
+    // casting UTF-8 to TimestampTZ isn't supported yet, add Timestamp as the middle layer for now
+    let result =
+        plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
+            .await
+            .unwrap();
+    let expected = vec![
+        "+-------------------------------------------------+",
+        "| Utf8(\"2000-01-01T00:00:00\")                     |",
+        "+-------------------------------------------------+",
+        "| 2000-01-01T00:00:00 (Unknown Time Zone '08:00') |",
+        "+-------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &result);
+
+    plan_and_collect(&ctx, "SET TIME ZONE = '08'")
+        .await
+        .unwrap();
+
+    // casting UTF-8 to TimestampTZ isn't supported yet, add Timestamp as the middle layer for now
+    let result =
+        plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
+            .await
+            .unwrap();
+    let expected = vec![
+        "+----------------------------------------------+",
+        "| Utf8(\"2000-01-01T00:00:00\")                  |",
+        "+----------------------------------------------+",
+        "| 2000-01-01T00:00:00 (Unknown Time Zone '08') |",
+        "+----------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &result);
+
+    // we dont support named time zone yet
+    plan_and_collect(&ctx, "SET TIME ZONE = 'Asia/Taipei'")
+        .await
+        .unwrap();
+
+    // casting UTF-8 to TimestampTZ isn't supported yet, add Timestamp as the middle layer for now
+    let result =
+        plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
+            .await
+            .unwrap();
+    let expected = vec![
+        "+-------------------------------------------------------+",
+        "| Utf8(\"2000-01-01T00:00:00\")                           |",
+        "+-------------------------------------------------------+",
+        "| 2000-01-01T00:00:00 (Unknown Time Zone 'Asia/Taipei') |",
+        "+-------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &result);
+
+    // this is invalid even after we support named time zone
+    plan_and_collect(&ctx, "SET TIME ZONE = 'Asia/Taipei2'")
+        .await
+        .unwrap();
+
+    // casting UTF-8 to TimestampTZ isn't supported yet, add Timestamp as the middle layer for now
+    let result =
+        plan_and_collect(&ctx, "SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ")
+            .await
+            .unwrap();
+    let expected = vec![
+        "+--------------------------------------------------------+",
+        "| Utf8(\"2000-01-01T00:00:00\")                            |",
+        "+--------------------------------------------------------+",
+        "| 2000-01-01T00:00:00 (Unknown Time Zone 'Asia/Taipei2') |",
+        "+--------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &result);
 }

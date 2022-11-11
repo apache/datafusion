@@ -49,6 +49,11 @@ The benchmark can then be run (assuming the data created from `dbgen` is in `./d
 cargo run --release --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
 ```
 
+If you omit `--query=<query_id>` argument, then all benchmarks will be run one by one (from query 1 to query 22).
+```bash
+cargo run --release --bin tpch -- benchmark datafusion --iterations 1 --path ./data --format tbl --batch-size 4096
+```
+
 You can enable the features `simd` (to use SIMD instructions, `cargo nightly` is required.) and/or `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`:
 
 ```
@@ -68,6 +73,12 @@ cargo run --release --bin tpch -- convert --input ./data --output /mnt/tpch-parq
 ```
 
 Or if you want to verify and run all the queries in the benchmark, you can just run `cargo test`.
+
+### Machine readable benchmark summary
+
+Any `tpch` execution with `-o <dir>` argument will produce a summary file right under the `<dir>`
+directory. It is a JSON serialized form of all the runs that happened as well as the runtime metadata
+(number of cores, DataFusion version, etc.).
 
 ## Expected output
 

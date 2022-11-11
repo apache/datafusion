@@ -259,6 +259,8 @@ pub struct CreateExternalTableNode {
     pub definition: ::prost::alloc::string::String,
     #[prost(string, tag="10")]
     pub file_compression_type: ::prost::alloc::string::String,
+    #[prost(map="string, string", tag="11")]
+    pub options: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateCatalogSchemaNode {
@@ -407,7 +409,7 @@ pub mod logical_expr_node {
         Literal(super::ScalarValue),
         /// binary expressions
         #[prost(message, tag="4")]
-        BinaryExpr(::prost::alloc::boxed::Box<super::BinaryExprNode>),
+        BinaryExpr(super::BinaryExprNode),
         /// aggregate expressions
         #[prost(message, tag="5")]
         AggregateExpr(::prost::alloc::boxed::Box<super::AggregateExprNode>),
@@ -554,10 +556,11 @@ pub struct AliasNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BinaryExprNode {
-    #[prost(message, optional, boxed, tag="1")]
-    pub l: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
-    #[prost(message, optional, boxed, tag="2")]
-    pub r: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    /// Represents the operands from the left inner most expression
+    /// to the right outer most expression where each of them are chained
+    /// with the operator 'op'.
+    #[prost(message, repeated, tag="1")]
+    pub operands: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(string, tag="3")]
     pub op: ::prost::alloc::string::String,
 }

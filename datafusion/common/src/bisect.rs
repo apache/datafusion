@@ -74,6 +74,10 @@ pub fn bisect<const SIDE: bool>(
     find_bisect_point(item_columns, target, compare_fn, low, high)
 }
 
+/// This function searches for a tuple of target values among the given rows using the bisection algorithm.
+/// The boolean-valued function `compare_fn` specifies whether we bisect on the left (with return value `false`),
+/// or on the right (with return value `true`) as we compare the target value with the current value as we iteratively
+/// bisect the input.
 pub fn find_bisect_point<F>(
     item_columns: &[ArrayRef],
     target: &[ScalarValue],

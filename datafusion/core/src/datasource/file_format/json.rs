@@ -149,7 +149,7 @@ impl FileFormat for JsonFormat {
 #[cfg(test)]
 mod tests {
     use super::super::test_util::scan_format;
-    use arrow::array::Int64Array;
+    use datafusion_common::cast::as_int64_array;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
 
@@ -228,11 +228,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(12, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
+        let array = as_int64_array(batches[0].column(0))?;
         let mut values: Vec<i64> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));

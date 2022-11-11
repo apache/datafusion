@@ -40,6 +40,7 @@ use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::execution::context::TaskContext;
+use datafusion_physical_expr::equivalence::project_equivalence_properties;
 use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
@@ -48,7 +49,7 @@ use futures::stream::StreamExt;
 #[derive(Debug)]
 pub struct ProjectionExec {
     /// The projection expressions stored as tuples of (expression, output column name)
-    expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    pub(crate) expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// The schema once the projection has been applied to the input
     schema: SchemaRef,
     /// The input plan
@@ -191,15 +192,14 @@ impl ExecutionPlan for ProjectionExec {
         true
     }
 
-    // Equivalence properties need to be adjusted after the Projection.
-    // 1) Add Alias, Alias can introduce additional equivalence properties,
-    //    For example:  Projection(a, a as a1, a as a2)
-    // 2) Truncate the properties that are not in the schema of the Projection
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let mut input_equivalence_properties = self.input.equivalence_properties();
-        input_equivalence_properties.merge_properties_with_alias(&self.alias_map);
-        input_equivalence_properties.truncate_properties_not_in_schema(&self.schema);
-        input_equivalence_properties
+        let mut new_properties = EquivalenceProperties::new(self.schema());
+        project_equivalence_properties(
+            self.input.equivalence_properties(),
+            &self.alias_map,
+            &mut new_properties,
+        );
+        new_properties
     }
 
     fn with_new_children(

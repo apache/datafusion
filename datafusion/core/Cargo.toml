@@ -62,6 +62,7 @@ async-trait = "0.1.41"
 bytes = "1.1"
 bzip2 = "0.4.3"
 chrono = { version = "0.4.22", default-features = false }
+dashmap = "5.4.0"
 datafusion-common = { path = "../common", version = "14.0.0", features = ["parquet", "object_store"] }
 datafusion-expr = { path = "../expr", version = "14.0.0" }
 datafusion-jit = { path = "../jit", version = "14.0.0", optional = true }
@@ -79,7 +80,6 @@ log = "^0.4"
 num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
 object_store = "0.5.0"
-ordered-float = "3.0"
 parking_lot = "0.12"
 parquet = { version = "26.0.0", features = ["arrow", "async"] }
 paste = "^1.0"

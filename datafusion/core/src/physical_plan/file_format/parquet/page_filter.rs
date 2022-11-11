@@ -20,9 +20,8 @@
 use arrow::array::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array};
 use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
 use datafusion_common::{Column, DataFusionError, Result};
-use datafusion_expr::utils::expr_to_columns;
 use datafusion_optimizer::utils::split_conjunction;
-use log::{debug, error};
+use log::{debug, error, trace};
 use parquet::{
     arrow::arrow_reader::{RowSelection, RowSelector},
     errors::ParquetError,
@@ -32,7 +31,7 @@ use parquet::{
     },
     format::PageLocation,
 };
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
@@ -100,6 +99,8 @@ pub(crate) fn build_page_filter(
     file_metadata: &ParquetMetaData,
     file_metrics: &ParquetFileMetrics,
 ) -> Result<Option<RowSelection>> {
+    // scoped timer updates on drop
+    let _timer_guard = file_metrics.page_index_eval_time.timer();
     let page_index_predicates =
         extract_page_index_push_down_predicates(pruning_predicate, schema)?;
 
@@ -141,6 +142,9 @@ pub(crate) fn build_page_filter(
                         }),
                     );
                 } else {
+                    trace!(
+                        "Did not have enough metadata to prune with page indexes, falling back, falling back to all rows",
+                    );
                     // fallback select all rows
                     let all_selected =
                         vec![RowSelector::select(groups[*r].num_rows() as usize)];
@@ -148,12 +152,25 @@ pub(crate) fn build_page_filter(
                 }
             }
             debug!(
-                "Use filter and page index create RowSelection {:?} from predicate:{:?}",
-                &selectors, predicate
+                "Use filter and page index create RowSelection {:?} from predicate: {:?}",
+                &selectors,
+                predicate.predicate_expr(),
             );
             row_selections.push_back(selectors.into_iter().flatten().collect::<Vec<_>>());
         }
         let final_selection = combine_multi_col_selection(row_selections);
+        let total_skip =
+            final_selection.iter().fold(
+                0,
+                |acc, x| {
+                    if x.skip {
+                        acc + x.row_count
+                    } else {
+                        acc
+                    }
+                },
+            );
+        file_metrics.page_index_rows_filtered.add(total_skip);
         Ok(Some(final_selection.into()))
     } else {
         Ok(None)
@@ -268,8 +285,7 @@ fn extract_page_index_push_down_predicates(
         predicates
             .into_iter()
             .try_for_each::<_, Result<()>>(|predicate| {
-                let mut columns: HashSet<Column> = HashSet::new();
-                expr_to_columns(predicate, &mut columns)?;
+                let columns = predicate.to_columns()?;
                 if columns.len() == 1 {
                     one_col_expr.push(predicate);
                 }
@@ -307,7 +323,7 @@ fn prune_pages_in_one_row_group(
                 assert_eq!(row_vec.len(), values.len());
                 let mut sum_row = *row_vec.first().unwrap();
                 let mut selected = *values.first().unwrap();
-
+                trace!("Pruned to to {:?} using {:?}", values, pruning_stats);
                 for (i, &f) in values.iter().skip(1).enumerate() {
                     if f == selected {
                         sum_row += *row_vec.get(i).unwrap();
@@ -362,6 +378,7 @@ fn create_row_count_in_each_page(
 
 /// Wraps one col page_index in one rowGroup statistics in a way
 /// that implements [`PruningStatistics`]
+#[derive(Debug)]
 struct PagesPruningStatistics<'a> {
     col_page_indexes: &'a Index,
     col_offset_indexes: &'a Vec<PageLocation>,

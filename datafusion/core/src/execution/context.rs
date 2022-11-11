@@ -73,7 +73,6 @@ use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
-use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
@@ -82,6 +81,7 @@ use crate::config::{
 };
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
+use crate::physical_optimizer::enforcement::BasicEnforcement;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
@@ -173,6 +173,26 @@ impl SessionContext {
     /// Creates a new execution context using a default session configuration.
     pub fn new() -> Self {
         Self::with_config(SessionConfig::new())
+    }
+
+    /// Finds any ListSchemaProviders and instructs them to reload tables from "disk"
+    pub async fn refresh_catalogs(&self) -> Result<()> {
+        let cat_names = self.catalog_names().clone();
+        for cat_name in cat_names.iter() {
+            let cat = self.catalog(cat_name.as_str()).ok_or_else(|| {
+                DataFusionError::Internal("Catalog not found!".to_string())
+            })?;
+            for schema_name in cat.schema_names() {
+                let schema = cat.schema(schema_name.as_str()).ok_or_else(|| {
+                    DataFusionError::Internal("Schema not found!".to_string())
+                })?;
+                let lister = schema.as_any().downcast_ref::<ListingSchemaProvider>();
+                if let Some(lister) = lister {
+                    lister.refresh(&self.state()).await?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Creates a new session context using the provided session configuration.
@@ -486,7 +506,7 @@ impl SessionContext {
                     cmd.file_type
                 ))
             })?;
-        let table = (*factory).create(cmd.location.as_str()).await?;
+        let table = (*factory).create(&state, cmd).await?;
         self.register_table(cmd.name.as_str(), table)?;
         let plan = LogicalPlanBuilder::empty(false).build()?;
         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
@@ -1207,6 +1227,8 @@ pub struct SessionConfig {
     pub parquet_pruning: bool,
     /// Should DataFusion collect statistics after listing files
     pub collect_statistics: bool,
+    /// Should DataFusion optimizer run a top down process to reorder the join keys
+    pub top_down_join_key_reordering: bool,
     /// Configuration options
     pub config_options: Arc<RwLock<ConfigOptions>>,
     /// Opaque extensions.
@@ -1226,6 +1248,7 @@ impl Default for SessionConfig {
             repartition_windows: true,
             parquet_pruning: true,
             collect_statistics: false,
+            top_down_join_key_reordering: true,
             config_options: Arc::new(RwLock::new(ConfigOptions::new())),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
@@ -1548,6 +1571,7 @@ impl SessionState {
             Arc::new(AggregateStatistics::new()),
             Arc::new(HashBuildProbeOrder::new()),
         ];
+        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
         if config
             .config_options
             .read()
@@ -1565,7 +1589,8 @@ impl SessionState {
             )));
         }
         physical_optimizers.push(Arc::new(Repartition::new()));
-        physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
+        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
+        // physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
 
         SessionState {
             session_id,
@@ -1764,7 +1789,7 @@ impl ContextProvider for SessionState {
             Ok(schema) => {
                 let provider = schema.table(resolved_ref.table).ok_or_else(|| {
                     DataFusionError::Plan(format!(
-                        "'{}.{}.{}' not found",
+                        "table '{}.{}.{}' not found",
                         resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
                     ))
                 })?;
@@ -1797,6 +1822,10 @@ impl ContextProvider for SessionState {
             .var_providers
             .as_ref()
             .and_then(|provider| provider.get(&provider_type)?.get_type(variable_names))
+    }
+
+    fn get_config_option(&self, variable: &str) -> Option<ScalarValue> {
+        self.config.config_options.read().get(variable)
     }
 }
 
@@ -2005,11 +2034,12 @@ mod tests {
     use super::*;
     use crate::assert_batches_eq;
     use crate::datasource::datasource::TableProviderFactory;
+    use crate::datasource::listing_table_factory::ListingTableFactory;
     use crate::execution::context::QueryPlanner;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
-    use crate::test_util::{parquet_test_data, TestTableFactory};
+    use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
     use arrow::array::ArrayRef;
     use arrow::datatypes::*;
@@ -2267,7 +2297,8 @@ mod tests {
 
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
-        table_factories.insert("test".to_string(), Arc::new(TestTableFactory {}));
+        let factory = Arc::new(ListingTableFactory::new(FileType::CSV));
+        table_factories.insert("test".to_string(), factory);
         let rt_cfg = RuntimeConfig::new().with_table_factories(table_factories);
         let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
         let cfg = SessionConfig::new()
@@ -2275,22 +2306,24 @@ mod tests {
             .set_str("datafusion.catalog.type", "test");
         let session_state = SessionState::with_config_rt(cfg, runtime);
         let ctx = SessionContext::with_state(session_state);
+        ctx.refresh_catalogs().await?;
 
-        let mut table_count = 0;
-        for cat_name in ctx.catalog_names().iter() {
-            let cat = ctx.catalog(cat_name).unwrap();
-            for s_name in cat.schema_names().iter() {
-                let schema = cat.schema(s_name).unwrap();
-                if let Some(listing) =
-                    schema.as_any().downcast_ref::<ListingSchemaProvider>()
-                {
-                    listing.refresh().await.unwrap();
-                    table_count = schema.table_names().len();
-                }
-            }
-        }
+        let result =
+            plan_and_collect(&ctx, "select c_name from default.customer limit 3;")
+                .await?;
 
-        assert_eq!(table_count, 8);
+        let actual = arrow::util::pretty::pretty_format_batches(&result)
+            .unwrap()
+            .to_string();
+        let expected = r#"+--------------------+
+| c_name             |
++--------------------+
+| Customer#000000002 |
+| Customer#000000003 |
+| Customer#000000004 |
++--------------------+"#;
+        assert_eq!(actual, expected);
+
         Ok(())
     }
 

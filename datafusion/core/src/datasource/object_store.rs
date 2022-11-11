@@ -19,11 +19,10 @@
 //! This allows the user to extend DataFusion with different storage systems such as S3 or HDFS
 //! and query data inside these systems.
 
+use dashmap::DashMap;
 use datafusion_common::{DataFusionError, Result};
 use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
-use parking_lot::RwLock;
-use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
 
@@ -125,7 +124,7 @@ pub trait ObjectStoreProvider: Send + Sync + 'static {
 /// [`ListingTableUrl`]: crate::datasource::listing::ListingTableUrl
 pub struct ObjectStoreRegistry {
     /// A map from scheme to object store that serve list / read operations for the store
-    object_stores: RwLock<HashMap<String, Arc<dyn ObjectStore>>>,
+    object_stores: DashMap<String, Arc<dyn ObjectStore>>,
     provider: Option<Arc<dyn ObjectStoreProvider>>,
 }
 
@@ -134,7 +133,11 @@ impl std::fmt::Debug for ObjectStoreRegistry {
         f.debug_struct("ObjectStoreRegistry")
             .field(
                 "schemes",
-                &self.object_stores.read().keys().collect::<Vec<_>>(),
+                &self
+                    .object_stores
+                    .iter()
+                    .map(|o| o.key().clone())
+                    .collect::<Vec<_>>(),
             )
             .finish()
     }
@@ -161,10 +164,10 @@ impl ObjectStoreRegistry {
     /// may be explicity registered with calls to [`ObjectStoreRegistry::register_store`] or
     /// created lazily, on-demand by the provided [`ObjectStoreProvider`]
     pub fn new_with_provider(provider: Option<Arc<dyn ObjectStoreProvider>>) -> Self {
-        let mut map: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
-        map.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
+        let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
+        object_stores.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
         Self {
-            object_stores: RwLock::new(map),
+            object_stores,
             provider,
         }
     }
@@ -178,9 +181,8 @@ impl ObjectStoreRegistry {
         host: impl AsRef<str>,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        let mut stores = self.object_stores.write();
         let s = format!("{}://{}", scheme.as_ref(), host.as_ref());
-        stores.insert(s, store)
+        self.object_stores.insert(s, store)
     }
 
     /// Get a suitable store for the provided URL. For example:
@@ -192,21 +194,17 @@ impl ObjectStoreRegistry {
     pub fn get_by_url(&self, url: impl AsRef<Url>) -> Result<Arc<dyn ObjectStore>> {
         let url = url.as_ref();
         // First check whether can get object store from registry
-        let store = {
-            let stores = self.object_stores.read();
-            let s = &url[url::Position::BeforeScheme..url::Position::BeforePath];
-            stores.get(s).cloned()
-        };
+        let s = &url[url::Position::BeforeScheme..url::Position::BeforePath];
+        let store = self.object_stores.get(s).map(|o| o.value().clone());
 
         match store {
             Some(store) => Ok(store),
             None => match &self.provider {
                 Some(provider) => {
                     let store = provider.get_by_url(url)?;
-                    let mut stores = self.object_stores.write();
                     let key =
                         &url[url::Position::BeforeScheme..url::Position::BeforePath];
-                    stores.insert(key.to_owned(), store.clone());
+                    self.object_stores.insert(key.to_owned(), store.clone());
                     Ok(store)
                 }
                 None => Err(DataFusionError::Internal(format!(

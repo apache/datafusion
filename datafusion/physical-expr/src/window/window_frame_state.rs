@@ -78,6 +78,8 @@ impl<'a> WindowFrameContext<'a> {
             WindowFrameContext::Rows(window_frame) => {
                 Self::calculate_range_rows(window_frame, length, idx)
             }
+            // sort_options is used in RANGE mode calculations because the ordering and the position of the nulls
+            // have impact on the range calculations and comparison of the rows.
             WindowFrameContext::Range {
                 window_frame,
                 ref mut state,
@@ -88,16 +90,12 @@ impl<'a> WindowFrameContext<'a> {
                 length,
                 idx,
             ),
+            // sort_options is not used in GROUPS mode calculations as the inequality of two rows is the indicator
+            // of a group change, and the ordering and the position of the nulls do not have impact on inequality.
             WindowFrameContext::Groups {
                 window_frame,
                 ref mut state,
-            } => state.calculate_range(
-                window_frame,
-                range_columns,
-                sort_options,
-                length,
-                idx,
-            ),
+            } => state.calculate_range(window_frame, range_columns, length, idx),
             WindowFrameContext::Default => Ok((0, length)),
         }
     }
@@ -339,7 +337,6 @@ impl WindowFrameStateGroups {
         &mut self,
         window_frame: &Arc<WindowFrame>,
         range_columns: &[ArrayRef],
-        _sort_options: &[SortOptions],
         length: usize,
         idx: usize,
     ) -> Result<(usize, usize)> {
@@ -655,10 +652,19 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_find_next_group_and_start_index() {
-        const NUM_ROWS: usize = 6;
-        const NEXT_INDICES: [usize; 5] = [1, 2, 4, 4, 5];
+    struct TestData {
+        arrays: Vec<ArrayRef>,
+        group_indices: [usize; 6],
+        num_groups: usize,
+        num_rows: usize,
+        next_group_indices: [usize; 5],
+    }
+
+    fn test_data() -> TestData {
+        let num_groups: usize = 5;
+        let num_rows: usize = 6;
+        let group_indices = [0, 1, 2, 2, 4, 5];
+        let next_group_indices = [1, 2, 4, 4, 5];
 
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 8., 9., 10.])),
@@ -666,33 +672,48 @@ mod tests {
             Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 8., 10., 11.0])),
             Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 8., 5., 0.0])),
         ];
-        for (current_idx, next_idx) in NEXT_INDICES.iter().enumerate() {
-            let current_row_values = arrays
+        TestData {
+            arrays,
+            group_indices,
+            num_groups,
+            num_rows,
+            next_group_indices,
+        }
+    }
+
+    #[test]
+    fn test_find_next_group_and_start_index() {
+        let test_data = test_data();
+        for (current_idx, next_idx) in test_data.next_group_indices.iter().enumerate() {
+            let current_row_values = test_data
+                .arrays
                 .iter()
                 .map(|col| ScalarValue::try_from_array(col, current_idx))
                 .collect::<Result<Vec<ScalarValue>>>()
                 .unwrap();
-            let next_row_values = arrays
+            let next_row_values = test_data
+                .arrays
                 .iter()
                 .map(|col| ScalarValue::try_from_array(col, *next_idx))
                 .collect::<Result<Vec<ScalarValue>>>()
                 .unwrap();
             let res = WindowFrameStateGroups::find_next_group_and_start_index(
-                &arrays,
+                &test_data.arrays,
                 &current_row_values,
                 current_idx,
             )
             .unwrap();
             assert_eq!(res, Some((next_row_values, *next_idx)));
         }
-        let current_idx = NUM_ROWS - 1;
-        let current_row_values = arrays
+        let current_idx = test_data.num_rows - 1;
+        let current_row_values = test_data
+            .arrays
             .iter()
             .map(|col| ScalarValue::try_from_array(col, current_idx))
             .collect::<Result<Vec<ScalarValue>>>()
             .unwrap();
         let res = WindowFrameStateGroups::find_next_group_and_start_index(
-            &arrays,
+            &test_data.arrays,
             &current_row_values,
             current_idx,
         )
@@ -701,23 +722,16 @@ mod tests {
     }
 
     #[test]
-    fn test_window_frame_groups_preceding_huge_delta() {
+    fn test_window_frame_groups_preceding_delta_greater_than_partition_size() {
         const START: bool = true;
         const END: bool = false;
         const PRECEDING: bool = true;
         const DELTA: u64 = 10;
-        const NUM_ROWS: usize = 5;
 
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
-            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
-        ];
-
+        let test_data = test_data();
         let mut window_frame_groups = WindowFrameStateGroups::default();
         window_frame_groups
-            .initialize::<PRECEDING>(DELTA, &arrays)
+            .initialize::<PRECEDING>(DELTA, &test_data.arrays)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 0);
@@ -725,45 +739,46 @@ mod tests {
         assert_eq!(window_frame_groups.group_start_indices.len(), 0);
 
         window_frame_groups
-            .extend_window_frame_if_necessary::<PRECEDING>(&arrays, DELTA)
+            .extend_window_frame_if_necessary::<PRECEDING>(&test_data.arrays, DELTA)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 0);
         assert!(!window_frame_groups.reached_end);
         assert_eq!(window_frame_groups.group_start_indices.len(), 0);
 
-        for idx in 0..NUM_ROWS {
+        for idx in 0..test_data.num_rows {
             let start = window_frame_groups
                 .calculate_index_of_group::<START, PRECEDING>(
-                    &arrays, idx, DELTA, NUM_ROWS,
+                    &test_data.arrays,
+                    idx,
+                    DELTA,
+                    test_data.num_rows,
                 )
                 .unwrap();
             assert_eq!(start, 0);
             let end = window_frame_groups
-                .calculate_index_of_group::<END, PRECEDING>(&arrays, idx, DELTA, NUM_ROWS)
+                .calculate_index_of_group::<END, PRECEDING>(
+                    &test_data.arrays,
+                    idx,
+                    DELTA,
+                    test_data.num_rows,
+                )
                 .unwrap();
             assert_eq!(end, 0);
         }
     }
 
     #[test]
-    fn test_window_frame_groups_following_huge_delta() {
+    fn test_window_frame_groups_following_delta_greater_than_partition_size() {
         const START: bool = true;
         const END: bool = false;
         const FOLLOWING: bool = false;
         const DELTA: u64 = 10;
-        const NUM_ROWS: usize = 5;
 
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
-            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
-        ];
-
+        let test_data = test_data();
         let mut window_frame_groups = WindowFrameStateGroups::default();
         window_frame_groups
-            .initialize::<FOLLOWING>(DELTA, &arrays)
+            .initialize::<FOLLOWING>(DELTA, &test_data.arrays)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, DELTA);
         assert_eq!(window_frame_groups.window_frame_end_idx, DELTA);
@@ -771,46 +786,48 @@ mod tests {
         assert_eq!(window_frame_groups.group_start_indices.len(), 0);
 
         window_frame_groups
-            .extend_window_frame_if_necessary::<FOLLOWING>(&arrays, DELTA)
+            .extend_window_frame_if_necessary::<FOLLOWING>(&test_data.arrays, DELTA)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, DELTA);
         assert_eq!(window_frame_groups.window_frame_end_idx, DELTA);
         assert!(window_frame_groups.reached_end);
         assert_eq!(window_frame_groups.group_start_indices.len(), 0);
 
-        for idx in 0..NUM_ROWS {
+        for idx in 0..test_data.num_rows {
             let start = window_frame_groups
                 .calculate_index_of_group::<START, FOLLOWING>(
-                    &arrays, idx, DELTA, NUM_ROWS,
+                    &test_data.arrays,
+                    idx,
+                    DELTA,
+                    test_data.num_rows,
                 )
                 .unwrap();
-            assert_eq!(start, NUM_ROWS);
+            assert_eq!(start, test_data.num_rows);
             let end = window_frame_groups
-                .calculate_index_of_group::<END, FOLLOWING>(&arrays, idx, DELTA, NUM_ROWS)
+                .calculate_index_of_group::<END, FOLLOWING>(
+                    &test_data.arrays,
+                    idx,
+                    DELTA,
+                    test_data.num_rows,
+                )
                 .unwrap();
-            assert_eq!(end, NUM_ROWS);
+            assert_eq!(end, test_data.num_rows);
         }
     }
 
     #[test]
-    fn test_window_frame_groups_preceding_and_following_huge_delta() {
+    fn test_window_frame_groups_preceding_and_following_delta_greater_than_partition_size(
+    ) {
         const START: bool = true;
         const END: bool = false;
         const FOLLOWING: bool = false;
         const PRECEDING: bool = true;
         const DELTA: u64 = 10;
-        const NUM_ROWS: usize = 5;
 
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
-            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
-        ];
-
+        let test_data = test_data();
         let mut window_frame_groups = WindowFrameStateGroups::default();
         window_frame_groups
-            .initialize::<PRECEDING>(DELTA, &arrays)
+            .initialize::<PRECEDING>(DELTA, &test_data.arrays)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 0);
@@ -818,24 +835,38 @@ mod tests {
         assert_eq!(window_frame_groups.group_start_indices.len(), 0);
 
         window_frame_groups
-            .extend_window_frame_if_necessary::<FOLLOWING>(&arrays, DELTA)
+            .extend_window_frame_if_necessary::<FOLLOWING>(&test_data.arrays, DELTA)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
-        assert_eq!(window_frame_groups.window_frame_end_idx, NUM_ROWS as u64);
+        assert_eq!(
+            window_frame_groups.window_frame_end_idx,
+            test_data.num_groups as u64
+        );
         assert!(window_frame_groups.reached_end);
-        assert_eq!(window_frame_groups.group_start_indices.len(), NUM_ROWS);
+        assert_eq!(
+            window_frame_groups.group_start_indices.len(),
+            test_data.num_groups
+        );
 
-        for idx in 0..NUM_ROWS {
+        for idx in 0..test_data.num_rows {
             let start = window_frame_groups
                 .calculate_index_of_group::<START, PRECEDING>(
-                    &arrays, idx, DELTA, NUM_ROWS,
+                    &test_data.arrays,
+                    idx,
+                    DELTA,
+                    test_data.num_rows,
                 )
                 .unwrap();
             assert_eq!(start, 0);
             let end = window_frame_groups
-                .calculate_index_of_group::<END, FOLLOWING>(&arrays, idx, DELTA, NUM_ROWS)
+                .calculate_index_of_group::<END, FOLLOWING>(
+                    &test_data.arrays,
+                    idx,
+                    DELTA,
+                    test_data.num_rows,
+                )
                 .unwrap();
-            assert_eq!(end, NUM_ROWS);
+            assert_eq!(end, test_data.num_rows);
         }
     }
 
@@ -846,18 +877,11 @@ mod tests {
         const FOLLOWING: bool = false;
         const PRECEDING: bool = true;
         const DELTA: u64 = 1;
-        const NUM_ROWS: usize = 5;
 
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
-            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
-        ];
-
+        let test_data = test_data();
         let mut window_frame_groups = WindowFrameStateGroups::default();
         window_frame_groups
-            .initialize::<PRECEDING>(DELTA, &arrays)
+            .initialize::<PRECEDING>(DELTA, &test_data.arrays)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 0);
@@ -865,7 +889,7 @@ mod tests {
         assert_eq!(window_frame_groups.group_start_indices.len(), 0);
 
         window_frame_groups
-            .extend_window_frame_if_necessary::<FOLLOWING>(&arrays, DELTA)
+            .extend_window_frame_if_necessary::<FOLLOWING>(&test_data.arrays, DELTA)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 2 * DELTA + 1);
@@ -875,25 +899,40 @@ mod tests {
             2 * DELTA as usize + 1
         );
 
-        for idx in 0..NUM_ROWS {
+        for idx in 0..test_data.num_rows {
             let start_idx = if idx < DELTA as usize {
                 0
             } else {
-                idx - DELTA as usize
+                test_data.group_indices[idx] - DELTA as usize
             };
             let start = window_frame_groups
                 .calculate_index_of_group::<START, PRECEDING>(
-                    &arrays, idx, DELTA, NUM_ROWS,
+                    &test_data.arrays,
+                    idx,
+                    DELTA,
+                    test_data.num_rows,
                 )
                 .unwrap();
-            assert_eq!(start, start_idx);
-            let end_idx = if idx + 1 + DELTA as usize > NUM_ROWS {
-                NUM_ROWS
+            assert_eq!(start, test_data.group_indices[start_idx]);
+            let mut end_idx = if idx >= test_data.num_groups {
+                test_data.num_rows
             } else {
-                idx + 1 + DELTA as usize
+                test_data.next_group_indices[idx]
             };
+            for _ in 0..DELTA {
+                end_idx = if end_idx >= test_data.num_groups {
+                    test_data.num_rows
+                } else {
+                    test_data.next_group_indices[end_idx]
+                };
+            }
             let end = window_frame_groups
-                .calculate_index_of_group::<END, FOLLOWING>(&arrays, idx, DELTA, NUM_ROWS)
+                .calculate_index_of_group::<END, FOLLOWING>(
+                    &test_data.arrays,
+                    idx,
+                    DELTA,
+                    test_data.num_rows,
+                )
                 .unwrap();
             assert_eq!(end, end_idx);
         }
@@ -904,36 +943,32 @@ mod tests {
         const START: bool = true;
         const PRECEDING: bool = true;
         const DELTA: u64 = 1;
-        const NUM_ROWS: usize = 5;
 
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
-            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
-        ];
-
+        let test_data = test_data();
         let mut window_frame_groups = WindowFrameStateGroups::default();
         window_frame_groups
-            .initialize::<PRECEDING>(DELTA, &arrays)
+            .initialize::<PRECEDING>(DELTA, &test_data.arrays)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 0);
         assert!(!window_frame_groups.reached_end);
         assert_eq!(window_frame_groups.group_start_indices.len(), 0);
 
-        for idx in 0..NUM_ROWS {
+        for idx in 0..test_data.num_rows {
             let start_idx = if idx < DELTA as usize {
                 0
             } else {
-                idx - DELTA as usize
+                test_data.group_indices[idx] - DELTA as usize
             };
             let start = window_frame_groups
                 .calculate_index_of_group::<START, PRECEDING>(
-                    &arrays, idx, DELTA, NUM_ROWS,
+                    &test_data.arrays,
+                    idx,
+                    DELTA,
+                    test_data.num_rows,
                 )
                 .unwrap();
-            assert_eq!(start, start_idx);
+            assert_eq!(start, test_data.group_indices[start_idx]);
         }
     }
 
@@ -942,31 +977,27 @@ mod tests {
         const START: bool = true;
         const PRECEDING: bool = true;
         const DELTA: u64 = 0;
-        const NUM_ROWS: usize = 5;
 
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
-            Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
-            Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 10., 11.0])),
-            Arc::new(Float64Array::from_slice([15.0, 13.0, 8.0, 5., 0.0])),
-        ];
-
+        let test_data = test_data();
         let mut window_frame_groups = WindowFrameStateGroups::default();
         window_frame_groups
-            .initialize::<PRECEDING>(DELTA, &arrays)
+            .initialize::<PRECEDING>(DELTA, &test_data.arrays)
             .unwrap();
         assert_eq!(window_frame_groups.window_frame_start_idx, 0);
         assert_eq!(window_frame_groups.window_frame_end_idx, 1);
         assert!(!window_frame_groups.reached_end);
         assert_eq!(window_frame_groups.group_start_indices.len(), 1);
 
-        for idx in 0..NUM_ROWS {
+        for idx in 0..test_data.num_rows {
             let start = window_frame_groups
                 .calculate_index_of_group::<START, PRECEDING>(
-                    &arrays, idx, DELTA, NUM_ROWS,
+                    &test_data.arrays,
+                    idx,
+                    DELTA,
+                    test_data.num_rows,
                 )
                 .unwrap();
-            assert_eq!(start, idx);
+            assert_eq!(start, test_data.group_indices[idx]);
         }
     }
 }
