@@ -57,6 +57,7 @@ use super::PartitionedFile;
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
 /// Configuration for creating a 'ListingTable'
+#[derive(Debug, Clone)]
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating `ListingTable`.
     /// They should share the same schema and object store.
@@ -89,15 +90,21 @@ impl ListingTableConfig {
         }
     }
     /// Add `schema` to `ListingTableConfig`
-    pub fn with_schema(mut self, file_schema: SchemaRef) -> Self {
-        self.file_schema = Some(file_schema);
-        self
+    pub fn with_schema(self, schema: SchemaRef) -> Self {
+        Self {
+            table_paths: self.table_paths,
+            file_schema: Some(schema),
+            options: self.options,
+        }
     }
 
     /// Add `listing_options` to `ListingTableConfig`
-    pub fn with_listing_options(mut self, listing_options: ListingOptions) -> Self {
-        self.options = Some(listing_options);
-        self
+    pub fn with_listing_options(self, listing_options: ListingOptions) -> Self {
+        Self {
+            table_paths: self.table_paths,
+            file_schema: self.file_schema,
+            options: Some(listing_options),
+        }
     }
 
     fn infer_format(path: &str) -> Result<(Arc<dyn FileFormat>, String)> {
@@ -196,7 +203,7 @@ impl ListingTableConfig {
 }
 
 /// Options for creating a `ListingTable`
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ListingOptions {
     /// A suffix on which files should be filtered (leave empty to
     /// keep all files on the path)
@@ -225,6 +232,7 @@ pub struct ListingOptions {
     /// provided if it is known by some external mechanism, but may in
     /// the future be automatically determined, for example using
     /// parquet metadata.
+    ///
     /// See <https://github.com/apache/arrow-datafusion/issues/4177>
     pub file_sort_order: Option<Vec<Expr>>,
 }
@@ -556,6 +564,7 @@ mod tests {
     };
     use arrow::datatypes::DataType;
     use chrono::DateTime;
+    use datafusion_common::assert_contains;
 
     use super::*;
 
@@ -601,6 +610,62 @@ mod tests {
         assert_eq!(exec.statistics().total_byte_size, Some(671));
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_try_create_output_ordering() {
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let schema = options.infer_schema(&state, &table_path).await.unwrap();
+
+        // (file_sort_order, expected_result)
+        let cases = vec![
+            (None, Ok(None)),
+            // empty list
+            (Some(vec![]), Ok(Some(vec![]))),
+            // not a sort expr
+            (
+                Some(vec![col("string_col")]),
+                Err("Expected Expr::Sort in output_ordering, but got string_col"),
+            ),
+        ];
+
+        for (file_sort_order, expected_result) in cases {
+            let options = ListingOptions {
+                file_sort_order,
+                ..options.clone()
+            };
+            let config = ListingTableConfig::new(table_path.clone())
+                .with_listing_options(options)
+                .with_schema(schema.clone());
+
+            let table =
+                ListingTable::try_new(config.clone()).expect("Creating the table");
+            let ordering_result = table.try_create_output_ordering();
+
+            match (expected_result, ordering_result) {
+                (Ok(expected), Ok(result)) => {
+                    assert_eq!(expected, result);
+                }
+                (Err(expected), Err(result)) => {
+                    // can't compare the DataFusionError directly
+                    let result = result.to_string();
+                    let expected = expected.to_string();
+                    assert_contains!(result.to_string(), expected);
+                }
+                (expected_result, ordering_result) => {
+                    panic!(
+                        "expected: {:#?}\n\nactual:{:#?}",
+                        expected_result, ordering_result
+                    );
+                }
+            }
+        }
     }
 
     #[tokio::test]
