@@ -435,7 +435,9 @@ fn register_partitioned_aggregate_csv(
     );
 
     let options = ListingOptions::new(Arc::new(CsvFormat::default()))
-        .with_table_partition_cols(partition_cols.iter().map(|&s| s.to_owned()).collect());
+        .with_table_partition_cols(
+            partition_cols.iter().map(|&s| s.to_owned()).collect(),
+        );
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
     let config = ListingTableConfig::new(table_path)

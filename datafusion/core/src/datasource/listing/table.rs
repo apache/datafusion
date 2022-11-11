@@ -243,10 +243,10 @@ impl ListingOptions {
     /// ```
     /// use std::sync::Arc;
     /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
-    /// 
+    ///
     /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
     ///     .with_file_extension(".parquet");
-    /// 
+    ///
     /// assert_eq!(listing_options.file_extension, ".parquet");
     /// ```
     pub fn with_file_extension(mut self, file_extension: impl Into<String>) -> Self {
@@ -259,13 +259,16 @@ impl ListingOptions {
     /// ```
     /// use std::sync::Arc;
     /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
-    /// 
+    ///
     /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
     ///     .with_table_partition_cols(vec!["col_a".to_string(), "col_b".to_string()]);
-    /// 
+    ///
     /// assert_eq!(listing_options.table_partition_cols, vec!["col_a", "col_b"]);
     /// ```
-    pub fn with_table_partition_cols(mut self, table_partition_cols: Vec<String>) -> Self {
+    pub fn with_table_partition_cols(
+        mut self,
+        table_partition_cols: Vec<String>,
+    ) -> Self {
         self.table_partition_cols = table_partition_cols;
         self
     }
@@ -276,10 +279,10 @@ impl ListingOptions {
     /// use std::sync::Arc;
     /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// # Enable stat collection 
+    /// # Enable stat collection
     /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
     ///     .with_collect_stat(true);
-    /// 
+    ///
     /// assert_eq!(listing_options.collect_stat, true);
     /// ```
     pub fn with_collect_stat(mut self, collect_stat: bool) -> Self {
@@ -295,7 +298,7 @@ impl ListingOptions {
     ///
     /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
     ///     .with_target_partitions(8);
-    /// 
+    ///
     /// assert_eq!(listing_options.target_partitions, 8);
     /// ```
     pub fn with_target_partitions(mut self, target_partitions: usize) -> Self {
