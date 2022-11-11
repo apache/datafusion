@@ -81,7 +81,7 @@ impl OptimizerConfig {
     /// Create optimizer config
     pub fn new() -> Self {
         Self {
-            query_execution_start_time: chrono::Utc::now(),
+            query_execution_start_time: Utc::now(),
             next_id: 0, // useful for generating things like unique subquery aliases
             skip_failing_rules: true,
             filter_null_keys: true,
