@@ -75,6 +75,7 @@ use arrow::record_batch::RecordBatch;
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
+use datafusion_common::cast::as_decimal128_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::binary_operator_data_type;
@@ -122,7 +123,7 @@ impl std::fmt::Display for BinaryExpr {
 
 macro_rules! compute_decimal_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
-        let ll = $LEFT.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        let ll = as_decimal128_array($LEFT).unwrap();
         if let ScalarValue::Decimal128(Some(_), _, _) = $RIGHT {
             Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
                 ll,
@@ -137,7 +138,7 @@ macro_rules! compute_decimal_op_dyn_scalar {
 
 macro_rules! compute_decimal_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        let ll = as_decimal128_array($LEFT).unwrap();
         if let ScalarValue::Decimal128(Some(_), _, _) = $RIGHT {
             Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
                 ll,
