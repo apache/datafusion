@@ -41,6 +41,7 @@ use datafusion_expr::{
     window_function::WindowFunction, BuiltinScalarFunction, TableSource,
 };
 use std::collections::{HashMap, HashSet};
+use std::ops::Not;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
@@ -53,6 +54,7 @@ use datafusion_common::{
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
+use datafusion_expr::utils::check_all_column_from_schema;
 use datafusion_expr::Expr::Alias;
 
 use sqlparser::ast::TimezoneInfo;
@@ -665,41 +667,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         match constraint {
             JoinConstraint::On(sql_expr) => {
-                let mut keys: Vec<(Column, Column)> = vec![];
+                let mut keys: Vec<(Expr, Expr)> = vec![];
                 let join_schema = left.schema().join(right.schema())?;
 
                 // parse ON expression
                 let expr = self.sql_to_rex(sql_expr, &join_schema, ctes)?;
+
+                // normalize all columns in expression
+                let using_columns = expr.to_columns()?;
+                let normalized_expr = normalize_col_with_schemas(
+                    expr,
+                    &[left.schema(), right.schema()],
+                    &[using_columns],
+                )?;
 
                 // expression that didn't match equi-join pattern
                 let mut filter = vec![];
 
                 // extract join keys
                 extract_join_keys(
-                    expr,
+                    normalized_expr,
                     &mut keys,
                     &mut filter,
                     left.schema(),
                     right.schema(),
-                );
+                )?;
 
-                let (left_keys, right_keys): (Vec<Column>, Vec<Column>) =
+                let (left_keys, right_keys): (Vec<Expr>, Vec<Expr>) =
                     keys.into_iter().unzip();
 
-                let join_filter = filter
-                    .into_iter()
-                    .map(|expr| {
-                        let using_columns = expr.to_columns()?;
-
-                        normalize_col_with_schemas(
-                            expr,
-                            &[left.schema(), right.schema()],
-                            &[using_columns],
-                        )
-                    })
-                    .collect::<Result<Vec<_>>>()?
-                    .into_iter()
-                    .reduce(Expr::and);
+                let join_filter = filter.into_iter().reduce(Expr::and);
 
                 if left_keys.is_empty() {
                     // When we don't have join keys, use cross join
@@ -709,8 +706,39 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .unwrap_or(Ok(join))?
                         .build()
                 } else {
-                    LogicalPlanBuilder::from(left)
-                        .join(&right, join_type, (left_keys, right_keys), join_filter)?
+                    let left_child =
+                        wrap_projection_for_join_if_necessary(&left_keys, left)?;
+                    let left_join_keys = left_keys
+                        .iter()
+                        .map(|key| {
+                            if let Ok(col) = key.try_into_col() {
+                                Ok(col)
+                            } else {
+                                Ok(Column::from_name(key.display_name()?))
+                            }
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    let right_child =
+                        wrap_projection_for_join_if_necessary(&right_keys, right)?;
+                    let right_join_keys = right_keys
+                        .iter()
+                        .map(|key| {
+                            if let Ok(col) = key.try_into_col() {
+                                Ok(col)
+                            } else {
+                                Ok(Column::from_name(key.display_name()?))
+                            }
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    LogicalPlanBuilder::from(left_child)
+                        .join(
+                            &right_child,
+                            join_type,
+                            (left_join_keys, right_join_keys),
+                            join_filter,
+                        )?
                         .build()
                 }
             }
@@ -2840,33 +2868,68 @@ fn remove_join_expressions(
 /// ```
 fn extract_join_keys(
     expr: Expr,
-    accum: &mut Vec<(Column, Column)>,
+    accum: &mut Vec<(Expr, Expr)>,
     accum_filter: &mut Vec<Expr>,
     left_schema: &Arc<DFSchema>,
     right_schema: &Arc<DFSchema>,
-) {
+) -> Result<()> {
     match &expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
-            Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(l), Expr::Column(r)) => {
-                    if left_schema.field_from_column(l).is_ok()
-                        && right_schema.field_from_column(r).is_ok()
-                        && can_hash(left_schema.field_from_column(l).unwrap().data_type())
-                    {
-                        accum.push((l.clone(), r.clone()));
-                    } else if left_schema.field_from_column(r).is_ok()
-                        && right_schema.field_from_column(l).is_ok()
-                        && can_hash(left_schema.field_from_column(r).unwrap().data_type())
-                    {
-                        accum.push((r.clone(), l.clone()));
+            Operator::Eq => {
+                let left = *left.clone();
+                let right = *right.clone();
+
+                let left_using_columns = left.to_columns()?;
+                let right_using_columns = right.to_columns()?;
+
+                // When there is one side expression does not contain columns, we need move this expression to filter.
+                // For example: a = 1, a = now() + 10.
+                if left_using_columns.is_empty() || right_using_columns.is_empty() {
+                    accum_filter.push(expr);
+                    return Ok(());
+                }
+
+                let l_is_left = check_all_column_from_schema(
+                    &left_using_columns,
+                    left_schema.clone(),
+                )?;
+                let r_is_right = check_all_column_from_schema(
+                    &right_using_columns,
+                    right_schema.clone(),
+                )?;
+
+                let r_is_left_and_l_is_right = || {
+                    let result = check_all_column_from_schema(
+                        &right_using_columns,
+                        left_schema.clone(),
+                    )? && check_all_column_from_schema(
+                        &left_using_columns,
+                        right_schema.clone(),
+                    )?;
+
+                    Result::Ok(result)
+                };
+
+                let join_key_pair = match (l_is_left, r_is_right) {
+                    (true, true) => Some((left, right)),
+                    (_, _) if r_is_left_and_l_is_right()? => Some((right, left)),
+                    _ => None,
+                };
+
+                if let Some((left_expr, right_expr)) = join_key_pair {
+                    let left_expr_type = left_expr.get_type(left_schema)?;
+                    let right_expr_type = right_expr.get_type(right_schema)?;
+
+                    // TODO: Maybe this check can be done later in optimizer
+                    if can_hash(&left_expr_type) && can_hash(&right_expr_type) {
+                        accum.push((left_expr, right_expr));
                     } else {
                         accum_filter.push(expr);
                     }
-                }
-                _other => {
+                } else {
                     accum_filter.push(expr);
                 }
-            },
+            }
             Operator::And => {
                 if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = expr {
                     extract_join_keys(
@@ -2875,14 +2938,14 @@ fn extract_join_keys(
                         accum_filter,
                         left_schema,
                         right_schema,
-                    );
+                    )?;
                     extract_join_keys(
                         *right,
                         accum,
                         accum_filter,
                         left_schema,
                         right_schema,
-                    );
+                    )?;
                 }
             }
             _other => {
@@ -2893,6 +2956,8 @@ fn extract_join_keys(
             accum_filter.push(expr);
         }
     }
+
+    Ok(())
 }
 
 /// Extract join keys from a WHERE clause
@@ -2932,6 +2997,30 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
                 n
             )))
         })
+}
+
+fn wrap_projection_for_join_if_necessary(
+    join_keys: &[Expr],
+    input: LogicalPlan,
+) -> Result<LogicalPlan> {
+    let expr_join_keys = join_keys
+        .iter()
+        .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let handled_input = if expr_join_keys.is_empty().not() {
+        let mut projection = expand_wildcard(input.schema(), &input)?;
+        projection.extend_from_slice(&expr_join_keys);
+
+        LogicalPlanBuilder::from(input)
+            .project(projection)?
+            .build()?
+    } else {
+        input
+    };
+
+    Ok(handled_input)
 }
 
 #[cfg(test)]
@@ -5507,6 +5596,38 @@ mod tests {
 
         // It should return error in other dialect.
         assert!(logical_plan("SELECT \"1\"").is_err());
+    }
+
+    #[test]
+    fn test_single_column_expr_eq_join() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            INNER JOIN orders \
+            ON person.id + 10 = orders.customer_id * 2";
+
+        let expected = "Projection: person.id, orders.order_id\
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
+        \n      TableScan: person\
+        \n    Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
+        \n      TableScan: orders";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_multiple_column_expr_eq_join() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            INNER JOIN orders \
+            ON person.id + person.age + 10 = orders.customer_id * 2 - orders.price";
+
+        let expected = "Projection: person.id, orders.order_id\
+        \n  Inner Join: person.id + person.age + Int64(10) = orders.customer_id * Int64(2) - orders.price\
+        \n    Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + person.age + Int64(10)\
+        \n      TableScan: person\
+        \n    Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
+        \n      TableScan: orders";
+        quick_test(sql, expected);
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
