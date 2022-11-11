@@ -279,7 +279,7 @@ impl ListingOptions {
     /// use std::sync::Arc;
     /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// # Enable stat collection
+    /// // Enable stat collection
     /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
     ///     .with_collect_stat(true);
     ///
