@@ -445,13 +445,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(ListingTableUrl::parse)
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let options = ListingOptions {
-                    file_extension: scan.file_extension.clone(),
-                    format: file_format,
-                    table_partition_cols: scan.table_partition_cols.clone(),
-                    collect_stat: scan.collect_stat,
-                    target_partitions: scan.target_partitions as usize,
-                };
+                let options = ListingOptions::new(file_format)
+                    .with_file_extension(scan.file_extension.clone())
+                    .with_table_partition_cols(scan.table_partition_cols.clone())
+                    .with_collect_stat(scan.collect_stat)
+                    .with_target_partitions(scan.target_partitions as usize);
 
                 let config =
                     ListingTableConfig::new_with_multi_paths(table_paths.clone())
