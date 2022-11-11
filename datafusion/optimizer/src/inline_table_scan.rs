@@ -48,7 +48,6 @@ impl OptimizerRule for InlineTableScan {
                 source,
                 table_name,
                 filters,
-                fetch: None,
                 ..
             }) if filters.is_empty() => {
                 if let Some(sub_plan) = source.get_logical_plan() {
