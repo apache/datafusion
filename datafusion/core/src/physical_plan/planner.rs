@@ -64,7 +64,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::expand_wildcard;
-use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -1457,12 +1457,6 @@ pub fn create_window_expr_with_name(
                 })
                 .collect::<Result<Vec<_>>>()?;
             if let Some(ref window_frame) = window_frame {
-                if window_frame.units == WindowFrameUnits::Groups {
-                    return Err(DataFusionError::NotImplemented(
-                        "Window frame definitions involving GROUPS are not supported yet"
-                            .to_string(),
-                    ));
-                }
                 if !is_window_valid(window_frame) {
                     return Err(DataFusionError::Execution(format!(
                         "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
