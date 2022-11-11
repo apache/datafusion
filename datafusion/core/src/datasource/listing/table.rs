@@ -623,6 +623,9 @@ mod tests {
         let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
         let schema = options.infer_schema(&state, &table_path).await.unwrap();
 
+        use physical_plan::expressions::col as physical_col;
+        use std::ops::Add;
+
         // (file_sort_order, expected_result)
         let cases = vec![
             (None, Ok(None)),
@@ -633,6 +636,50 @@ mod tests {
                 Some(vec![col("string_col")]),
                 Err("Expected Expr::Sort in output_ordering, but got string_col"),
             ),
+            // sort expr, but non column
+            (
+                Some(vec![
+                    col("int_col").add(lit(1)).sort(true, true),
+                ]),
+                Err("Only support single column references in output_ordering, got int_col + Int32(1)"),
+            ),
+            // ok with one column
+            (
+                Some(vec![col("string_col").sort(true, false)]),
+                Ok(Some(vec![PhysicalSortExpr {
+                    expr: physical_col("string_col", &schema).unwrap(),
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    },
+                }]))
+
+            ),
+            // ok with two columns, different options
+            (
+                Some(vec![
+                    col("string_col").sort(true, false),
+                    col("int_col").sort(false, true),
+                ]),
+                Ok(Some(vec![
+                    PhysicalSortExpr {
+                        expr: physical_col("string_col", &schema).unwrap(),
+                        options: SortOptions {
+                            descending: false,
+                            nulls_first: false,
+                        },
+                    },
+                    PhysicalSortExpr {
+                        expr: physical_col("int_col", &schema).unwrap(),
+                        options: SortOptions {
+                            descending: true,
+                            nulls_first: true,
+                        },
+                    },
+                ]))
+
+            ),
+
         ];
 
         for (file_sort_order, expected_result) in cases {
