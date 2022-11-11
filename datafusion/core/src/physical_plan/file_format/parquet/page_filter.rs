@@ -20,7 +20,6 @@
 use arrow::array::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array};
 use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
 use datafusion_common::{Column, DataFusionError, Result};
-use datafusion_expr::utils::expr_to_columns;
 use datafusion_optimizer::utils::split_conjunction;
 use log::{debug, error, trace};
 use parquet::{
@@ -32,7 +31,7 @@ use parquet::{
     },
     format::PageLocation,
 };
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
@@ -286,8 +285,7 @@ fn extract_page_index_push_down_predicates(
         predicates
             .into_iter()
             .try_for_each::<_, Result<()>>(|predicate| {
-                let mut columns: HashSet<Column> = HashSet::new();
-                expr_to_columns(predicate, &mut columns)?;
+                let columns = predicate.to_columns()?;
                 if columns.len() == 1 {
                     one_col_expr.push(predicate);
                 }

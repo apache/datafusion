@@ -48,7 +48,6 @@ use arrow::{
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
-use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{binary_expr, cast, try_cast, ExprSchemable};
 use datafusion_physical_expr::create_physical_expr;
 use log::trace;
@@ -445,10 +444,8 @@ impl<'a> PruningExpressionBuilder<'a> {
         required_columns: &'a mut RequiredStatColumns,
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
-        let mut left_columns = HashSet::<Column>::new();
-        expr_to_columns(left, &mut left_columns)?;
-        let mut right_columns = HashSet::<Column>::new();
-        expr_to_columns(right, &mut right_columns)?;
+        let left_columns = left.to_columns()?;
+        let right_columns = right.to_columns()?;
         let (column_expr, scalar_expr, columns, correct_operator) =
             match (left_columns.len(), right_columns.len()) {
                 (1, 0) => (left, right, left_columns, op),

@@ -63,7 +63,7 @@ use datafusion_expr::expr::{
     Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
-use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
+use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
@@ -72,7 +72,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::{debug, trace};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::Arc;
 
@@ -539,19 +539,6 @@ impl DefaultPhysicalPlanner {
                         vec![]
                     };
 
-                    let input_exec = if can_repartition {
-                        Arc::new(RepartitionExec::try_new(
-                            input_exec,
-                            Partitioning::Hash(
-                                physical_partition_keys.clone(),
-                                session_state.config.target_partitions,
-                            ),
-                        )?)
-                    } else {
-                        input_exec
-                    };
-
-                    // add a sort phase
                     let get_sort_keys = |expr: &Expr| match expr {
                         Expr::WindowFunction {
                             ref partition_by,
@@ -609,16 +596,6 @@ impl DefaultPhysicalPlanner {
                         Some(sort_keys)
                     };
 
-                    let input_exec = match physical_sort_keys.clone() {
-                        None => input_exec,
-                        Some(sort_exprs) => {
-                            if can_repartition {
-                                Arc::new(SortExec::new_with_partitioning(sort_exprs, input_exec, true, None))
-                            } else {
-                                Arc::new(SortExec::try_new(sort_exprs, input_exec, None)?)
-                            }
-                        },
-                    };
                     let physical_input_schema = input_exec.schema();
                     let window_expr = window_expr
                         .iter()
@@ -688,16 +665,8 @@ impl DefaultPhysicalPlanner {
                         Arc<dyn ExecutionPlan>,
                         AggregateMode,
                     ) = if can_repartition {
-                        // Divide partial hash aggregates into multiple partitions by hash key
-                        let hash_repartition = Arc::new(RepartitionExec::try_new(
-                            initial_aggr,
-                            Partitioning::Hash(
-                                final_group.clone(),
-                                session_state.config.target_partitions,
-                            ),
-                        )?);
-                        // Combine hash aggregates within the partition
-                        (hash_repartition, AggregateMode::FinalPartitioned)
+                        // construct a second aggregation with 'AggregateMode::FinalPartitioned'
+                        (initial_aggr, AggregateMode::FinalPartitioned)
                     } else {
                         // construct a second aggregation, keeping the final column name equal to the
                         // first aggregation and the expressions corresponding to the respective aggregate
@@ -906,8 +875,7 @@ impl DefaultPhysicalPlanner {
                     let join_filter = match filter {
                         Some(expr) => {
                             // Extract columns from filter expression
-                            let mut cols = HashSet::new();
-                            expr_to_columns(expr, &mut cols)?;
+                            let cols = expr.to_columns()?;
 
                             // Collect left & right field indices
                             let left_field_indices = cols.iter()
@@ -965,32 +933,10 @@ impl DefaultPhysicalPlanner {
                     if session_state.config.target_partitions > 1
                         && session_state.config.repartition_joins
                     {
-                        let (left_expr, right_expr) = join_on
-                            .iter()
-                            .map(|(l, r)| {
-                                (
-                                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-                                )
-                            })
-                            .unzip();
-
                         // Use hash partition by default to parallelize hash joins
                         Ok(Arc::new(HashJoinExec::try_new(
-                            Arc::new(RepartitionExec::try_new(
-                                physical_left,
-                                Partitioning::Hash(
-                                    left_expr,
-                                    session_state.config.target_partitions,
-                                ),
-                            )?),
-                            Arc::new(RepartitionExec::try_new(
-                                physical_right,
-                                Partitioning::Hash(
-                                    right_expr,
-                                    session_state.config.target_partitions,
-                                ),
-                            )?),
+                            physical_left,
+                            physical_right,
                             join_on,
                             join_filter,
                             join_type,

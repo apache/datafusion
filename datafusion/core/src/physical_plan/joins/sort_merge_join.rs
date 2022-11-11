@@ -59,13 +59,13 @@ use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 #[derive(Debug)]
 pub struct SortMergeJoinExec {
     /// Left sorted joining execution plan
-    left: Arc<dyn ExecutionPlan>,
+    pub(crate) left: Arc<dyn ExecutionPlan>,
     /// Right sorting joining execution plan
-    right: Arc<dyn ExecutionPlan>,
+    pub(crate) right: Arc<dyn ExecutionPlan>,
     /// Set of common columns used to join on
-    on: JoinOn,
+    pub(crate) on: JoinOn,
     /// How the join is performed
-    join_type: JoinType,
+    pub(crate) join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Execution metrics
@@ -77,9 +77,9 @@ pub struct SortMergeJoinExec {
     /// The output ordering
     output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Sort options of join columns used in sorting left and right execution plans
-    sort_options: Vec<SortOptions>,
+    pub(crate) sort_options: Vec<SortOptions>,
     /// If null_equals_null is true, null == null else null != null
-    null_equals_null: bool,
+    pub(crate) null_equals_null: bool,
 }
 
 impl SortMergeJoinExec {
@@ -258,6 +258,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.right.equivalence_properties(),
             left_columns_len,
             self.on(),
+            self.schema(),
         )
     }
 
