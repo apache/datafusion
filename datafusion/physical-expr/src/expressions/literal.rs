@@ -87,7 +87,7 @@ impl PhysicalExpr for Literal {
     #[allow(unused_variables)]
     /// Return the boundaries of this literal expression (which is the same as
     /// the value it represents).
-    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
+    fn boundaries(&self, context: &mut AnalysisContext) -> Option<ExprBoundaries> {
         Some(ExprBoundaries::new(
             self.value.clone(),
             self.value.clone(),
@@ -147,10 +147,10 @@ mod tests {
     #[test]
     fn literal_bounds_analysis() -> Result<()> {
         let schema = Schema::new(vec![]);
-        let context = AnalysisContext::new(&schema, vec![]);
+        let mut context = AnalysisContext::new(&schema, vec![]);
 
         let literal_expr = lit(42i32);
-        let boundaries = literal_expr.boundaries(&context).unwrap();
+        let boundaries = literal_expr.boundaries(&mut context).unwrap();
         assert_eq!(boundaries.min_value, ScalarValue::Int32(Some(42)));
         assert_eq!(boundaries.max_value, ScalarValue::Int32(Some(42)));
         assert_eq!(boundaries.distinct_count, Some(1));

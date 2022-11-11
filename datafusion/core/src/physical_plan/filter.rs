@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::expressions::PhysicalSortExpr;
-use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
+use super::{ColumnStatistics, RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
@@ -172,24 +172,44 @@ impl ExecutionPlan for FilterExec {
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Statistics {
         let input_stats = self.input.statistics();
-        let analysis_ctx =
+        let mut analysis_ctx =
             AnalysisContext::from_statistics(self.input.schema().as_ref(), &input_stats);
 
         let predicate_selectivity = self
             .predicate
-            .boundaries(&analysis_ctx)
+            .boundaries(&mut analysis_ctx)
             .and_then(|bounds| bounds.selectivity);
 
         match predicate_selectivity {
-            Some(selectivity) => Statistics {
-                num_rows: input_stats
-                    .num_rows
-                    .map(|num_rows| (num_rows as f64 * selectivity).ceil() as usize),
-                total_byte_size: input_stats.total_byte_size.map(|total_byte_size| {
-                    (total_byte_size as f64 * selectivity).ceil() as usize
-                }),
-                ..Default::default()
-            },
+            Some(selectivity) => {
+                // Build back the column level statistics from the boundaries inside the
+                // analysis context. It is possible that these are going to be different
+                // than the input statistics, especially when a comparison is made inside
+                // the predicate expression (e.g. `col1 > 100`).
+                let column_statistics = analysis_ctx
+                    .column_boundaries
+                    .iter()
+                    .map(|boundary| match boundary {
+                        Some(boundary) => ColumnStatistics {
+                            min_value: Some(boundary.min_value.clone()),
+                            max_value: Some(boundary.max_value.clone()),
+                            ..Default::default()
+                        },
+                        None => ColumnStatistics::default(),
+                    })
+                    .collect();
+
+                Statistics {
+                    num_rows: input_stats
+                        .num_rows
+                        .map(|num_rows| (num_rows as f64 * selectivity).ceil() as usize),
+                    column_statistics: Some(column_statistics),
+                    total_byte_size: input_stats.total_byte_size.map(|total_byte_size| {
+                        (total_byte_size as f64 * selectivity).ceil() as usize
+                    }),
+                    ..Default::default(),
+                }
+            }
             None => Statistics::default(),
         }
     }
@@ -452,9 +472,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
-    // This test requires propagation of column boundaries from the comparison analysis
-    // to the analysis context. This is not yet implemented.
     async fn test_filter_statistics_column_level_basic_expr() -> Result<()> {
         // Table:
         //      a: min=1, max=100
@@ -481,11 +498,59 @@ mod tests {
             Arc::new(FilterExec::try_new(predicate, input)?);
 
         let statistics = filter.statistics();
+
+        // a must be in [1, 25] range now!
         assert_eq!(statistics.num_rows, Some(25));
         assert_eq!(
             statistics.column_statistics,
             Some(vec![ColumnStatistics {
                 min_value: Some(ScalarValue::Int32(Some(1))),
+                max_value: Some(ScalarValue::Int32(Some(25))),
+                ..Default::default()
+            }])
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_column_level_nested() -> Result<()> {
+        // Table:
+        //      a: min=1, max=100
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(100),
+                column_statistics: Some(vec![ColumnStatistics {
+                    min_value: Some(ScalarValue::Int32(Some(1))),
+                    max_value: Some(ScalarValue::Int32(Some(100))),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+            schema.clone(),
+        ));
+
+        // WHERE a <= 25
+        let sub_filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+            binary(col("a", &schema)?, Operator::LtEq, lit(25i32), &schema)?,
+            input,
+        )?);
+
+        // Nested filters (two separate physical plans, instead of AND chain in the expr)
+        // WHERE a >= 10
+        // WHERE a <= 25
+        let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+            binary(col("a", &schema)?, Operator::GtEq, lit(10i32), &schema)?,
+            sub_filter,
+        )?);
+
+        let statistics = filter.statistics();
+        assert_eq!(statistics.num_rows, Some(16));
+        assert_eq!(
+            statistics.column_statistics,
+            Some(vec![ColumnStatistics {
+                min_value: Some(ScalarValue::Int32(Some(10))),
                 max_value: Some(ScalarValue::Int32(Some(25))),
                 ..Default::default()
             }])

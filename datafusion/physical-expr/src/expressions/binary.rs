@@ -71,6 +71,7 @@ use kernels_arrow::{
 use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 
+use super::column::Column;
 use crate::physical_expr::down_cast_any_ref;
 use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
 use datafusion_common::cast::{as_boolean_array, as_decimal128_array};
@@ -658,7 +659,7 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     /// Return the boundaries of this binary expression's result.
-    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
+    fn boundaries(&self, context: &mut AnalysisContext) -> Option<ExprBoundaries> {
         match &self.op {
             Operator::Eq
             | Operator::Gt
@@ -705,7 +706,7 @@ impl PartialEq<dyn Any> for BinaryExpr {
 // false, or unknown (with a probablistic selectivity value attached).
 fn analyze_expr_scalar_comparison(
     op: &Operator,
-    context: &AnalysisContext,
+    context: &mut AnalysisContext,
     left: &Arc<dyn PhysicalExpr>,
     right: ScalarValue,
 ) -> Option<ExprBoundaries> {
@@ -759,6 +760,46 @@ fn analyze_expr_scalar_comparison(
             Some(overlap_between_boundaries as f64 / total_range as f64)
         }
     }?;
+
+    // The context represents all the knowledge we have gathered during the
+    // analysis process, which we can now add more since the expression's upper
+    // and lower boundaries might have changed.
+    if let Some(column_expr) = left.as_any().downcast_ref::<Column>() {
+        let (left_min, left_max) = match op {
+            // TODO: for lt/gt, we technically should shrink the possibility space
+            // by one since a < 5 means that 5 is not a possible value for `a`. However,
+            // it is currently tricky to do so (e.g. for floats, we can get away with 4.999
+            // so we need a smarter logic to find out what is the closest value that is
+            // different from the scalar_value).
+            Operator::Lt | Operator::LtEq => {
+                // We only want to update the upper bound when we know it will help us (e.g.
+                // it is actually smaller than what we have right now) and it is a valid
+                // value (e.g. [0, 100] < -100 would update the boundaries to [0, -100] if
+                // there weren't the selectivity check).
+                if right < left_max && selectivity > 0.0 {
+                    (left_min, right)
+                } else {
+                    (left_min, left_max)
+                }
+            }
+            Operator::Gt | Operator::GtEq => {
+                // Same as above, but this time we want to limit the lower bound.
+                if right > left_min && selectivity > 0.0 {
+                    (right, left_max)
+                } else {
+                    (left_min, left_max)
+                }
+            }
+            // For equality, we don't have the range problem so even if the selectivity
+            // is 0.0, we can still update the boundaries.
+            Operator::Eq => (right.clone(), right),
+            _ => unreachable!(),
+        };
+
+        let left_bounds =
+            ExprBoundaries::new(left_min, left_max, left_bounds.distinct_count);
+        context.update_column(column_expr.index(), left_bounds);
+    }
 
     // The selectivity can't be be greater than 1.0.
     assert!(selectivity <= 1.0);
@@ -3109,12 +3150,12 @@ mod tests {
             ((Operator::GtEq, 200), (0.0, 1, 100)),
         ];
 
-        for ((operator, rhs), (exp_selectivity, _, _)) in cases {
-            let context = AnalysisContext::from_statistics(&schema, &statistics);
+        for ((operator, rhs), (exp_selectivity, exp_min, exp_max)) in cases {
+            let mut context = AnalysisContext::from_statistics(&schema, &statistics);
             let left = col("a", &schema).unwrap();
             let right = ScalarValue::Int64(Some(rhs));
             let boundaries =
-                analyze_expr_scalar_comparison(&operator, &context, &left, right)
+                analyze_expr_scalar_comparison(&operator, &mut context, &left, right)
                     .expect("this case should not return None");
 
             assert_eq!(
@@ -3137,6 +3178,14 @@ mod tests {
                 assert_eq!(boundaries.min_value, ScalarValue::Boolean(Some(false)));
                 assert_eq!(boundaries.max_value, ScalarValue::Boolean(Some(true)));
             }
+
+            // For getting the updated boundaries, we can simply analyze the LHS
+            // with the existing context.
+            let left_boundaries = left
+                .boundaries(&mut context)
+                .expect("this case should not return None");
+            assert_eq!(left_boundaries.min_value, ScalarValue::Int64(Some(exp_min)));
+            assert_eq!(left_boundaries.max_value, ScalarValue::Int64(Some(exp_max)));
         }
         Ok(())
     }
@@ -3178,12 +3227,12 @@ mod tests {
             ((Operator::GtEq, 50.7), (1.0 / distance, 50.7, 50.7)),
         ];
 
-        for ((operator, rhs), (exp_selectivity, _, _)) in cases {
-            let context = AnalysisContext::from_statistics(&schema, &statistics);
+        for ((operator, rhs), (exp_selectivity, exp_min, exp_max)) in cases {
+            let mut context = AnalysisContext::from_statistics(&schema, &statistics);
             let left = col("a", &schema).unwrap();
             let right = ScalarValue::from(rhs);
             let boundaries =
-                analyze_expr_scalar_comparison(&operator, &context, &left, right)
+                analyze_expr_scalar_comparison(&operator, &mut context, &left, right)
                     .expect("this case should not return None");
 
             assert_eq!(
@@ -3206,6 +3255,18 @@ mod tests {
                 assert_eq!(boundaries.min_value, ScalarValue::from(false));
                 assert_eq!(boundaries.max_value, ScalarValue::from(true));
             }
+
+            let left_boundaries = left
+                .boundaries(&mut context)
+                .expect("this case should not return None");
+            assert_eq!(
+                left_boundaries.min_value,
+                ScalarValue::Float64(Some(exp_min))
+            );
+            assert_eq!(
+                left_boundaries.max_value,
+                ScalarValue::Float64(Some(exp_max))
+            );
         }
         Ok(())
     }
@@ -3225,9 +3286,9 @@ mod tests {
             &schema,
         );
 
-        let context = AnalysisContext::from_statistics(&schema, &statistics);
+        let mut context = AnalysisContext::from_statistics(&schema, &statistics);
         let predicate_boundaries = gt
-            .boundaries(&context)
+            .boundaries(&mut context)
             .expect("boundaries should not be None");
         assert_eq!(predicate_boundaries.selectivity, Some(0.76));
 
@@ -3253,9 +3314,9 @@ mod tests {
             &schema,
         );
 
-        let context = AnalysisContext::from_statistics(&schema, &statistics);
+        let mut context = AnalysisContext::from_statistics(&schema, &statistics);
         let predicate_boundaries = gt
-            .boundaries(&context)
+            .boundaries(&mut context)
             .expect("boundaries should not be None");
         assert_eq!(predicate_boundaries.selectivity, Some(0.5));
 

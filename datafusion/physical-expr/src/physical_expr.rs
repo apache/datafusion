@@ -79,7 +79,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
     #[allow(unused_variables)]
     /// Return the boundaries of this expression. This method (and all the
     /// related APIs) are experimental and subject to change.
-    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
+    fn boundaries(&self, context: &mut AnalysisContext) -> Option<ExprBoundaries> {
         None
     }
 }
@@ -115,6 +115,11 @@ impl AnalysisContext {
             None => vec![None; input_schema.fields().len()],
         };
         Self::new(input_schema, column_boundaries)
+    }
+
+    /// Update the boundaries of a column.
+    pub fn update_column(&mut self, column: usize, boundaries: ExprBoundaries) {
+        self.column_boundaries[column] = Some(boundaries);
     }
 }
 
