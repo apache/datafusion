@@ -421,7 +421,7 @@ impl TDigest {
 
         let mut k_limit: f64 = 1.0;
         let mut q_limit_times_count =
-            Self::k_to_q(k_limit, max_size as f64) * (count as f64);
+            Self::k_to_q(k_limit, max_size as f64) * (count);
 
         let mut iter_centroids = centroids.iter_mut();
         let mut curr = iter_centroids.next().unwrap();
@@ -441,7 +441,7 @@ impl TDigest {
                 weights_to_merge = 0_f64;
                 compressed.push(curr.clone());
                 q_limit_times_count =
-                    Self::k_to_q(k_limit, max_size as f64) * (count as f64);
+                    Self::k_to_q(k_limit, max_size as f64) * (count);
                 k_limit += 1.0;
                 curr = centroid;
             }
@@ -452,7 +452,7 @@ impl TDigest {
         compressed.shrink_to_fit();
         compressed.sort();
 
-        result.count = count as f64;
+        result.count = count;
         result.min = min;
         result.max = max;
         result.centroids = compressed;

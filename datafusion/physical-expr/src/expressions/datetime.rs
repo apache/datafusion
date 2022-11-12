@@ -373,7 +373,7 @@ mod tests {
         match res {
             ColumnarValue::Scalar(ScalarValue::Date64(Some(d))) => {
                 let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-                let res = epoch.add(Duration::milliseconds(d as i64));
+                let res = epoch.add(Duration::milliseconds(d));
                 assert_eq!(format!("{:?}", res).as_str(), "1969-12-16");
             }
             _ => Err(DataFusionError::NotImplemented(
