@@ -716,7 +716,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                             // replace keys in join_cols_to_replace with values in resulting column
                             // set
                             .filter(|c| !join_cols_to_replace.contains_key(c))
-                            .chain(join_cols_to_replace.iter().map(|(_, v)| (*v).clone()))
+                            .chain(join_cols_to_replace.values().map(|v| (*v).clone()))
                             .collect();
 
                         Some(Ok((join_side_predicate, join_side_columns)))

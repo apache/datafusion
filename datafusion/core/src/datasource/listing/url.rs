@@ -235,7 +235,7 @@ mod tests {
         let root = std::env::current_dir().unwrap();
         let root = root.to_string_lossy();
 
-        let url = ListingTableUrl::parse(&root).unwrap();
+        let url = ListingTableUrl::parse(root).unwrap();
         let child = url.prefix.child("partition").child("file");
 
         let prefix: Vec<_> = url.strip_prefix(&child).unwrap().collect();

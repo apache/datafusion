@@ -152,7 +152,7 @@ impl TableProvider for CustomProvider {
                     Expr::Literal(ScalarValue::Int8(Some(i))) => *i as i64,
                     Expr::Literal(ScalarValue::Int16(Some(i))) => *i as i64,
                     Expr::Literal(ScalarValue::Int32(Some(i))) => *i as i64,
-                    Expr::Literal(ScalarValue::Int64(Some(i))) => *i as i64,
+                    Expr::Literal(ScalarValue::Int64(Some(i))) => *i,
                     Expr::Cast(Cast { expr, data_type: _ }) => match expr.deref() {
                         Expr::Literal(lit_value) => match lit_value {
                             ScalarValue::Int8(Some(v)) => *v as i64,
