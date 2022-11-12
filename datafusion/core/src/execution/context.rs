@@ -1589,8 +1589,9 @@ impl SessionState {
             )));
         }
         physical_optimizers.push(Arc::new(Repartition::new()));
+        // Repartition rule could introduce additional RepartitionExec with RoundRobin partitioning.
+        // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
-        // physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
 
         SessionState {
             session_id,
