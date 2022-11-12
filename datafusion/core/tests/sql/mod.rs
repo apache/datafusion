@@ -581,8 +581,7 @@ async fn register_tpch_csv_data(
                     let sb = col.as_any_mut().downcast_mut::<Date32Builder>().unwrap();
                     let dt = NaiveDate::parse_from_str(val.trim(), "%Y-%m-%d").unwrap();
                     let dt = dt
-                        .sub(NaiveDate::from_ymd_opt(1970, 1, 1))
-                        .unwrap()
+                        .sub(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
                         .num_days() as i32;
                     sb.append_value(dt);
                 }

@@ -613,7 +613,7 @@ mod tests {
             },
             ObjectMeta {
                 location: Path::from("mybucket/tablepath/part1=val2/file.parquet"),
-                last_modified: to_timstamp_millis(0).unwrap(),
+                last_modified: to_timestamp_millis(0).unwrap(),
                 size: 100,
             },
         ];
