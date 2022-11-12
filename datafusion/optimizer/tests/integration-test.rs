@@ -236,7 +236,8 @@ fn timestamp_nano_ts_none_predicates() -> Result<()> {
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
     let expected =
-        "Projection: test.col_int32\n  Filter: CAST(test.col_ts_nano_none AS Timestamp(Nanosecond, Some(\"+00:00\"))) < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
+        "Projection: test.col_int32\
+         \n  Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)\
          \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
