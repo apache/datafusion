@@ -320,7 +320,7 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Result<Vec<PartitionedFile>> {
                     object_meta: ObjectMeta {
                         location: Path::parse(key_array.value(row))
                             .map_err(|e| DataFusionError::External(Box::new(e)))?,
-                        last_modified: Utc.timestamp_millis(modified_array.value(row)),
+                        last_modified: to_timestamp_millis(modified_array.value(row))?,
                         size: length_array.value(row) as usize,
                     },
                     partition_values: (3..batch.columns().len())
@@ -334,6 +334,20 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Result<Vec<PartitionedFile>> {
             })
         })
         .collect()
+}
+
+fn to_timestamp_millis(v: i64) -> Result<chrono::DateTime<Utc>> {
+    match Utc.timestamp_millis_opt(v) {
+        chrono::LocalResult::None => Err(DataFusionError::Execution(format!(
+            "Can not convert {} to UTC millisecond timestamp",
+            v
+        ))),
+        chrono::LocalResult::Single(v) => Ok(v),
+        chrono::LocalResult::Ambiguous(_, _) => Err(DataFusionError::Execution(format!(
+            "Ambiguous timestamp when converting {} to UTC millisecond timestamp",
+            v
+        ))),
+    }
 }
 
 /// Extract the partition values for the given `file_path` (in the given `table_path`)
@@ -594,12 +608,12 @@ mod tests {
         let files = vec![
             ObjectMeta {
                 location: Path::from("mybucket/tablepath/part1=val1/file.parquet"),
-                last_modified: Utc.timestamp_millis(1634722979123),
+                last_modified: to_timestamp_millis(1634722979123).unwrap(),
                 size: 100,
             },
             ObjectMeta {
                 location: Path::from("mybucket/tablepath/part1=val2/file.parquet"),
-                last_modified: Utc.timestamp_millis(0),
+                last_modified: to_timstamp_millis(0).unwrap(),
                 size: 100,
             },
         ];
@@ -625,12 +639,12 @@ mod tests {
         let files = vec![
             ObjectMeta {
                 location: Path::from("mybucket/tablepath/part1=val1/file.parquet"),
-                last_modified: Utc.timestamp_millis(1634722979123),
+                last_modified: to_timestamp_millis(1634722979123).unwrap(),
                 size: 100,
             },
             ObjectMeta {
                 location: Path::from("mybucket/tablepath/part1=val2/file.parquet"),
-                last_modified: Utc.timestamp_millis(0),
+                last_modified: to_timestamp_millis(0).unwrap(),
                 size: 100,
             },
         ];
