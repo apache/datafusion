@@ -132,16 +132,16 @@ impl PhysicalOptimizerRule for BasicEnforcement {
 /// Following is the explanation of the reordering process:
 ///
 /// 1) If the current plan is Partitioned HashJoin, SortMergeJoin, check whether the requirements can be satisfied by adjusting join keys ordering:
-///    Requirements can not be satisfied, clear the current requriments, generate new requirements(to pushdown) based on the current join keys, return the unchanged plan.
-///    Requirements is already satisfied, clear the current requriments, generate new requirements(to pushdown) based on the current join keys, return the unchanged plan.
-///    Requirements can be satisfied by adjusting keys ordering, clear the current requriments, generate new requirements(to pushdown) based on the adjusted join keys, return the changed plan.
+///    Requirements can not be satisfied, clear the current requirements, generate new requirements(to pushdown) based on the current join keys, return the unchanged plan.
+///    Requirements is already satisfied, clear the current requirements, generate new requirements(to pushdown) based on the current join keys, return the unchanged plan.
+///    Requirements can be satisfied by adjusting keys ordering, clear the current requiements, generate new requirements(to pushdown) based on the adjusted join keys, return the changed plan.
 ///
 /// 2) If the current plan is Aggregation, check whether the requirements can be satisfied by adjusting group by keys ordering:
-///    Requirements can not be satisfied, clear all the requriments, return the unchanged plan.
-///    Requirements is already satisfied, clear all the requriments, return the unchanged plan.
-///    Requirements can be satisfied by adjusting keys ordering, clear all the requriments, return the changed plan.
+///    Requirements can not be satisfied, clear all the requirements, return the unchanged plan.
+///    Requirements is already satisfied, clear all the requirements, return the unchanged plan.
+///    Requirements can be satisfied by adjusting keys ordering, clear all the requirements, return the changed plan.
 ///
-/// 3) If the current plan is RepartitionExec, CoalescePartitionsExec or WindowAggExec, clear all the requriments, return the unchanged plan
+/// 3) If the current plan is RepartitionExec, CoalescePartitionsExec or WindowAggExec, clear all the requirements, return the unchanged plan
 /// 4) If the current plan is Projection, transform the requirements to the columns before the Projection and push down requirements
 /// 5) For other types of operators, by default, pushdown the parent requirements to children.
 ///
