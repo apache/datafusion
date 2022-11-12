@@ -134,7 +134,7 @@ async fn prune_date64() {
     let date = "2020-01-02"
         .parse::<chrono::NaiveDate>()
         .unwrap()
-        .and_time(chrono::NaiveTime::from_hms(0, 0, 0));
+        .and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
     let date = ScalarValue::Date64(Some(date.timestamp_millis()));
 
     let output = ContextWithParquet::new(Scenario::Dates)
@@ -935,7 +935,7 @@ fn make_date_batch(offset: Duration) -> RecordBatch {
                 let t = t
                     .parse::<chrono::NaiveDate>()
                     .unwrap()
-                    .and_time(chrono::NaiveTime::from_hms(0, 0, 0));
+                    .and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
                 let t = t + offset;
                 t.timestamp_millis()
             })
