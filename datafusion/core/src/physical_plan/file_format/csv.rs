@@ -252,7 +252,7 @@ pub async fn plan_to_csv(
             for i in 0..plan.output_partitioning().partition_count() {
                 let plan = plan.clone();
                 let filename = format!("part-{}.csv", i);
-                let path = fs_path.join(&filename);
+                let path = fs_path.join(filename);
                 let file = fs::File::create(path)?;
                 let mut writer = csv::Writer::new(file);
                 let task_ctx = Arc::new(TaskContext::from(state));
@@ -539,7 +539,7 @@ mod tests {
         // generate a partitioned file
         for partition in 0..partition_count {
             let filename = format!("partition-{}.{}", partition, file_extension);
-            let file_path = tmp_dir.path().join(&filename);
+            let file_path = tmp_dir.path().join(filename);
             let mut file = File::create(file_path)?;
 
             // generate some data

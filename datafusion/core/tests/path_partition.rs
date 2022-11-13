@@ -548,7 +548,7 @@ impl ObjectStore for MirroringObjectStore {
     ) -> object_store::Result<Bytes> {
         self.files.iter().find(|x| *x == location.as_ref()).unwrap();
         let path = std::path::PathBuf::from(&self.mirrored_file);
-        let mut file = File::open(&path).unwrap();
+        let mut file = File::open(path).unwrap();
         file.seek(SeekFrom::Start(range.start as u64)).unwrap();
 
         let to_read = range.end - range.start;

@@ -501,7 +501,7 @@ async fn group_by_date_trunc() -> Result<()> {
     // generate a partitioned file
     for partition in 0..4 {
         let filename = format!("partition-{}.{}", partition, "csv");
-        let file_path = tmp_dir.path().join(&filename);
+        let file_path = tmp_dir.path().join(filename);
         let mut file = File::create(file_path)?;
 
         // generate some data
