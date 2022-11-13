@@ -128,7 +128,7 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
         .value();
     let percentile = match lit {
         ScalarValue::Float32(Some(q)) => *q as f64,
-        ScalarValue::Float64(Some(q)) => *q as f64,
+        ScalarValue::Float64(Some(q)) => *q,
         got => return Err(DataFusionError::NotImplemented(format!(
             "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
             got.get_datatype()
@@ -388,7 +388,7 @@ impl Accumulator for ApproxPercentileAccumulator {
             DataType::UInt32 => ScalarValue::UInt32(Some(q as u32)),
             DataType::UInt64 => ScalarValue::UInt64(Some(q as u64)),
             DataType::Float32 => ScalarValue::Float32(Some(q as f32)),
-            DataType::Float64 => ScalarValue::Float64(Some(q as f64)),
+            DataType::Float64 => ScalarValue::Float64(Some(q)),
             v => unreachable!("unexpected return type {:?}", v),
         })
     }
