@@ -41,11 +41,10 @@ impl OptimizerRule for PropagateEmptyRelation {
         // optimize child plans first
         let optimized_children_plan =
             utils::optimize_children(self, plan, optimizer_config)?;
-        let optimized_plan_opt = match optimized_children_plan {
+        let optimized_plan_opt = match &optimized_children_plan {
             LogicalPlan::Projection(_)
             | LogicalPlan::Filter(_)
             | LogicalPlan::Window(_)
-            | LogicalPlan::Aggregate(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::Join(_)
             | LogicalPlan::CrossJoin(_)
