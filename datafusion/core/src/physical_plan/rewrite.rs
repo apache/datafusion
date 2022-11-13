@@ -149,7 +149,6 @@ pub enum RewriteRecursion {
     Skip,
 }
 
-#[allow(clippy::vtable_address_comparisons)]
 impl TreeNodeRewritable for Arc<dyn ExecutionPlan> {
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
