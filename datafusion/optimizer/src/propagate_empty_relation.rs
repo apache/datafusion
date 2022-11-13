@@ -17,6 +17,7 @@
 
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::EmptyRelation;
 
 use crate::{utils, OptimizerConfig, OptimizerRule};
 
@@ -68,44 +69,36 @@ impl OptimizerRule for PropagateEmptyRelation {
 fn empty_child(plan: &LogicalPlan) -> Option<LogicalPlan> {
     let inputs = plan.inputs();
 
-    if inputs.len() == 1 {
-        let input = inputs.get(0)?;
-        match input {
-            LogicalPlan::EmptyRelation(empty) => {
-                if !empty.produce_one_row {
-                    Some((*input).clone())
-                } else {
-                    None
-                }
+    let contains_empty = match inputs.len() {
+        1 => {
+            let input = inputs.get(0)?;
+            match input {
+                LogicalPlan::EmptyRelation(empty) => !empty.produce_one_row,
+                _ => false,
             }
-            _ => None,
         }
-    } else if inputs.len() == 2 {
-        let left = inputs.get(0)?;
-        let right = inputs.get(1)?;
-        let left_opt = match left {
-            LogicalPlan::EmptyRelation(empty) => {
-                if !empty.produce_one_row {
-                    Some((*left).clone())
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        if left_opt.is_some() {
-            return left_opt;
+        2 => {
+            let left = inputs.get(0)?;
+            let right = inputs.get(1)?;
+
+            let left_empty = match left {
+                LogicalPlan::EmptyRelation(empty) => !empty.produce_one_row,
+                _ => false,
+            };
+            let right_empty = match right {
+                LogicalPlan::EmptyRelation(empty) => !empty.produce_one_row,
+                _ => false,
+            };
+            left_empty || right_empty
         }
-        match right {
-            LogicalPlan::EmptyRelation(empty) => {
-                if !empty.produce_one_row {
-                    Some((*right).clone())
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
+        _ => false,
+    };
+
+    if contains_empty {
+        Some(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: plan.schema().clone(),
+        }))
     } else {
         None
     }
@@ -113,8 +106,13 @@ fn empty_child(plan: &LogicalPlan) -> Option<LogicalPlan> {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::ScalarValue;
-    use datafusion_expr::{logical_plan::builder::LogicalPlanBuilder, Expr};
+    use crate::eliminate_filter::EliminateFilter;
+    use crate::test::{test_table_scan, test_table_scan_with_name};
+    use datafusion_common::{Column, ScalarValue};
+    use datafusion_expr::{
+        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr, JoinType,
+        Operator,
+    };
 
     use super::*;
 
@@ -128,22 +126,54 @@ mod tests {
         assert_eq!(plan.schema(), optimized_plan.schema());
     }
 
+    fn assert_together_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
+        let optimize_one = EliminateFilter::new()
+            .optimize(plan, &mut OptimizerConfig::new())
+            .expect("failed to optimize plan");
+        let optimize_two = PropagateEmptyRelation::new()
+            .optimize(&optimize_one, &mut OptimizerConfig::new())
+            .expect("failed to optimize plan");
+        let formatted_plan = format!("{:?}", optimize_two);
+        assert_eq!(formatted_plan, expected);
+        assert_eq!(plan.schema(), optimize_two.schema());
+    }
+
     #[test]
-    fn propagate_empty() {
-        let filter_true = Expr::Literal(ScalarValue::Boolean(Some(true)));
-
+    fn propagate_empty() -> Result<()> {
         let plan = LogicalPlanBuilder::empty(false)
-            .filter(filter_true.clone())
-            .unwrap()
-            .filter(filter_true.clone())
-            .unwrap()
-            .filter(filter_true)
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(true))))?
+            .limit(10, None)?
+            .project(vec![binary_expr(lit(1), Operator::Plus, lit(1))])?
+            .build()?;
 
-        // No aggregate / scan / limit
         let expected = "EmptyRelation";
         assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn cooperate_with_eliminate_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a")])?
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                &right,
+                JoinType::Inner,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .filter(col("a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        let expected = "EmptyRelation";
+        assert_together_optimized_plan_eq(&plan, expected);
+
+        Ok(())
     }
 }
