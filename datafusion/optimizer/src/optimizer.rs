@@ -163,10 +163,10 @@ impl Optimizer {
             // subqueries to joins
             Arc::new(SimplifyExpressions::new()),
             Arc::new(EliminateFilter::new()),
-            Arc::new(PropagateEmptyRelation::new()),
             Arc::new(ReduceCrossJoin::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
+            Arc::new(PropagateEmptyRelation::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
         ];
         if config.filter_null_keys {

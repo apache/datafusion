@@ -61,7 +61,7 @@ impl OptimizerRule for PropagateEmptyRelation {
     }
 
     fn name(&self) -> &str {
-        "eliminate_limit"
+        "propagate_empty_relation"
     }
 }
 
