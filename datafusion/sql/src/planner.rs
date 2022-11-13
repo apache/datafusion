@@ -17,44 +17,13 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
-use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
-use arrow::datatypes::*;
-use datafusion_common::parsers::parse_interval;
-use datafusion_common::{context, ToDFSchema};
-use datafusion_expr::expr_rewriter::normalize_col;
-use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::{
-    Analyze, CreateCatalog, CreateCatalogSchema,
-    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DropTable, DropView, Explain, JoinType, LogicalPlan, LogicalPlanBuilder,
-    Partitioning, PlanType, SetVariable, ToStringifiedPlan,
-};
-use datafusion_expr::utils::{
-    can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
-    find_aggregate_exprs, find_column_exprs, find_window_exprs, COUNT_STAR_EXPANSION,
-};
-use datafusion_expr::{
-    and, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable, GetIndexedField,
-    Operator, ScalarUDF, WindowFrame, WindowFrameUnits,
-};
-use datafusion_expr::{
-    window_function::WindowFunction, BuiltinScalarFunction, TableSource,
-};
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
 
-use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
-use datafusion_common::TableReference;
-use datafusion_common::{
-    field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-};
-use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
-use datafusion_expr::logical_plan::builder::project_with_alias;
-use datafusion_expr::logical_plan::{Filter, Subquery};
-use datafusion_expr::Expr::Alias;
-
+use arrow::datatypes::*;
+use sqlparser::ast::ExactNumberInfo;
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
@@ -67,7 +36,38 @@ use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::parser::ParserError::ParserError;
 
-use sqlparser::ast::ExactNumberInfo;
+use datafusion_common::parsers::parse_interval;
+use datafusion_common::TableReference;
+use datafusion_common::{context, ToDFSchema};
+use datafusion_common::{
+    field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+};
+use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
+use datafusion_expr::expr_rewriter::normalize_col;
+use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
+use datafusion_expr::logical_plan::builder::project_with_alias;
+use datafusion_expr::logical_plan::{
+    Analyze, CreateCatalog, CreateCatalogSchema,
+    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
+    DropTable, DropView, Explain, JoinType, LogicalPlan, LogicalPlanBuilder,
+    Partitioning, PlanType, SetVariable, ToStringifiedPlan,
+};
+use datafusion_expr::logical_plan::{Filter, Subquery};
+use datafusion_expr::utils::{
+    can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
+    find_aggregate_exprs, find_column_exprs, find_window_exprs, COUNT_STAR_EXPANSION,
+};
+use datafusion_expr::Expr::Alias;
+use datafusion_expr::{
+    and, cast, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable,
+    GetIndexedField, Operator, ScalarUDF, WindowFrame, WindowFrameUnits,
+};
+use datafusion_expr::{
+    window_function::WindowFunction, BuiltinScalarFunction, TableSource,
+};
+
+use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
+use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
 
 use super::{
     parser::DFParser,
@@ -180,12 +180,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if_not_exists,
                 or_replace,
                 ..
-            } if columns.is_empty()
-                && constraints.is_empty()
+            } if constraints.is_empty()
                 && table_properties.is_empty()
                 && with_options.is_empty() =>
             {
-                let plan = self.query_to_plan(*query, &mut HashMap::new())?;
+                let plan = self.query_to_plan(*query.clone(), &mut HashMap::new())?;
+                let input_schema = plan.schema();
+
+                let plan = if !columns.is_empty() {
+                    match *query.body {
+                        SetExpr::Values(_) => {
+                            let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                            if schema.fields().len() != input_schema.fields().len() {
+                                return Err(DataFusionError::Plan("Mismatch between schema and batches".to_string()))
+                            }
+                            let input_fields = input_schema.fields();
+                            let project_exprs = schema.fields().iter().zip(input_fields).map(|(field, input_field)| {
+                                cast(col(input_field.name()), field.data_type().clone()).alias(field.name())
+                            }).collect::<Vec<_>>();
+                            LogicalPlanBuilder::from(plan.clone())
+                                .project(project_exprs)?
+                                .build()?
+                        },
+                        _ => return Err(DataFusionError::Plan(
+                            "You can only specify schema when create table with a `values` statement"
+                                .to_string()
+                        ))
+                    }
+                } else {
+                    plan
+                };
 
                 Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                     name: name.to_string(),

@@ -50,6 +50,31 @@ async fn create_table_as() -> Result<()> {
 }
 
 #[tokio::test]
+async fn create_table_as_with_schema() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
+
+    let sql =
+        "CREATE TABLE my_table(c1 int, c2 float, c3 varchar) AS VALUES(1, 2, 'hello')";
+    ctx.sql(sql).await.unwrap();
+
+    let sql_all = "SELECT * FROM my_table";
+    let results_all = execute_to_batches(&ctx, sql_all).await;
+
+    let expected = vec![
+        "+----+----+-------+",
+        "| c1 | c2 | c3    |",
+        "+----+----+-------+",
+        "| 1  | 2  | hello |",
+        "+----+----+-------+",
+    ];
+
+    assert_batches_eq!(expected, &results_all);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_or_replace_table_as() -> Result<()> {
     // the information schema used to introduce cyclic Arcs
     let ctx =
