@@ -20,7 +20,7 @@ use crate::{DataFusionError, Result, ScalarValue};
 use std::str::FromStr;
 
 const SECONDS_PER_HOUR: f64 = 3_600_f64;
-const NANOS_PER_SECOND: f64 = 1_000_000_000f64;
+const NANOS_PER_SECOND: f64 = 1_000_000_000_f64;
 
 /// Parses a string with an interval like `'0.5 MONTH'` to an
 /// appropriately typed [`ScalarValue`]
