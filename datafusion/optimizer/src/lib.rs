@@ -26,6 +26,7 @@ pub mod inline_table_scan;
 pub mod limit_push_down;
 pub mod optimizer;
 pub mod projection_push_down;
+pub mod propagate_empty_relation;
 pub mod reduce_cross_join;
 pub mod reduce_outer_join;
 pub mod scalar_subquery_to_join;
