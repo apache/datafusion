@@ -1177,7 +1177,7 @@ pub struct Filter {
     /// The predicate expression, which must have Boolean type.
     predicate: Expr,
     /// The incoming logical plan
-    pub input: Arc<LogicalPlan>,
+    input: Arc<LogicalPlan>,
 }
 
 impl Filter {
