@@ -871,7 +871,7 @@ fn populate_csv_partitions(
     // generate a partitioned file
     for partition in 0..partition_count {
         let filename = format!("partition-{}.{}", partition, file_extension);
-        let file_path = tmp_dir.path().join(&filename);
+        let file_path = tmp_dir.path().join(filename);
         let mut file = File::create(file_path)?;
 
         // generate some data

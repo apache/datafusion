@@ -215,7 +215,7 @@ pub async fn plan_to_json(
             for i in 0..plan.output_partitioning().partition_count() {
                 let plan = plan.clone();
                 let filename = format!("part-{}.json", i);
-                let path = fs_path.join(&filename);
+                let path = fs_path.join(filename);
                 let file = fs::File::create(path)?;
                 let mut writer = json::LineDelimitedWriter::new(file);
                 let task_ctx = Arc::new(TaskContext::from(state));
