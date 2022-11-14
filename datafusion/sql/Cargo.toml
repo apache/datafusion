@@ -40,4 +40,4 @@ unicode_expressions = []
 arrow = { version = "26.0.0", default-features = false }
 datafusion-common = { path = "../common", version = "14.0.0" }
 datafusion-expr = { path = "../expr", version = "14.0.0" }
-sqlparser = "0.26"
+sqlparser = "0.27"
