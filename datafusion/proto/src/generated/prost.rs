@@ -132,6 +132,8 @@ pub struct ListingTableScanNode {
     pub collect_stat: bool,
     #[prost(uint32, tag="9")]
     pub target_partitions: u32,
+    #[prost(message, repeated, tag="13")]
+    pub file_sort_order: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(oneof="listing_table_scan_node::FileFormatType", tags="10, 11, 12")]
     pub file_format_type: ::core::option::Option<listing_table_scan_node::FileFormatType>,
 }
