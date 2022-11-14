@@ -2703,10 +2703,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else if let Ok(n) = n.parse::<i64>() {
             Ok(lit(n))
         } else if self.options.parse_float_as_decimal {
-            if let Some(i) = n.find('.') {
-                let p = n.len() - 1;
-                let s = n.len() - i - 1;
-                let str = n.replace('.', "");
+            // remove leading zeroes
+            let str = n.trim_start_matches('0');
+            if let Some(i) = str.find('.') {
+                // remove trailing zeroes
+                let str = str.trim_end_matches('0');
+                let p = str.len() - 1;
+                let s = str.len() - i - 1;
+                let str = str.replace('.', "");
                 let n = str.parse::<i128>().map_err(|_| {
                     DataFusionError::from(ParserError(format!(
                         "Cannot parse {} as i128 when building decimal",
@@ -3093,15 +3097,29 @@ mod tests {
 
     #[test]
     fn parse_decimals() {
-        let options = ParserOptions {
-            parse_float_as_decimal: true,
-        };
-        quick_test_with_options(
-            "SELECT 1, 1.0, 0.1, .1, 12.34",
-            "Projection: Int64(1), Decimal128(Some(10),2,1), Decimal128(Some(1),2,1), Decimal128(Some(1),1,1), Decimal128(Some(1234),4,2)\
-             \n  EmptyRelation",
-            options
-        );
+        let test_data = [
+            ("1", "Int64(1)"),
+            ("001", "Int64(1)"),
+            ("0.1", "Decimal128(Some(1),1,1)"),
+            ("0.01", "Decimal128(Some(1),2,2)"),
+            ("1.0", "Decimal128(Some(1),1,0)"),
+            ("10.01", "Decimal128(Some(1001),4,2)"),
+            (
+                "10000000000000000000.00",
+                "Decimal128(Some(10000000000000000000),20,0)",
+            ),
+        ];
+        for (a, b) in test_data {
+            let sql = format!("SELECT {}", a);
+            let expected = format!("Projection: {}\n  EmptyRelation", b);
+            quick_test_with_options(
+                &sql,
+                &expected,
+                ParserOptions {
+                    parse_float_as_decimal: true,
+                },
+            );
+        }
     }
 
     #[test]
