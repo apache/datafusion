@@ -1626,6 +1626,92 @@ async fn aggregate_times_max() -> Result<()> {
 }
 
 #[tokio::test]
+async fn aggregate_times_sum() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_table("t", table_with_times()).unwrap();
+
+    let results = plan_and_collect(
+        &ctx,
+        "SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t",
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(results.to_string(), "Error during planning: The function Sum does not support inputs of type Time64(Nanosecond).");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_times_count() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_table("t", table_with_times()).unwrap();
+
+    let results = execute_to_batches(
+        &ctx,
+        "SELECT count(nanos), count(micros), count(millis), count(secs) FROM t",
+    )
+    .await;
+
+    let expected = vec![
+        "+----------------+-----------------+-----------------+---------------+",
+        "| COUNT(t.nanos) | COUNT(t.micros) | COUNT(t.millis) | COUNT(t.secs) |",
+        "+----------------+-----------------+-----------------+---------------+",
+        "| 4              | 4               | 4               | 4             |",
+        "+----------------+-----------------+-----------------+---------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_times_min() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_table("t", table_with_times()).unwrap();
+
+    let results = execute_to_batches(
+        &ctx,
+        "SELECT min(nanos), min(micros), min(millis), min(secs) FROM t",
+    )
+    .await;
+
+    let expected = vec![
+        "+--------------------+-----------------+---------------+-------------+",
+        "| MIN(t.nanos)       | MIN(t.micros)   | MIN(t.millis) | MIN(t.secs) |",
+        "+--------------------+-----------------+---------------+-------------+",
+        "| 18:06:30.243620451 | 18:06:30.243620 | 18:06:30.243  | 18:06:30    |",
+        "+--------------------+-----------------+---------------+-------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_times_max() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_table("t", table_with_times()).unwrap();
+
+    let results = execute_to_batches(
+        &ctx,
+        "SELECT max(nanos), max(micros), max(millis), max(secs) FROM t",
+    )
+    .await;
+
+    let expected = vec![
+        "+--------------------+-----------------+---------------+-------------+",
+        "| MAX(t.nanos)       | MAX(t.micros)   | MAX(t.millis) | MAX(t.secs) |",
+        "+--------------------+-----------------+---------------+-------------+",
+        "| 21:06:28.247821084 | 21:06:28.247821 | 21:06:28.247  | 21:06:28    |",
+        "+--------------------+-----------------+---------------+-------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn aggregate_timestamps_avg() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_table("t", table_with_timestamps()).unwrap();
