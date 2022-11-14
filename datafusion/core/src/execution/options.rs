@@ -151,6 +151,7 @@ impl<'a> CsvReadOptions<'a> {
             file_extension: self.file_extension.to_owned(),
             target_partitions,
             table_partition_cols: self.table_partition_cols.clone(),
+            file_sort_order: None,
         }
     }
 }
@@ -225,6 +226,7 @@ impl<'a> ParquetReadOptions<'a> {
             file_extension: self.file_extension.to_owned(),
             target_partitions,
             table_partition_cols: self.table_partition_cols.clone(),
+            file_sort_order: None,
         }
     }
 }
@@ -274,6 +276,7 @@ impl<'a> AvroReadOptions<'a> {
             file_extension: self.file_extension.to_owned(),
             target_partitions,
             table_partition_cols: self.table_partition_cols.clone(),
+            file_sort_order: None,
         }
     }
 }
@@ -346,6 +349,7 @@ impl<'a> NdJsonReadOptions<'a> {
             file_extension: self.file_extension.to_owned(),
             target_partitions,
             table_partition_cols: self.table_partition_cols.clone(),
+            file_sort_order: None,
         }
     }
 }

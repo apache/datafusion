@@ -564,6 +564,7 @@ impl SessionContext {
                     file_extension: file_extension.to_owned(),
                     target_partitions: self.copied_config().target_partitions,
                     table_partition_cols: cmd.table_partition_cols.clone(),
+                    file_sort_order: None,
                 };
                 self.register_listing_table(
                     cmd.name.as_str(),
@@ -807,7 +808,7 @@ impl SessionContext {
         table_path: impl AsRef<str>,
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
-        sql: Option<String>,
+        sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
         let resolved_schema = match provided_schema {
@@ -817,7 +818,7 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config)?.with_definition(sql);
+        let table = ListingTable::try_new(config)?.with_definition(sql_definition);
         self.register_table(name, Arc::new(table))?;
         Ok(())
     }
@@ -1589,8 +1590,9 @@ impl SessionState {
             )));
         }
         physical_optimizers.push(Arc::new(Repartition::new()));
+        // Repartition rule could introduce additional RepartitionExec with RoundRobin partitioning.
+        // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
-        // physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
 
         SessionState {
             session_id,
