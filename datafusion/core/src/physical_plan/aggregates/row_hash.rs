@@ -479,8 +479,15 @@ fn create_batch_from_map(
                     results[i].push(acc.evaluate(&state_accessor).unwrap());
                 }
             }
-            for scalars in results {
-                columns.push(ScalarValue::iter_to_array(scalars)?);
+            for (scalars, field) in results
+                .into_iter()
+                .zip(output_schema.fields()[columns.len()..].iter())
+            {
+                if !scalars.is_empty() {
+                    columns.push(ScalarValue::iter_to_array(scalars)?);
+                } else {
+                    columns.push(arrow::array::new_empty_array(field.data_type()))
+                }
             }
         }
     }
