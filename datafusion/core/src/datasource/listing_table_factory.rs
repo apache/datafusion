@@ -67,6 +67,7 @@ impl TableProviderFactory for ListingTableFactory {
             file_extension: file_extension.to_owned(),
             target_partitions: 1,
             table_partition_cols: vec![],
+            file_sort_order: None,
         };
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
