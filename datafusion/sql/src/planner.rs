@@ -706,29 +706,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .unwrap_or(Ok(join))?
                         .build()
                 } else {
+                    // Wrap projection fro left input if left join keys has normal expression.
                     let left_child =
                         wrap_projection_for_join_if_necessary(&left_keys, left)?;
                     let left_join_keys = left_keys
                         .iter()
                         .map(|key| {
-                            if let Ok(col) = key.try_into_col() {
-                                Ok(col)
-                            } else {
-                                Ok(Column::from_name(key.display_name()?))
-                            }
+                            key.try_into_col()
+                                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
                         })
                         .collect::<Result<Vec<_>>>()?;
 
+                    // Wrap projection fro left input if left join keys has normal expression.
                     let right_child =
                         wrap_projection_for_join_if_necessary(&right_keys, right)?;
                     let right_join_keys = right_keys
                         .iter()
                         .map(|key| {
-                            if let Ok(col) = key.try_into_col() {
-                                Ok(col)
-                            } else {
-                                Ok(Column::from_name(key.display_name()?))
-                            }
+                            key.try_into_col()
+                                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
                         })
                         .collect::<Result<Vec<_>>>()?;
 
@@ -2865,6 +2861,11 @@ fn remove_join_expressions(
 /// foo = bar => accum=[(foo, bar)] accum_filter=[]
 /// foo = bar AND bar = baz => accum=[(foo, bar), (bar, baz)] accum_filter=[]
 /// foo = bar AND baz > 1 => accum=[(foo, bar)] accum_filter=[baz > 1]
+///
+/// For normal expression join key, assume we have a(c0, c1 c2) and b(c0, c1, c2):
+/// (a.c0 = 10) => accum=[], accum_filter=[a.c0 = 10]
+/// (a.c0 + 1 = b.c0 * 2) => accum=[(a.c0 + 1, b.c0 * 2)],  accum_filter=[]
+/// (a.c0 + b.c0 = 10) =>  accum=[], accum_filter=[a.c0 + b.c0 = 10]
 /// ```
 fn extract_join_keys(
     expr: Expr,
@@ -2878,17 +2879,17 @@ fn extract_join_keys(
             Operator::Eq => {
                 let left = *left.clone();
                 let right = *right.clone();
-
                 let left_using_columns = left.to_columns()?;
                 let right_using_columns = right.to_columns()?;
 
-                // When there is one side expression does not contain columns, we need move this expression to filter.
+                // When one side key does not contain columns, we need move this expression to filter.
                 // For example: a = 1, a = now() + 10.
                 if left_using_columns.is_empty() || right_using_columns.is_empty() {
                     accum_filter.push(expr);
                     return Ok(());
                 }
 
+                // Checking left join key is from left schema, right join key is from right schema, or the opposite.
                 let l_is_left = check_all_column_from_schema(
                     &left_using_columns,
                     left_schema.clone(),
@@ -2920,7 +2921,6 @@ fn extract_join_keys(
                     let left_expr_type = left_expr.get_type(left_schema)?;
                     let right_expr_type = right_expr.get_type(right_schema)?;
 
-                    // TODO: Maybe this check can be done later in optimizer
                     if can_hash(&left_expr_type) && can_hash(&right_expr_type) {
                         accum.push((left_expr, right_expr));
                     } else {
@@ -2999,6 +2999,7 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
         })
 }
 
+/// Wrap projection for a plan, if the join keys contains normal expression.
 fn wrap_projection_for_join_if_necessary(
     join_keys: &[Expr],
     input: LogicalPlan,
@@ -3009,8 +3010,8 @@ fn wrap_projection_for_join_if_necessary(
         .cloned()
         .collect::<Vec<_>>();
 
-    let handled_input = if expr_join_keys.is_empty().not() {
-        let mut projection = expand_wildcard(input.schema(), &input)?;
+    let plan = if expr_join_keys.is_empty().not() {
+        let mut projection = vec![Expr::Wildcard];
         projection.extend_from_slice(&expr_join_keys);
 
         LogicalPlanBuilder::from(input)
@@ -3020,7 +3021,7 @@ fn wrap_projection_for_join_if_necessary(
         input
     };
 
-    Ok(handled_input)
+    Ok(plan)
 }
 
 #[cfg(test)]
@@ -5599,6 +5600,37 @@ mod tests {
     }
 
     #[test]
+    fn test_constant_expr_eq_join() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            INNER JOIN orders \
+            ON person.id = 10";
+
+        let expected = "Projection: person.id, orders.order_id\
+        \n  Filter: person.id = Int64(10)\
+        \n    CrossJoin:\
+        \n      TableScan: person\
+        \n      TableScan: orders";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_right_left_expr_eq_join() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            INNER JOIN orders \
+            ON orders.customer_id * 2 = person.id + 10";
+
+        let expected = "Projection: person.id, orders.order_id\
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
+        \n      TableScan: person\
+        \n    Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
+        \n      TableScan: orders";
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn test_single_column_expr_eq_join() {
         let sql = "SELECT id, order_id \
             FROM person \
@@ -5625,6 +5657,36 @@ mod tests {
         \n  Inner Join: person.id + person.age + Int64(10) = orders.customer_id * Int64(2) - orders.price\
         \n    Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + person.age + Int64(10)\
         \n      TableScan: person\
+        \n    Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
+        \n      TableScan: orders";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_left_projection_expr_eq_join() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            INNER JOIN orders \
+            ON person.id + person.age + 10 = orders.customer_id";
+
+        let expected = "Projection: person.id, orders.order_id\
+        \n  Inner Join: person.id + person.age + Int64(10) = orders.customer_id\
+        \n    Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + person.age + Int64(10)\
+        \n      TableScan: person\
+        \n    TableScan: orders";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_right_projection_expr_eq_join() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            INNER JOIN orders \
+            ON person.id = orders.customer_id * 2 - orders.price";
+
+        let expected = "Projection: person.id, orders.order_id\
+        \n  Inner Join: person.id = orders.customer_id * Int64(2) - orders.price\
+        \n    TableScan: person\
         \n    Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
         \n      TableScan: orders";
         quick_test(sql, expected);
