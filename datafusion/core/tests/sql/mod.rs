@@ -1277,6 +1277,99 @@ pub fn make_times() -> RecordBatch {
     .unwrap()
 }
 
+/// Return a new table provider containing all of the supported timestamp types
+pub fn table_with_times() -> Arc<dyn TableProvider> {
+    let batch = make_times();
+    let schema = batch.schema();
+    let partitions = vec![vec![batch]];
+    Arc::new(MemTable::try_new(schema, partitions).unwrap())
+}
+
+/// Return  record batch with all of the supported time types
+/// values
+///
+/// Columns are named:
+/// "nanos" --> Time64NanosecondArray
+/// "micros" --> Time64MicrosecondArray
+/// "millis" --> Time32MillisecondArray
+/// "secs" --> Time32SecondArray
+/// "names" --> StringArray
+pub fn make_times() -> RecordBatch {
+    let ts_strings = vec![
+        Some("18:06:30.243620451"),
+        Some("20:08:28.161121654"),
+        Some("19:11:04.156423842"),
+        Some("21:06:28.247821084"),
+    ];
+
+    let ts_nanos = ts_strings
+        .into_iter()
+        .map(|t| {
+            t.map(|t| {
+                let integer_sec = t
+                    .parse::<chrono::NaiveTime>()
+                    .unwrap()
+                    .num_seconds_from_midnight() as i64;
+                let extra_nano =
+                    t.parse::<chrono::NaiveTime>().unwrap().nanosecond() as i64;
+                // Total time in nanoseconds given by integer number of seconds multiplied by 10^9
+                // plus number of nanoseconds corresponding to the extra fraction of second
+                integer_sec * 1_000_000_000 + extra_nano
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let ts_micros = ts_nanos
+        .iter()
+        .map(|t| t.as_ref().map(|ts_nanos| ts_nanos / 1000))
+        .collect::<Vec<_>>();
+
+    let ts_millis = ts_nanos
+        .iter()
+        .map(|t| t.as_ref().map(|ts_nanos| { ts_nanos / 1000000 } as i32))
+        .collect::<Vec<_>>();
+
+    let ts_secs = ts_nanos
+        .iter()
+        .map(|t| t.as_ref().map(|ts_nanos| { ts_nanos / 1000000000 } as i32))
+        .collect::<Vec<_>>();
+
+    let names = ts_nanos
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("Row {}", i))
+        .collect::<Vec<_>>();
+
+    let arr_nanos = Time64NanosecondArray::from(ts_nanos);
+    let arr_micros = Time64MicrosecondArray::from(ts_micros);
+    let arr_millis = Time32MillisecondArray::from(ts_millis);
+    let arr_secs = Time32SecondArray::from(ts_secs);
+
+    let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+    let arr_names = StringArray::from(names);
+
+    let schema = Schema::new(vec![
+        Field::new("nanos", arr_nanos.data_type().clone(), true),
+        Field::new("micros", arr_micros.data_type().clone(), true),
+        Field::new("millis", arr_millis.data_type().clone(), true),
+        Field::new("secs", arr_secs.data_type().clone(), true),
+        Field::new("name", arr_names.data_type().clone(), true),
+    ]);
+    let schema = Arc::new(schema);
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(arr_nanos),
+            Arc::new(arr_micros),
+            Arc::new(arr_millis),
+            Arc::new(arr_secs),
+            Arc::new(arr_names),
+        ],
+    )
+    .unwrap()
+}
+
 #[tokio::test]
 async fn nyc() -> Result<()> {
     // schema for nyxtaxi csv files
