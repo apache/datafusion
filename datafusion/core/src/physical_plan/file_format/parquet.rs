@@ -294,7 +294,6 @@ impl ExecutionPlan for ParquetExec {
     ///
     ///              ParquetExec
     ///```
-    ///
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.base_config.output_ordering.as_deref()
     }

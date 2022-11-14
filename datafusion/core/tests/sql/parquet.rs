@@ -54,7 +54,7 @@ async fn parquet_query() {
 /// expressions make it all the way down to the ParquetExec
 async fn parquet_with_sort_order_specified() {
     let parquet_read_options = ParquetReadOptions::default();
-    let target_partitions = 1;
+    let target_partitions = 2;
 
     // The sort order is not specified
     let options_no_sort = ListingOptions {
@@ -83,29 +83,51 @@ async fn parquet_with_sort_order_specified() {
         "output_ordering=[string_col@9 ASC NULLS LAST, int_col@4 ASC NULLS LAST]";
 
     // when sort not specified, should not appear in the explain plan
+    let num_files = 1;
     assert_not_contains!(
-        run_query_with_options(options_no_sort).await,
+        run_query_with_options(options_no_sort, num_files).await,
         expected_output_ordering
     );
 
     // when sort IS specified, SHOULD appear in the explain plan
+    let num_files = 1;
     assert_contains!(
-        run_query_with_options(options_sort).await,
+        run_query_with_options(options_sort.clone(), num_files).await,
+        expected_output_ordering
+    );
+
+    // when sort IS specified, but there are too many files (greater
+    // than the number of partitions) sort should not appear
+    let num_files = 3;
+    assert_not_contains!(
+        run_query_with_options(options_sort, num_files).await,
         expected_output_ordering
     );
 }
 
-/// Runs a limit query against a parquet file that was registered from options
-async fn run_query_with_options(options: ListingOptions) -> String {
+/// Runs a limit query against a parquet file that was registered from
+/// options on num_files copies of all_types_plain.parquet
+async fn run_query_with_options(options: ListingOptions, num_files: usize) -> String {
     let ctx = SessionContext::new();
+
     let testdata = datafusion::test_util::parquet_test_data();
-    let table_path = format!("{}/alltypes_plain.parquet", testdata);
+    let file_path = format!("{}/alltypes_plain.parquet", testdata);
+
+    // Create a directory of parquet files with names
+    // 0.parquet
+    // 1.parquet
+    let tmpdir = TempDir::new().unwrap();
+    for i in 0..num_files {
+        let target_file = tmpdir.path().join(format!("{i}.parquet"));
+        println!("Copying {file_path} to {target_file:?}");
+        std::fs::copy(&file_path, target_file).unwrap();
+    }
 
     let provided_schema = None;
     let sql_definition = None;
     ctx.register_listing_table(
         "t",
-        &table_path,
+        tmpdir.path().to_string_lossy(),
         options.clone(),
         provided_schema,
         sql_definition,
