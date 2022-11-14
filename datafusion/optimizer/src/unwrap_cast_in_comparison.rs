@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn test_not_support_data_type() {
-        // "c6 > 0" will be cast to `cast(c6 as int64) > 0
+        // "c6 > 0" will be cast to `cast(c6 as float) > 0
         // but the type of c6 is uint32
         // the rewriter will not throw error and just return the original expr
         let schema = expr_test_schema();
