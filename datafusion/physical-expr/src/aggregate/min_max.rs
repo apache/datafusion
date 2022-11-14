@@ -1073,13 +1073,79 @@ mod tests {
     }
 
     #[test]
-    fn min_time64() -> Result<()> {
+    fn min_time32second() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time32SecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time32(TimeUnit::Second),
+            Min,
+            ScalarValue::Time32Second(Some(1))
+        )
+    }
+
+    #[test]
+    fn max_time32second() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time32SecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time32(TimeUnit::Second),
+            Max,
+            ScalarValue::Time32Second(Some(5))
+        )
+    }
+
+    #[test]
+    fn min_time32millisecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time32(TimeUnit::Millisecond),
+            Min,
+            ScalarValue::Time32Millisecond(Some(1))
+        )
+    }
+
+    #[test]
+    fn max_time32millisecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time32(TimeUnit::Millisecond),
+            Max,
+            ScalarValue::Time32Millisecond(Some(5))
+        )
+    }
+
+    #[test]
+    fn min_time64microsecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time64MicrosecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time64(TimeUnit::Microsecond),
+            Min,
+            ScalarValue::Time64Microsecond(Some(1))
+        )
+    }
+
+    #[test]
+    fn max_time64microsecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time64MicrosecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time64(TimeUnit::Microsecond),
+            Max,
+            ScalarValue::Time64Microsecond(Some(5))
+        )
+    }
+
+    #[test]
+    fn min_time64nanosecond() -> Result<()> {
         let a: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Time64(TimeUnit::Nanosecond),
-            Max,
-            ScalarValue::Time64(Some(5))
+            Min,
+            ScalarValue::Time64Nanosecond(Some(1))
         )
     }
 

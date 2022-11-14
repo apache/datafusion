@@ -1358,7 +1358,10 @@ impl ScalarValue {
                 }
             }
             // explicitly enumerate unsupported types so newly added
-            // types must be aknowledged
+            // types must be aknowledged, Time32 and Time64 types are
+            // not supported if the TimeUnit is not valid (Time32 can
+            // only be used with Second and Millisecond, Time64 only
+            // with Microsecond and Nanosecond)
             DataType::Float16
             | DataType::Time32(_)
             | DataType::Time64(_)
@@ -2083,7 +2086,7 @@ macro_rules! impl_try_from {
 impl_try_from!(Int8, i8);
 impl_try_from!(Int16, i16);
 
-// special implementation for i32 because of Date32
+// special implementation for i32 because of Date32 and Time32
 impl TryFrom<ScalarValue> for i32 {
     type Error = DataFusionError;
 
@@ -2100,7 +2103,7 @@ impl TryFrom<ScalarValue> for i32 {
     }
 }
 
-// special implementation for i64 because of TimeNanosecond
+// special implementation for i64 because of Date64, Time64 and Timestamp
 impl TryFrom<ScalarValue> for i64 {
     type Error = DataFusionError;
 
