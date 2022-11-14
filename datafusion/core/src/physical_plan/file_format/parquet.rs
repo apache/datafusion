@@ -17,66 +17,55 @@
 
 //! Execution plan for reading Parquet files
 
+use arrow::datatypes::SchemaRef;
 use fmt::Debug;
-use std::collections::{HashSet, VecDeque};
+use std::any::Any;
 use std::fmt;
 use std::fs;
 use std::ops::Range;
 use std::sync::Arc;
-use std::{any::Any, convert::TryInto};
 
 use crate::config::OPT_PARQUET_ENABLE_PAGE_INDEX;
 use crate::config::OPT_PARQUET_PUSHDOWN_FILTERS;
 use crate::config::OPT_PARQUET_REORDER_FILTERS;
 use crate::datasource::file_format::parquet::fetch_parquet_metadata;
-use crate::datasource::listing::FileRange;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
 };
-use crate::physical_plan::file_format::row_filter::build_row_filter;
 use crate::physical_plan::file_format::FileMeta;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::{SessionState, TaskContext},
-    physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
+    physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         expressions::PhysicalSortExpr,
         file_format::{FileScanConfig, SchemaAdapter},
-        metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
+        metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
         Statistics,
     },
-    scalar::ScalarValue,
 };
-use arrow::array::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array};
-use arrow::datatypes::DataType;
-use arrow::{
-    array::ArrayRef,
-    datatypes::{Schema, SchemaRef},
-    error::ArrowError,
-};
+use arrow::error::ArrowError;
 use bytes::Bytes;
-use datafusion_common::Column;
-use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::Expr;
-use datafusion_optimizer::utils::split_conjunction;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
-use log::{debug, error};
+use log::debug;
 use object_store::{ObjectMeta, ObjectStore};
-use parquet::arrow::arrow_reader::{ArrowReaderOptions, RowSelector};
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::basic::{ConvertedType, LogicalType};
 use parquet::errors::ParquetError;
-use parquet::file::page_index::index::Index;
-use parquet::file::{
-    metadata::{ParquetMetaData, RowGroupMetaData},
-    properties::WriterProperties,
-    statistics::Statistics as ParquetStatistics,
-};
-use parquet::format::PageLocation;
-use parquet::schema::types::ColumnDescriptor;
+use parquet::file::{metadata::ParquetMetaData, properties::WriterProperties};
+
+mod metrics;
+mod page_filter;
+mod row_filter;
+mod row_groups;
+
+pub use metrics::ParquetFileMetrics;
+
+use super::get_output_ordering;
 
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
@@ -228,61 +217,6 @@ impl ParquetExec {
     }
 }
 
-/// Stores metrics about the parquet execution for a particular parquet file.
-///
-/// This component is a subject to **change** in near future and is exposed for low level integrations
-/// through [ParquetFileReaderFactory].
-#[derive(Debug, Clone)]
-pub struct ParquetFileMetrics {
-    /// Number of times the predicate could not be evaluated
-    pub predicate_evaluation_errors: metrics::Count,
-    /// Number of row groups pruned using
-    pub row_groups_pruned: metrics::Count,
-    /// Total number of bytes scanned
-    pub bytes_scanned: metrics::Count,
-    /// Total rows filtered out by predicates pushed into parquet scan
-    pub pushdown_rows_filtered: metrics::Count,
-    /// Total time spent evaluating pushdown filters
-    pub pushdown_eval_time: metrics::Time,
-}
-
-impl ParquetFileMetrics {
-    /// Create new metrics
-    pub fn new(
-        partition: usize,
-        filename: &str,
-        metrics: &ExecutionPlanMetricsSet,
-    ) -> Self {
-        let predicate_evaluation_errors = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
-            .counter("predicate_evaluation_errors", partition);
-
-        let row_groups_pruned = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
-            .counter("row_groups_pruned", partition);
-
-        let bytes_scanned = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
-            .counter("bytes_scanned", partition);
-
-        let pushdown_rows_filtered = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
-            .counter("pushdown_rows_filtered", partition);
-
-        let pushdown_eval_time = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
-            .subset_time("pushdown_eval_time", partition);
-
-        Self {
-            predicate_evaluation_errors,
-            row_groups_pruned,
-            bytes_scanned,
-            pushdown_rows_filtered,
-            pushdown_eval_time,
-        }
-    }
-}
-
 impl ExecutionPlan for ParquetExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -304,11 +238,7 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
-    }
-
-    fn relies_on_input_order(&self) -> bool {
-        false
+        get_output_ordering(&self.base_config)
     }
 
     fn with_new_children(
@@ -373,24 +303,29 @@ impl ExecutionPlan for ParquetExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                if let Some(pre) = &self.pruning_predicate {
-                    write!(
-                        f,
-                        "ParquetExec: limit={:?}, partitions={}, predicate={}, projection={}",
-                        self.base_config.limit,
-                        super::FileGroupsDisplay(&self.base_config.file_groups),
-                        pre.predicate_expr(),
-                        super::ProjectSchemaDisplay(&self.projected_schema),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "ParquetExec: limit={:?}, partitions={}, projection={}",
-                        self.base_config.limit,
-                        super::FileGroupsDisplay(&self.base_config.file_groups),
-                        super::ProjectSchemaDisplay(&self.projected_schema),
-                    )
-                }
+                let pruning_predicate_string = self
+                    .pruning_predicate
+                    .as_ref()
+                    // TODO change this to be pruning_predicate rather than 'predicate'
+                    // to avoid confusion
+                    // https://github.com/apache/arrow-datafusion/issues/4020
+                    .map(|pre| format!(", predicate={}", pre.predicate_expr()))
+                    .unwrap_or_default();
+
+                let output_ordering_string = self
+                    .output_ordering()
+                    .map(make_output_ordering_string)
+                    .unwrap_or_default();
+
+                write!(
+                    f,
+                    "ParquetExec: limit={:?}, partitions={}{}{}, projection={}",
+                    self.base_config.limit,
+                    super::FileGroupsDisplay(&self.base_config.file_groups),
+                    pruning_predicate_string,
+                    output_ordering_string,
+                    super::ProjectSchemaDisplay(&self.projected_schema),
+                )
             }
         }
     }
@@ -402,6 +337,20 @@ impl ExecutionPlan for ParquetExec {
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
     }
+}
+
+fn make_output_ordering_string(ordering: &[PhysicalSortExpr]) -> String {
+    use std::fmt::Write;
+    let mut w: String = ", output_ordering=[".into();
+
+    for (i, e) in ordering.iter().enumerate() {
+        if i > 0 {
+            write!(&mut w, ", ").unwrap()
+        }
+        write!(&mut w, "{}", e).unwrap()
+    }
+    write!(&mut w, "]").unwrap();
+    w
 }
 
 /// Implements [`FormatReader`] for a parquet file
@@ -433,13 +382,13 @@ impl FileOpener for ParquetOpener {
             &self.metrics,
         );
 
-        let reader =
-            BoxedAsyncFileReader(self.parquet_file_reader_factory.create_reader(
+        let reader: Box<dyn AsyncFileReader> =
+            self.parquet_file_reader_factory.create_reader(
                 self.partition_index,
                 file_meta,
                 self.metadata_size_hint,
                 &self.metrics,
-            )?);
+            )?;
 
         let schema_adapter = SchemaAdapter::new(self.table_schema.clone());
         let batch_size = self.batch_size;
@@ -463,18 +412,18 @@ impl FileOpener for ParquetOpener {
                 adapted_projections.iter().cloned(),
             );
 
+            // Filter pushdown: evlauate predicates during scan
             if let Some(predicate) = pushdown_filters
                 .then(|| pruning_predicate.as_ref().map(|p| p.logical_expr()))
                 .flatten()
             {
-                let row_filter = build_row_filter(
+                let row_filter = row_filter::build_row_filter(
                     predicate.clone(),
                     builder.schema().as_ref(),
                     table_schema.as_ref(),
                     builder.metadata(),
                     reorder_predicates,
-                    &file_metrics.pushdown_rows_filtered,
-                    &file_metrics.pushdown_eval_time,
+                    &file_metrics,
                 );
 
                 match row_filter {
@@ -491,77 +440,33 @@ impl FileOpener for ParquetOpener {
                 };
             };
 
+            // Row group pruning: attempt to skip entire row_groups
+            // using metadata on the row groups
             let file_metadata = builder.metadata();
-            let groups = file_metadata.row_groups();
-            let row_groups = prune_row_groups(
-                groups,
+            let row_groups = row_groups::prune_row_groups(
+                file_metadata.row_groups(),
                 file_range,
                 pruning_predicate.clone(),
                 &file_metrics,
             );
 
-            if enable_page_index {
-                let page_index_predicates = extract_page_index_push_down_predicates(
-                    &pruning_predicate,
-                    builder.schema().clone(),
-                )?;
-                if !page_index_predicates.is_empty() {
-                    let file_offset_indexes = file_metadata.offset_indexes();
-                    let file_page_indexes = file_metadata.page_indexes();
-                    if let (Some(file_offset_indexes), Some(file_page_indexes)) =
-                        (file_offset_indexes, file_page_indexes)
-                    {
-                        let mut row_selections =
-                            VecDeque::with_capacity(page_index_predicates.len());
-                        for predicate in page_index_predicates {
-                            // `extract_page_index_push_down_predicates` only return predicate with one col.
-                            let col_id = *predicate
-                                .need_input_columns_ids()
-                                .iter()
-                                .next()
-                                .unwrap();
-                            let mut selectors = Vec::with_capacity(row_groups.len());
-                            for r in &row_groups {
-                                let rg_offset_indexes = file_offset_indexes.get(*r);
-                                let rg_page_indexes = file_page_indexes.get(*r);
-                                if let (Some(rg_page_indexes), Some(rg_offset_indexes)) =
-                                    (rg_page_indexes, rg_offset_indexes)
-                                {
-                                    selectors.extend(
-                                        prune_pages_in_one_row_group(
-                                            &groups[*r],
-                                            &predicate,
-                                            rg_offset_indexes.get(col_id),
-                                            rg_page_indexes.get(col_id),
-                                            &file_metrics,
-                                        )
-                                            .map_err(|e| {
-                                                ArrowError::ParquetError(format!(
-                                                    "Fail in prune_pages_in_one_row_group: {}",
-                                                    e
-                                                ))
-                                            }),
-                                    );
-                                } else {
-                                    // fallback select all rows
-                                    let all_selected = vec![RowSelector::select(
-                                        groups[*r].num_rows() as usize,
-                                    )];
-                                    selectors.push(all_selected);
-                                }
-                            }
-                            debug!(
-                            "Use filter and page index create RowSelection {:?} from predicate:{:?}",
-                            &selectors, predicate
-                        );
-                            row_selections.push_back(
-                                selectors.into_iter().flatten().collect::<Vec<_>>(),
-                            );
-                        }
-                        let final_selection = combine_multi_col_selection(row_selections);
-                        builder = builder.with_row_selection(final_selection.into());
-                    }
-                }
+            // page index pruning: if all data on individual pages can
+            // be ruled using page metadata, rows from other columns
+            // with that range can be skipped as well
+            if let Some(row_selection) = (enable_page_index && !row_groups.is_empty())
+                .then(|| {
+                    page_filter::build_page_filter(
+                        pruning_predicate.as_ref(),
+                        builder.schema().clone(),
+                        &row_groups,
+                        file_metadata.as_ref(),
+                        &file_metrics,
+                    )
+                })
+                .transpose()?
+                .flatten()
+            {
+                builder = builder.with_row_selection(row_selection);
             }
 
             let stream = builder
@@ -583,170 +488,6 @@ impl FileOpener for ParquetOpener {
             Ok(adapted.boxed())
         }))
     }
-}
-
-/// For example:
-/// ```text
-/// ┏━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━
-///    ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ┃
-/// ┃     ┌──────────────┐  │     ┌──────────────┐  │  ┃
-/// ┃  │  │              │     │  │              │     ┃
-/// ┃     │              │  │     │     Page     │  │
-///    │  │              │     │  │      3       │     ┃
-/// ┃     │              │  │     │   min: "A"   │  │  ┃
-/// ┃  │  │              │     │  │   max: "C"   │     ┃
-/// ┃     │     Page     │  │     │ first_row: 0 │  │
-///    │  │      1       │     │  │              │     ┃
-/// ┃     │   min: 10    │  │     └──────────────┘  │  ┃
-/// ┃  │  │   max: 20    │     │  ┌──────────────┐     ┃
-/// ┃     │ first_row: 0 │  │     │              │  │
-///    │  │              │     │  │     Page     │     ┃
-/// ┃     │              │  │     │      4       │  │  ┃
-/// ┃  │  │              │     │  │   min: "D"   │     ┃
-/// ┃     │              │  │     │   max: "G"   │  │
-///    │  │              │     │  │first_row: 100│     ┃
-/// ┃     └──────────────┘  │     │              │  │  ┃
-/// ┃  │  ┌──────────────┐     │  │              │     ┃
-/// ┃     │              │  │     └──────────────┘  │
-///    │  │     Page     │     │  ┌──────────────┐     ┃
-/// ┃     │      2       │  │     │              │  │  ┃
-/// ┃  │  │   min: 30    │     │  │     Page     │     ┃
-/// ┃     │   max: 40    │  │     │      5       │  │
-///    │  │first_row: 200│     │  │   min: "H"   │     ┃
-/// ┃     │              │  │     │   max: "Z"   │  │  ┃
-/// ┃  │  │              │     │  │first_row: 250│     ┃
-/// ┃     └──────────────┘  │     │              │  │
-///    │                       │  └──────────────┘     ┃
-/// ┃   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘   ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ┃
-/// ┃       ColumnChunk            ColumnChunk         ┃
-/// ┃            A                      B
-///  ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━┛
-///
-///   Total rows: 300
-/// ```
-///
-/// Given the predicate 'A > 35 AND B = "F"':
-/// using `extract_page_index_push_down_predicates` get two single column predicate:
-/// Using 'A > 35': could get `RowSelector1: [ Skip(0~199), Read(200~299)]`
-/// Using  B = "F": could get `RowSelector2: [ Skip(0~99), Read(100~249), Skip(250~299)]`
-///
-/// As the Final selection is the intersection of each columns `RowSelectors:
-/// final_selection:[ Skip(0~199), Read(200~249), Skip(250~299)]`
-fn combine_multi_col_selection(
-    row_selections: VecDeque<Vec<RowSelector>>,
-) -> Vec<RowSelector> {
-    row_selections
-        .into_iter()
-        .reduce(intersect_row_selection)
-        .unwrap()
-}
-
-/// combine two `RowSelection` return the intersection
-/// For example:
-/// self:     NNYYYYNNY
-/// other:    NYNNNNNNY
-///
-/// returned: NNNNNNNNY
-/// set `need_combine` true will combine result: Select(2) + Select(1) + Skip(2) -> Select(3) + Skip(2)
-///
-/// Move to arrow-rs: https://github.com/apache/arrow-rs/issues/3003
-pub(crate) fn intersect_row_selection(
-    left: Vec<RowSelector>,
-    right: Vec<RowSelector>,
-) -> Vec<RowSelector> {
-    let mut res = vec![];
-    let mut l_iter = left.into_iter().peekable();
-    let mut r_iter = right.into_iter().peekable();
-
-    while let (Some(a), Some(b)) = (l_iter.peek_mut(), r_iter.peek_mut()) {
-        if a.row_count == 0 {
-            l_iter.next().unwrap();
-            continue;
-        }
-        if b.row_count == 0 {
-            r_iter.next().unwrap();
-            continue;
-        }
-        match (a.skip, b.skip) {
-            // Keep both ranges
-            (false, false) => {
-                if a.row_count < b.row_count {
-                    res.push(RowSelector::select(a.row_count));
-                    b.row_count -= a.row_count;
-                    l_iter.next().unwrap();
-                } else {
-                    res.push(RowSelector::select(b.row_count));
-                    a.row_count -= b.row_count;
-                    r_iter.next().unwrap();
-                }
-            }
-            // skip at least one
-            _ => {
-                if a.row_count < b.row_count {
-                    res.push(RowSelector::skip(a.row_count));
-                    b.row_count -= a.row_count;
-                    l_iter.next().unwrap();
-                } else {
-                    res.push(RowSelector::skip(b.row_count));
-                    a.row_count -= b.row_count;
-                    r_iter.next().unwrap();
-                }
-            }
-        }
-    }
-    if l_iter.peek().is_some() {
-        res.extend(l_iter);
-    }
-    if r_iter.peek().is_some() {
-        res.extend(r_iter);
-    }
-    // combine the adjacent same operators and last zero row count
-    // TODO: remove when https://github.com/apache/arrow-rs/pull/2994 is released~
-
-    let mut pre = res[0];
-    let mut after_combine = vec![];
-    for selector in res.iter_mut().skip(1) {
-        if selector.skip == pre.skip {
-            pre.row_count += selector.row_count;
-        } else {
-            after_combine.push(pre);
-            pre = *selector;
-        }
-    }
-    if pre.row_count != 0 {
-        after_combine.push(pre);
-    }
-    after_combine
-}
-
-// Extract single col pruningPredicate from input predicate for evaluating page Index.
-fn extract_page_index_push_down_predicates(
-    predicate: &Option<PruningPredicate>,
-    schema: SchemaRef,
-) -> Result<Vec<PruningPredicate>> {
-    let mut one_col_predicates = vec![];
-    if let Some(predicate) = predicate {
-        let expr = predicate.logical_expr();
-        // todo try use CNF rewrite when ready
-        let predicates = split_conjunction(expr);
-        let mut one_col_expr = vec![];
-        predicates
-            .into_iter()
-            .try_for_each::<_, Result<()>>(|predicate| {
-                let mut columns: HashSet<Column> = HashSet::new();
-                expr_to_columns(predicate, &mut columns)?;
-                if columns.len() == 1 {
-                    one_col_expr.push(predicate);
-                }
-                Ok(())
-            })?;
-        one_col_predicates = one_col_expr
-            .into_iter()
-            .map(|e| PruningPredicate::try_new(e.clone(), schema.clone()))
-            .collect::<Result<Vec<_>>>()
-            .unwrap_or_default();
-    }
-    Ok(one_col_predicates)
 }
 
 /// Factory of parquet file readers.
@@ -865,423 +606,6 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
     }
 }
 
-///
-/// BoxedAsyncFileReader has been created to satisfy type requirements of
-/// parquet stream builder constructor.
-///
-/// Temporary pending https://github.com/apache/arrow-rs/pull/2368
-struct BoxedAsyncFileReader(Box<dyn AsyncFileReader + Send>);
-
-impl AsyncFileReader for BoxedAsyncFileReader {
-    fn get_bytes(
-        &mut self,
-        range: Range<usize>,
-    ) -> BoxFuture<'_, ::parquet::errors::Result<Bytes>> {
-        self.0.get_bytes(range)
-    }
-
-    fn get_byte_ranges(
-        &mut self,
-        ranges: Vec<Range<usize>>,
-    ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>>
-    // TODO: This where bound forces us to enable #![allow(where_clauses_object_safety)] (#3081)
-    // Upstream issue https://github.com/apache/arrow-rs/issues/2372
-    where
-        Self: Send,
-    {
-        self.0.get_byte_ranges(ranges)
-    }
-
-    fn get_metadata(
-        &mut self,
-    ) -> BoxFuture<'_, ::parquet::errors::Result<Arc<ParquetMetaData>>> {
-        self.0.get_metadata()
-    }
-}
-
-/// Wraps parquet statistics in a way
-/// that implements [`PruningStatistics`]
-struct RowGroupPruningStatistics<'a> {
-    row_group_metadata: &'a RowGroupMetaData,
-    parquet_schema: &'a Schema,
-}
-
-/// Wraps one col page_index in one rowGroup statistics in a way
-/// that implements [`PruningStatistics`]
-struct PagesPruningStatistics<'a> {
-    col_page_indexes: &'a Index,
-    col_offset_indexes: &'a Vec<PageLocation>,
-}
-
-// TODO: consolidate code with arrow-rs
-// Convert the bytes array to i128.
-// The endian of the input bytes array must be big-endian.
-// Copy from the arrow-rs
-fn from_bytes_to_i128(b: &[u8]) -> i128 {
-    assert!(b.len() <= 16, "Decimal128Array supports only up to size 16");
-    let first_bit = b[0] & 128u8 == 128u8;
-    let mut result = if first_bit { [255u8; 16] } else { [0u8; 16] };
-    for (i, v) in b.iter().enumerate() {
-        result[i + (16 - b.len())] = *v;
-    }
-    // The bytes array are from parquet file and must be the big-endian.
-    // The endian is defined by parquet format, and the reference document
-    // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
-    i128::from_be_bytes(result)
-}
-
-/// Extract the min/max statistics from a `ParquetStatistics` object
-macro_rules! get_statistic {
-    ($column_statistics:expr, $func:ident, $bytes_func:ident, $target_arrow_type:expr) => {{
-        if !$column_statistics.has_min_max_set() {
-            return None;
-        }
-        match $column_statistics {
-            ParquetStatistics::Boolean(s) => Some(ScalarValue::Boolean(Some(*s.$func()))),
-            ParquetStatistics::Int32(s) => {
-                match $target_arrow_type {
-                    // int32 to decimal with the precision and scale
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(*s.$func() as i128),
-                            precision,
-                            scale,
-                        ))
-                    }
-                    _ => Some(ScalarValue::Int32(Some(*s.$func()))),
-                }
-            }
-            ParquetStatistics::Int64(s) => {
-                match $target_arrow_type {
-                    // int64 to decimal with the precision and scale
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(*s.$func() as i128),
-                            precision,
-                            scale,
-                        ))
-                    }
-                    _ => Some(ScalarValue::Int64(Some(*s.$func()))),
-                }
-            }
-            // 96 bit ints not supported
-            ParquetStatistics::Int96(_) => None,
-            ParquetStatistics::Float(s) => Some(ScalarValue::Float32(Some(*s.$func()))),
-            ParquetStatistics::Double(s) => Some(ScalarValue::Float64(Some(*s.$func()))),
-            ParquetStatistics::ByteArray(s) => {
-                // TODO support decimal type for byte array type
-                let s = std::str::from_utf8(s.$bytes_func())
-                    .map(|s| s.to_string())
-                    .ok();
-                Some(ScalarValue::Utf8(s))
-            }
-            // type not supported yet
-            ParquetStatistics::FixedLenByteArray(s) => {
-                match $target_arrow_type {
-                    // just support the decimal data type
-                    Some(DataType::Decimal128(precision, scale)) => {
-                        Some(ScalarValue::Decimal128(
-                            Some(from_bytes_to_i128(s.$bytes_func())),
-                            precision,
-                            scale,
-                        ))
-                    }
-                    _ => None,
-                }
-            }
-        }
-    }};
-}
-
-// Extract the min or max value calling `func` or `bytes_func` on the ParquetStatistics as appropriate
-macro_rules! get_min_max_values {
-    ($self:expr, $column:expr, $func:ident, $bytes_func:ident) => {{
-        let (_column_index, field) =
-            if let Some((v, f)) = $self.parquet_schema.column_with_name(&$column.name) {
-                (v, f)
-            } else {
-                // Named column was not present
-                return None;
-            };
-
-        let data_type = field.data_type();
-        // The result may be None, because DataFusion doesn't have support for ScalarValues of the column type
-        let null_scalar: ScalarValue = data_type.try_into().ok()?;
-
-        $self.row_group_metadata
-            .columns()
-            .iter()
-            .find(|c| c.column_descr().name() == &$column.name)
-            .and_then(|c| if c.statistics().is_some() {Some((c.statistics().unwrap(), c.column_descr()))} else {None})
-            .map(|(stats, column_descr)|
-                {
-                    let target_data_type = parquet_to_arrow_decimal_type(column_descr);
-                    get_statistic!(stats, $func, $bytes_func, target_data_type)
-                })
-            .flatten()
-            // column either didn't have statistics at all or didn't have min/max values
-            .or_else(|| Some(null_scalar.clone()))
-            .map(|s| s.to_array())
-    }}
-}
-
-// Extract the null count value on the ParquetStatistics
-macro_rules! get_null_count_values {
-    ($self:expr, $column:expr) => {{
-        let value = ScalarValue::UInt64(
-            if let Some(col) = $self
-                .row_group_metadata
-                .columns()
-                .iter()
-                .find(|c| c.column_descr().name() == &$column.name)
-            {
-                col.statistics().map(|s| s.null_count())
-            } else {
-                Some($self.row_group_metadata.num_rows() as u64)
-            },
-        );
-
-        Some(value.to_array())
-    }};
-}
-
-// Extract the min or max value calling `func` from page idex
-macro_rules! get_min_max_values_for_page_index {
-    ($self:expr, $func:ident) => {{
-        match $self.col_page_indexes {
-            Index::NONE => None,
-            Index::INT32(index) => {
-                let vec = &index.indexes;
-                Some(Arc::new(Int32Array::from_iter(
-                    vec.iter().map(|x| x.$func().cloned()),
-                )))
-            }
-            Index::INT64(index) => {
-                let vec = &index.indexes;
-                Some(Arc::new(Int64Array::from_iter(
-                    vec.iter().map(|x| x.$func().cloned()),
-                )))
-            }
-            Index::FLOAT(index) => {
-                let vec = &index.indexes;
-                Some(Arc::new(Float32Array::from_iter(
-                    vec.iter().map(|x| x.$func().cloned()),
-                )))
-            }
-            Index::DOUBLE(index) => {
-                let vec = &index.indexes;
-                Some(Arc::new(Float64Array::from_iter(
-                    vec.iter().map(|x| x.$func().cloned()),
-                )))
-            }
-            Index::BOOLEAN(index) => {
-                let vec = &index.indexes;
-                Some(Arc::new(BooleanArray::from_iter(
-                    vec.iter().map(|x| x.$func().cloned()),
-                )))
-            }
-            Index::INT96(_) | Index::BYTE_ARRAY(_) | Index::FIXED_LEN_BYTE_ARRAY(_) => {
-                //Todo support these type
-                None
-            }
-        }
-    }};
-}
-
-// Convert parquet column schema to arrow data type, and just consider the
-// decimal data type.
-fn parquet_to_arrow_decimal_type(parquet_column: &ColumnDescriptor) -> Option<DataType> {
-    let type_ptr = parquet_column.self_type_ptr();
-    match type_ptr.get_basic_info().logical_type() {
-        Some(LogicalType::Decimal { scale, precision }) => {
-            Some(DataType::Decimal128(precision as u8, scale as u8))
-        }
-        _ => match type_ptr.get_basic_info().converted_type() {
-            ConvertedType::DECIMAL => Some(DataType::Decimal128(
-                type_ptr.get_precision() as u8,
-                type_ptr.get_scale() as u8,
-            )),
-            _ => None,
-        },
-    }
-}
-
-impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
-    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_min_max_values!(self, column, min, min_bytes)
-    }
-
-    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        get_min_max_values!(self, column, max, max_bytes)
-    }
-
-    fn num_containers(&self) -> usize {
-        1
-    }
-
-    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        get_null_count_values!(self, column)
-    }
-}
-
-impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
-    fn min_values(&self, _column: &Column) -> Option<ArrayRef> {
-        get_min_max_values_for_page_index!(self, min)
-    }
-
-    fn max_values(&self, _column: &Column) -> Option<ArrayRef> {
-        get_min_max_values_for_page_index!(self, max)
-    }
-
-    fn num_containers(&self) -> usize {
-        self.col_offset_indexes.len()
-    }
-
-    fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
-        match self.col_page_indexes {
-            Index::NONE => None,
-            Index::BOOLEAN(index) => Some(Arc::new(Int64Array::from_iter(
-                index.indexes.iter().map(|x| x.null_count),
-            ))),
-            Index::INT32(index) => Some(Arc::new(Int64Array::from_iter(
-                index.indexes.iter().map(|x| x.null_count),
-            ))),
-            Index::INT64(index) => Some(Arc::new(Int64Array::from_iter(
-                index.indexes.iter().map(|x| x.null_count),
-            ))),
-            Index::FLOAT(index) => Some(Arc::new(Int64Array::from_iter(
-                index.indexes.iter().map(|x| x.null_count),
-            ))),
-            Index::DOUBLE(index) => Some(Arc::new(Int64Array::from_iter(
-                index.indexes.iter().map(|x| x.null_count),
-            ))),
-            Index::INT96(_) | Index::BYTE_ARRAY(_) | Index::FIXED_LEN_BYTE_ARRAY(_) => {
-                // Todo support these types
-                None
-            }
-        }
-    }
-}
-
-fn prune_row_groups(
-    groups: &[RowGroupMetaData],
-    range: Option<FileRange>,
-    predicate: Option<PruningPredicate>,
-    metrics: &ParquetFileMetrics,
-) -> Vec<usize> {
-    // TODO: Columnar pruning
-    let mut filtered = Vec::with_capacity(groups.len());
-    for (idx, metadata) in groups.iter().enumerate() {
-        if let Some(range) = &range {
-            let offset = metadata.column(0).file_offset();
-            if offset < range.start || offset >= range.end {
-                continue;
-            }
-        }
-
-        if let Some(predicate) = &predicate {
-            let pruning_stats = RowGroupPruningStatistics {
-                row_group_metadata: metadata,
-                parquet_schema: predicate.schema().as_ref(),
-            };
-            match predicate.prune(&pruning_stats) {
-                Ok(values) => {
-                    // NB: false means don't scan row group
-                    if !values[0] {
-                        metrics.row_groups_pruned.add(1);
-                        continue;
-                    }
-                }
-                // stats filter array could not be built
-                // return a closure which will not filter out any row groups
-                Err(e) => {
-                    debug!("Error evaluating row group predicate values {}", e);
-                    metrics.predicate_evaluation_errors.add(1);
-                }
-            }
-        }
-
-        filtered.push(idx)
-    }
-    filtered
-}
-
-fn prune_pages_in_one_row_group(
-    group: &RowGroupMetaData,
-    predicate: &PruningPredicate,
-    col_offset_indexes: Option<&Vec<PageLocation>>,
-    col_page_indexes: Option<&Index>,
-    metrics: &ParquetFileMetrics,
-) -> Result<Vec<RowSelector>> {
-    let num_rows = group.num_rows() as usize;
-    if let (Some(col_offset_indexes), Some(col_page_indexes)) =
-        (col_offset_indexes, col_page_indexes)
-    {
-        let pruning_stats = PagesPruningStatistics {
-            col_page_indexes,
-            col_offset_indexes,
-        };
-
-        match predicate.prune(&pruning_stats) {
-            Ok(values) => {
-                let mut vec = Vec::with_capacity(values.len());
-                let row_vec = create_row_count_in_each_page(col_offset_indexes, num_rows);
-                assert_eq!(row_vec.len(), values.len());
-                let mut sum_row = *row_vec.first().unwrap();
-                let mut selected = *values.first().unwrap();
-
-                for (i, &f) in values.iter().skip(1).enumerate() {
-                    if f == selected {
-                        sum_row += *row_vec.get(i).unwrap();
-                    } else {
-                        let selector = if selected {
-                            RowSelector::select(sum_row)
-                        } else {
-                            RowSelector::skip(sum_row)
-                        };
-                        vec.push(selector);
-                        sum_row = *row_vec.get(i).unwrap();
-                        selected = f;
-                    }
-                }
-
-                let selector = if selected {
-                    RowSelector::select(sum_row)
-                } else {
-                    RowSelector::skip(sum_row)
-                };
-                vec.push(selector);
-                return Ok(vec);
-            }
-            // stats filter array could not be built
-            // return a result which will not filter out any pages
-            Err(e) => {
-                error!("Error evaluating page index predicate values {}", e);
-                metrics.predicate_evaluation_errors.add(1);
-                return Ok(vec![RowSelector::select(group.num_rows() as usize)]);
-            }
-        }
-    }
-    Err(DataFusionError::ParquetError(ParquetError::General(
-        "Got some error in prune_pages_in_one_row_group, plz try open the debuglog mode"
-            .to_string(),
-    )))
-}
-
-fn create_row_count_in_each_page(
-    location: &Vec<PageLocation>,
-    num_rows: usize,
-) -> Vec<usize> {
-    let mut vec = Vec::with_capacity(location.len());
-    location.windows(2).for_each(|x| {
-        let start = x[0].first_row_index as usize;
-        let end = x[1].first_row_index as usize;
-        vec.push(end - start);
-    });
-    vec.push(num_rows - location.last().unwrap().first_row_index as usize);
-    vec
-}
-
 /// Executes a query and writes the results to a partitioned Parquet file.
 pub async fn plan_to_parquet(
     state: &SessionState,
@@ -1298,7 +622,7 @@ pub async fn plan_to_parquet(
             for i in 0..plan.output_partitioning().partition_count() {
                 let plan = plan.clone();
                 let filename = format!("part-{}.parquet", i);
-                let path = fs_path.join(&filename);
+                let path = fs_path.join(filename);
                 let file = fs::File::create(path)?;
                 let mut writer =
                     ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
@@ -1332,6 +656,8 @@ pub async fn plan_to_parquet(
 
 #[cfg(test)]
 mod tests {
+    // See also `parquet_exec` integration test
+
     use super::*;
     use crate::config::ConfigOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
@@ -1339,7 +665,6 @@ mod tests {
     use crate::datasource::listing::{FileRange, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::options::CsvReadOptions;
-    use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use crate::{
@@ -1347,8 +672,8 @@ mod tests {
         datasource::file_format::{parquet::ParquetFormat, FileFormat},
         physical_plan::collect,
     };
-    use arrow::array::Float32Array;
-    use arrow::datatypes::DataType::Decimal128;
+    use arrow::array::{ArrayRef, Float32Array, Int32Array};
+    use arrow::datatypes::Schema;
     use arrow::record_batch::RecordBatch;
     use arrow::{
         array::{Int64Array, Int8Array, StringArray},
@@ -1356,18 +681,12 @@ mod tests {
     };
     use chrono::{TimeZone, Utc};
     use datafusion_common::assert_contains;
-    use datafusion_expr::{cast, col, lit};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{col, lit};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::ObjectMeta;
-    use parquet::basic::LogicalType;
-    use parquet::data_type::{ByteArray, FixedLenByteArray};
-    use parquet::{
-        basic::Type as PhysicalType,
-        file::{metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics},
-        schema::types::SchemaDescPtr,
-    };
     use std::fs::File;
     use std::io::Write;
     use tempfile::TempDir;
@@ -1388,9 +707,16 @@ mod tests {
         predicate: Option<Expr>,
         pushdown_predicate: bool,
     ) -> Result<Vec<RecordBatch>> {
-        round_trip(batches, projection, schema, predicate, pushdown_predicate)
-            .await
-            .batches
+        round_trip(
+            batches,
+            projection,
+            schema,
+            predicate,
+            pushdown_predicate,
+            false,
+        )
+        .await
+        .batches
     }
 
     /// Writes each RecordBatch as an individual parquet file and then
@@ -1402,6 +728,7 @@ mod tests {
         schema: Option<SchemaRef>,
         predicate: Option<Expr>,
         pushdown_predicate: bool,
+        page_index_predicate: bool,
     ) -> RoundTripResult {
         let file_schema = match schema {
             Some(schema) => schema,
@@ -1411,7 +738,7 @@ mod tests {
             ),
         };
 
-        let (meta, _files) = store_parquet(batches).await.unwrap();
+        let (meta, _files) = store_parquet(batches, page_index_predicate).await.unwrap();
         let file_groups = meta.into_iter().map(Into::into).collect();
 
         // prepare the scan
@@ -1425,6 +752,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
+                output_ordering: None,
             },
             predicate,
             None,
@@ -1434,6 +762,10 @@ mod tests {
             parquet_exec = parquet_exec
                 .with_pushdown_filters(true)
                 .with_reorder_filters(true);
+        }
+
+        if page_index_predicate {
+            parquet_exec = parquet_exec.with_enable_page_index(true);
         }
 
         let session_ctx = SessionContext::new();
@@ -1653,7 +985,8 @@ mod tests {
         let filter = col("c2").eq(lit(2_i64));
 
         // read/write them files:
-        let rt = round_trip(vec![batch1, batch2], None, None, Some(filter), true).await;
+        let rt =
+            round_trip(vec![batch1, batch2], None, None, Some(filter), true, false).await;
         let expected = vec![
             "+----+----+----+",
             "| c1 | c3 | c2 |",
@@ -1802,7 +1135,8 @@ mod tests {
         let filter = col("c2").eq(lit(1_i64));
 
         // read/write them files:
-        let rt = round_trip(vec![batch1, batch2], None, None, Some(filter), true).await;
+        let rt =
+            round_trip(vec![batch1, batch2], None, None, Some(filter), true, false).await;
 
         let expected = vec![
             "+----+----+",
@@ -1948,6 +1282,7 @@ mod tests {
                     limit: None,
                     table_partition_cols: vec![],
                     config_options: ConfigOptions::new().into_shareable(),
+                    output_ordering: None,
                 },
                 None,
                 None,
@@ -2050,6 +1385,7 @@ mod tests {
                     "day".to_owned(),
                 ],
                 config_options: ConfigOptions::new().into_shareable(),
+                output_ordering: None,
             },
             None,
             None,
@@ -2109,6 +1445,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
+                output_ordering: None,
             },
             None,
             None,
@@ -2121,6 +1458,33 @@ mod tests {
         assert!(results.next().await.is_none());
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_page_index_exec_metrics() {
+        let c1: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(2)]));
+        let c2: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(4), Some(5)]));
+        let batch1 = create_batch(vec![("int", c1.clone())]);
+        let batch2 = create_batch(vec![("int", c2.clone())]);
+
+        let filter = col("int").eq(lit(4_i32));
+
+        let rt =
+            round_trip(vec![batch1, batch2], None, None, Some(filter), false, true).await;
+
+        let metrics = rt.parquet_exec.metrics().unwrap();
+
+        // assert the batches and some metrics
+        let expected = vec![
+            "+-----+", "| int |", "+-----+", "| 3   |", "| 4   |", "| 5   |", "+-----+",
+        ];
+        assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
+        assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 3);
+        assert!(
+            get_value(&metrics, "page_index_eval_time") > 0,
+            "no eval time in metrics: {:#?}",
+            metrics
+        );
     }
 
     #[tokio::test]
@@ -2142,7 +1506,7 @@ mod tests {
         let filter = col("c1").not_eq(lit("bar"));
 
         // read/write them files:
-        let rt = round_trip(vec![batch1], None, None, Some(filter), true).await;
+        let rt = round_trip(vec![batch1], None, None, Some(filter), true, false).await;
 
         let metrics = rt.parquet_exec.metrics().unwrap();
 
@@ -2170,15 +1534,8 @@ mod tests {
     ///
     /// Panics if no such metric.
     fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
-        let sum = metrics.sum(|m| match m.value() {
-            MetricValue::Count { name, .. } if name == metric_name => true,
-            MetricValue::Time { name, .. } if name == metric_name => true,
-            _ => false,
-        });
-
-        match sum {
-            Some(MetricValue::Count { count, .. }) => count.value(),
-            Some(MetricValue::Time { time, .. }) => time.value(),
+        match metrics.sum_by_name(metric_name) {
+            Some(v) => v.as_usize(),
             _ => {
                 panic!(
                     "Expected metric not found. Looking for '{}' in\n\n{:#?}",
@@ -2186,536 +1543,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    fn parquet_file_metrics() -> ParquetFileMetrics {
-        let metrics = Arc::new(ExecutionPlanMetricsSet::new());
-        ParquetFileMetrics::new(0, "file.parquet", &metrics)
-    }
-
-    #[test]
-    fn test_combine_row_selection() {
-        // a size equal b size
-        let a = vec![
-            RowSelector::select(5),
-            RowSelector::skip(4),
-            RowSelector::select(1),
-        ];
-        let b = vec![
-            RowSelector::select(8),
-            RowSelector::skip(1),
-            RowSelector::select(1),
-        ];
-
-        let res = intersect_row_selection(a, b);
-        assert_eq!(
-            res,
-            vec![
-                RowSelector::select(5),
-                RowSelector::skip(4),
-                RowSelector::select(1)
-            ],
-        );
-
-        // a size larger than b size
-        let a = vec![
-            RowSelector::select(3),
-            RowSelector::skip(33),
-            RowSelector::select(3),
-            RowSelector::skip(33),
-        ];
-        let b = vec![RowSelector::select(36), RowSelector::skip(36)];
-        let res = intersect_row_selection(a, b);
-        assert_eq!(res, vec![RowSelector::select(3), RowSelector::skip(69)]);
-
-        // a size less than b size
-        let a = vec![RowSelector::select(3), RowSelector::skip(7)];
-        let b = vec![
-            RowSelector::select(2),
-            RowSelector::skip(2),
-            RowSelector::select(2),
-            RowSelector::skip(2),
-            RowSelector::select(2),
-        ];
-        let res = intersect_row_selection(a, b);
-        assert_eq!(res, vec![RowSelector::select(2), RowSelector::skip(8)]);
-
-        let a = vec![RowSelector::select(3), RowSelector::skip(7)];
-        let b = vec![
-            RowSelector::select(2),
-            RowSelector::skip(2),
-            RowSelector::select(2),
-            RowSelector::skip(2),
-            RowSelector::select(2),
-        ];
-        let res = intersect_row_selection(a, b);
-        assert_eq!(res, vec![RowSelector::select(2), RowSelector::skip(8),]);
-    }
-
-    #[test]
-    fn row_group_pruning_predicate_simple_expr() {
-        use datafusion_expr::{col, lit};
-        // int > 1 => c1_max > 1
-        let expr = col("c1").gt(lit(15));
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let pruning_predicate =
-            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
-        let schema_descr = get_test_schema_descr(vec![(
-            "c1",
-            PhysicalType::INT32,
-            None,
-            None,
-            None,
-            None,
-        )]);
-        let rgm1 = get_row_group_meta_data(
-            &schema_descr,
-            vec![ParquetStatistics::int32(Some(1), Some(10), None, 0, false)],
-        );
-        let rgm2 = get_row_group_meta_data(
-            &schema_descr,
-            vec![ParquetStatistics::int32(Some(11), Some(20), None, 0, false)],
-        );
-
-        let metrics = parquet_file_metrics();
-        assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
-            vec![1]
-        );
-    }
-
-    #[test]
-    fn row_group_pruning_predicate_missing_stats() {
-        use datafusion_expr::{col, lit};
-        // int > 1 => c1_max > 1
-        let expr = col("c1").gt(lit(15));
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let pruning_predicate =
-            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
-
-        let schema_descr = get_test_schema_descr(vec![(
-            "c1",
-            PhysicalType::INT32,
-            None,
-            None,
-            None,
-            None,
-        )]);
-        let rgm1 = get_row_group_meta_data(
-            &schema_descr,
-            vec![ParquetStatistics::int32(None, None, None, 0, false)],
-        );
-        let rgm2 = get_row_group_meta_data(
-            &schema_descr,
-            vec![ParquetStatistics::int32(Some(11), Some(20), None, 0, false)],
-        );
-        let metrics = parquet_file_metrics();
-        // missing statistics for first row group mean that the result from the predicate expression
-        // is null / undefined so the first row group can't be filtered out
-        assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
-            vec![0, 1]
-        );
-    }
-
-    #[test]
-    fn row_group_pruning_predicate_partial_expr() {
-        use datafusion_expr::{col, lit};
-        // test row group predicate with partially supported expression
-        // int > 1 and int % 2 => c1_max > 1 and true
-        let expr = col("c1").gt(lit(15)).and(col("c2").modulus(lit(2)));
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Int32, false),
-            Field::new("c2", DataType::Int32, false),
-        ]));
-        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone()).unwrap();
-
-        let schema_descr = get_test_schema_descr(vec![
-            ("c1", PhysicalType::INT32, None, None, None, None),
-            ("c2", PhysicalType::INT32, None, None, None, None),
-        ]);
-        let rgm1 = get_row_group_meta_data(
-            &schema_descr,
-            vec![
-                ParquetStatistics::int32(Some(1), Some(10), None, 0, false),
-                ParquetStatistics::int32(Some(1), Some(10), None, 0, false),
-            ],
-        );
-        let rgm2 = get_row_group_meta_data(
-            &schema_descr,
-            vec![
-                ParquetStatistics::int32(Some(11), Some(20), None, 0, false),
-                ParquetStatistics::int32(Some(11), Some(20), None, 0, false),
-            ],
-        );
-
-        let metrics = parquet_file_metrics();
-        let groups = &[rgm1, rgm2];
-        // the first row group is still filtered out because the predicate expression can be partially evaluated
-        // when conditions are joined using AND
-        assert_eq!(
-            prune_row_groups(groups, None, Some(pruning_predicate), &metrics),
-            vec![1]
-        );
-
-        // if conditions in predicate are joined with OR and an unsupported expression is used
-        // this bypasses the entire predicate expression and no row groups are filtered out
-        let expr = col("c1").gt(lit(15)).or(col("c2").modulus(lit(2)));
-        let pruning_predicate = PruningPredicate::try_new(expr, schema).unwrap();
-
-        // if conditions in predicate are joined with OR and an unsupported expression is used
-        // this bypasses the entire predicate expression and no row groups are filtered out
-        assert_eq!(
-            prune_row_groups(groups, None, Some(pruning_predicate), &metrics),
-            vec![0, 1]
-        );
-    }
-
-    fn gen_row_group_meta_data_for_pruning_predicate() -> Vec<RowGroupMetaData> {
-        let schema_descr = get_test_schema_descr(vec![
-            ("c1", PhysicalType::INT32, None, None, None, None),
-            ("c2", PhysicalType::BOOLEAN, None, None, None, None),
-        ]);
-        let rgm1 = get_row_group_meta_data(
-            &schema_descr,
-            vec![
-                ParquetStatistics::int32(Some(1), Some(10), None, 0, false),
-                ParquetStatistics::boolean(Some(false), Some(true), None, 0, false),
-            ],
-        );
-        let rgm2 = get_row_group_meta_data(
-            &schema_descr,
-            vec![
-                ParquetStatistics::int32(Some(11), Some(20), None, 0, false),
-                ParquetStatistics::boolean(Some(false), Some(true), None, 1, false),
-            ],
-        );
-        vec![rgm1, rgm2]
-    }
-
-    #[test]
-    fn row_group_pruning_predicate_null_expr() {
-        use datafusion_expr::{col, lit};
-        // int > 1 and IsNull(bool) => c1_max > 1 and bool_null_count > 0
-        let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Int32, false),
-            Field::new("c2", DataType::Boolean, false),
-        ]));
-        let pruning_predicate = PruningPredicate::try_new(expr, schema).unwrap();
-        let groups = gen_row_group_meta_data_for_pruning_predicate();
-
-        let metrics = parquet_file_metrics();
-        // First row group was filtered out because it contains no null value on "c2".
-        assert_eq!(
-            prune_row_groups(&groups, None, Some(pruning_predicate), &metrics),
-            vec![1]
-        );
-    }
-
-    #[test]
-    fn row_group_pruning_predicate_eq_null_expr() {
-        use datafusion_expr::{col, lit};
-        // test row group predicate with an unknown (Null) expr
-        //
-        // int > 1 and bool = NULL => c1_max > 1 and null
-        let expr = col("c1")
-            .gt(lit(15))
-            .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Int32, false),
-            Field::new("c2", DataType::Boolean, false),
-        ]));
-        let pruning_predicate = PruningPredicate::try_new(expr, schema).unwrap();
-        let groups = gen_row_group_meta_data_for_pruning_predicate();
-
-        let metrics = parquet_file_metrics();
-        // bool = NULL always evaluates to NULL (and thus will not
-        // pass predicates. Ideally these should both be false
-        assert_eq!(
-            prune_row_groups(&groups, None, Some(pruning_predicate), &metrics),
-            vec![1]
-        );
-    }
-
-    #[test]
-    fn row_group_pruning_predicate_decimal_type() {
-        // For the decimal data type, parquet can use `INT32`, `INT64`, `BYTE_ARRAY`, `FIXED_LENGTH_BYTE_ARRAY` to
-        // store the data.
-        // In this case, construct four types of statistics to filtered with the decimal predication.
-
-        // INT32: c1 > 5, the c1 is decimal(9,2)
-        // The type of scalar value if decimal(9,2), don't need to do cast
-        let expr = col("c1").gt(lit(ScalarValue::Decimal128(Some(500), 9, 2)));
-        let schema =
-            Schema::new(vec![Field::new("c1", DataType::Decimal128(9, 2), false)]);
-        let schema_descr = get_test_schema_descr(vec![(
-            "c1",
-            PhysicalType::INT32,
-            Some(LogicalType::Decimal {
-                scale: 2,
-                precision: 9,
-            }),
-            Some(9),
-            Some(2),
-            None,
-        )]);
-        let pruning_predicate =
-            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
-        let rgm1 = get_row_group_meta_data(
-            &schema_descr,
-            // [1.00, 6.00]
-            // c1 > 5, this row group will be included in the results.
-            vec![ParquetStatistics::int32(
-                Some(100),
-                Some(600),
-                None,
-                0,
-                false,
-            )],
-        );
-        let rgm2 = get_row_group_meta_data(
-            &schema_descr,
-            // [0.1, 0.2]
-            // c1 > 5, this row group will not be included in the results.
-            vec![ParquetStatistics::int32(Some(10), Some(20), None, 0, false)],
-        );
-        let metrics = parquet_file_metrics();
-        assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
-            vec![0]
-        );
-
-        // INT32: c1 > 5, but parquet decimal type has different precision or scale to arrow decimal
-        // The c1 type is decimal(9,0) in the parquet file, and the type of scalar is decimal(5,2).
-        // We should convert all type to the coercion type, which is decimal(11,2)
-        // The decimal of arrow is decimal(5,2), the decimal of parquet is decimal(9,0)
-        let expr = cast(col("c1"), DataType::Decimal128(11, 2)).gt(cast(
-            lit(ScalarValue::Decimal128(Some(500), 5, 2)),
-            Decimal128(11, 2),
-        ));
-        let schema =
-            Schema::new(vec![Field::new("c1", DataType::Decimal128(9, 0), false)]);
-        let schema_descr = get_test_schema_descr(vec![(
-            "c1",
-            PhysicalType::INT32,
-            Some(LogicalType::Decimal {
-                scale: 0,
-                precision: 9,
-            }),
-            Some(9),
-            Some(0),
-            None,
-        )]);
-        let pruning_predicate =
-            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
-        let rgm1 = get_row_group_meta_data(
-            &schema_descr,
-            // [100, 600]
-            // c1 > 5, this row group will be included in the results.
-            vec![ParquetStatistics::int32(
-                Some(100),
-                Some(600),
-                None,
-                0,
-                false,
-            )],
-        );
-        let rgm2 = get_row_group_meta_data(
-            &schema_descr,
-            // [10, 20]
-            // c1 > 5, this row group will be included in the results.
-            vec![ParquetStatistics::int32(Some(10), Some(20), None, 0, false)],
-        );
-        let rgm3 = get_row_group_meta_data(
-            &schema_descr,
-            // [0, 2]
-            // c1 > 5, this row group will not be included in the results.
-            vec![ParquetStatistics::int32(Some(0), Some(2), None, 0, false)],
-        );
-        let metrics = parquet_file_metrics();
-        assert_eq!(
-            prune_row_groups(
-                &[rgm1, rgm2, rgm3],
-                None,
-                Some(pruning_predicate),
-                &metrics
-            ),
-            vec![0, 1]
-        );
-
-        // INT64: c1 < 5, the c1 is decimal(18,2)
-        let expr = col("c1").lt(lit(ScalarValue::Decimal128(Some(500), 18, 2)));
-        let schema =
-            Schema::new(vec![Field::new("c1", DataType::Decimal128(18, 2), false)]);
-        let schema_descr = get_test_schema_descr(vec![(
-            "c1",
-            PhysicalType::INT64,
-            Some(LogicalType::Decimal {
-                scale: 2,
-                precision: 18,
-            }),
-            Some(18),
-            Some(2),
-            None,
-        )]);
-        let pruning_predicate =
-            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
-        let rgm1 = get_row_group_meta_data(
-            &schema_descr,
-            // [6.00, 8.00]
-            vec![ParquetStatistics::int32(
-                Some(600),
-                Some(800),
-                None,
-                0,
-                false,
-            )],
-        );
-        let rgm2 = get_row_group_meta_data(
-            &schema_descr,
-            // [0.1, 0.2]
-            vec![ParquetStatistics::int64(Some(10), Some(20), None, 0, false)],
-        );
-        let metrics = parquet_file_metrics();
-        assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
-            vec![1]
-        );
-
-        // FIXED_LENGTH_BYTE_ARRAY: c1 = decimal128(100000, 28, 3), the c1 is decimal(18,2)
-        // the type of parquet is decimal(18,2)
-        let schema =
-            Schema::new(vec![Field::new("c1", DataType::Decimal128(18, 2), false)]);
-        // cast the type of c1 to decimal(28,3)
-        let left = cast(col("c1"), DataType::Decimal128(28, 3));
-        let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
-        let schema_descr = get_test_schema_descr(vec![(
-            "c1",
-            PhysicalType::FIXED_LEN_BYTE_ARRAY,
-            Some(LogicalType::Decimal {
-                scale: 2,
-                precision: 18,
-            }),
-            Some(18),
-            Some(2),
-            Some(16),
-        )]);
-        let pruning_predicate =
-            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
-        // we must use the big-endian when encode the i128 to bytes or vec[u8].
-        let rgm1 = get_row_group_meta_data(
-            &schema_descr,
-            vec![ParquetStatistics::fixed_len_byte_array(
-                // 5.00
-                Some(FixedLenByteArray::from(ByteArray::from(
-                    500i128.to_be_bytes().to_vec(),
-                ))),
-                // 80.00
-                Some(FixedLenByteArray::from(ByteArray::from(
-                    8000i128.to_be_bytes().to_vec(),
-                ))),
-                None,
-                0,
-                false,
-            )],
-        );
-        let rgm2 = get_row_group_meta_data(
-            &schema_descr,
-            vec![ParquetStatistics::fixed_len_byte_array(
-                // 5.00
-                Some(FixedLenByteArray::from(ByteArray::from(
-                    500i128.to_be_bytes().to_vec(),
-                ))),
-                // 200.00
-                Some(FixedLenByteArray::from(ByteArray::from(
-                    20000i128.to_be_bytes().to_vec(),
-                ))),
-                None,
-                0,
-                false,
-            )],
-        );
-        let metrics = parquet_file_metrics();
-        assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
-            vec![1]
-        );
-
-        // TODO: BYTE_ARRAY support read decimal from parquet, after the 20.0.0 arrow-rs release
-    }
-
-    fn get_row_group_meta_data(
-        schema_descr: &SchemaDescPtr,
-        column_statistics: Vec<ParquetStatistics>,
-    ) -> RowGroupMetaData {
-        use parquet::file::metadata::ColumnChunkMetaData;
-        let mut columns = vec![];
-        for (i, s) in column_statistics.iter().enumerate() {
-            let column = ColumnChunkMetaData::builder(schema_descr.column(i))
-                .set_statistics(s.clone())
-                .build()
-                .unwrap();
-            columns.push(column);
-        }
-        RowGroupMetaData::builder(schema_descr.clone())
-            .set_num_rows(1000)
-            .set_total_byte_size(2000)
-            .set_column_metadata(columns)
-            .build()
-            .unwrap()
-    }
-
-    #[allow(clippy::type_complexity)]
-    fn get_test_schema_descr(
-        fields: Vec<(
-            &str,
-            PhysicalType,
-            Option<LogicalType>,
-            Option<i32>, // precision
-            Option<i32>, // scale
-            Option<i32>, // length of bytes
-        )>,
-    ) -> SchemaDescPtr {
-        use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
-        let mut schema_fields = fields
-            .iter()
-            .map(|(n, t, logical, precision, scale, length)| {
-                let mut builder = SchemaType::primitive_type_builder(n, *t);
-                // add logical type for the parquet field
-                match logical {
-                    None => {}
-                    Some(logical_type) => {
-                        builder = builder.with_logical_type(Some(logical_type.clone()));
-                    }
-                };
-                match precision {
-                    None => {}
-                    Some(v) => {
-                        builder = builder.with_precision(*v);
-                    }
-                };
-                match scale {
-                    None => {}
-                    Some(v) => {
-                        builder = builder.with_scale(*v);
-                    }
-                }
-                match length {
-                    None => {}
-                    Some(v) => {
-                        builder = builder.with_length(*v);
-                    }
-                }
-                Arc::new(builder.build().unwrap())
-            })
-            .collect::<Vec<_>>();
-        let schema = SchemaType::group_type_builder("schema")
-            .with_fields(&mut schema_fields)
-            .build()
-            .unwrap();
-
-        Arc::new(SchemaDescriptor::new(Arc::new(schema)))
     }
 
     fn populate_csv_partitions(
@@ -2733,7 +1560,7 @@ mod tests {
         // generate a partitioned file
         for partition in 0..partition_count {
             let filename = format!("partition-{}.{}", partition, file_extension);
-            let file_path = tmp_dir.path().join(&filename);
+            let file_path = tmp_dir.path().join(filename);
             let mut file = File::create(file_path)?;
 
             // generate some data

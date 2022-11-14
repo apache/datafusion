@@ -33,6 +33,8 @@ use std::sync::Arc;
 
 use crate::physical_plan::metrics;
 
+use super::ParquetFileMetrics;
+
 /// This module contains utilities for enabling the pushdown of DataFusion filter predicates (which
 /// can be any DataFusion `Expr` that evaluates to a `BooleanArray`) to the parquet decoder level in `arrow-rs`.
 /// DataFusion will use a `ParquetRecordBatchStream` to read data from parquet into arrow `RecordBatch`es.
@@ -133,7 +135,7 @@ impl ArrowPredicate for DatafusionArrowPredicate {
             Ok(array) => {
                 if let Some(mask) = array.as_any().downcast_ref::<BooleanArray>() {
                     let bool_arr = BooleanArray::from(mask.data().clone());
-                    let num_filtered = bool_arr.len() - true_count(&bool_arr);
+                    let num_filtered = bool_arr.len() - bool_arr.true_count();
                     self.rows_filtered.add(num_filtered);
                     timer.stop();
                     Ok(bool_arr)
@@ -148,27 +150,6 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 e
             ))),
         }
-    }
-}
-
-/// Return the number of non null true vaulues in an array
-// TODO remove when https://github.com/apache/arrow-rs/issues/2963 is released
-fn true_count(arr: &BooleanArray) -> usize {
-    match arr.data().null_buffer() {
-        Some(nulls) => {
-            let null_chunks = nulls.bit_chunks(arr.offset(), arr.len());
-            let value_chunks = arr.values().bit_chunks(arr.offset(), arr.len());
-            null_chunks
-                .iter()
-                .zip(value_chunks.iter())
-                .chain(std::iter::once((
-                    null_chunks.remainder_bits(),
-                    value_chunks.remainder_bits(),
-                )))
-                .map(|(a, b)| (a & b).count_ones() as usize)
-                .sum()
-        }
-        None => arr.values().count_set_bits_offset(arr.offset(), arr.len()),
     }
 }
 
@@ -330,9 +311,11 @@ pub fn build_row_filter(
     table_schema: &Schema,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
-    rows_filtered: &metrics::Count,
-    time: &metrics::Time,
+    file_metrics: &ParquetFileMetrics,
 ) -> Result<Option<RowFilter>> {
+    let rows_filtered = &file_metrics.pushdown_rows_filtered;
+    let time = &file_metrics.pushdown_eval_time;
+
     let predicates = split_conjunction_owned(expr);
 
     let mut candidates: Vec<FilterCandidate> = predicates
@@ -405,7 +388,6 @@ pub fn build_row_filter(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::physical_plan::file_format::row_filter::FilterCandidateBuilder;
     use arrow::datatypes::Field;
     use datafusion_expr::{cast, col, lit};
     use parquet::arrow::parquet_to_arrow_schema;
@@ -417,7 +399,7 @@ mod test {
     #[should_panic(expected = "building candidate failed")]
     fn test_filter_candidate_builder_ignore_projected_columns() {
         let testdata = crate::test_util::parquet_test_data();
-        let file = std::fs::File::open(&format!("{}/alltypes_plain.parquet", testdata))
+        let file = std::fs::File::open(format!("{}/alltypes_plain.parquet", testdata))
             .expect("opening file");
 
         let reader = SerializedFileReader::new(file).expect("creating reader");
@@ -441,7 +423,7 @@ mod test {
     #[test]
     fn test_filter_candidate_builder_ignore_complex_types() {
         let testdata = crate::test_util::parquet_test_data();
-        let file = std::fs::File::open(&format!("{}/list_columns.parquet", testdata))
+        let file = std::fs::File::open(format!("{}/list_columns.parquet", testdata))
             .expect("opening file");
 
         let reader = SerializedFileReader::new(file).expect("creating reader");
@@ -465,7 +447,7 @@ mod test {
     #[test]
     fn test_filter_candidate_builder_rewrite_missing_column() {
         let testdata = crate::test_util::parquet_test_data();
-        let file = std::fs::File::open(&format!("{}/alltypes_plain.parquet", testdata))
+        let file = std::fs::File::open(format!("{}/alltypes_plain.parquet", testdata))
             .expect("opening file");
 
         let reader = SerializedFileReader::new(file).expect("creating reader");

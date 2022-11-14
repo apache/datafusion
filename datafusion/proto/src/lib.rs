@@ -172,13 +172,16 @@ mod roundtrip_tests {
         fn try_decode_table_provider(
             &self,
             buf: &[u8],
-            _schema: SchemaRef,
+            schema: SchemaRef,
             _ctx: &SessionContext,
         ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
             let msg = TestTableProto::decode(buf).map_err(|_| {
                 DataFusionError::Internal("Error decoding test table".to_string())
             })?;
-            let provider = TestTableProvider { url: msg.url };
+            let provider = TestTableProvider {
+                url: msg.url,
+                schema,
+            };
             Ok(Arc::new(provider))
         }
 
@@ -243,8 +246,6 @@ mod roundtrip_tests {
             "SELECT a, SUM(b + 1) as b_sum FROM t1 GROUP BY a ORDER BY b_sum DESC";
         let plan = ctx.sql(query).await?.to_logical_plan()?;
 
-        println!("{:?}", plan);
-
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
@@ -270,8 +271,6 @@ mod roundtrip_tests {
 
         let query = "SELECT a, COUNT(DISTINCT b) as b_cd FROM t1 GROUP BY a";
         let plan = ctx.sql(query).await?.to_logical_plan()?;
-
-        println!("{:?}", plan);
 
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;

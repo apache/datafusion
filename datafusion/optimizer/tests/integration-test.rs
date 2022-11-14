@@ -227,8 +227,6 @@ fn concat_ws_literals() -> Result<()> {
 }
 
 #[test]
-#[ignore]
-// https://github.com/apache/arrow-datafusion/issues/3938
 fn timestamp_nano_ts_none_predicates() -> Result<()> {
     let sql = "SELECT col_int32
         FROM test
@@ -237,25 +235,27 @@ fn timestamp_nano_ts_none_predicates() -> Result<()> {
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
-    let expected = "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"UTC\"))\
-                    \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
+    let expected =
+        "Projection: test.col_int32\
+         \n  Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)\
+         \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
 }
 
 #[test]
-fn timestamp_nano_ts_utc_predicates() -> Result<()> {
+fn timestamp_nano_ts_utc_predicates() {
     let sql = "SELECT col_int32
         FROM test
         WHERE col_ts_nano_utc < (now() - interval '1 hour')";
-    let plan = test_sql(sql)?;
+    let plan = test_sql(sql).unwrap();
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
-    let expected = "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"UTC\"))\
-                    \n    TableScan: test projection=[col_int32, col_ts_nano_utc]";
+    let expected =
+        "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
+         \n    TableScan: test projection=[col_int32, col_ts_nano_utc]";
     assert_eq!(expected, format!("{:?}", plan));
-    Ok(())
 }
 
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
@@ -270,8 +270,8 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
     // hard code the return value of now()
-    let now_time =
-        DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(1666615693, 0), Utc);
+    let ts = NaiveDateTime::from_timestamp_opt(1666615693, 0).unwrap();
+    let now_time = DateTime::<Utc>::from_utc(ts, Utc);
     let mut config = OptimizerConfig::new()
         .with_skip_failing_rules(false)
         .with_query_execution_start_time(now_time);
@@ -305,7 +305,7 @@ impl ContextProvider for MySchemaProvider {
                     // timestamp with UTC timezone
                     Field::new(
                         "col_ts_nano_utc",
-                        DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                        DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
                         true,
                     ),
                 ],
@@ -329,6 +329,13 @@ impl ContextProvider for MySchemaProvider {
     }
 
     fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
+        None
+    }
+
+    fn get_config_option(
+        &self,
+        _variable: &str,
+    ) -> Option<datafusion_common::ScalarValue> {
         None
     }
 }

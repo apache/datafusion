@@ -152,9 +152,10 @@ impl TreeNodeRewritable for Arc<dyn PhysicalExpr> {
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        if !self.children().is_empty() {
+        let children = self.children();
+        if !children.is_empty() {
             let new_children: Result<Vec<_>> =
-                self.children().into_iter().map(transform).collect();
+                children.into_iter().map(transform).collect();
             with_new_children_if_necessary(self, new_children?)
         } else {
             Ok(self)

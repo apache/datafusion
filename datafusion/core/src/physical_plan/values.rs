@@ -22,8 +22,8 @@ use super::{common, SendableRecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::physical_plan::{
-    memory::MemoryStream, ColumnarValue, DisplayFormatType, Distribution, ExecutionPlan,
-    Partitioning, PhysicalExpr,
+    memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
+    PhysicalExpr,
 };
 use crate::scalar::ScalarValue;
 use arrow::array::new_null_array;
@@ -108,11 +108,6 @@ impl ExecutionPlan for ValuesExec {
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
     }
-
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::UnspecifiedDistribution
-    }
-
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
@@ -120,10 +115,6 @@ impl ExecutionPlan for ValuesExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
-    }
-
-    fn relies_on_input_order(&self) -> bool {
-        false
     }
 
     fn with_new_children(

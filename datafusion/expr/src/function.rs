@@ -220,7 +220,7 @@ pub fn return_type(
         }
         BuiltinScalarFunction::Now => Ok(DataType::Timestamp(
             TimeUnit::Nanosecond,
-            Some("UTC".to_owned()),
+            Some("+00:00".to_owned()),
         )),
         BuiltinScalarFunction::CurrentDate => Ok(DataType::Date32),
         BuiltinScalarFunction::CurrentTime => Ok(DataType::Time64(TimeUnit::Nanosecond)),

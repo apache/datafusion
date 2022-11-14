@@ -62,12 +62,13 @@ use crate::physical_plan::{
     expressions::PhysicalSortExpr,
     hash_utils::create_hashes,
     joins::utils::{
-        build_join_schema, check_join_is_valid, estimate_join_statistics, ColumnIndex,
-        JoinFilter, JoinOn, JoinSide,
+        adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
+        combine_join_equivalence_properties, estimate_join_statistics,
+        partitioned_join_output_partitioning, ColumnIndex, JoinFilter, JoinOn, JoinSide,
     },
     metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-    DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
+    PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use crate::error::{DataFusionError, Result};
@@ -117,15 +118,15 @@ type JoinLeftData = (JoinHashMap, RecordBatch);
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
-    left: Arc<dyn ExecutionPlan>,
+    pub(crate) left: Arc<dyn ExecutionPlan>,
     /// right (probe) side which are filtered by the hash table
-    right: Arc<dyn ExecutionPlan>,
+    pub(crate) right: Arc<dyn ExecutionPlan>,
     /// Set of common columns used to join on
-    on: Vec<(Column, Column)>,
+    pub(crate) on: Vec<(Column, Column)>,
     /// Filters which are applied while finding matching rows
-    filter: Option<JoinFilter>,
+    pub(crate) filter: Option<JoinFilter>,
     /// How the join is performed
-    join_type: JoinType,
+    pub(crate) join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Build-side data
@@ -133,13 +134,13 @@ pub struct HashJoinExec {
     /// Shares the `RandomState` for the hashing algorithm
     random_state: RandomState,
     /// Partitioning mode to use
-    mode: PartitionMode,
+    pub(crate) mode: PartitionMode,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// If null_equals_null is true, null == null else null != null
-    null_equals_null: bool,
+    pub(crate) null_equals_null: bool,
 }
 
 /// Metrics for HashJoinExec
@@ -270,6 +271,76 @@ impl ExecutionPlan for HashJoinExec {
         self.schema.clone()
     }
 
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        match self.mode {
+            PartitionMode::CollectLeft => vec![
+                Distribution::SinglePartition,
+                Distribution::UnspecifiedDistribution,
+            ],
+            PartitionMode::Partitioned => {
+                let (left_expr, right_expr) = self
+                    .on
+                    .iter()
+                    .map(|(l, r)| {
+                        (
+                            Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
+                            Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
+                        )
+                    })
+                    .unzip();
+                vec![
+                    Distribution::HashPartitioned(left_expr),
+                    Distribution::HashPartitioned(right_expr),
+                ]
+            }
+        }
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        let left_columns_len = self.left.schema().fields.len();
+        match self.mode {
+            PartitionMode::CollectLeft => match self.join_type {
+                JoinType::Inner | JoinType::Right => adjust_right_output_partitioning(
+                    self.right.output_partitioning(),
+                    left_columns_len,
+                ),
+                JoinType::RightSemi | JoinType::RightAnti => {
+                    self.right.output_partitioning()
+                }
+                JoinType::Left
+                | JoinType::LeftSemi
+                | JoinType::LeftAnti
+                | JoinType::Full => Partitioning::UnknownPartitioning(
+                    self.right.output_partitioning().partition_count(),
+                ),
+            },
+            PartitionMode::Partitioned => partitioned_join_output_partitioning(
+                self.join_type,
+                self.left.output_partitioning(),
+                self.right.output_partitioning(),
+                left_columns_len,
+            ),
+        }
+    }
+
+    // TODO Output ordering might be kept for some cases.
+    // For example if it is inner join then the stream side order can be kept
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        let left_columns_len = self.left.schema().fields.len();
+        combine_join_equivalence_properties(
+            self.join_type,
+            self.left.equivalence_properties(),
+            self.right.equivalence_properties(),
+            left_columns_len,
+            self.on(),
+            self.schema(),
+        )
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.left.clone(), self.right.clone()]
     }
@@ -287,18 +358,6 @@ impl ExecutionPlan for HashJoinExec {
             self.mode,
             &self.null_equals_null,
         )?))
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        self.right.output_partitioning()
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
-    }
-
-    fn relies_on_input_order(&self) -> bool {
-        false
     }
 
     fn execute(
@@ -389,9 +448,14 @@ async fn collect_left_input(
 ) -> Result<JoinLeftData> {
     let schema = left.schema();
     let start = Instant::now();
-
     // merge all left parts into a single stream
-    let merge = CoalescePartitionsExec::new(left);
+    let merge = {
+        if left.output_partitioning().partition_count() != 1 {
+            Arc::new(CoalescePartitionsExec::new(left))
+        } else {
+            left
+        }
+    };
     let stream = merge.execute(0, context)?;
 
     // This operation performs 2 steps at once:

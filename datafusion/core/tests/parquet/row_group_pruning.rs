@@ -134,7 +134,7 @@ async fn prune_date64() {
     let date = "2020-01-02"
         .parse::<chrono::NaiveDate>()
         .unwrap()
-        .and_time(chrono::NaiveTime::from_hms(0, 0, 0));
+        .and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
     let date = ScalarValue::Date64(Some(date.timestamp_millis()));
 
     let output = ContextWithParquet::new(Scenario::Dates)
@@ -822,10 +822,10 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
         .map(|(i, _)| format!("Row {} + {}", i, offset))
         .collect::<Vec<_>>();
 
-    let arr_nanos = TimestampNanosecondArray::from_opt_vec(ts_nanos, None);
-    let arr_micros = TimestampMicrosecondArray::from_opt_vec(ts_micros, None);
-    let arr_millis = TimestampMillisecondArray::from_opt_vec(ts_millis, None);
-    let arr_seconds = TimestampSecondArray::from_opt_vec(ts_seconds, None);
+    let arr_nanos = TimestampNanosecondArray::from(ts_nanos);
+    let arr_micros = TimestampMicrosecondArray::from(ts_micros);
+    let arr_millis = TimestampMillisecondArray::from(ts_millis);
+    let arr_seconds = TimestampSecondArray::from(ts_seconds);
 
     let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
     let arr_names = StringArray::from(names);
@@ -935,7 +935,7 @@ fn make_date_batch(offset: Duration) -> RecordBatch {
                 let t = t
                     .parse::<chrono::NaiveDate>()
                     .unwrap()
-                    .and_time(chrono::NaiveTime::from_hms(0, 0, 0));
+                    .and_time(chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
                 let t = t + offset;
                 t.timestamp_millis()
             })

@@ -226,7 +226,7 @@ fn reduce_outer_join(
     }
 }
 
-/// Recursively traversese expr, if expr returns false when
+/// Recursively traverses expr, if expr returns false when
 /// any inputs are null, treats columns of both sides as nonnullable columns.
 ///
 /// For and/or expr, extracts from all sub exprs and merges the columns.

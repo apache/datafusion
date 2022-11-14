@@ -1464,21 +1464,15 @@ impl serde::Serialize for BinaryExprNode {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.l.is_some() {
-            len += 1;
-        }
-        if self.r.is_some() {
+        if !self.operands.is_empty() {
             len += 1;
         }
         if !self.op.is_empty() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.BinaryExprNode", len)?;
-        if let Some(v) = self.l.as_ref() {
-            struct_ser.serialize_field("l", v)?;
-        }
-        if let Some(v) = self.r.as_ref() {
-            struct_ser.serialize_field("r", v)?;
+        if !self.operands.is_empty() {
+            struct_ser.serialize_field("operands", &self.operands)?;
         }
         if !self.op.is_empty() {
             struct_ser.serialize_field("op", &self.op)?;
@@ -1493,15 +1487,13 @@ impl<'de> serde::Deserialize<'de> for BinaryExprNode {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "l",
-            "r",
+            "operands",
             "op",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            L,
-            R,
+            Operands,
             Op,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -1524,8 +1516,7 @@ impl<'de> serde::Deserialize<'de> for BinaryExprNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "l" => Ok(GeneratedField::L),
-                            "r" => Ok(GeneratedField::R),
+                            "operands" => Ok(GeneratedField::Operands),
                             "op" => Ok(GeneratedField::Op),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -1546,22 +1537,15 @@ impl<'de> serde::Deserialize<'de> for BinaryExprNode {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut l__ = None;
-                let mut r__ = None;
+                let mut operands__ = None;
                 let mut op__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
-                        GeneratedField::L => {
-                            if l__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("l"));
+                        GeneratedField::Operands => {
+                            if operands__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("operands"));
                             }
-                            l__ = map.next_value()?;
-                        }
-                        GeneratedField::R => {
-                            if r__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("r"));
-                            }
-                            r__ = map.next_value()?;
+                            operands__ = Some(map.next_value()?);
                         }
                         GeneratedField::Op => {
                             if op__.is_some() {
@@ -1572,8 +1556,7 @@ impl<'de> serde::Deserialize<'de> for BinaryExprNode {
                     }
                 }
                 Ok(BinaryExprNode {
-                    l: l__,
-                    r: r__,
+                    operands: operands__.unwrap_or_default(),
                     op: op__.unwrap_or_default(),
                 })
             }
@@ -2408,6 +2391,9 @@ impl serde::Serialize for CreateExternalTableNode {
         if !self.file_compression_type.is_empty() {
             len += 1;
         }
+        if !self.options.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CreateExternalTableNode", len)?;
         if !self.name.is_empty() {
             struct_ser.serialize_field("name", &self.name)?;
@@ -2439,6 +2425,9 @@ impl serde::Serialize for CreateExternalTableNode {
         if !self.file_compression_type.is_empty() {
             struct_ser.serialize_field("fileCompressionType", &self.file_compression_type)?;
         }
+        if !self.options.is_empty() {
+            struct_ser.serialize_field("options", &self.options)?;
+        }
         struct_ser.end()
     }
 }
@@ -2464,6 +2453,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             "definition",
             "file_compression_type",
             "fileCompressionType",
+            "options",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2478,6 +2468,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             Delimiter,
             Definition,
             FileCompressionType,
+            Options,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2509,6 +2500,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             "delimiter" => Ok(GeneratedField::Delimiter),
                             "definition" => Ok(GeneratedField::Definition),
                             "fileCompressionType" | "file_compression_type" => Ok(GeneratedField::FileCompressionType),
+                            "options" => Ok(GeneratedField::Options),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2538,6 +2530,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                 let mut delimiter__ = None;
                 let mut definition__ = None;
                 let mut file_compression_type__ = None;
+                let mut options__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -2600,6 +2593,14 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                             }
                             file_compression_type__ = Some(map.next_value()?);
                         }
+                        GeneratedField::Options => {
+                            if options__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("options"));
+                            }
+                            options__ = Some(
+                                map.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
                     }
                 }
                 Ok(CreateExternalTableNode {
@@ -2613,6 +2614,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                     delimiter: delimiter__.unwrap_or_default(),
                     definition: definition__.unwrap_or_default(),
                     file_compression_type: file_compression_type__.unwrap_or_default(),
+                    options: options__.unwrap_or_default(),
                 })
             }
         }
@@ -6881,6 +6883,9 @@ impl serde::Serialize for ListingTableScanNode {
         if self.target_partitions != 0 {
             len += 1;
         }
+        if !self.file_sort_order.is_empty() {
+            len += 1;
+        }
         if self.file_format_type.is_some() {
             len += 1;
         }
@@ -6911,6 +6916,9 @@ impl serde::Serialize for ListingTableScanNode {
         }
         if self.target_partitions != 0 {
             struct_ser.serialize_field("targetPartitions", &self.target_partitions)?;
+        }
+        if !self.file_sort_order.is_empty() {
+            struct_ser.serialize_field("fileSortOrder", &self.file_sort_order)?;
         }
         if let Some(v) = self.file_format_type.as_ref() {
             match v {
@@ -6949,6 +6957,8 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             "collectStat",
             "target_partitions",
             "targetPartitions",
+            "file_sort_order",
+            "fileSortOrder",
             "csv",
             "parquet",
             "avro",
@@ -6965,6 +6975,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             TablePartitionCols,
             CollectStat,
             TargetPartitions,
+            FileSortOrder,
             Csv,
             Parquet,
             Avro,
@@ -6998,6 +7009,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
                             "collectStat" | "collect_stat" => Ok(GeneratedField::CollectStat),
                             "targetPartitions" | "target_partitions" => Ok(GeneratedField::TargetPartitions),
+                            "fileSortOrder" | "file_sort_order" => Ok(GeneratedField::FileSortOrder),
                             "csv" => Ok(GeneratedField::Csv),
                             "parquet" => Ok(GeneratedField::Parquet),
                             "avro" => Ok(GeneratedField::Avro),
@@ -7029,6 +7041,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                 let mut table_partition_cols__ = None;
                 let mut collect_stat__ = None;
                 let mut target_partitions__ = None;
+                let mut file_sort_order__ = None;
                 let mut file_format_type__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
@@ -7088,6 +7101,12 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                                 Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::FileSortOrder => {
+                            if file_sort_order__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fileSortOrder"));
+                            }
+                            file_sort_order__ = Some(map.next_value()?);
+                        }
                         GeneratedField::Csv => {
                             if file_format_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("csv"));
@@ -7121,6 +7140,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
                     collect_stat: collect_stat__.unwrap_or_default(),
                     target_partitions: target_partitions__.unwrap_or_default(),
+                    file_sort_order: file_sort_order__.unwrap_or_default(),
                     file_format_type: file_format_type__,
                 })
             }

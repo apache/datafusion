@@ -271,7 +271,7 @@ async fn information_schema_describe_table_not_exists() {
     let err = plan_and_collect(&ctx, sql_all).await.unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Error during planning: 'datafusion.public.table' not found"
+        "Error during planning: table 'datafusion.public.table' not found"
     );
 }
 
@@ -368,7 +368,7 @@ async fn information_schema_show_columns() {
     assert_eq!(
         err.to_string(),
         // Error propagates from SessionState::get_table_provider
-        "Error during planning: 'datafusion.public.T' not found"
+        "Error during planning: table 'datafusion.public.T' not found"
     );
 }
 
@@ -431,7 +431,7 @@ async fn information_schema_show_table_table_names() {
     assert_eq!(
         err.to_string(),
         // Error propagates from SessionState::get_table_provider
-        "Error during planning: 'datafusion.public.t2' not found"
+        "Error during planning: table 'datafusion.public.t2' not found"
     );
 
     let err = plan_and_collect(&ctx, "SHOW columns from datafusion.public.t2")
@@ -440,7 +440,7 @@ async fn information_schema_show_table_table_names() {
     assert_eq!(
         err.to_string(),
         // Error propagates from SessionState::get_table_provider
-        "Error during planning: 'datafusion.public.t2' not found"
+        "Error during planning: table 'datafusion.public.t2' not found"
     );
 }
 
@@ -519,10 +519,7 @@ fn table_with_many_types() -> Arc<dyn TableProvider> {
             Arc::new(LargeStringArray::from(vec![Some("bar")])),
             Arc::new(BinaryArray::from_slice([b"foo" as &[u8]])),
             Arc::new(LargeBinaryArray::from_slice([b"foo" as &[u8]])),
-            Arc::new(TimestampNanosecondArray::from_opt_vec(
-                vec![Some(123)],
-                None,
-            )),
+            Arc::new(TimestampNanosecondArray::from(vec![Some(123)])),
         ],
     )
     .unwrap();
@@ -698,13 +695,15 @@ async fn show_all() {
         "+-------------------------------------------------+---------+",
         "| name                                            | setting |",
         "+-------------------------------------------------+---------+",
+        "| datafusion.catalog.location                     | NULL    |",
+        "| datafusion.catalog.type                         | NULL    |",
         "| datafusion.execution.batch_size                 | 8192    |",
         "| datafusion.execution.coalesce_batches           | true    |",
         "| datafusion.execution.coalesce_target_batch_size | 4096    |",
         "| datafusion.execution.parquet.enable_page_index  | false   |",
         "| datafusion.execution.parquet.pushdown_filters   | false   |",
         "| datafusion.execution.parquet.reorder_filters    | false   |",
-        "| datafusion.execution.time_zone                  | UTC     |",
+        "| datafusion.execution.time_zone                  | +00:00  |",
         "| datafusion.explain.logical_plan_only            | false   |",
         "| datafusion.explain.physical_plan_only           | false   |",
         "| datafusion.optimizer.filter_null_join_keys      | false   |",
@@ -728,7 +727,7 @@ async fn show_time_zone_default_utc() {
         "+--------------------------------+---------+",
         "| name                           | setting |",
         "+--------------------------------+---------+",
-        "| datafusion.execution.time_zone | UTC     |",
+        "| datafusion.execution.time_zone | +00:00  |",
         "+--------------------------------+---------+",
     ];
 
@@ -747,7 +746,7 @@ async fn show_timezone_default_utc() {
         "+--------------------------------+---------+",
         "| name                           | setting |",
         "+--------------------------------+---------+",
-        "| datafusion.execution.time_zone | UTC     |",
+        "| datafusion.execution.time_zone | +00:00  |",
         "+--------------------------------+---------+",
     ];
 

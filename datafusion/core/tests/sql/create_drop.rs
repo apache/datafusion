@@ -271,8 +271,8 @@ async fn create_external_table_with_timestamps() {
         "+--------+-------------------------+",
         "| name   | ts                      |",
         "+--------+-------------------------+",
-        "| Andrew | 2018-11-13 17:11:10.011 |",
-        "| Jorge  | 2018-12-13 12:12:10.011 |",
+        "| Andrew | 2018-11-13T17:11:10.011 |",
+        "| Jorge  | 2018-12-13T12:12:10.011 |",
         "+--------+-------------------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
@@ -383,6 +383,36 @@ async fn create_custom_table() -> Result<()> {
     let schema = cat.schema("public").unwrap();
     let exists = schema.table_exist("dt");
     assert!(exists, "Table should have been created!");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_external_table_with_ddl() -> Result<()> {
+    let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+        HashMap::new();
+    table_factories.insert("mocktable".to_string(), Arc::new(TestTableFactory {}));
+    let cfg = RuntimeConfig::new().with_table_factories(table_factories);
+    let env = RuntimeEnv::new(cfg).unwrap();
+    let ses = SessionConfig::new();
+    let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
+
+    let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS MOCKTABLE LOCATION 'mockprotocol://path/to/table';";
+    ctx.sql(sql).await.unwrap();
+
+    let cat = ctx.catalog("datafusion").unwrap();
+    let schema = cat.schema("public").unwrap();
+
+    let exists = schema.table_exist("dt");
+    assert!(exists, "Table should have been created!");
+
+    let table_schema = schema.table("dt").unwrap().schema();
+
+    assert_eq!(3, table_schema.fields().len());
+
+    assert_eq!(&DataType::Int32, table_schema.field(0).data_type());
+    assert_eq!(&DataType::Utf8, table_schema.field(1).data_type());
+    assert_eq!(&DataType::Boolean, table_schema.field(2).data_type());
 
     Ok(())
 }

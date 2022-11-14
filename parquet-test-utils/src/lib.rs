@@ -51,7 +51,7 @@ pub struct TestParquetFile {
     object_meta: ObjectMeta,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParquetScanOptions {
     pub pushdown_filters: bool,
     pub reorder_filters: bool,
@@ -59,34 +59,20 @@ pub struct ParquetScanOptions {
 }
 
 impl TestParquetFile {
-    /// Creates a new parquet file at the specified location
+    /// Creates a new parquet file at the specified location with the
+    /// given properties
     pub fn try_new(
         path: PathBuf,
+        props: WriterProperties,
         batches: impl IntoIterator<Item = RecordBatch>,
-        page_size: Option<usize>,
-        row_group_size: Option<usize>,
     ) -> Result<Self> {
         let file = File::create(&path).unwrap();
-
-        let mut props_builder = WriterProperties::builder();
-
-        if let Some(s) = page_size {
-            props_builder = props_builder
-                .set_data_pagesize_limit(s)
-                .set_write_batch_size(s);
-        }
-
-        if let Some(s) = row_group_size {
-            props_builder = props_builder.set_max_row_group_size(s);
-        }
 
         let mut batches = batches.into_iter();
         let first_batch = batches.next().expect("need at least one record batch");
         let schema = first_batch.schema();
 
-        let mut writer =
-            ArrowWriter::try_new(file, schema.clone(), Some(props_builder.build()))
-                .unwrap();
+        let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props)).unwrap();
 
         writer.write(&first_batch).unwrap();
         writer.flush()?;
@@ -122,7 +108,9 @@ impl TestParquetFile {
             object_meta,
         })
     }
+}
 
+impl TestParquetFile {
     /// return a `ParquetExec` and `FilterExec` with the specified options to scan this parquet file.
     ///
     /// This returns the same plan that DataFusion will make with a pushed down predicate followed by a filter:
@@ -161,6 +149,7 @@ impl TestParquetFile {
             limit: None,
             table_partition_cols: vec![],
             config_options: config_options.into_shareable(),
+            output_ordering: None,
         };
 
         let df_schema = self.schema.clone().to_dfschema_ref()?;

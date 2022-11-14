@@ -18,11 +18,9 @@
 //! Optimizer rule to replace TableScan references
 //! such as DataFrames and Views and inlines the LogicalPlan
 //! to support further optimization
-use crate::{OptimizerConfig, OptimizerRule};
+use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
-use datafusion_expr::{
-    logical_plan::LogicalPlan, utils::from_plan, Expr, LogicalPlanBuilder, TableScan,
-};
+use datafusion_expr::{logical_plan::LogicalPlan, Expr, LogicalPlanBuilder, TableScan};
 
 /// Optimization rule that inlines TableScan that provide a [LogicalPlan]
 /// ([DataFrame] / [ViewTable])
@@ -36,54 +34,43 @@ impl InlineTableScan {
     }
 }
 
-/// Inline
-fn inline_table_scan(plan: &LogicalPlan) -> Result<LogicalPlan> {
-    match plan {
-        // Match only on scans without filter / projection / fetch
-        // Views and DataFrames won't have those added
-        // during the early stage of planning
-        LogicalPlan::TableScan(TableScan {
-            source,
-            table_name,
-            filters,
-            fetch: None,
-            ..
-        }) if filters.is_empty() => {
-            if let Some(sub_plan) = source.get_logical_plan() {
-                // Recursively apply optimization
-                let plan = inline_table_scan(sub_plan)?;
-                let plan = LogicalPlanBuilder::from(plan).project_with_alias(
-                    vec![Expr::Wildcard],
-                    Some(table_name.to_string()),
-                )?;
-                plan.build()
-            } else {
-                // No plan available, return with table scan as is
-                Ok(plan.clone())
-            }
-        }
-
-        // Rest: Recurse
-        _ => {
-            // apply the optimization to all inputs of the plan
-            let inputs = plan.inputs();
-            let new_inputs = inputs
-                .iter()
-                .map(|plan| inline_table_scan(plan))
-                .collect::<Result<Vec<_>>>()?;
-
-            from_plan(plan, &plan.expressions(), &new_inputs)
-        }
-    }
-}
-
 impl OptimizerRule for InlineTableScan {
     fn optimize(
         &self,
         plan: &LogicalPlan,
         _optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        inline_table_scan(plan)
+        match plan {
+            // Match only on scans without filter / projection / fetch
+            // Views and DataFrames won't have those added
+            // during the early stage of planning
+            LogicalPlan::TableScan(TableScan {
+                source,
+                table_name,
+                filters,
+                ..
+            }) if filters.is_empty() => {
+                if let Some(sub_plan) = source.get_logical_plan() {
+                    // Recursively apply optimization
+                    let plan =
+                        utils::optimize_children(self, sub_plan, _optimizer_config)?;
+                    let plan = LogicalPlanBuilder::from(plan).project_with_alias(
+                        vec![Expr::Wildcard],
+                        Some(table_name.to_string()),
+                    )?;
+                    plan.build()
+                } else {
+                    // No plan available, return with table scan as is
+                    Ok(plan.clone())
+                }
+            }
+
+            // Rest: Recurse
+            _ => {
+                // apply the optimization to all inputs of the plan
+                utils::optimize_children(self, plan, _optimizer_config)
+            }
+        }
     }
 
     fn name(&self) -> &str {

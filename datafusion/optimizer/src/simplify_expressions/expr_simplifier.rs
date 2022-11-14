@@ -40,6 +40,8 @@ pub struct ExprSimplifier<S> {
     info: S,
 }
 
+const THRESHOLD_INLINE_INLIST: usize = 3;
+
 impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// Create a new `ExprSimplifier` with the given `info` such as an
     /// instance of [`SimplifyContext`]. See
@@ -365,7 +367,48 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                     None => lit_bool_null(),
                 }
             }
+            // expr IN () --> false
+            // expr NOT IN () --> true
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } if list.is_empty() && *expr != Expr::Literal(ScalarValue::Null) => {
+                lit(negated)
+            }
 
+            // if expr is a single column reference:
+            // expr IN (A, B, ...) --> (expr = A) OR (expr = B) OR (expr = C)
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } if !list.is_empty()
+                && (
+                    // For lists with only 1 value we allow more complex expressions to be simplified
+                    // e.g SUBSTR(c1, 2, 3) IN ('1') -> SUBSTR(c1, 2, 3) = '1'
+                    // for more than one we avoid repeating this potentially expensive
+                    // expressions
+                    list.len() == 1
+                        || list.len() <= THRESHOLD_INLINE_INLIST
+                            && expr.try_into_col().is_ok()
+                ) =>
+            {
+                let first_val = list[0].clone();
+                if negated {
+                    list.into_iter()
+                        .skip(1)
+                        .fold((*expr.clone()).not_eq(first_val), |acc, y| {
+                            (*expr.clone()).not_eq(y).and(acc)
+                        })
+                } else {
+                    list.into_iter()
+                        .skip(1)
+                        .fold((*expr.clone()).eq(first_val), |acc, y| {
+                            (*expr.clone()).eq(y).or(acc)
+                        })
+                }
+            }
             //
             // Rules for NotEq
             //
@@ -427,6 +470,22 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Or,
                 right,
             }) if is_false(&right) => *left,
+            // A OR !A ---> true (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Or,
+                right,
+            }) if is_not_of(&right, &left) && !info.nullable(&left)? => {
+                Expr::Literal(ScalarValue::Boolean(Some(true)))
+            }
+            // !A OR A ---> true (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Or,
+                right,
+            }) if is_not_of(&left, &right) && !info.nullable(&right)? => {
+                Expr::Literal(ScalarValue::Boolean(Some(true)))
+            }
             // (..A..) OR A --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -480,6 +539,22 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: And,
                 right,
             }) if is_false(&right) => *right,
+            // A AND !A ---> false (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: And,
+                right,
+            }) if is_not_of(&right, &left) && !info.nullable(&left)? => {
+                Expr::Literal(ScalarValue::Boolean(Some(false)))
+            }
+            // !A AND A ---> false (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: And,
+                right,
+            }) if is_not_of(&left, &right) && !info.nullable(&right)? => {
+                Expr::Literal(ScalarValue::Boolean(Some(false)))
+            }
             // (..A..) AND A --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -727,7 +802,7 @@ mod tests {
         datatypes::{DataType, Field, Schema},
     };
     use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_common::{DFField, ToDFSchema};
+    use datafusion_common::{cast::as_int32_array, DFField, ToDFSchema};
     use datafusion_expr::*;
     use datafusion_physical_expr::{
         execution_props::ExecutionProps, functions::make_scalar_function,
@@ -848,14 +923,8 @@ mod tests {
         let return_type = Arc::new(DataType::Int32);
 
         let fun = |args: &[ArrayRef]| {
-            let arg0 = &args[0]
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .expect("cast failed");
-            let arg1 = &args[1]
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .expect("cast failed");
+            let arg0 = as_int32_array(&args[0])?;
+            let arg1 = as_int32_array(&args[1])?;
 
             // 2. perform the computation
             let array = arg0
@@ -1041,6 +1110,18 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_or_not_self() {
+        // A OR !A if A is not nullable --> true
+        // !A OR A if A is not nullable --> true
+        let expr_a = col("c2_non_null").or(col("c2_non_null").not());
+        let expr_b = col("c2_non_null").not().or(col("c2_non_null"));
+        let expected = lit(true);
+
+        assert_eq!(simplify(expr_a), expected);
+        assert_eq!(simplify(expr_b), expected);
+    }
+
+    #[test]
     fn test_simplify_and_false() {
         let expr_a = lit(false).and(col("c2"));
         let expr_b = col("c2").and(lit(false));
@@ -1063,6 +1144,18 @@ mod tests {
         let expr_a = lit(true).and(col("c2"));
         let expr_b = col("c2").and(lit(true));
         let expected = col("c2");
+
+        assert_eq!(simplify(expr_a), expected);
+        assert_eq!(simplify(expr_b), expected);
+    }
+
+    #[test]
+    fn test_simplify_and_not_self() {
+        // A AND !A if A is not nullable --> false
+        // !A AND A if A is not nullable --> false
+        let expr_a = col("c2_non_null").and(col("c2_non_null").not());
+        let expr_b = col("c2_non_null").not().and(col("c2_non_null"));
+        let expected = lit(false);
 
         assert_eq!(simplify(expr_a), expected);
         assert_eq!(simplify(expr_b), expected);
@@ -1747,6 +1840,37 @@ mod tests {
             lit_bool_null(),
         );
         assert_eq!(expected_expr, result);
+    }
+
+    #[test]
+    fn simplify_inlist() {
+        assert_eq!(simplify(in_list(col("c1"), vec![], false)), lit(false));
+        assert_eq!(simplify(in_list(col("c1"), vec![], true)), lit(true));
+
+        assert_eq!(
+            simplify(in_list(col("c1"), vec![lit(1)], false)),
+            col("c1").eq(lit(1))
+        );
+        assert_eq!(
+            simplify(in_list(col("c1"), vec![lit(1)], true)),
+            col("c1").not_eq(lit(1))
+        );
+
+        // more complex expressions can be simplified if list contains
+        // one element only
+        assert_eq!(
+            simplify(in_list(col("c1") * lit(10), vec![lit(2)], false)),
+            (col("c1") * lit(10)).eq(lit(2))
+        );
+
+        assert_eq!(
+            simplify(in_list(col("c1"), vec![lit(1), lit(2)], false)),
+            col("c1").eq(lit(2)).or(col("c1").eq(lit(1)))
+        );
+        assert_eq!(
+            simplify(in_list(col("c1"), vec![lit(1), lit(2)], true)),
+            col("c1").not_eq(lit(2)).and(col("c1").not_eq(lit(1)))
+        );
     }
 
     #[test]

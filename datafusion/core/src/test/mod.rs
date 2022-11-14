@@ -106,7 +106,7 @@ pub fn partitioned_file_groups(
                 .get_ext_with_compression(file_compression_type.to_owned())
                 .unwrap()
         );
-        let filename = tmp_dir.join(&filename);
+        let filename = tmp_dir.join(filename);
 
         let file = File::create(&filename).unwrap();
 
@@ -125,7 +125,7 @@ pub fn partitioned_file_groups(
         files.push(filename);
     }
 
-    let f = File::open(&path)?;
+    let f = File::open(path)?;
     let f = BufReader::new(f);
     for (i, line) in f.lines().enumerate() {
         let line = line.unwrap();
@@ -167,6 +167,7 @@ pub fn partitioned_csv_config(
         limit: None,
         table_partition_cols: vec![],
         config_options: ConfigOptions::new().into_shareable(),
+        output_ordering: None,
     })
 }
 

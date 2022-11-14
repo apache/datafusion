@@ -29,16 +29,19 @@ use arrow::record_batch::RecordBatch;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::{
     coalesce_batches::concat_batches, coalesce_partitions::CoalescePartitionsExec,
-    ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
+    ExecutionPlan, Partitioning, PhysicalSortExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
-use datafusion_physical_expr::PhysicalSortExpr;
 use log::debug;
 use std::time::Instant;
 
-use super::utils::{check_join_is_valid, OnceAsync, OnceFut};
+use super::utils::{
+    adjust_right_output_partitioning, check_join_is_valid,
+    cross_join_equivalence_properties, OnceAsync, OnceFut,
+};
 
 /// Data of the left side
 type JoinLeftData = RecordBatch;
@@ -48,9 +51,9 @@ type JoinLeftData = RecordBatch;
 #[derive(Debug)]
 pub struct CrossJoinExec {
     /// left (build) side which gets loaded in memory
-    left: Arc<dyn ExecutionPlan>,
+    pub(crate) left: Arc<dyn ExecutionPlan>,
     /// right (probe) side which are combined with left side
-    right: Arc<dyn ExecutionPlan>,
+    pub(crate) right: Arc<dyn ExecutionPlan>,
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Build-side data
@@ -107,7 +110,13 @@ async fn load_left_input(
     let start = Instant::now();
 
     // merge all left parts into a single stream
-    let merge = CoalescePartitionsExec::new(left.clone());
+    let merge = {
+        if left.output_partitioning().partition_count() != 1 {
+            Arc::new(CoalescePartitionsExec::new(left.clone()))
+        } else {
+            left.clone()
+        }
+    };
     let stream = merge.execute(0, context)?;
 
     // Load all batches and count the rows
@@ -153,16 +162,35 @@ impl ExecutionPlan for CrossJoinExec {
         )?))
     }
 
-    fn output_partitioning(&self) -> Partitioning {
-        self.right.output_partitioning()
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![
+            Distribution::SinglePartition,
+            Distribution::UnspecifiedDistribution,
+        ]
     }
 
+    // TODO optimize CrossJoin implementation to generate M * N partitions
+    fn output_partitioning(&self) -> Partitioning {
+        let left_columns_len = self.left.schema().fields.len();
+        adjust_right_output_partitioning(
+            self.right.output_partitioning(),
+            left_columns_len,
+        )
+    }
+
+    // TODO check the output ordering of CrossJoin
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        let left_columns_len = self.left.schema().fields.len();
+        cross_join_equivalence_properties(
+            self.left.equivalence_properties(),
+            self.right.equivalence_properties(),
+            left_columns_len,
+            self.schema(),
+        )
     }
 
     fn execute(

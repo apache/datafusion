@@ -180,7 +180,7 @@ pub fn make_now(
     move |_arg| {
         Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
             now_ts,
-            Some("UTC".to_owned()),
+            Some("+00:00".to_owned()),
         )))
     }
 }
@@ -195,7 +195,10 @@ pub fn make_current_date(
     now_ts: DateTime<Utc>,
 ) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
     let days = Some(
-        now_ts.num_days_from_ce() - NaiveDate::from_ymd(1970, 1, 1).num_days_from_ce(),
+        now_ts.num_days_from_ce()
+            - NaiveDate::from_ymd_opt(1970, 1, 1)
+                .unwrap()
+                .num_days_from_ce(),
     );
     move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Date32(days)))
 }
@@ -218,7 +221,11 @@ fn quarter_month(date: &NaiveDateTime) -> u32 {
 }
 
 fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
-    let value = timestamp_ns_to_datetime(value).with_nanosecond(0);
+    let value = timestamp_ns_to_datetime(value)
+        .ok_or_else(|| {
+            DataFusionError::Execution(format!("Timestamp {} out of range", value))
+        })?
+        .with_nanosecond(0);
     let value = match granularity {
         "second" => value,
         "minute" => value.and_then(|d| d.with_second(0)),

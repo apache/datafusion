@@ -25,8 +25,8 @@ use std::task::{Context, Poll};
 
 use crate::error::Result;
 use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream,
+    DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream,
 };
 
 use crate::execution::context::TaskContext;
@@ -100,8 +100,8 @@ impl ExecutionPlan for CoalesceBatchesExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(

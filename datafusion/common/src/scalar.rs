@@ -24,6 +24,9 @@ use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
+use crate::cast::{as_decimal128_array, as_struct_array};
+use crate::delta::shift_months;
+use crate::error::{DataFusionError, Result};
 use arrow::{
     array::*,
     compute::kernels::cast::{cast, cast_with_options, CastOptions},
@@ -37,11 +40,6 @@ use arrow::{
     },
 };
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
-use ordered_float::OrderedFloat;
-
-use crate::cast::as_struct_array;
-use crate::delta::shift_months;
-use crate::error::{DataFusionError, Result};
 
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part of arrow's `Array`.
@@ -116,8 +114,7 @@ pub enum ScalarValue {
     Dictionary(Box<DataType>, Box<ScalarValue>),
 }
 
-// manual implementation of `PartialEq` that uses OrderedFloat to
-// get defined behavior for floating point
+// manual implementation of `PartialEq`
 impl PartialEq for ScalarValue {
     fn eq(&self, other: &Self) -> bool {
         use ScalarValue::*;
@@ -131,17 +128,15 @@ impl PartialEq for ScalarValue {
             (Decimal128(_, _, _), _) => false,
             (Boolean(v1), Boolean(v2)) => v1.eq(v2),
             (Boolean(_), _) => false,
-            (Float32(v1), Float32(v2)) => {
-                let v1 = v1.map(OrderedFloat);
-                let v2 = v2.map(OrderedFloat);
-                v1.eq(&v2)
-            }
+            (Float32(v1), Float32(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
+                _ => v1.eq(v2),
+            },
             (Float32(_), _) => false,
-            (Float64(v1), Float64(v2)) => {
-                let v1 = v1.map(OrderedFloat);
-                let v2 = v2.map(OrderedFloat);
-                v1.eq(&v2)
-            }
+            (Float64(v1), Float64(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
+                _ => v1.eq(v2),
+            },
             (Float64(_), _) => false,
             (Int8(v1), Int8(v2)) => v1.eq(v2),
             (Int8(_), _) => false,
@@ -201,8 +196,7 @@ impl PartialEq for ScalarValue {
     }
 }
 
-// manual implementation of `PartialOrd` that uses OrderedFloat to
-// get defined behavior for floating point
+// manual implementation of `PartialOrd`
 impl PartialOrd for ScalarValue {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         use ScalarValue::*;
@@ -221,17 +215,15 @@ impl PartialOrd for ScalarValue {
             (Decimal128(_, _, _), _) => None,
             (Boolean(v1), Boolean(v2)) => v1.partial_cmp(v2),
             (Boolean(_), _) => None,
-            (Float32(v1), Float32(v2)) => {
-                let v1 = v1.map(OrderedFloat);
-                let v2 = v2.map(OrderedFloat);
-                v1.partial_cmp(&v2)
-            }
+            (Float32(v1), Float32(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
+                _ => v1.partial_cmp(v2),
+            },
             (Float32(_), _) => None,
-            (Float64(v1), Float64(v2)) => {
-                let v1 = v1.map(OrderedFloat);
-                let v2 = v2.map(OrderedFloat);
-                v1.partial_cmp(&v2)
-            }
+            (Float64(v1), Float64(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
+                _ => v1.partial_cmp(v2),
+            },
             (Float64(_), _) => None,
             (Int8(v1), Int8(v2)) => v1.partial_cmp(v2),
             (Int8(_), _) => None,
@@ -533,7 +525,7 @@ macro_rules! get_sign {
 
 #[inline]
 pub fn date32_add(days: i32, scalar: &ScalarValue, sign: i32) -> Result<i32> {
-    let epoch = NaiveDate::from_ymd(1970, 1, 1);
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let prior = epoch.add(Duration::days(days as i64));
     let posterior = do_date_math(prior, scalar, sign)?;
     Ok(posterior.sub(epoch).num_days() as i32)
@@ -541,7 +533,7 @@ pub fn date32_add(days: i32, scalar: &ScalarValue, sign: i32) -> Result<i32> {
 
 #[inline]
 pub fn date64_add(ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let epoch = NaiveDate::from_ymd(1970, 1, 1);
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let prior = epoch.add(Duration::milliseconds(ms));
     let posterior = do_date_math(prior, scalar, sign)?;
     Ok(posterior.sub(epoch).num_milliseconds())
@@ -580,7 +572,12 @@ fn do_date_time_math(
     scalar: &ScalarValue,
     sign: i32,
 ) -> Result<NaiveDateTime> {
-    let prior = NaiveDateTime::from_timestamp(secs, nsecs);
+    let prior = NaiveDateTime::from_timestamp_opt(secs, nsecs).ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "Could not conert to NaiveDateTime: secs {} nsecs {} scalar {:?} sign {}",
+            secs, nsecs, scalar, sign
+        ))
+    })?;
     do_date_math(prior, scalar, sign)
 }
 
@@ -625,8 +622,23 @@ where
     intermediate.add(Duration::milliseconds(ms as i64))
 }
 
-// manual implementation of `Hash` that uses OrderedFloat to
-// get defined behavior for floating point
+//Float wrapper over f32/f64. Just because we cannot build std::hash::Hash for floats directly we have to do it through type wrapper
+struct Fl<T>(T);
+
+macro_rules! hash_float_value {
+    ($(($t:ty, $i:ty)),+) => {
+        $(impl std::hash::Hash for Fl<$t> {
+            #[inline]
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                state.write(&<$i>::from_ne_bytes(self.0.to_ne_bytes()).to_ne_bytes())
+            }
+        })+
+    };
+}
+
+hash_float_value!((f64, u64), (f32, u32));
+
+// manual implementation of `Hash`
 impl std::hash::Hash for ScalarValue {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         use ScalarValue::*;
@@ -637,14 +649,8 @@ impl std::hash::Hash for ScalarValue {
                 s.hash(state)
             }
             Boolean(v) => v.hash(state),
-            Float32(v) => {
-                let v = v.map(OrderedFloat);
-                v.hash(state)
-            }
-            Float64(v) => {
-                let v = v.map(OrderedFloat);
-                v.hash(state)
-            }
+            Float32(v) => v.map(Fl).hash(state),
+            Float64(v) => v.map(Fl).hash(state),
             Int8(v) => v.hash(state),
             Int16(v) => v.hash(state),
             Int32(v) => v.hash(state),
@@ -1881,12 +1887,13 @@ impl ScalarValue {
         index: usize,
         precision: u8,
         scale: u8,
-    ) -> ScalarValue {
-        let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+    ) -> Result<ScalarValue> {
+        let array = as_decimal128_array(array)?;
         if array.is_null(index) {
-            ScalarValue::Decimal128(None, precision, scale)
+            Ok(ScalarValue::Decimal128(None, precision, scale))
         } else {
-            ScalarValue::Decimal128(Some(array.value(index)), precision, scale)
+            let value = array.value(index);
+            Ok(ScalarValue::Decimal128(Some(value), precision, scale))
         }
     }
 
@@ -1902,7 +1909,7 @@ impl ScalarValue {
             DataType::Decimal128(precision, scale) => {
                 ScalarValue::get_decimal_value_from_array(
                     array, index, *precision, *scale,
-                )
+                )?
             }
             DataType::Boolean => typed_cast!(array, index, BooleanArray, Boolean),
             DataType::Float64 => typed_cast!(array, index, Float64Array, Float64),
@@ -2073,14 +2080,16 @@ impl ScalarValue {
         value: &Option<i128>,
         precision: u8,
         scale: u8,
-    ) -> bool {
-        let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+    ) -> Result<bool> {
+        let array = as_decimal128_array(array)?;
         if array.precision() != precision || array.scale() != scale {
-            return false;
+            return Ok(false);
         }
-        match value {
-            None => array.is_null(index),
-            Some(v) => !array.is_null(index) && array.value(index) == *v,
+        let is_null = array.is_null(index);
+        if let Some(v) = value {
+            Ok(!array.is_null(index) && array.value(index) == *v)
+        } else {
+            Ok(is_null)
         }
     }
 
@@ -2105,6 +2114,7 @@ impl ScalarValue {
         match self {
             ScalarValue::Decimal128(v, precision, scale) => {
                 ScalarValue::eq_array_decimal(array, index, v, *precision, *scale)
+                    .unwrap()
             }
             ScalarValue::Boolean(val) => {
                 eq_array_primitive!(array, index, BooleanArray, val)
@@ -2696,14 +2706,14 @@ mod tests {
 
         // decimal scalar to array
         let array = decimal_value.to_array();
-        let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        let array = as_decimal128_array(&array)?;
         assert_eq!(1, array.len());
         assert_eq!(DataType::Decimal128(10, 1), array.data_type().clone());
         assert_eq!(123i128, array.value(0));
 
         // decimal scalar to array with size
         let array = decimal_value.to_array_of_size(10);
-        let array_decimal = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        let array_decimal = as_decimal128_array(&array)?;
         assert_eq!(10, array.len());
         assert_eq!(DataType::Decimal128(10, 1), array.data_type().clone());
         assert_eq!(123i128, array_decimal.value(0));

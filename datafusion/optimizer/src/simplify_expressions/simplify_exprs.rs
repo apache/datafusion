@@ -516,7 +516,7 @@ mod tests {
         // expect the same timestamp appears in both exprs
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected = format!(
-            "Projection: TimestampNanosecond({}, Some(\"UTC\")) AS now(), TimestampNanosecond({}, Some(\"UTC\")) AS t2\
+            "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\
             \n  TableScan: test",
             time.timestamp_nanos(),
             time.timestamp_nanos()
@@ -595,8 +595,6 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-
-        println!("{:?}", plan);
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
@@ -706,7 +704,8 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: test.d NOT IN ([Int32(1), Int32(2), Int32(3)])\
+        let expected =
+            "Filter: test.d != Int32(3) AND test.d != Int32(2) AND test.d != Int32(1)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -721,7 +720,8 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        let expected = "Filter: test.d IN ([Int32(1), Int32(2), Int32(3)])\
+        let expected =
+            "Filter: test.d = Int32(3) OR test.d = Int32(2) OR test.d = Int32(1)\
         \n  TableScan: test";
 
         assert_optimized_plan_eq(&plan, expected);

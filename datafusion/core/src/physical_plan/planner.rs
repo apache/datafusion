@@ -63,8 +63,8 @@ use datafusion_expr::expr::{
     Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
-use datafusion_expr::utils::{expand_wildcard, expr_to_columns};
-use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+use datafusion_expr::utils::expand_wildcard;
+use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -72,7 +72,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use log::{debug, trace};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::Arc;
 
@@ -522,8 +522,9 @@ impl DefaultPhysicalPlanner {
                         && session_state.config.target_partitions > 1
                         && session_state.config.repartition_windows;
 
-                    let input_exec = if can_repartition {
-                        let partition_keys = partition_keys
+                    let physical_partition_keys = if can_repartition
+                    {
+                        partition_keys
                             .iter()
                             .map(|e| {
                                 self.create_physical_expr(
@@ -533,19 +534,11 @@ impl DefaultPhysicalPlanner {
                                     session_state,
                                 )
                             })
-                            .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?;
-                        Arc::new(RepartitionExec::try_new(
-                            input_exec,
-                            Partitioning::Hash(
-                                partition_keys,
-                                session_state.config.target_partitions,
-                            ),
-                        )?)
+                            .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?
                     } else {
-                        input_exec
+                        vec![]
                     };
 
-                    // add a sort phase
                     let get_sort_keys = |expr: &Expr| match expr {
                         Expr::WindowFunction {
                             ref partition_by,
@@ -576,8 +569,8 @@ impl DefaultPhysicalPlanner {
 
                     let logical_input_schema = input.schema();
 
-                    let input_exec = if sort_keys.is_empty() {
-                        input_exec
+                    let physical_sort_keys = if sort_keys.is_empty() {
+                        None
                     } else {
                         let physical_input_schema = input_exec.schema();
                         let sort_keys = sort_keys
@@ -600,11 +593,7 @@ impl DefaultPhysicalPlanner {
                                 _ => unreachable!(),
                             })
                             .collect::<Result<Vec<_>>>()?;
-                        Arc::new(if can_repartition {
-                            SortExec::new_with_partitioning(sort_keys, input_exec, true, None)
-                        } else {
-                            SortExec::try_new(sort_keys, input_exec, None)?
-                        })
+                        Some(sort_keys)
                     };
 
                     let physical_input_schema = input_exec.schema();
@@ -624,6 +613,8 @@ impl DefaultPhysicalPlanner {
                         window_expr,
                         input_exec,
                         physical_input_schema,
+                        physical_partition_keys,
+                        physical_sort_keys,
                     )?))
                 }
                 LogicalPlan::Aggregate(Aggregate {
@@ -674,16 +665,8 @@ impl DefaultPhysicalPlanner {
                         Arc<dyn ExecutionPlan>,
                         AggregateMode,
                     ) = if can_repartition {
-                        // Divide partial hash aggregates into multiple partitions by hash key
-                        let hash_repartition = Arc::new(RepartitionExec::try_new(
-                            initial_aggr,
-                            Partitioning::Hash(
-                                final_group.clone(),
-                                session_state.config.target_partitions,
-                            ),
-                        )?);
-                        // Combine hash aggregates within the partition
-                        (hash_repartition, AggregateMode::FinalPartitioned)
+                        // construct a second aggregation with 'AggregateMode::FinalPartitioned'
+                        (initial_aggr, AggregateMode::FinalPartitioned)
                     } else {
                         // construct a second aggregation, keeping the final column name equal to the
                         // first aggregation and the expressions corresponding to the respective aggregate
@@ -892,8 +875,7 @@ impl DefaultPhysicalPlanner {
                     let join_filter = match filter {
                         Some(expr) => {
                             // Extract columns from filter expression
-                            let mut cols = HashSet::new();
-                            expr_to_columns(expr, &mut cols)?;
+                            let cols = expr.to_columns()?;
 
                             // Collect left & right field indices
                             let left_field_indices = cols.iter()
@@ -951,32 +933,10 @@ impl DefaultPhysicalPlanner {
                     if session_state.config.target_partitions > 1
                         && session_state.config.repartition_joins
                     {
-                        let (left_expr, right_expr) = join_on
-                            .iter()
-                            .map(|(l, r)| {
-                                (
-                                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-                                )
-                            })
-                            .unzip();
-
                         // Use hash partition by default to parallelize hash joins
                         Ok(Arc::new(HashJoinExec::try_new(
-                            Arc::new(RepartitionExec::try_new(
-                                physical_left,
-                                Partitioning::Hash(
-                                    left_expr,
-                                    session_state.config.target_partitions,
-                                ),
-                            )?),
-                            Arc::new(RepartitionExec::try_new(
-                                physical_right,
-                                Partitioning::Hash(
-                                    right_expr,
-                                    session_state.config.target_partitions,
-                                ),
-                            )?),
+                            physical_left,
+                            physical_right,
                             join_on,
                             join_filter,
                             join_type,
@@ -1497,12 +1457,6 @@ pub fn create_window_expr_with_name(
                 })
                 .collect::<Result<Vec<_>>>()?;
             if let Some(ref window_frame) = window_frame {
-                if window_frame.units == WindowFrameUnits::Groups {
-                    return Err(DataFusionError::NotImplemented(
-                        "Window frame definitions involving GROUPS are not supported yet"
-                            .to_string(),
-                    ));
-                }
                 if !is_window_valid(window_frame) {
                     return Err(DataFusionError::Execution(format!(
                         "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
@@ -2040,7 +1994,9 @@ mod tests {
             .build()?;
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8, and the const will be evaluated.
-        let expected = "expr: [(InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"1\") }], negated: false }";
+
+        let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\") } }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\") } } }";
+
         let actual = format!("{:?}", execution_plan);
         assert!(actual.contains(expected), "{}", actual);
 
@@ -2304,10 +2260,6 @@ mod tests {
 
         fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
             None
-        }
-
-        fn relies_on_input_order(&self) -> bool {
-            false
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

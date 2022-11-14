@@ -21,6 +21,7 @@ use datafusion::{
     execution::registry::FunctionRegistry,
     physical_plan::{expressions::AvgAccumulator, functions::make_scalar_function},
 };
+use datafusion_common::cast::as_int32_array;
 use datafusion_expr::{create_udaf, LogicalPlanBuilder};
 
 /// test that casting happens on udfs.
@@ -57,14 +58,8 @@ async fn scalar_udf() -> Result<()> {
     ctx.register_batch("t", batch)?;
 
     let myfunc = |args: &[ArrayRef]| {
-        let l = &args[0]
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("cast failed");
-        let r = &args[1]
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("cast failed");
+        let l = as_int32_array(&args[0])?;
+        let r = as_int32_array(&args[1])?;
         Ok(Arc::new(add(l, r)?) as ArrayRef)
     };
     let myfunc = make_scalar_function(myfunc);
@@ -113,21 +108,9 @@ async fn scalar_udf() -> Result<()> {
     assert_batches_eq!(expected, &result);
 
     let batch = &result[0];
-    let a = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .expect("failed to cast a");
-    let b = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .expect("failed to cast b");
-    let sum = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .expect("failed to cast sum");
+    let a = as_int32_array(batch.column(0))?;
+    let b = as_int32_array(batch.column(1))?;
+    let sum = as_int32_array(batch.column(2))?;
 
     assert_eq!(4, a.len());
     assert_eq!(4, b.len());

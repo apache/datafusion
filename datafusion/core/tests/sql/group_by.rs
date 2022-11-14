@@ -501,7 +501,7 @@ async fn group_by_date_trunc() -> Result<()> {
     // generate a partitioned file
     for partition in 0..4 {
         let filename = format!("partition-{}.{}", partition, "csv");
-        let file_path = tmp_dir.path().join(&filename);
+        let file_path = tmp_dir.path().join(filename);
         let mut file = File::create(file_path)?;
 
         // generate some data
@@ -527,8 +527,8 @@ async fn group_by_date_trunc() -> Result<()> {
         "+---------------------+--------------+",
         "| week                | SUM(test.c2) |",
         "+---------------------+--------------+",
-        "| 2020-12-07 00:00:00 | 24           |",
-        "| 2020-12-14 00:00:00 | 156          |",
+        "| 2020-12-07T00:00:00 | 24           |",
+        "| 2020-12-14T00:00:00 | 156          |",
         "+---------------------+--------------+",
     ];
     assert_batches_sorted_eq!(expected, &results);

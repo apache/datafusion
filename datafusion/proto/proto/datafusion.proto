@@ -109,6 +109,7 @@ message ListingTableScanNode {
     ParquetFormat parquet = 11;
     AvroFormat avro = 12;
   }
+  repeated datafusion.LogicalExprNode file_sort_order = 13;
 }
 
 message ViewTableScanNode {
@@ -176,6 +177,7 @@ message CreateExternalTableNode {
   string delimiter = 8;
   string definition = 9;
   string file_compression_type = 10;
+  map<string, string> options = 11;
 }
 
 message CreateCatalogSchemaNode {
@@ -409,8 +411,10 @@ message AliasNode {
 }
 
 message BinaryExprNode {
-  LogicalExprNode l = 1;
-  LogicalExprNode r = 2;
+  // Represents the operands from the left inner most expression
+  // to the right outer most expression where each of them are chained
+  // with the operator 'op'.
+  repeated LogicalExprNode operands = 1;
   string op = 3;
 }
 
