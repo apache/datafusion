@@ -2960,10 +2960,13 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use datafusion_common::assert_contains;
-    use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
     use std::any::Any;
+
+    use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
+
+    use datafusion_common::assert_contains;
+
+    use super::*;
 
     #[test]
     fn select_no_relation() {
