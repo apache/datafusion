@@ -28,7 +28,7 @@ use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{FileScanConfig, get_output_ordering};
+use super::{get_output_ordering, FileScanConfig};
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]

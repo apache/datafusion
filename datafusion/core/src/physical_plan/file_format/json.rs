@@ -43,7 +43,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::task::{self, JoinHandle};
 
-use super::{FileScanConfig, get_output_ordering};
+use super::{get_output_ordering, FileScanConfig};
 
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]
