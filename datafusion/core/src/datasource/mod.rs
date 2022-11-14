@@ -125,8 +125,8 @@ pub async fn get_statistics_with_limit(
     };
 
     let statistics = Statistics {
-        num_rows: Some(num_rows as usize),
-        total_byte_size: Some(total_byte_size as usize),
+        num_rows: Some(num_rows),
+        total_byte_size: Some(total_byte_size),
         column_statistics: column_stats,
         is_exact,
     };
@@ -167,7 +167,7 @@ fn get_col_stats(
                 None => None,
             };
             ColumnStatistics {
-                null_count: Some(null_counts[i] as usize),
+                null_count: Some(null_counts[i]),
                 max_value,
                 min_value,
                 distinct_count: None,

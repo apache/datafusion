@@ -209,7 +209,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .project(
                             plan.schema().fields().iter().zip(columns.into_iter()).map(
                                 |(field, ident)| {
-                                    col(field.name()).alias(&normalize_ident(&ident))
+                                    col(field.name()).alias(normalize_ident(&ident))
                                 },
                             ),
                         )
@@ -717,7 +717,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
-                    .map(|x| Column::from_name(&normalize_ident(&x)))
+                    .map(|x| Column::from_name(normalize_ident(&x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
                     .join_using(&right, join_type, keys)?
@@ -840,7 +840,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Ok(LogicalPlanBuilder::from(plan.clone())
                 .project_with_alias(
                     plan.schema().fields().iter().zip(columns_alias.iter()).map(
-                        |(field, ident)| col(field.name()).alias(&normalize_ident(ident)),
+                        |(field, ident)| col(field.name()).alias(normalize_ident(ident)),
                     ),
                     Some(normalize_ident(&alias.name)),
                 )?

@@ -247,7 +247,7 @@ async fn benchmark_query(
         }
 
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-        millis.push(elapsed as f64);
+        millis.push(elapsed);
         let row_count = result.iter().map(|b| b.num_rows()).sum();
         println!(
             "Query {} iteration {} took {:.1} ms and returned {} rows",

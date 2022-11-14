@@ -525,7 +525,7 @@ macro_rules! get_sign {
 
 #[inline]
 pub fn date32_add(days: i32, scalar: &ScalarValue, sign: i32) -> Result<i32> {
-    let epoch = NaiveDate::from_ymd(1970, 1, 1);
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let prior = epoch.add(Duration::days(days as i64));
     let posterior = do_date_math(prior, scalar, sign)?;
     Ok(posterior.sub(epoch).num_days() as i32)
@@ -533,7 +533,7 @@ pub fn date32_add(days: i32, scalar: &ScalarValue, sign: i32) -> Result<i32> {
 
 #[inline]
 pub fn date64_add(ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let epoch = NaiveDate::from_ymd(1970, 1, 1);
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let prior = epoch.add(Duration::milliseconds(ms));
     let posterior = do_date_math(prior, scalar, sign)?;
     Ok(posterior.sub(epoch).num_milliseconds())
@@ -572,7 +572,12 @@ fn do_date_time_math(
     scalar: &ScalarValue,
     sign: i32,
 ) -> Result<NaiveDateTime> {
-    let prior = NaiveDateTime::from_timestamp(secs, nsecs);
+    let prior = NaiveDateTime::from_timestamp_opt(secs, nsecs).ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "Could not conert to NaiveDateTime: secs {} nsecs {} scalar {:?} sign {}",
+            secs, nsecs, scalar, sign
+        ))
+    })?;
     do_date_math(prior, scalar, sign)
 }
 
