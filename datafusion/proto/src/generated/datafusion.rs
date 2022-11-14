@@ -28,7 +28,7 @@ pub struct DfSchema {
 /// LogicalPlan is a nested type
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogicalPlanNode {
-    #[prost(oneof="logical_plan_node::LogicalPlanType", tags="1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25")]
+    #[prost(oneof="logical_plan_node::LogicalPlanType", tags="1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23")]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
 /// Nested message and enum types in `LogicalPlanNode`.
@@ -79,10 +79,6 @@ pub mod logical_plan_node {
         CreateView(::prost::alloc::boxed::Box<super::CreateViewNode>),
         #[prost(message, tag="23")]
         Distinct(::prost::alloc::boxed::Box<super::DistinctNode>),
-        #[prost(message, tag="24")]
-        ViewScan(::prost::alloc::boxed::Box<super::ViewTableScanNode>),
-        #[prost(message, tag="25")]
-        CustomScan(super::CustomTableScanNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -146,33 +142,6 @@ pub mod listing_table_scan_node {
         #[prost(message, tag="12")]
         Avro(super::AvroFormat),
     }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ViewTableScanNode {
-    #[prost(string, tag="1")]
-    pub table_name: ::prost::alloc::string::String,
-    #[prost(message, optional, boxed, tag="2")]
-    pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
-    #[prost(message, optional, tag="3")]
-    pub schema: ::core::option::Option<Schema>,
-    #[prost(message, optional, tag="4")]
-    pub projection: ::core::option::Option<ProjectionColumns>,
-    #[prost(string, tag="5")]
-    pub definition: ::prost::alloc::string::String,
-}
-/// Logical Plan to Scan a CustomTableProvider registered at runtime
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CustomTableScanNode {
-    #[prost(string, tag="1")]
-    pub table_name: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="2")]
-    pub projection: ::core::option::Option<ProjectionColumns>,
-    #[prost(message, optional, tag="3")]
-    pub schema: ::core::option::Option<Schema>,
-    #[prost(message, repeated, tag="4")]
-    pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
-    #[prost(bytes="vec", tag="5")]
-    pub custom_table_data: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectionNode {
@@ -257,10 +226,6 @@ pub struct CreateExternalTableNode {
     pub delimiter: ::prost::alloc::string::String,
     #[prost(string, tag="9")]
     pub definition: ::prost::alloc::string::String,
-    #[prost(string, tag="10")]
-    pub file_compression_type: ::prost::alloc::string::String,
-    #[prost(map="string, string", tag="11")]
-    pub options: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateCatalogSchemaNode {
@@ -409,7 +374,7 @@ pub mod logical_expr_node {
         Literal(super::ScalarValue),
         /// binary expressions
         #[prost(message, tag="4")]
-        BinaryExpr(super::BinaryExprNode),
+        BinaryExpr(::prost::alloc::boxed::Box<super::BinaryExprNode>),
         /// aggregate expressions
         #[prost(message, tag="5")]
         AggregateExpr(::prost::alloc::boxed::Box<super::AggregateExprNode>),
@@ -556,11 +521,10 @@ pub struct AliasNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BinaryExprNode {
-    /// Represents the operands from the left inner most expression
-    /// to the right outer most expression where each of them are chained
-    /// with the operator 'op'.
-    #[prost(message, repeated, tag="1")]
-    pub operands: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(message, optional, boxed, tag="1")]
+    pub l: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, optional, boxed, tag="2")]
+    pub r: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(string, tag="3")]
     pub op: ::prost::alloc::string::String,
 }
@@ -751,8 +715,20 @@ pub mod window_frame {
 pub struct WindowFrameBound {
     #[prost(enumeration="WindowFrameBoundType", tag="1")]
     pub window_frame_bound_type: i32,
-    #[prost(message, optional, tag="2")]
-    pub bound_value: ::core::option::Option<ScalarValue>,
+    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see <https://github.com/tokio-rs/prost/issues/430> and <https://github.com/tokio-rs/prost/pull/455>)
+    /// this syntax is ugly but is binary compatible with the "optional" keyword (see <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
+    #[prost(oneof="window_frame_bound::BoundValue", tags="2")]
+    pub bound_value: ::core::option::Option<window_frame_bound::BoundValue>,
+}
+/// Nested message and enum types in `WindowFrameBound`.
+pub mod window_frame_bound {
+    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see <https://github.com/tokio-rs/prost/issues/430> and <https://github.com/tokio-rs/prost/pull/455>)
+    /// this syntax is ugly but is binary compatible with the "optional" keyword (see <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum BoundValue {
+        #[prost(uint64, tag="2")]
+        Value(u64),
+    }
 }
 // /////////////////////////////////////////////////////////////////////////////////////////////////
 // Arrow Data Types
@@ -830,14 +806,31 @@ pub struct Union {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarListValue {
-    /// encode null explicitly to distinguish a list with a null value
-    /// from a list with no values)
-    #[prost(bool, tag="3")]
-    pub is_null: bool,
     #[prost(message, optional, tag="1")]
     pub field: ::core::option::Option<Field>,
     #[prost(message, repeated, tag="2")]
     pub values: ::prost::alloc::vec::Vec<ScalarValue>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarTimestampValue {
+    #[prost(string, tag="5")]
+    pub timezone: ::prost::alloc::string::String,
+    #[prost(oneof="scalar_timestamp_value::Value", tags="1, 2, 3, 4")]
+    pub value: ::core::option::Option<scalar_timestamp_value::Value>,
+}
+/// Nested message and enum types in `ScalarTimestampValue`.
+pub mod scalar_timestamp_value {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Value {
+        #[prost(int64, tag="1")]
+        TimeMicrosecondValue(i64),
+        #[prost(int64, tag="2")]
+        TimeNanosecondValue(i64),
+        #[prost(int64, tag="3")]
+        TimeSecondValue(i64),
+        #[prost(int64, tag="4")]
+        TimeMillisecondValue(i64),
+    }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarTime32Value {
@@ -870,27 +863,6 @@ pub mod scalar_time64_value {
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ScalarTimestampValue {
-    #[prost(string, tag="5")]
-    pub timezone: ::prost::alloc::string::String,
-    #[prost(oneof="scalar_timestamp_value::Value", tags="1, 2, 3, 4")]
-    pub value: ::core::option::Option<scalar_timestamp_value::Value>,
-}
-/// Nested message and enum types in `ScalarTimestampValue`.
-pub mod scalar_timestamp_value {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Value {
-        #[prost(int64, tag="1")]
-        TimeMicrosecondValue(i64),
-        #[prost(int64, tag="2")]
-        TimeNanosecondValue(i64),
-        #[prost(int64, tag="3")]
-        TimeSecondValue(i64),
-        #[prost(int64, tag="4")]
-        TimeMillisecondValue(i64),
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarDictionaryValue {
     #[prost(message, optional, tag="1")]
     pub index_type: ::core::option::Option<ArrowType>,
@@ -917,25 +889,17 @@ pub struct StructValue {
     pub fields: ::prost::alloc::vec::Vec<Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ScalarFixedSizeBinary {
-    #[prost(bytes="vec", tag="1")]
-    pub values: ::prost::alloc::vec::Vec<u8>,
-    #[prost(int32, tag="2")]
-    pub length: i32,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarValue {
-    #[prost(oneof="scalar_value::Value", tags="33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34")]
+    #[prost(oneof="scalar_value::Value", tags="19, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18, 20, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33")]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
 /// Nested message and enum types in `ScalarValue`.
 pub mod scalar_value {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Value {
-        /// was PrimitiveScalarType null_value = 19;
-        /// Null value of any type
-        #[prost(message, tag="33")]
-        NullValue(super::ArrowType),
+        /// Null value of any type (type is encoded)
+        #[prost(enumeration="super::PrimitiveScalarType", tag="19")]
+        NullValue(i32),
         #[prost(bool, tag="1")]
         BoolValue(bool),
         #[prost(string, tag="2")]
@@ -965,11 +929,10 @@ pub mod scalar_value {
         /// Literal Date32 value always has a unit of day
         #[prost(int32, tag="14")]
         Date32Value(i32),
-        #[prost(message, tag="15")]
-        Time32Value(super::ScalarTime32Value),
-        /// WAS: ScalarType null_list_value = 18;
         #[prost(message, tag="17")]
         ListValue(super::ScalarListValue),
+        #[prost(message, tag="18")]
+        NullListValue(super::ScalarType),
         #[prost(message, tag="20")]
         Decimal128Value(super::Decimal128),
         #[prost(int64, tag="21")]
@@ -987,13 +950,13 @@ pub mod scalar_value {
         #[prost(bytes, tag="29")]
         LargeBinaryValue(::prost::alloc::vec::Vec<u8>),
         #[prost(message, tag="30")]
-        Time64Value(super::ScalarTime64Value),
+        Time32Value(super::ScalarTime32Value),
         #[prost(message, tag="31")]
-        IntervalMonthDayNano(super::IntervalMonthDayNanoValue),
+        Time64Value(super::ScalarTime64Value),
         #[prost(message, tag="32")]
+        IntervalMonthDayNano(super::IntervalMonthDayNanoValue),
+        #[prost(message, tag="33")]
         StructValue(super::StructValue),
-        #[prost(message, tag="34")]
-        FixedSizeBinaryValue(super::ScalarFixedSizeBinary),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1005,7 +968,32 @@ pub struct Decimal128 {
     #[prost(int64, tag="3")]
     pub s: i64,
 }
-/// Serialized data type
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarType {
+    #[prost(oneof="scalar_type::Datatype", tags="1, 2")]
+    pub datatype: ::core::option::Option<scalar_type::Datatype>,
+}
+/// Nested message and enum types in `ScalarType`.
+pub mod scalar_type {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Datatype {
+        #[prost(enumeration="super::PrimitiveScalarType", tag="1")]
+        Scalar(i32),
+        #[prost(message, tag="2")]
+        List(super::ScalarListType),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarListType {
+    #[prost(string, repeated, tag="3")]
+    pub field_names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(enumeration="PrimitiveScalarType", tag="2")]
+    pub deepest_type: i32,
+}
+/// Broke out into multiple message types so that type
+/// metadata did not need to be in separate message
+/// All types that are of the empty message types contain no additional metadata
+/// about the type
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ArrowType {
     #[prost(oneof="arrow_type::ArrowTypeEnum", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 32, 15, 16, 31, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30")]
@@ -1145,10 +1133,8 @@ pub enum JoinType {
     Left = 1,
     Right = 2,
     Full = 3,
-    Leftsemi = 4,
-    Leftanti = 5,
-    Rightsemi = 6,
-    Rightanti = 7,
+    Semi = 4,
+    Anti = 5,
 }
 impl JoinType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1161,10 +1147,8 @@ impl JoinType {
             JoinType::Left => "LEFT",
             JoinType::Right => "RIGHT",
             JoinType::Full => "FULL",
-            JoinType::Leftsemi => "LEFTSEMI",
-            JoinType::Leftanti => "LEFTANTI",
-            JoinType::Rightsemi => "RIGHTSEMI",
-            JoinType::Rightanti => "RIGHTANTI",
+            JoinType::Semi => "SEMI",
+            JoinType::Anti => "ANTI",
         }
     }
 }
@@ -1259,9 +1243,6 @@ pub enum ScalarFunction {
     Atan2 = 67,
     DateBin = 68,
     ArrowTypeof = 69,
-    CurrentDate = 70,
-    CurrentTime = 71,
-    Uuid = 72,
 }
 impl ScalarFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1340,9 +1321,6 @@ impl ScalarFunction {
             ScalarFunction::Atan2 => "Atan2",
             ScalarFunction::DateBin => "DateBin",
             ScalarFunction::ArrowTypeof => "ArrowTypeof",
-            ScalarFunction::CurrentDate => "CurrentDate",
-            ScalarFunction::CurrentTime => "CurrentTime",
-            ScalarFunction::Uuid => "Uuid",
         }
     }
 }
@@ -1549,6 +1527,87 @@ impl UnionMode {
         match self {
             UnionMode::Sparse => "sparse",
             UnionMode::Dense => "dense",
+        }
+    }
+}
+/// Contains all valid datafusion scalar type except for
+/// List
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum PrimitiveScalarType {
+    /// arrow::Type::BOOL
+    Bool = 0,
+    /// arrow::Type::UINT8
+    Uint8 = 1,
+    /// arrow::Type::INT8
+    Int8 = 2,
+    /// represents arrow::Type fields in src/arrow/type.h
+    Uint16 = 3,
+    Int16 = 4,
+    Uint32 = 5,
+    Int32 = 6,
+    Uint64 = 7,
+    Int64 = 8,
+    Float32 = 9,
+    Float64 = 10,
+    Utf8 = 11,
+    LargeUtf8 = 12,
+    Date32 = 13,
+    TimestampMicrosecond = 14,
+    TimestampNanosecond = 15,
+    Null = 16,
+    Decimal128 = 17,
+    Date64 = 20,
+    TimestampSecond = 21,
+    TimestampMillisecond = 22,
+    IntervalYearmonth = 23,
+    IntervalDaytime = 24,
+    IntervalMonthdaynano = 31,
+    Binary = 25,
+    LargeBinary = 26,
+    Time32Second = 27,
+    Time32Millisecond = 28,
+    Time64Microsecond = 29,
+    Time64Nanosecond = 30,
+}
+
+impl PrimitiveScalarType {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            PrimitiveScalarType::Bool => "BOOL",
+            PrimitiveScalarType::Uint8 => "UINT8",
+            PrimitiveScalarType::Int8 => "INT8",
+            PrimitiveScalarType::Uint16 => "UINT16",
+            PrimitiveScalarType::Int16 => "INT16",
+            PrimitiveScalarType::Uint32 => "UINT32",
+            PrimitiveScalarType::Int32 => "INT32",
+            PrimitiveScalarType::Uint64 => "UINT64",
+            PrimitiveScalarType::Int64 => "INT64",
+            PrimitiveScalarType::Float32 => "FLOAT32",
+            PrimitiveScalarType::Float64 => "FLOAT64",
+            PrimitiveScalarType::Utf8 => "UTF8",
+            PrimitiveScalarType::LargeUtf8 => "LARGE_UTF8",
+            PrimitiveScalarType::Date32 => "DATE32",
+            PrimitiveScalarType::TimestampMicrosecond => "TIMESTAMP_MICROSECOND",
+            PrimitiveScalarType::TimestampNanosecond => "TIMESTAMP_NANOSECOND",
+            PrimitiveScalarType::Null => "NULL",
+            PrimitiveScalarType::Decimal128 => "DECIMAL128",
+            PrimitiveScalarType::Date64 => "DATE64",
+            PrimitiveScalarType::TimestampSecond => "TIMESTAMP_SECOND",
+            PrimitiveScalarType::TimestampMillisecond => "TIMESTAMP_MILLISECOND",
+            PrimitiveScalarType::IntervalYearmonth => "INTERVAL_YEARMONTH",
+            PrimitiveScalarType::IntervalDaytime => "INTERVAL_DAYTIME",
+            PrimitiveScalarType::IntervalMonthdaynano => "INTERVAL_MONTHDAYNANO",
+            PrimitiveScalarType::Binary => "BINARY",
+            PrimitiveScalarType::LargeBinary => "LARGE_BINARY",
+            PrimitiveScalarType::Time32Second => "TIME32_SECOND",
+            PrimitiveScalarType::Time32Millisecond => "TIME32_MILLISECOND",
+            PrimitiveScalarType::Time64Microsecond => "TIME64MICROSECOND",
+            PrimitiveScalarType::Time64Nanosecond => "TIME64NANOSECOND",
         }
     }
 }

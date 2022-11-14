@@ -1075,8 +1075,48 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
 
-            datafusion::scalar::ScalarValue::Time64(v) => {
-                create_proto_scalar(v, &data_type, |v| Value::Time64Value(*v))
+
+
+
+
+            datafusion::scalar::ScalarValue::Time32Second(v) => {
+                create_proto_scalar(v, &data_type, |v| {
+                    Value::Time32Value(protobuf::ScalarTime32Value {
+                        value: Some(
+                            protobuf::scalar_time32_value::Value::Time32SecondValue(*v),
+                        ),
+                    })
+                })
+            }
+
+            datafusion::scalar::ScalarValue::Time32Millisecond(v) => {
+                create_proto_scalar(v, &data_type, |v| {
+                    Value::Time32Value(protobuf::ScalarTime32Value {
+                        value: Some(
+                            protobuf::scalar_time32_value::Value::Time32MillisecondValue(*v),
+                        ),
+                    })
+                })
+            }
+
+            datafusion::scalar::ScalarValue::Time64Microsecond(v) => {
+                create_proto_scalar(v, &data_type, |v| {
+                    Value::Time64Value(protobuf::ScalarTime64Value {
+                        value: Some(
+                            protobuf::scalar_time64_value::Value::Time64MicrosecondValue(*v),
+                        ),
+                    })
+                })
+            }
+
+            datafusion::scalar::ScalarValue::Time64Nanosecond(v) => {
+                create_proto_scalar(v, &data_type, |v| {
+                    Value::Time64Value(protobuf::ScalarTime64Value {
+                        value: Some(
+                            protobuf::scalar_time64_value::Value::Time64NanosecondValue(*v),
+                        ),
+                    })
+                })
             }
 
             datafusion::scalar::ScalarValue::IntervalMonthDayNano(v) => {

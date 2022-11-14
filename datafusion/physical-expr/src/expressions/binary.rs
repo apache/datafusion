@@ -460,6 +460,18 @@ macro_rules! binary_array_op {
             DataType::Date64 => {
                 compute_op!($LEFT, $RIGHT, $OP, Date64Array)
             }
+            DataType::Time32(TimeUnit::Second) => {
+                compute_op!($LEFT, $RIGHT, $OP, Time32SecondArray)
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                compute_op!($LEFT, $RIGHT, $OP, Time32MillisecondArray)
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                compute_op!($LEFT, $RIGHT, $OP, Time64MicrosecondArray)
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                compute_op!($LEFT, $RIGHT, $OP, Time64NanosecondArray)
+            }
             DataType::Boolean => compute_bool_op!($LEFT, $RIGHT, $OP, BooleanArray),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for binary operation '{}' on dyn arrays",
@@ -814,6 +826,10 @@ macro_rules! binary_array_op_dyn_scalar {
             ScalarValue::Float64(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Date32(_) => compute_op_scalar!($LEFT, right, $OP, Date32Array),
             ScalarValue::Date64(_) => compute_op_scalar!($LEFT, right, $OP, Date64Array),
+            ScalarValue::Time32Second(_) => compute_op_scalar!($LEFT, right, $OP, Time32SecondArray),
+            ScalarValue::Time32Millisecond(_) => compute_op_scalar!($LEFT, right, $OP, Time32MillisecondArray),
+            ScalarValue::Time64Microsecond(_) => compute_op_scalar!($LEFT, right, $OP, Time64MicrosecondArray),
+            ScalarValue::Time64Nanosecond(_) => compute_op_scalar!($LEFT, right, $OP, Time64NanosecondArray),
             ScalarValue::TimestampSecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampSecondArray),
             ScalarValue::TimestampMillisecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMillisecondArray),
             ScalarValue::TimestampMicrosecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMicrosecondArray),

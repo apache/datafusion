@@ -10067,6 +10067,224 @@ impl<'de> serde::Deserialize<'de> for ScalarListValue {
         deserializer.deserialize_struct("datafusion.ScalarListValue", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ScalarTime32Value {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.value.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ScalarTime32Value", len)?;
+        if let Some(v) = self.value.as_ref() {
+            match v {
+                scalar_time32_value::Value::Time32SecondValue(v) => {
+                    struct_ser.serialize_field("time32SecondValue", v)?;
+                }
+                scalar_time32_value::Value::Time32MillisecondValue(v) => {
+                    struct_ser.serialize_field("time32MillisecondValue", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ScalarTime32Value {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "time32_second_value",
+            "time32SecondValue",
+            "time32_millisecond_value",
+            "time32MillisecondValue",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Time32SecondValue,
+            Time32MillisecondValue,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "time32SecondValue" | "time32_second_value" => Ok(GeneratedField::Time32SecondValue),
+                            "time32MillisecondValue" | "time32_millisecond_value" => Ok(GeneratedField::Time32MillisecondValue),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ScalarTime32Value;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ScalarTime32Value")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<ScalarTime32Value, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut value__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Time32SecondValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("time32SecondValue"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_time32_value::Value::Time32SecondValue(x.0));
+                        }
+                        GeneratedField::Time32MillisecondValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("time32MillisecondValue"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_time32_value::Value::Time32MillisecondValue(x.0));
+                        }
+                    }
+                }
+                Ok(ScalarTime32Value {
+                    value: value__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ScalarTime32Value", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ScalarTime64Value {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.value.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ScalarTime64Value", len)?;
+        if let Some(v) = self.value.as_ref() {
+            match v {
+                scalar_time64_value::Value::Time64MicrosecondValue(v) => {
+                    struct_ser.serialize_field("time64MicrosecondValue", ToString::to_string(&v).as_str())?;
+                }
+                scalar_time64_value::Value::Time64NanosecondValue(v) => {
+                    struct_ser.serialize_field("time64NanosecondValue", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ScalarTime64Value {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "time64_microsecond_value",
+            "time64MicrosecondValue",
+            "time64_nanosecond_value",
+            "time64NanosecondValue",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Time64MicrosecondValue,
+            Time64NanosecondValue,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "time64MicrosecondValue" | "time64_microsecond_value" => Ok(GeneratedField::Time64MicrosecondValue),
+                            "time64NanosecondValue" | "time64_nanosecond_value" => Ok(GeneratedField::Time64NanosecondValue),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ScalarTime64Value;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ScalarTime64Value")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<ScalarTime64Value, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut value__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Time64MicrosecondValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("time64MicrosecondValue"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_time64_value::Value::Time64MicrosecondValue(x.0));
+                        }
+                        GeneratedField::Time64NanosecondValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("time64NanosecondValue"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_time64_value::Value::Time64NanosecondValue(x.0));
+                        }
+                    }
+                }
+                Ok(ScalarTime64Value {
+                    value: value__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ScalarTime64Value", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ScalarTimestampValue {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -10387,6 +10605,9 @@ impl serde::Serialize for ScalarValue {
                 scalar_value::Value::Date32Value(v) => {
                     struct_ser.serialize_field("date32Value", v)?;
                 }
+                scalar_value::Value::Time32Value(v) => {
+                    struct_ser.serialize_field("time32Value", v)?;
+                }
                 scalar_value::Value::ListValue(v) => {
                     struct_ser.serialize_field("listValue", v)?;
                 }
@@ -10415,7 +10636,7 @@ impl serde::Serialize for ScalarValue {
                     struct_ser.serialize_field("largeBinaryValue", pbjson::private::base64::encode(&v).as_str())?;
                 }
                 scalar_value::Value::Time64Value(v) => {
-                    struct_ser.serialize_field("time64Value", ToString::to_string(&v).as_str())?;
+                    struct_ser.serialize_field("time64Value", v)?;
                 }
                 scalar_value::Value::IntervalMonthDayNano(v) => {
                     struct_ser.serialize_field("intervalMonthDayNano", v)?;
@@ -10468,6 +10689,8 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "float64Value",
             "date_32_value",
             "date32Value",
+            "time32_value",
+            "time32Value",
             "list_value",
             "listValue",
             "decimal128_value",
@@ -10513,6 +10736,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             Float32Value,
             Float64Value,
             Date32Value,
+            Time32Value,
             ListValue,
             Decimal128Value,
             Date64Value,
@@ -10562,6 +10786,7 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "float32Value" | "float32_value" => Ok(GeneratedField::Float32Value),
                             "float64Value" | "float64_value" => Ok(GeneratedField::Float64Value),
                             "date32Value" | "date_32_value" => Ok(GeneratedField::Date32Value),
+                            "time32Value" | "time32_value" => Ok(GeneratedField::Time32Value),
                             "listValue" | "list_value" => Ok(GeneratedField::ListValue),
                             "decimal128Value" | "decimal128_value" => Ok(GeneratedField::Decimal128Value),
                             "date64Value" | "date_64_value" => Ok(GeneratedField::Date64Value),
@@ -10688,6 +10913,13 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             }
                             value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Date32Value(x.0));
                         }
+                        GeneratedField::Time32Value => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("time32Value"));
+                            }
+                            value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::Time32Value)
+;
+                        }
                         GeneratedField::ListValue => {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("listValue"));
@@ -10750,7 +10982,8 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             if value__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("time64Value"));
                             }
-                            value__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| scalar_value::Value::Time64Value(x.0));
+                            value__ = map.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::Time64Value)
+;
                         }
                         GeneratedField::IntervalMonthDayNano => {
                             if value__.is_some() {

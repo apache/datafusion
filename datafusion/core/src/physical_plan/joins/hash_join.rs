@@ -26,7 +26,7 @@ use arrow::{
         Date32Array, Date64Array, Decimal128Array, DictionaryArray, LargeStringArray,
         PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
-        UInt64Builder,
+        UInt64Builder, Time32SecondArray, Time32MillisecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     },
     compute,
     datatypes::{
@@ -1210,6 +1210,34 @@ fn equal_rows(
             }
             DataType::Date64 => {
                 equal_rows_elem!(Date64Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Time32(time_unit) => match time_unit {
+                TimeUnit::Second => {
+                    equal_rows_elem!(Time32SecondArray, l, r, left, right, null_equals_null)
+                }
+                TimeUnit::Millisecond => {
+                    equal_rows_elem!(Time32MillisecondArray, l, r, left, right, null_equals_null)
+                }
+                _ => {
+                    err = Some(Err(DataFusionError::Internal(
+                        "Unsupported data type in hasher".to_string(),
+                    )));
+                    false
+                }
+            }
+            DataType::Time64(time_unit) => match time_unit {
+                TimeUnit::Microsecond => {
+                    equal_rows_elem!(Time64MicrosecondArray, l, r, left, right, null_equals_null)
+                }
+                TimeUnit::Nanosecond => {
+                    equal_rows_elem!(Time64NanosecondArray, l, r, left, right, null_equals_null)
+                }
+                _ => {
+                    err = Some(Err(DataFusionError::Internal(
+                        "Unsupported data type in hasher".to_string(),
+                    )));
+                    false
+                }
             }
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => {
