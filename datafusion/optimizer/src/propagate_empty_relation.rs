@@ -111,11 +111,16 @@ impl OptimizerRule for PropagateEmptyRelation {
                         schema: plan.schema().clone(),
                     }))
                 } else if new_inputs.len() == 1 {
-                    Ok(LogicalPlan::Projection(Projection::new_from_schema(
-                        Arc::new((**(union.inputs.get(0).unwrap())).clone()),
-                        plan.schema().clone(),
-                        union.alias.clone(),
-                    )))
+                    let child = (**(union.inputs.get(0).unwrap())).clone();
+                    if child.schema().eq(plan.schema()) {
+                        Ok(child)
+                    } else {
+                        Ok(LogicalPlan::Projection(Projection::new_from_schema(
+                            Arc::new(child),
+                            plan.schema().clone(),
+                            union.alias.clone(),
+                        )))
+                    }
                 } else {
                     Ok(LogicalPlan::Union(Union {
                         inputs: new_inputs,
