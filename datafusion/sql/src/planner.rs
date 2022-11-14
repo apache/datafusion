@@ -2706,8 +2706,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // remove leading zeroes
             let str = n.trim_start_matches('0');
             if let Some(i) = str.find('.') {
-                // remove trailing zeroes
-                let str = str.trim_end_matches('0');
                 let p = str.len() - 1;
                 let s = str.len() - i - 1;
                 let str = str.replace('.', "");
@@ -3102,11 +3100,11 @@ mod tests {
             ("001", "Int64(1)"),
             ("0.1", "Decimal128(Some(1),1,1)"),
             ("0.01", "Decimal128(Some(1),2,2)"),
-            ("1.0", "Decimal128(Some(1),1,0)"),
+            ("1.0", "Decimal128(Some(10),2,1)"),
             ("10.01", "Decimal128(Some(1001),4,2)"),
             (
                 "10000000000000000000.00",
-                "Decimal128(Some(10000000000000000000),20,0)",
+                "Decimal128(Some(1000000000000000000000),22,2)",
             ),
         ];
         for (a, b) in test_data {
