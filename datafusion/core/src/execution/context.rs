@@ -1590,8 +1590,9 @@ impl SessionState {
             )));
         }
         physical_optimizers.push(Arc::new(Repartition::new()));
+        // Repartition rule could introduce additional RepartitionExec with RoundRobin partitioning.
+        // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
-        // physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
 
         SessionState {
             session_id,
@@ -1631,7 +1632,7 @@ impl SessionState {
             Some(host) => format!("{}://{}", url.scheme(), host),
             None => format!("{}://", url.scheme()),
         };
-        let path = &url.as_str()[authority.len() as usize..];
+        let path = &url.as_str()[authority.len()..];
         let path = object_store::path::Path::parse(path).expect("Can't parse path");
         let store = ObjectStoreUrl::parse(authority.as_str())
             .expect("Invalid default catalog url");
@@ -2650,7 +2651,7 @@ mod tests {
         // generate a partitioned file
         for partition in 0..partition_count {
             let filename = format!("partition-{}.{}", partition, file_extension);
-            let file_path = tmp_dir.path().join(&filename);
+            let file_path = tmp_dir.path().join(filename);
             let mut file = File::create(file_path)?;
 
             // generate some data

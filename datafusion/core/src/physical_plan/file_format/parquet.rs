@@ -680,7 +680,7 @@ pub async fn plan_to_parquet(
             for i in 0..plan.output_partitioning().partition_count() {
                 let plan = plan.clone();
                 let filename = format!("part-{}.parquet", i);
-                let path = fs_path.join(&filename);
+                let path = fs_path.join(filename);
                 let file = fs::File::create(path)?;
                 let mut writer =
                     ArrowWriter::try_new(file, plan.schema(), writer_properties.clone())?;
@@ -1618,7 +1618,7 @@ mod tests {
         // generate a partitioned file
         for partition in 0..partition_count {
             let filename = format!("partition-{}.{}", partition, file_extension);
-            let file_path = tmp_dir.path().join(&filename);
+            let file_path = tmp_dir.path().join(filename);
             let mut file = File::create(file_path)?;
 
             // generate some data
