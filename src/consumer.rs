@@ -1,6 +1,6 @@
 use async_recursion::async_recursion;
 use datafusion::common::{DFField, DFSchema, DFSchemaRef};
-use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::{LogicalPlan, aggregate_function};
 use datafusion::logical_plan::build_join_schema;
 use datafusion::prelude::JoinType;
 use datafusion::{
@@ -10,65 +10,83 @@ use datafusion::{
     prelude::{Column, DataFrame, SessionContext},
     scalar::ScalarValue,
 };
-use substrait::protobuf::sort_field::{SortKind::*, SortDirection};
-use substrait::protobuf::Plan;
-use std::collections::HashMap;
-use std::sync::Arc;
+
 use substrait::protobuf::{
+    aggregate_function::AggregationInvocation,
     expression::{
         field_reference::ReferenceType::MaskedReference, literal::LiteralType, MaskExpression,
         RexType,
     },
+    extensions::simple_extension_declaration::MappingType,
     function_argument::ArgType,
     read_rel::ReadType,
     rel::RelType,
-    Expression, Rel,
+    sort_field::{SortKind::*, SortDirection},
+    AggregateFunction, Expression, Plan, Rel,
 };
 
-pub fn reference_to_op(reference: u32) -> Result<Operator> {
-    match reference {
-        1 => Ok(Operator::Eq),
-        2 => Ok(Operator::NotEq),
-        3 => Ok(Operator::Lt),
-        4 => Ok(Operator::LtEq),
-        5 => Ok(Operator::Gt),
-        6 => Ok(Operator::GtEq),
-        7 => Ok(Operator::Plus),
-        8 => Ok(Operator::Minus),
-        9 => Ok(Operator::Multiply),
-        10 => Ok(Operator::Divide),
-        11 => Ok(Operator::Modulo),
-        12 => Ok(Operator::And),
-        13 => Ok(Operator::Or),
-        14 => Ok(Operator::Like),
-        15 => Ok(Operator::NotLike),
-        16 => Ok(Operator::IsDistinctFrom),
-        17 => Ok(Operator::IsNotDistinctFrom),
-        18 => Ok(Operator::RegexMatch),
-        19 => Ok(Operator::RegexIMatch),
-        20 => Ok(Operator::RegexNotMatch),
-        21 => Ok(Operator::RegexNotIMatch),
-        22 => Ok(Operator::BitwiseAnd),
-        23 => Ok(Operator::BitwiseOr),
-        24 => Ok(Operator::StringConcat),
-        25 => Ok(Operator::BitwiseXor),
-        26 => Ok(Operator::BitwiseShiftRight),
-        27 => Ok(Operator::BitwiseShiftLeft),
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
+
+pub fn name_to_op(name: &str) -> Result<Operator> {
+    match name {
+        "equal" => Ok(Operator::Eq),
+        "not_equal" => Ok(Operator::NotEq),
+        "lt" => Ok(Operator::Lt),
+        "lte" => Ok(Operator::LtEq),
+        "gt" => Ok(Operator::Gt),
+        "gte" => Ok(Operator::GtEq),
+        "add" => Ok(Operator::Plus),
+        "subtract" => Ok(Operator::Minus),
+        "multiply" => Ok(Operator::Multiply),
+        "divide" => Ok(Operator::Divide),
+        "mod" => Ok(Operator::Modulo),
+        "and" => Ok(Operator::And),
+        "or" => Ok(Operator::Or),
+        "like" => Ok(Operator::Like),
+        "not_like" => Ok(Operator::NotLike),
+        "is_distinct_from" => Ok(Operator::IsDistinctFrom),
+        "is_not_distinct_from" => Ok(Operator::IsNotDistinctFrom),
+        "regex_match" => Ok(Operator::RegexMatch),
+        "regex_imatch" => Ok(Operator::RegexIMatch),
+        "regex_not_match" => Ok(Operator::RegexNotMatch),
+        "regex_not_imatch" => Ok(Operator::RegexNotIMatch),
+        "bitwise_and" => Ok(Operator::BitwiseAnd),
+        "bitwise_or" => Ok(Operator::BitwiseOr),
+        "str_concat" => Ok(Operator::StringConcat),
+        "bitwise_xor" => Ok(Operator::BitwiseXor),
+        "bitwise_shift_right" => Ok(Operator::BitwiseShiftRight),
+        "bitwise_shift_left" => Ok(Operator::BitwiseShiftLeft),
         _ => Err(DataFusionError::NotImplemented(format!(
-            "Unsupported function_reference: {:?}",
-            reference
+            "Unsupported function name: {:?}",
+            name
         ))),
     }
 }
 
 /// Convert Substrait Plan to DataFusion DataFrame
 pub async fn from_substrait_plan(ctx: &mut SessionContext, plan: &Plan) -> Result<Arc<DataFrame>> {
+    // Register function extension
+    let function_extension = plan.extensions
+        .iter()
+        .map(|e| match &e.mapping_type {
+            Some(ext) => {
+                match ext {
+                    MappingType::ExtensionFunction(ext_f) => Ok((ext_f.function_anchor, &ext_f.name)),
+                    _ => Err(DataFusionError::NotImplemented(format!("Extension type not supported: {:?}", ext)))
+                }
+            }
+            None => Err(DataFusionError::NotImplemented("Cannot parse empty extension".to_string()))
+        })
+        .collect::<Result<HashMap<_, _>>>()?;
+    // Parse relations
     match plan.relations.len() {
         1 => {
             match plan.relations[0].rel_type.as_ref() {
                 Some(rt) => match rt {
                     substrait::protobuf::plan_rel::RelType::Rel(rel) => {
-                        Ok(from_substrait_rel(ctx, &rel).await?)
+                        Ok(from_substrait_rel(ctx, &rel, &function_extension).await?)
                     },
                     substrait::protobuf::plan_rel::RelType::Root(_) => Err(DataFusionError::NotImplemented(
                         "RootRel not supported".to_string()
@@ -87,14 +105,14 @@ pub async fn from_substrait_plan(ctx: &mut SessionContext, plan: &Plan) -> Resul
 
 /// Convert Substrait Rel to DataFusion DataFrame
 #[async_recursion]
-pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<Arc<DataFrame>> {
+pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel, extensions: &HashMap<u32, &String>) -> Result<Arc<DataFrame>> {
     match &rel.rel_type {
         Some(RelType::Project(p)) => {
             if let Some(input) = p.input.as_ref() {
-                let input = from_substrait_rel(ctx, input).await?;
+                let input = from_substrait_rel(ctx, input, extensions).await?;
                 let mut exprs: Vec<Expr> = vec![];
                 for e in &p.expressions {
-                    let x = from_substrait_rex(e, &input.schema()).await?;
+                    let x = from_substrait_rex(e, &input.schema(), extensions).await?;
                     exprs.push(x.as_ref().clone());
                 }
                 input.select(exprs)
@@ -106,9 +124,9 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<A
         }
         Some(RelType::Filter(filter)) => {
             if let Some(input) = filter.input.as_ref() {
-                let input = from_substrait_rel(ctx, input).await?;
+                let input = from_substrait_rel(ctx, input, extensions).await?;
                 if let Some(condition) = filter.condition.as_ref() {
-                    let expr = from_substrait_rex(condition, &input.schema()).await?;
+                    let expr = from_substrait_rex(condition, &input.schema(), extensions).await?;
                     input.filter(expr.as_ref().clone())
                 } else {
                     Err(DataFusionError::NotImplemented(
@@ -123,7 +141,7 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<A
         }
         Some(RelType::Fetch(fetch)) => {
             if let Some(input) = fetch.input.as_ref() {
-                let input = from_substrait_rel(ctx, input).await?;
+                let input = from_substrait_rel(ctx, input, extensions).await?;
                 let offset = fetch.offset as usize;
                 let count = fetch.count as usize;
                 input.limit(offset, Some(count))
@@ -135,10 +153,10 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<A
         }
         Some(RelType::Sort(sort)) => {
             if let Some(input) = sort.input.as_ref() {
-                let input = from_substrait_rel(ctx, input).await?;
+                let input = from_substrait_rel(ctx, input, extensions).await?;
                 let mut sorts: Vec<Expr> = vec![];
                 for s in &sort.sorts {
-                    let expr = from_substrait_rex(&s.expr.as_ref().unwrap(), &input.schema()).await?;
+                    let expr = from_substrait_rex(&s.expr.as_ref().unwrap(), &input.schema(), extensions).await?;
                     let asc_nullfirst = match &s.sort_kind {
                         Some(k) => match k {
                             Direction(d) => {
@@ -184,9 +202,57 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<A
                 ))
             }
         }
+        Some(RelType::Aggregate(agg)) => {
+            if let Some(input) = agg.input.as_ref() {
+                let input = from_substrait_rel(ctx, input, extensions).await?;
+                let mut group_expr = vec![];
+                let mut aggr_expr = vec![];
+
+                let groupings = match agg.groupings.len() {
+                    1 => { Ok(&agg.groupings[0]) },
+                    _ => {
+                        Err(DataFusionError::NotImplemented(
+                            "Aggregate with multiple grouping sets is not supported".to_string(),
+                        ))
+                    }
+                };
+
+                for e in &groupings?.grouping_expressions {
+                    let x = from_substrait_rex(&e, &input.schema(), extensions).await?;
+                    group_expr.push(x.as_ref().clone());
+                }
+
+                for m in &agg.measures {
+                    let filter = match &m.filter {
+                        Some(fil) => Some(Box::new(from_substrait_rex(fil, &input.schema(), extensions).await?.as_ref().clone())),
+                        None => None
+                    };
+                    let agg_func = match &m.measure {
+                        Some(f) => {
+                            let distinct = match f.invocation  {
+                                _ if f.invocation == AggregationInvocation::Distinct as i32 => true,
+                                _ if f.invocation == AggregationInvocation::All as i32 => false,
+                                _ => false
+                            };
+                            from_substrait_agg_func(&f, &input.schema(), extensions, filter, distinct).await
+                        },
+                        None => Err(DataFusionError::NotImplemented(
+                            "Aggregate without aggregate function is not supported".to_string(),
+                        )),
+                    };
+                    aggr_expr.push(agg_func?.as_ref().clone());
+                }
+
+                input.aggregate(group_expr, aggr_expr)
+            } else {
+                Err(DataFusionError::NotImplemented(
+                    "Aggregate without an input is not valid".to_string(),
+                ))
+            }
+        }
         Some(RelType::Join(join)) => {
-            let left = from_substrait_rel(ctx, &join.left.as_ref().unwrap()).await?;
-            let right = from_substrait_rel(ctx, &join.right.as_ref().unwrap()).await?;
+            let left = from_substrait_rel(ctx, &join.left.as_ref().unwrap(), extensions).await?;
+            let right = from_substrait_rel(ctx, &join.right.as_ref().unwrap(), extensions).await?;
             let join_type = match join.r#type {
                 1 => JoinType::Inner,
                 2 => JoinType::Left,
@@ -198,7 +264,7 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<A
             };
             let mut predicates = vec![];
             let schema = build_join_schema(&left.schema(), &right.schema(), &JoinType::Inner)?;
-            let on = from_substrait_rex(&join.expression.as_ref().unwrap(), &schema).await?;
+            let on = from_substrait_rex(&join.expression.as_ref().unwrap(), &schema, extensions).await?;
             split_conjunction(&on, &mut predicates);
             let pairs = predicates
                 .iter()
@@ -273,9 +339,49 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel) -> Result<A
     }
 }
 
+/// Convert Substrait AggregateFunction to DataFusion Expr
+pub async fn from_substrait_agg_func(
+    f: &AggregateFunction,
+    input_schema: &DFSchema,
+    extensions: &HashMap<u32, &String>,
+    filter: Option<Box<Expr>>,
+    distinct: bool
+) -> Result<Arc<Expr>> {
+    let mut args: Vec<Expr> = vec![];
+    for arg in &f.arguments {
+        let arg_expr = match &arg.arg_type {
+            Some(ArgType::Value(e)) => from_substrait_rex(e, input_schema, extensions).await,
+            _ => Err(DataFusionError::NotImplemented(
+                    "Aggregated function argument non-Value type not supported".to_string(),
+                ))
+        };
+        args.push(arg_expr?.as_ref().clone());
+    }
+
+    let fun = match extensions.get(&f.function_reference) {
+        Some(function_name) => aggregate_function::AggregateFunction::from_str(function_name),
+        None => Err(DataFusionError::NotImplemented(format!(
+                "Aggregated function not found: function anchor = {:?}",
+                f.function_reference
+            )
+        ))
+    };
+
+    Ok(
+        Arc::new(
+            Expr::AggregateFunction {
+                fun: fun.unwrap(),
+                args: args,
+                distinct: distinct,
+                filter: filter
+            }
+        )
+    )
+}
+
 /// Convert Substrait Rex to DataFusion Expr
 #[async_recursion]
-pub async fn from_substrait_rex(e: &Expression, input_schema: &DFSchema) -> Result<Arc<Expr>> {
+pub async fn from_substrait_rex(e: &Expression, input_schema: &DFSchema, extensions: &HashMap<u32, &String>) -> Result<Arc<Expr>> {
     match &e.rex_type {
         Some(RexType::Selection(field_ref)) => match &field_ref.reference_type {
             Some(MaskedReference(mask)) => match &mask.select.as_ref() {
@@ -296,14 +402,21 @@ pub async fn from_substrait_rex(e: &Expression, input_schema: &DFSchema) -> Resu
         },
         Some(RexType::ScalarFunction(f)) => {
             assert!(f.arguments.len() == 2);
-            let op = reference_to_op(f.function_reference)?;
+            let op = match extensions.get(&f.function_reference) {
+                    Some(fname) => name_to_op(fname),
+                    None => Err(DataFusionError::NotImplemented(format!(
+                        "Aggregated function not found: function reference = {:?}",
+                        f.function_reference
+                    )
+                ))
+            };
             match (&f.arguments[0].arg_type, &f.arguments[1].arg_type) {
                 (Some(ArgType::Value(l)), Some(ArgType::Value(r))) => {
                     Ok(Arc::new(Expr::BinaryExpr {
-                        left: Box::new(from_substrait_rex(l, input_schema).await?.as_ref().clone()),
-                        op,
+                        left: Box::new(from_substrait_rex(l, input_schema, extensions).await?.as_ref().clone()),
+                        op: op?,
                         right: Box::new(
-                            from_substrait_rex(r, input_schema).await?.as_ref().clone(),
+                            from_substrait_rex(r, input_schema, extensions).await?.as_ref().clone(),
                         ),
                     }))
                 }
