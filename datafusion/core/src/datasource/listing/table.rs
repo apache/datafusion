@@ -329,13 +329,16 @@ impl ListingOptions {
     /// use datafusion::prelude::{Expr, col};
     /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_file_sort_order(Some(vec![
-    ///        // Specify the files are sorted by column "a"
-    ///        col("a").sort(true, true)
-    ///      ]));
     ///
-    /// assert_eq!(listing_options.target_partitions, 8);
+    ///  // Tell datafusion that the files are sorted by column "a"
+    ///  let file_sort_order = Some(vec![
+    ///    col("a").sort(true, true)
+    ///  ]);
+    ///
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_file_sort_order(file_sort_order.clone());
+    ///
+    /// assert_eq!(listing_options.file_sort_order, file_sort_order);
     /// ```
     pub fn with_file_sort_order(mut self, file_sort_order: Option<Vec<Expr>>) -> Self {
         self.file_sort_order = file_sort_order;
