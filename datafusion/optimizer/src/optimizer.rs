@@ -55,7 +55,7 @@ pub trait OptimizerRule {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        self.optimize(plan, optimizer_config).map(|plan| Some(plan))
+        self.optimize(plan, optimizer_config).map(Some)
     }
 
     /// Rewrite `plan` to an optimized form. This method will eventually be deprecated and

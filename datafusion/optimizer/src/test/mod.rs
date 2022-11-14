@@ -130,10 +130,10 @@ pub fn assert_optimizer_err(
     }
 }
 
-pub fn assert_optimization_skipped(
-    rule: &dyn OptimizerRule,
-    plan: &LogicalPlan,
-) {
+pub fn assert_optimization_skipped(rule: &dyn OptimizerRule, plan: &LogicalPlan) {
     let new_plan = rule.optimize(plan, &mut OptimizerConfig::new()).unwrap();
-    assert_eq!(format!("{}", plan.display_indent()), format!("{}", new_plan.display_indent()));
+    assert_eq!(
+        format!("{}", plan.display_indent()),
+        format!("{}", new_plan.display_indent())
+    );
 }

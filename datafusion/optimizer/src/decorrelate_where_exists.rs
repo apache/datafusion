@@ -75,7 +75,9 @@ impl OptimizerRule for DecorrelateWhereExists {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<LogicalPlan> {
-        Ok(self.try_optimize(plan, optimizer_config)?.unwrap_or(plan.clone()))
+        Ok(self
+            .try_optimize(plan, optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
     }
 
     fn try_optimize(
