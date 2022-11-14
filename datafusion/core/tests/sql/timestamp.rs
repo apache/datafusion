@@ -1558,7 +1558,7 @@ async fn cast_timestamp_to_timestamptz() -> Result<()> {
 #[tokio::test]
 async fn test_cast_to_time() -> Result<()> {
     let ctx = SessionContext::new();
-    let sql = "SELECT 0::TIME";
+    let sql = "SELECT 0::TIME64";
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
