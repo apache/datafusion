@@ -295,7 +295,22 @@ impl ExecutionPlan for ParquetExec {
     ///              ParquetExec
     ///```
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.base_config.output_ordering.as_deref()
+        if let Some(output_ordering) = self.base_config.output_ordering.as_ref() {
+            if self
+                .base_config
+                .file_groups
+                .iter()
+                .any(|group| group.len() > 1)
+            {
+                debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
+                       output_ordering, self.base_config.file_groups);
+                None
+            } else {
+                Some(output_ordering)
+            }
+        } else {
+            None
+        }
     }
 
     fn with_new_children(
