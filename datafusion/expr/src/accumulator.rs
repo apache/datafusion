@@ -18,6 +18,7 @@
 //! Accumulator module contains the trait definition for aggregation function's accumulators.
 
 use arrow::array::ArrayRef;
+use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use std::fmt::Debug;
 
@@ -39,7 +40,7 @@ pub trait Accumulator: Send + Sync + Debug {
     /// Set state for accumulator
     fn set_state(&mut self, _state_data: &[AggregateState]) -> Result<()> {
         // TODO set state for all accumulators
-        Err(DataFusionError::Internal(
+        Err(DataFusionError::NotImplemented(
             "Set state should be implemented for aggregate functions when used with incremental queries".to_string()
         ))
     }
@@ -52,7 +53,7 @@ pub trait Accumulator: Send + Sync + Debug {
     /// for accumulators that should support bounded OVER aggregates.
     fn retract_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
         // TODO add retract for all accumulators
-        Err(DataFusionError::Internal(
+        Err(DataFusionError::NotImplemented(
             "Retract should be implemented for aggregate functions when used with custom window frame queries".to_string()
         ))
     }
@@ -62,6 +63,13 @@ pub trait Accumulator: Send + Sync + Debug {
 
     /// returns its value based on its current state.
     fn evaluate(&self) -> Result<ScalarValue>;
+
+    fn out_type(&self) -> Result<DataType> {
+        // TODO add out_type for all accumulators
+        Err(DataFusionError::NotImplemented(
+            "out_type is not implemented for this aggregated function".to_string(),
+        ))
+    }
 }
 
 /// Representation of internal accumulator state. Accumulators can potentially have a mix of

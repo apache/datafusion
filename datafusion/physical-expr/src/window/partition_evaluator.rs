@@ -18,7 +18,7 @@
 //! partition evaluation module
 
 use crate::window::window_expr::BuiltinWindowState;
-use crate::window::WindowState;
+use crate::window::WindowAggState;
 use arrow::array::ArrayRef;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
@@ -64,7 +64,7 @@ pub trait PartitionEvaluator {
 
     fn update_state(
         &mut self,
-        _state: &WindowState,
+        _state: &WindowAggState,
         _range_columns: &[ArrayRef],
         _sort_partition_points: &[Range<usize>],
     ) -> Result<()> {
@@ -72,7 +72,7 @@ pub trait PartitionEvaluator {
         Ok(())
     }
 
-    fn get_range(&self, _state: &WindowState) -> Result<(usize, usize)> {
+    fn get_range(&self, _state: &WindowAggState) -> Result<Range<usize>> {
         Err(DataFusionError::NotImplemented(
             "get_range is not implemented for this window function".to_string(),
         ))
@@ -87,7 +87,7 @@ pub trait PartitionEvaluator {
     }
 
     /// evaluate window function result inside given range
-    fn evaluate_stream(&self, _state: &WindowState) -> Result<ScalarValue> {
+    fn evaluate_stream(&self, _state: &WindowAggState) -> Result<ScalarValue> {
         Err(DataFusionError::NotImplemented(
             "evaluate_stream is not implemented by default".into(),
         ))

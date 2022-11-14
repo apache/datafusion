@@ -19,10 +19,11 @@
 
 use std::any::Any;
 use std::iter::IntoIterator;
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::Array;
-use arrow::compute::SortOptions;
+use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 
@@ -31,9 +32,8 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::utils::WindowSortKeys;
 use datafusion_expr::WindowFrame;
 
-use crate::window::common::concat_cols;
-use crate::window::window_expr::{BatchState, WindowState};
-use crate::window::WindowAggState;
+use crate::window::window_expr::{PartitionBatches, WindowAggState};
+use crate::window::PartitionWindowAggStates;
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use crate::{window::WindowExpr, AggregateExpr};
 
@@ -118,7 +118,7 @@ impl WindowExpr for AggregateWindowExpr {
                 .map(|v| v.slice(partition_range.start, length))
                 .collect::<Vec<_>>();
 
-            let mut last_range: (usize, usize) = (0, 0);
+            let mut last_range = Range { start: 0, end: 0 };
 
             // We iterate on each row to perform a running calculation.
             // First, cur_range is calculated, then it is compared with last_range.
@@ -131,25 +131,25 @@ impl WindowExpr for AggregateWindowExpr {
                     i,
                     &vec![],
                 )?;
-                let value = if cur_range.0 == cur_range.1 {
+                let value = if cur_range.start == cur_range.end {
                     // We produce None if the window is empty.
                     ScalarValue::try_from(self.aggregate.field()?.data_type())?
                 } else {
                     // Accumulate any new rows that have entered the window:
-                    let update_bound = cur_range.1 - last_range.1;
+                    let update_bound = cur_range.end - last_range.end;
                     if update_bound > 0 {
                         let update: Vec<ArrayRef> = value_slice
                             .iter()
-                            .map(|v| v.slice(last_range.1, update_bound))
+                            .map(|v| v.slice(last_range.end, update_bound))
                             .collect();
                         accumulator.update_batch(&update)?
                     }
                     // Remove rows that have now left the window:
-                    let retract_bound = cur_range.0 - last_range.0;
+                    let retract_bound = cur_range.start - last_range.start;
                     if retract_bound > 0 {
                         let retract: Vec<ArrayRef> = value_slice
                             .iter()
-                            .map(|v| v.slice(last_range.0, retract_bound))
+                            .map(|v| v.slice(last_range.start, retract_bound))
                             .collect();
                         accumulator.retract_batch(&retract)?
                     }
@@ -164,22 +164,23 @@ impl WindowExpr for AggregateWindowExpr {
 
     fn evaluate_stream(
         &self,
-        batch_state: &BatchState,
-        window_accumulators: &mut WindowAggState,
+        partition_batches: &PartitionBatches,
+        window_agg_state: &mut PartitionWindowAggStates,
         window_sort_keys: &WindowSortKeys,
         is_end: bool,
     ) -> Result<()> {
         let window_sort_keys =
             window_sort_keys[self.partition_by.len()..window_sort_keys.len()].to_vec();
-        for (partition_row, partition_batch) in batch_state.iter() {
+        for (partition_row, partition_batch) in partition_batches.iter() {
             let mut accumulator = self.aggregate.create_accumulator()?;
-            let mut state = if let Some(state) = window_accumulators.get(partition_row) {
+            let out_type = &accumulator.out_type()?;
+            let mut state = if let Some(state) = window_agg_state.get(partition_row) {
                 let aggregate_state = state.aggregate_state.clone();
                 accumulator.set_state(&aggregate_state)?;
                 state.clone()
             } else {
-                let state = WindowState::default();
-                window_accumulators.insert(partition_row.clone(), state.clone());
+                let state = WindowAggState::new(out_type)?;
+                window_agg_state.insert(partition_row.clone(), state.clone());
                 state.clone()
             };
             let num_rows = partition_batch.num_rows();
@@ -197,6 +198,7 @@ impl WindowExpr for AggregateWindowExpr {
             let sort_options: Vec<SortOptions> =
                 self.order_by.iter().map(|o| o.options).collect();
             let mut row_wise_results: Vec<ScalarValue> = vec![];
+            let mut last_range = state.cur_range.clone();
             for i in state.last_idx..length {
                 state.cur_range = self.calculate_range(
                     &self.window_frame,
@@ -207,51 +209,53 @@ impl WindowExpr for AggregateWindowExpr {
                     &window_sort_keys,
                 )?;
                 // exit if range end index is length, need kind of flag to stop
-                if state.cur_range.1 == length && !is_end {
-                    state.cur_range = state.last_range;
+                if state.cur_range.end == length && !is_end {
+                    state.cur_range = last_range.clone();
                     break;
                 }
-                if state.cur_range.0 == state.cur_range.1 {
+                if state.cur_range.start == state.cur_range.end {
                     // We produce None if the window is empty.
                     row_wise_results
                         .push(ScalarValue::try_from(self.aggregate.field()?.data_type())?)
                 } else {
                     // Accumulate any new rows that have entered the window:
-                    let update_bound = state.cur_range.1 - state.last_range.1;
+                    let update_bound = state.cur_range.end - last_range.end;
                     if update_bound > 0 {
                         let update: Vec<ArrayRef> = values
                             .iter()
-                            .map(|v| v.slice(state.last_range.1, update_bound))
+                            .map(|v| v.slice(last_range.end, update_bound))
                             .collect();
                         accumulator.update_batch(&update)?
                     }
                     // Remove rows that have now left the window:
-                    let retract_bound = state.cur_range.0 - state.last_range.0;
+                    let retract_bound = state.cur_range.start - last_range.start;
                     if retract_bound > 0 {
                         let retract: Vec<ArrayRef> = values
                             .iter()
-                            .map(|v| v.slice(state.last_range.0, retract_bound))
+                            .map(|v| v.slice(last_range.start, retract_bound))
                             .collect();
                         accumulator.retract_batch(&retract)?
                     }
                     let res = accumulator.evaluate()?;
                     row_wise_results.push(res);
                 }
-                state.last_range = state.cur_range;
+                last_range = state.cur_range;
                 state.last_idx = i + 1;
             }
+            state.cur_range = last_range.clone();
 
-            let col = if !row_wise_results.is_empty() {
-                Some(ScalarValue::iter_to_array(row_wise_results.into_iter())?)
+            let out_col = if !row_wise_results.is_empty() {
+                ScalarValue::iter_to_array(row_wise_results.into_iter())?
             } else {
-                None
+                let a = ScalarValue::try_from(accumulator.out_type()?)?;
+                a.to_array_of_size(0)
             };
 
-            state.col = concat_cols(state.col, col)?;
-            state.num_rows = num_rows;
+            state.out_col = concat(&[&state.out_col, &out_col])?;
+            state.n_row_result_missing = num_rows - state.last_idx;
 
             state.aggregate_state = accumulator.state()?;
-            window_accumulators.insert(partition_row.clone(), state.clone());
+            window_agg_state.insert(partition_row.clone(), state.clone());
         }
         Ok(())
     }

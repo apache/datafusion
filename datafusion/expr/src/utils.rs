@@ -206,6 +206,8 @@ pub struct WindowSortKey {
     pub expr: Expr,
     pub column_info: Option<ColumnInfo>,
     pub is_partition: bool,
+    pub can_skip: bool,
+    pub is_reversed: bool,
 }
 
 // We keep in Vector because window frame  may contain multiple ORDER BYs and/or PARTITION BYs
@@ -312,35 +314,43 @@ pub fn get_decision_flags(
     None
 }
 
-pub fn is_all_window_functions_aggregator(exprs: &[&Expr]) -> bool {
-    let mut res = true;
+pub fn is_all_window_functions_aggregate(exprs: &[&Expr]) -> Result<bool> {
+    let mut is_all_aggregate = true;
     for expr in exprs.iter() {
-        let is_aggregate = match expr {
-            Expr::WindowFunction { fun, .. } => match fun {
-                WindowFunction::AggregateFunction(_) => true,
-                WindowFunction::BuiltInWindowFunction(_) => false,
-            },
-            Expr::Alias(inside_expr, _) => match &**inside_expr {
-                Expr::WindowFunction { fun, .. } => match fun {
-                    WindowFunction::AggregateFunction(_) => true,
-                    WindowFunction::BuiltInWindowFunction(_) => false,
-                },
+        let fun = match expr {
+            Expr::WindowFunction { fun, .. } => fun,
+            Expr::Alias(sub_expr, _alias) => match &**sub_expr {
+                Expr::WindowFunction { fun, .. } => fun,
                 _ => {
-                    println!("expr: {:?}", expr);
-                    panic!("expects window functions");
+                    return Err(DataFusionError::Execution(
+                        "Expects to get window frame".to_string(),
+                    ))
                 }
             },
             _ => {
-                println!("expr: {:?}", expr);
-                panic!("expects window functions");
+                return Err(DataFusionError::Execution(
+                    "Expects to get window frame".to_string(),
+                ))
             }
         };
-        res = res && is_aggregate;
+        let is_aggregate = match fun {
+            WindowFunction::AggregateFunction(_) => true,
+            WindowFunction::BuiltInWindowFunction(_) => false,
+        };
+        is_all_aggregate = is_all_aggregate && is_aggregate;
     }
-    res
+    Ok(is_all_aggregate)
 }
 
-pub fn can_run_frame_in_streaming(expr: &Expr) -> Result<bool> {
+pub fn can_run_frames_in_streaming(exprs: &[Expr]) -> Result<bool> {
+    let mut can_run_in_streaming = true;
+    for expr in exprs {
+        can_run_in_streaming = can_run_in_streaming && can_run_frame_in_streaming(expr)?;
+    }
+    Ok(can_run_in_streaming)
+}
+
+fn can_run_frame_in_streaming(expr: &Expr) -> Result<bool> {
     let (window_frame, fun) = match expr {
         Expr::WindowFunction {
             window_frame, fun, ..
@@ -402,36 +412,15 @@ pub fn can_run_frame_in_streaming(expr: &Expr) -> Result<bool> {
     )
 }
 
-pub fn remove_redundant_order_bys(
-    sort_keys: &WindowSortKeys,
-    exprs: &[&Expr],
-) -> Result<WindowSortKeys> {
-    let is_all_aggregate = is_all_window_functions_aggregator(exprs);
-    let mut non_inc_sort_keys = vec![];
-    for WindowSortKey {
-        expr,
-        column_info,
-        is_partition,
-    } in sort_keys.iter()
-    {
-        let can_skip = if let Some(column_info) = column_info {
-            let sort_fields = get_sort_fields(expr)?;
-            column_info.is_sorted
-                && !column_info.is_nullable
-                && (is_all_aggregate
-                    || column_info.is_ascending == sort_fields.is_ascending)
-        } else {
-            false
-        };
-        if !can_skip {
-            non_inc_sort_keys.push(WindowSortKey {
-                expr: expr.clone(),
-                column_info: *column_info,
-                is_partition: *is_partition,
-            });
-        }
-    }
-    Ok(non_inc_sort_keys)
+fn can_skip_column(column_info: Option<ColumnInfo>, expr: &Expr) -> Result<(bool, bool)> {
+    Ok(if let Some(column_info) = column_info {
+        let sort_fields = get_sort_fields(expr)?;
+        let can_skip = column_info.is_sorted && !column_info.is_nullable;
+        let is_reversed = column_info.is_ascending != sort_fields.is_ascending;
+        (can_skip, is_reversed)
+    } else {
+        (false, false)
+    })
 }
 
 /// Generate a sort key for a given window expr's partition_by and order_bu expr
@@ -447,11 +436,17 @@ pub fn generate_sort_key(
         // TODO: If the repartition is false we can skip in partition by queries also
         // once this information is available handle that case. For now we are not optimizing in
         // partition by columns.
+
+        let (can_skip, is_reversed) = can_skip_column(column_info, &expr)?;
+
         let elem = WindowSortKey {
             expr,
             column_info,
             is_partition: true,
+            can_skip,
+            is_reversed,
         };
+        // We keep unique elements
         if !sort_key.contains(&elem) {
             sort_key.push(elem);
         }
@@ -459,11 +454,15 @@ pub fn generate_sort_key(
     })?;
     order_by.iter().try_for_each(|expr| -> Result<()> {
         let column_info = decide_col_sorting(input_schema, expr)?;
+        let (can_skip, is_reversed) = can_skip_column(column_info, expr)?;
         let elem = WindowSortKey {
             expr: expr.clone(),
             column_info,
             is_partition: false,
+            can_skip,
+            is_reversed,
         };
+        // We keep unique elements
         if !sort_key.contains(&elem) {
             sort_key.push(elem);
         }
@@ -1132,11 +1131,15 @@ mod tests {
                 expr: age_asc.clone(),
                 column_info: None,
                 is_partition: false,
+                can_skip: false,
+                is_reversed: false,
             },
             WindowSortKey {
                 expr: name_desc.clone(),
                 column_info: None,
                 is_partition: false,
+                can_skip: false,
+                is_reversed: false,
             },
         ];
         let key2 = vec![];
@@ -1145,16 +1148,22 @@ mod tests {
                 expr: name_desc,
                 column_info: None,
                 is_partition: false,
+                can_skip: false,
+                is_reversed: false,
             },
             WindowSortKey {
                 expr: age_asc,
                 column_info: None,
                 is_partition: false,
+                can_skip: false,
+                is_reversed: false,
             },
             WindowSortKey {
                 expr: created_at_desc,
                 column_info: None,
                 is_partition: false,
+                can_skip: false,
+                is_reversed: false,
             },
         ];
 

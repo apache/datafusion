@@ -157,35 +157,6 @@ impl Accumulator for AvgAccumulator {
         ])
     }
 
-    fn set_state(&mut self, state_data: &[AggregateState]) -> Result<()> {
-        // TODO set state for all accumulators
-        let count_state = &state_data[0];
-        let sum_state = &state_data[1];
-        match count_state {
-            AggregateState::Scalar(ScalarValue::UInt64(Some(count))) => {
-                self.count = *count;
-            }
-            count_state => {
-                return Err(DataFusionError::Execution(format!(
-                    "Unexpected State received for count {:?}",
-                    count_state
-                )))
-            }
-        }
-        match sum_state {
-            AggregateState::Scalar(sum_val) => {
-                self.sum = sum_val.clone();
-            }
-            sum_state => {
-                return Err(DataFusionError::Execution(format!(
-                    "Unexpected State received for sum {:?}",
-                    sum_state
-                )))
-            }
-        }
-        Ok(())
-    }
-
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
 

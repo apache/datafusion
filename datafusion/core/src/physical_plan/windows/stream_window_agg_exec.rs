@@ -42,13 +42,14 @@ use indexmap::IndexMap;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion_expr::utils::WindowSortKeys;
 use datafusion_physical_expr::window::{
-    BatchState, PartitionKey, WindowAggState, WindowState,
+    PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowAggState,
 };
 use datafusion_physical_expr::PhysicalExpr;
 
@@ -237,14 +238,14 @@ fn create_schema(
 fn compute_window_aggregates(
     window_expr: &[Arc<dyn WindowExpr>],
     window_sort_keys: &WindowSortKeys,
-    state: &mut [WindowAggState],
-    batch_state: &BatchState,
+    window_agg_states: &mut [PartitionWindowAggStates],
+    partition_batches: &PartitionBatches,
     is_end: bool,
 ) -> Result<()> {
     for (idx, cur_window_expr) in window_expr.iter().enumerate() {
         cur_window_expr.evaluate_stream(
-            batch_state,
-            &mut state[idx],
+            partition_batches,
+            &mut window_agg_states[idx],
             window_sort_keys,
             is_end,
         )?;
@@ -257,8 +258,8 @@ pub struct WindowAggStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     batch: Option<RecordBatch>,
-    batch_state: BatchState,
-    state: Vec<WindowAggState>,
+    partition_batches: PartitionBatches,
+    window_agg_states: Vec<PartitionWindowAggStates>,
     finished: bool,
     window_expr: Vec<Arc<dyn WindowExpr>>,
     window_sort_keys: WindowSortKeys,
@@ -282,8 +283,8 @@ impl WindowAggStream {
             schema,
             input,
             batch: None,
-            batch_state: IndexMap::new(),
-            state,
+            partition_batches: IndexMap::new(),
+            window_agg_states: state,
             finished: false,
             window_expr,
             window_sort_keys,
@@ -294,22 +295,16 @@ impl WindowAggStream {
     fn calc_len_to_show(&self) -> usize {
         // different window aggregators may produce with different rates
         // produce the overall result with the same speed as slowest one
-        self.state
+        self.window_agg_states
             .iter()
             .map(|window_agg_state| {
                 let mut min_len = 0;
                 // TODO: Add sorting according to ts for iteration
                 for (_, state) in window_agg_state.iter() {
-                    let cur_len = if let Some(col) = &state.col {
-                        col.len()
-                    } else {
-                        0
-                    };
-                    min_len += cur_len;
-                    if cur_len < state.num_rows {
+                    min_len += state.out_col.len();
+                    if state.n_row_result_missing > 0 {
                         break;
                     }
-                    assert!(cur_len <= state.num_rows);
                 }
                 min_len
             })
@@ -320,153 +315,108 @@ impl WindowAggStream {
 
     fn calc_columns_to_show(&self, len_to_show: usize) -> Result<Vec<ArrayRef>> {
         let mut columns_to_show = vec![];
-        for accumulator_state in self.state.iter() {
-            let mut ret = None;
-            let mut running_length = 0;
-            for (_, WindowState { col: col_state, .. }) in accumulator_state {
-                if running_length < len_to_show {
-                    ret = match (ret, col_state) {
-                        (None, None) => None,
-                        (Some(ret), Some(col_state)) => {
-                            let n_to_use =
-                                min(len_to_show - running_length, col_state.len());
-                            running_length += n_to_use;
-                            Some(concat(&[&ret, &col_state.slice(0, n_to_use)])?)
-                        }
-                        (None, Some(col_state)) => {
-                            let n_to_use =
-                                min(len_to_show - running_length, col_state.len());
-                            running_length += n_to_use;
-                            Some(col_state.slice(0, n_to_use))
-                        }
-                        (Some(res), None) => Some(res),
-                    }
-                }
-                if running_length == len_to_show {
-                    columns_to_show.push(ret.ok_or_else(|| {
-                        DataFusionError::Execution("Should contain something".to_string())
-                    })?);
-                    break;
-                }
-                assert!(running_length < len_to_show);
-            }
+        for partition_window_agg_states in self.window_agg_states.iter() {
+            columns_to_show.push(get_aggregate_results_to_show(
+                partition_window_agg_states,
+                len_to_show,
+            )?);
         }
+
+        let batch_to_show = self
+            .batch
+            .as_ref()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expects something in the batch".to_string())
+            })?
+            .columns()
+            .iter()
+            .map(|elem| elem.slice(0, len_to_show))
+            .collect::<Vec<_>>();
+        columns_to_show.extend_from_slice(&batch_to_show);
+
         Ok(columns_to_show)
     }
 
     /// retracts sections in the batch state that are no longer needed during
     /// window frame range calculations
-    fn retract_state(state: &mut [WindowAggState], batch_state: &mut BatchState) {
+    fn retract_state(&mut self, n_showed: usize) -> Result<()> {
         // Fill the earliest boundary for each partition range in the batch state
         // For instance in window frame one uses [10, 20] and window frame 2 uses [5, 15]
         // We retract only first 5.
+        // Calculate how many element to retract for each partition_batch
         let mut retract_state: HashMap<PartitionKey, usize> = HashMap::new();
-        for accumulator_state in state.iter_mut() {
-            for (partition_row, value) in accumulator_state {
+        for window_agg_state in self.window_agg_states.iter_mut() {
+            for (partition_row, value) in window_agg_state {
                 if let Some(state) = retract_state.get_mut(partition_row) {
-                    if value.last_range.0 < *state {
-                        *state = value.last_range.0;
+                    if value.cur_range.start < *state {
+                        *state = value.cur_range.start;
                     }
                 } else {
-                    retract_state.insert(partition_row.clone(), value.last_range.0);
+                    retract_state.insert(partition_row.clone(), value.cur_range.start);
                 }
             }
         }
 
+        let err = || DataFusionError::Execution("Expects to have partition".to_string());
+        // Retracts no longer needed parts during window calculations from partition batch
         for (partition_row, offset) in retract_state.iter() {
-            if let Some(record_batch) = batch_state.get(partition_row) {
-                let new_record_batch =
-                    record_batch.slice(*offset, record_batch.num_rows() - offset);
-                batch_state.insert(partition_row.clone(), new_record_batch);
-                for accumulator_state in state.iter_mut() {
-                    if let Some(state) = accumulator_state.get_mut(partition_row) {
-                        state.last_range =
-                            (state.last_range.0 - offset, state.last_range.1 - offset);
-                        state.cur_range =
-                            (state.cur_range.0 - offset, state.cur_range.1 - offset);
-                        state.last_idx -= offset;
-                        state.n_retracted += offset;
-                    } else {
-                        panic!("should have this partition");
-                    }
-                }
-            } else {
-                panic!("should have this partition");
+            let partition_batch =
+                self.partition_batches.get(partition_row).ok_or_else(err)?;
+            let new_record_batch =
+                partition_batch.slice(*offset, partition_batch.num_rows() - offset);
+            self.partition_batches
+                .insert(partition_row.clone(), new_record_batch);
+
+            // Update State indices, since we have retracted some rows from the beginning
+            for window_agg_state in self.window_agg_states.iter_mut() {
+                let state = window_agg_state.get_mut(partition_row).ok_or_else(err)?;
+                state.cur_range = Range {
+                    start: state.cur_range.start - offset,
+                    end: state.cur_range.end - offset,
+                };
+                state.last_idx -= offset;
+                state.n_retracted += offset;
             }
         }
-    }
 
-    fn retract_showed_elements_from_state(
-        state: &mut [WindowAggState],
-        len_showed: usize,
-    ) -> Result<()> {
-        for accumulator_state in state.iter_mut() {
-            let mut running_length = 0;
-            // TODO: make iteration order according to ts
-            for (_, WindowState { col, num_rows, .. }) in accumulator_state {
-                if running_length < len_showed {
-                    match col {
-                        Some(col) => {
-                            if col.len() + running_length >= len_showed {
-                                let n_to_keep = col.len() + running_length - len_showed;
-                                let slice_start = col.len() - n_to_keep;
-                                // keep last n_to_keep values
-                                let new_num_rows =
-                                    *num_rows + running_length - len_showed;
+        // retracts showed parts from batch
+        if let Some(batch) = &self.batch {
+            let len_batch = batch.num_rows();
+            let n_to_keep = len_batch - n_showed;
+            let batch_to_keep = batch
+                .columns()
+                .iter()
+                .map(|elem| elem.slice(n_showed, n_to_keep))
+                .collect::<Vec<_>>();
+            self.batch = Some(RecordBatch::try_new(
+                self.batch.as_ref().unwrap().schema(),
+                batch_to_keep,
+            )?);
+        }
 
-                                *num_rows = new_num_rows;
-                                *col = col.slice(slice_start, n_to_keep);
-                            }
-                            running_length += col.len();
-                        }
-                        None => {
-                            return Err(DataFusionError::Execution(
-                                "Expects something to retract".to_string(),
-                            ))
-                        }
-                    }
-                }
-            }
+        // Retracts showed parts for each WindowAggState out_col field
+        for partition_window_agg_states in self.window_agg_states.iter_mut() {
+            retract_showed_results(partition_window_agg_states, n_showed)?;
         }
         Ok(())
     }
 
     fn compute_aggregates(&mut self, is_end: bool) -> ArrowResult<RecordBatch> {
-        // record compute time on drop
-        let _timer = self.baseline_metrics.elapsed_compute().timer();
-
-        if let Some(batch) = &self.batch {
+        if self.batch.is_some() {
             // calculate window cols
             compute_window_aggregates(
                 &self.window_expr,
                 &self.window_sort_keys.clone(),
-                &mut self.state,
-                &self.batch_state,
+                &mut self.window_agg_states,
+                &self.partition_batches,
                 is_end,
             )?;
 
             let len_to_show = self.calc_len_to_show();
 
-            let len_batch = batch.num_rows();
-            let n_to_keep = len_batch - len_to_show;
             if len_to_show > 0 {
-                let batch_to_show = batch
-                    .columns()
-                    .iter()
-                    .map(|elem| elem.slice(0, len_to_show))
-                    .collect::<Vec<_>>();
-
-                let mut columns_to_show = self.calc_columns_to_show(len_to_show)?;
-                let batch_to_keep = batch
-                    .columns()
-                    .iter()
-                    .map(|elem| elem.slice(len_to_show, n_to_keep))
-                    .collect::<Vec<_>>();
-                self.batch = Some(RecordBatch::try_new(batch.schema(), batch_to_keep)?);
-                Self::retract_showed_elements_from_state(&mut self.state, len_to_show)?;
-                Self::retract_state(&mut self.state, &mut self.batch_state);
-
-                columns_to_show.extend_from_slice(&batch_to_show);
+                let columns_to_show = self.calc_columns_to_show(len_to_show)?;
+                self.retract_state(len_to_show)?;
 
                 RecordBatch::try_new(self.schema.clone(), columns_to_show)
             } else {
@@ -508,6 +458,7 @@ impl WindowAggStream {
                         "window expr cannot be empty to support streaming".to_string(),
                     )
                 })?;
+
                 let partition_columns = window_expr.partition_columns(&batch)?;
                 let num_rows = batch.num_rows();
                 if num_rows > 0 {
@@ -527,19 +478,20 @@ impl WindowAggStream {
                             partition_range.start,
                             partition_range.end - partition_range.start,
                         );
-                        if let Some(state) = self.batch_state.get(&partition_row) {
+                        if let Some(state) = self.partition_batches.get(&partition_row) {
                             let res = common::append_new_batch(
                                 state,
                                 &batch_chunk,
                                 self.input.schema(),
                             )?;
-                            self.batch_state.insert(partition_row.clone(), res.clone());
+                            self.partition_batches
+                                .insert(partition_row.clone(), res.clone());
                         } else {
-                            self.batch_state.insert(partition_row.clone(), batch_chunk);
+                            self.partition_batches
+                                .insert(partition_row.clone(), batch_chunk);
                         };
                     }
                 }
-
                 self.batch = Some(if let Some(state_batch) = &self.batch {
                     common::append_new_batch(state_batch, &batch, self.input.schema())?
                 } else {
@@ -562,4 +514,46 @@ impl RecordBatchStream for WindowAggStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
+}
+
+/// Calculates the section we can show for expression at current iteration
+fn get_aggregate_results_to_show(
+    partition_window_agg_states: &PartitionWindowAggStates,
+    len_to_show: usize,
+) -> Result<ArrayRef> {
+    let mut ret = None;
+    let mut running_length = 0;
+    // We assume that iteration order is according to insertion order
+    for (_, WindowAggState { out_col, .. }) in partition_window_agg_states {
+        if running_length < len_to_show {
+            let n_to_use = min(len_to_show - running_length, out_col.len());
+            running_length += n_to_use;
+            let slice_to_use = out_col.slice(0, n_to_use);
+            ret = match ret {
+                Some(ret) => Some(concat(&[&ret, &slice_to_use])?),
+                None => Some(slice_to_use),
+            }
+        } else {
+            break;
+        }
+    }
+    assert_eq!(running_length, len_to_show);
+    ret.ok_or_else(|| DataFusionError::Execution("Should contain something".to_string()))
+}
+
+/// Retracts showed parts from WindowAggState out_col field
+fn retract_showed_results(
+    partition_window_agg_states: &mut PartitionWindowAggStates,
+    n_showed: usize,
+) -> Result<()> {
+    let mut running_length = 0;
+    for (_, WindowAggState { out_col, .. }) in partition_window_agg_states {
+        if running_length < n_showed {
+            let n_to_del = min(out_col.len(), n_showed - running_length);
+            let n_to_keep = out_col.len() - n_to_del;
+            *out_col = out_col.slice(n_to_del, n_to_keep);
+            running_length += n_to_del;
+        }
+    }
+    Ok(())
 }

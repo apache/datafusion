@@ -28,7 +28,7 @@ fn append_to_the_content(batch: &RecordBatch, content: &mut String) -> Result<()
             if col < batch.num_columns() - 1 {
                 res += ", ";
             }
-            if column.is_null(row) {
+            if column.is_null(row) && col == batch.num_columns() - 1 {
                 res.pop();
             }
         }
@@ -73,7 +73,7 @@ fn mock_data_running_test() -> Result<(SchemaRef, Vec<RecordBatch>)> {
     let mut equal_field = Field::new("equal", DataType::Int32, false);
     equal_field.set_metadata(Some(BTreeMap::from([
         (String::from("is_sorted"), String::from("true")),
-        (String::from("is_ascending"), String::from("false")),
+        (String::from("is_ascending"), String::from("true")),
     ])));
 
     let mut nonmonothonic_inc_field =
@@ -83,12 +83,16 @@ fn mock_data_running_test() -> Result<(SchemaRef, Vec<RecordBatch>)> {
         (String::from("is_ascending"), String::from("true")),
     ])));
 
+    let non_sorted_non_unique_field =
+        Field::new("non_sorted_non_unique_field", DataType::Int32, false);
+
     let schema = Arc::new(Schema::new(vec![
         ts_field,
         inc_field,
         desc_field,
         equal_field,
         nonmonothonic_inc_field,
+        non_sorted_non_unique_field,
     ]));
 
     let batch = RecordBatch::try_new(
@@ -136,6 +140,13 @@ fn mock_data_running_test() -> Result<(SchemaRef, Vec<RecordBatch>)> {
                 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7,
                 7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9,
                 9, 9, 9, 9,
+            ])),
+            Arc::new(Int32Array::from_slice(&[
+                2, 1, 3, 1, 2, 5, 5, 3, 3, 3, 5, 1, 4, 2, 2, 5, 0, 3, 5, 2, 5, 3, 5, 5,
+                3, 1, 0, 0, 5, 1, 2, 4, 5, 2, 4, 1, 0, 5, 2, 2, 4, 3, 5, 3, 4, 4, 1, 1,
+                5, 3, 3, 5, 4, 1, 1, 2, 5, 4, 0, 2, 0, 4, 4, 3, 5, 4, 4, 4, 2, 5, 0, 3,
+                0, 5, 1, 4, 5, 4, 5, 5, 2, 4, 5, 3, 2, 0, 1, 1, 1, 0, 2, 5, 1, 2, 5, 4,
+                4, 2, 0, 4,
             ])),
         ],
     )?;
@@ -1605,7 +1616,7 @@ mod tests {
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
-        ctx.register_table("users", Arc::new(mem_table))?;
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
 
         let sql = " SELECT
             SUM(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
@@ -1622,7 +1633,7 @@ mod tests {
             SUM(desc_col) OVER(ORDER BY desc_col DESC ROWS BETWEEN 10 PRECEDING AND 10 FOLLOWING),
             COUNT(*) OVER(ORDER BY inc_col ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
             COUNT(*) OVER(ORDER BY desc_col DESC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
-            FROM users AS user
+            FROM annotated_data
             ";
 
         let dataframe = ctx.sql(sql).await?;
@@ -1643,19 +1654,49 @@ mod tests {
 
     /// This example demonstrates executing a simple query against a Memtable
     #[tokio::test]
+    async fn test_window_multi_order_bys() -> Result<()> {
+        let config = SessionConfig::new();
+        let ctx = SessionContext::with_config(config);
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
+
+        let sql = "SELECT ts,
+        SUM(inc_col) OVER(ORDER BY nonmonothonic_inc, desc_col ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+FROM annotated_data
+            ";
+
+        let dataframe = ctx.sql(sql).await?;
+
+        let err = dataframe.execute_stream().await;
+        match err {
+            Ok(_res) => panic!("We expect to get error"),
+            Err(err) => {
+                assert_eq!(
+                    err.to_string(),
+                    "Execution error: Cannot run conflicting multiple orderbys in streaming mode".to_owned()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// This example demonstrates executing a simple query against a Memtable
+    #[tokio::test]
     async fn test_window_frame_running_partition_by() -> Result<()> {
         let config = SessionConfig::new().with_repartition_windows(false);
         let ctx = SessionContext::with_config(config);
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
-        ctx.register_table("users", Arc::new(mem_table))?;
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
 
         let sql = "SELECT
             SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
             SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING),
             SUM(inc_col) OVER(PARTITION BY equal ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 10 FOLLOWING)
-            FROM users AS user_
+            FROM annotated_data
             ";
         let dataframe = ctx.sql(sql).await?;
 
@@ -1684,11 +1725,11 @@ mod tests {
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
-        ctx.register_table("users", Arc::new(mem_table))?;
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
 
         let sql = " SELECT
             SUM(inc_col) OVER(PARTITION BY inc_col ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
-            FROM users AS user_
+            FROM annotated_data
             ORDER BY ts
             ";
 
@@ -1716,20 +1757,21 @@ mod tests {
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
-        ctx.register_table("users", Arc::new(mem_table))?;
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
 
         let sql = "SELECT
-            SUM(inc_col) OVER(ORDER BY ts RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
-            SUM(desc_col) OVER(ORDER BY ts RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
-            SUM(inc_col) OVER(ORDER BY ts DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
-            SUM(desc_col) OVER(ORDER BY ts DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
-            COUNT(*) OVER(ORDER BY ts RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
-            COUNT(*) OVER(ORDER BY ts DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
-            SUM(inc_col) OVER(ORDER BY ts ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
-            SUM(desc_col) OVER(ORDER BY ts DESC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
-            COUNT(*) OVER(ORDER BY ts DESC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
-            FROM users
-            ORDER BY ts";
+            SUM(inc_col) OVER(ORDER BY ts RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING),
+            SUM(desc_col) OVER(ORDER BY ts RANGE BETWEEN 5 PRECEDING AND 1 FOLLOWING),
+            SUM(inc_col) OVER(ORDER BY ts DESC RANGE BETWEEN 1 PRECEDING AND 4 FOLLOWING),
+            SUM(desc_col) OVER(ORDER BY ts DESC RANGE BETWEEN 1 PRECEDING AND 8 FOLLOWING),
+            COUNT(*) OVER(ORDER BY ts RANGE BETWEEN 4 PRECEDING AND 8 FOLLOWING),
+            COUNT(*) OVER(ORDER BY ts DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING),
+            SUM(inc_col) OVER(ORDER BY ts ROWS BETWEEN 1 PRECEDING AND 10 FOLLOWING),
+            SUM(desc_col) OVER(ORDER BY ts DESC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING),
+            COUNT(*) OVER(ORDER BY ts DESC ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING),
+            SUM(desc_col) OVER(ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING),
+            COUNT(*) OVER(ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING)
+            FROM annotated_data";
 
         let dataframe = ctx.sql(sql).await?;
 
@@ -1755,7 +1797,7 @@ mod tests {
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
-        ctx.register_table("users", Arc::new(mem_table))?;
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
 
         let sql = "SELECT
             SUM(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
@@ -1764,7 +1806,7 @@ mod tests {
             SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
             SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
             SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN 20 PRECEDING AND 20 FOLLOWING)
-            FROM users
+            FROM annotated_data
             ORDER BY ts";
 
         let dataframe = ctx.sql(sql).await?;
@@ -1793,12 +1835,12 @@ mod tests {
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
-        ctx.register_table("users", Arc::new(mem_table))?;
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
 
         let sql = "SELECT
 SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING),
 SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING)
-            FROM users AS user_
+            FROM annotated_data
             ";
 
         let dataframe = ctx.sql(sql).await?;
@@ -1829,21 +1871,13 @@ SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN 1 PRECEDING and 10 FOLLOWI
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
-        ctx.register_table("users", Arc::new(mem_table))?;
-        //
-        //         let sql = "SELECT
-        // SUM(inc_col) OVER(ORDER BY inc_col DESC RANGE BETWEEN UNBOUNDED PRECEDING and 1 FOLLOWING),
-        // SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN UNBOUNDED PRECEDING and UNBOUNDED FOLLOWING),
-        // SUM(inc_col) OVER(ORDER BY inc_col ASC RANGE BETWEEN 10 PRECEDING and UNBOUNDED FOLLOWING)
-        //             FROM users AS user_
-        //             ORDER BY ts
-        //             ";
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
         let sql = "SELECT
     SUM(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) as inc_sum1,
     SUM(desc_col) OVER(ORDER BY desc_col DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) as desc_sum1,
     SUM(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING AND 10 FOLLOWING) as inc_sum2,
     SUM(desc_col) OVER(ORDER BY desc_col DESC RANGE BETWEEN 10 PRECEDING AND 10 FOLLOWING) as desc_sum2
-FROM users AS user";
+FROM annotated_data";
 
         let dataframe = ctx.sql(sql).await?;
 
@@ -1872,13 +1906,16 @@ FROM users AS user";
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
-        ctx.register_table("users", Arc::new(mem_table))?;
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
 
         let sql = "SELECT
             FIRST_VALUE(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING),
             LAST_VALUE(inc_col) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING),
-            NTH_VALUE(inc_col, 5) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING)
-            FROM users AS user_
+            FIRST_VALUE(inc_col) OVER(ORDER BY inc_col ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING),
+            LAST_VALUE(inc_col) OVER(ORDER BY inc_col ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING),
+            NTH_VALUE(inc_col, 5) OVER(ORDER BY inc_col RANGE BETWEEN 10 PRECEDING and 1 FOLLOWING),
+            NTH_VALUE(inc_col, 5) OVER(ORDER BY inc_col ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING)
+            FROM annotated_data
             ";
 
         let dataframe = ctx.sql(sql).await?;
@@ -1907,13 +1944,13 @@ FROM users AS user";
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
-        ctx.register_table("users", Arc::new(mem_table))?;
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
 
         let sql = "SELECT
           inc_col,
           ROW_NUMBER() OVER(ORDER BY inc_col RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING) AS rn1,
           ROW_NUMBER() OVER(ORDER BY inc_col ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as rn2
-            FROM users AS user_
+            FROM annotated_data
             ";
 
         let dataframe = ctx.sql(sql).await?;
@@ -1941,7 +1978,7 @@ FROM users AS user";
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
-        ctx.register_table("users", Arc::new(mem_table))?;
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
 
         let sql = "SELECT
           inc_col,
@@ -1949,7 +1986,7 @@ FROM users AS user";
           RANK() OVER(ORDER BY nonmonothonic_inc ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as rn2,
           DENSE_RANK() OVER(ORDER BY nonmonothonic_inc RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING) AS dense_rank1,
           DENSE_RANK() OVER(ORDER BY nonmonothonic_inc ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as dense_rank2
-            FROM users AS user_
+            FROM annotated_data
             ";
 
         let dataframe = ctx.sql(sql).await?;
@@ -1976,7 +2013,7 @@ FROM users AS user";
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
 
-        ctx.register_table("users", Arc::new(mem_table))?;
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
 
         let sql = "SELECT
           inc_col,
@@ -1985,7 +2022,7 @@ FROM users AS user";
           LAG(inc_col, 2, 1002) OVER(ORDER BY nonmonothonic_inc ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lag2,
           LEAD(inc_col, 3, 1003) OVER(ORDER BY nonmonothonic_inc RANGE BETWEEN 1 PRECEDING and 10 FOLLOWING) AS lead2,
           LEAD(inc_col, 4, 1004) OVER(ORDER BY nonmonothonic_inc ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lead3
-            FROM users AS user_
+            FROM annotated_data
             ";
 
         let dataframe = ctx.sql(sql).await?;
@@ -2005,19 +2042,88 @@ FROM users AS user";
         Ok(())
     }
 
+    /// This example demonstrates executing a simple query against a Memtable
     #[tokio::test]
-    async fn show_physical_plan() -> Result<()> {
-        let config = SessionConfig::new();
+    #[ignore]
+    async fn test_window_frame_partition_by_unsorted() -> Result<()> {
+        let config = SessionConfig::new()
+            .set_u64("datafusion.execution.coalesce_target_batch_size", 10);
+        // let config = SessionConfig::new();
         let ctx = SessionContext::with_config(config);
         let (schema, batches) = mock_data_running_test()?;
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
-        ctx.register_table("users", Arc::new(mem_table))?;
+
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
 
         let sql = "SELECT
-            SUM(inc_col) OVER(PARTITION BY inc_col ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
-            SUM(inc_col) OVER(PARTITION BY desc_col ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
-            FROM users AS user_
-            ORDER BY ts";
+            ts,
+            SUM(inc_col) OVER(PARTITION BY non_sorted_non_unique_field ORDER BY desc_col DESC RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING),
+            SUM(inc_col) OVER(PARTITION BY non_sorted_non_unique_field ORDER BY desc_col DESC ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING),
+            SUM(inc_col) OVER(PARTITION BY non_sorted_non_unique_field ORDER BY desc_col RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING),
+            SUM(inc_col) OVER(PARTITION BY non_sorted_non_unique_field ORDER BY desc_col ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING)
+            FROM annotated_data
+            ORDER BY ts
+            ";
+
+        let dataframe = ctx.sql(sql).await?;
+
+        let mut stream = dataframe.execute_stream().await.unwrap();
+        let mut res_calc = "".to_string();
+        while let Some(result) = stream.next().await {
+            let result = result.map_err(DataFusionError::ArrowError)?;
+            append_to_the_content(&result, &mut res_calc).unwrap();
+            print_batches(&[result])?;
+        }
+        println!("{}", res_calc);
+        let postgre_ref =
+            fs::read_to_string("tests/postgrerefs/partition_by_unsorted.csv").unwrap();
+        assert_eq!(postgre_ref, res_calc);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn show_physical_plan() -> Result<()> {
+        // let config = SessionConfig::new()
+        //     .set_u64("datafusion.execution.coalesce_target_batch_size", 10);
+        // let ctx = SessionContext::with_config(config);
+        // let (schema, batches) = mock_data_running_test()?;
+        // let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+        // ctx.register_table("annotated_data", Arc::new(mem_table))?;
+        // let sql = "SELECT
+        //     ts,
+        //     SUM(inc_col) OVER(PARTITION BY non_sorted_non_unique_field ORDER BY desc_col DESC RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING),
+        //     SUM(inc_col) OVER(PARTITION BY non_sorted_non_unique_field ORDER BY desc_col DESC ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING),
+        //     SUM(inc_col) OVER(PARTITION BY non_sorted_non_unique_field ORDER BY desc_col RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING),
+        //     SUM(inc_col) OVER(PARTITION BY non_sorted_non_unique_field ORDER BY desc_col ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING)
+        //     FROM annotated_data
+        //     ORDER BY ts";
+
+        // let tmp_dir = TempDir::new()?;
+        // let partition_count = 4;
+        // let ctx = create_ctx_with_partition(&tmp_dir, partition_count).await?;
+        // let sql = "SELECT \
+        // c1, \
+        // c2, \
+        // SUM(c2) OVER (), \
+        // COUNT(c2) OVER (), \
+        // MAX(c2) OVER (), \
+        // MIN(c2) OVER (), \
+        // AVG(c2) OVER () \
+        // FROM test \
+        // ORDER BY c1, c2 \
+        // LIMIT 5";
+
+        let ctx = SessionContext::new();
+        register_aggregate_csv(&ctx).await?;
+        let sql = "SELECT
+          c9,
+          LAG(c9, 2, 10101) OVER(ORDER BY c9) as lag1,
+          LAG(c9, 2, 10101) OVER(ORDER BY c9 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lag2,
+          LEAD(c9, 2, 10101) OVER(ORDER BY c9) as lead1,
+          LEAD(c9, 2, 10101) OVER(ORDER BY c9 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lead2
+          FROM aggregate_test_100
+          ORDER BY c9
+          LIMIT 5";
 
         let dataframe = ctx.sql(sql).await?;
         let df = dataframe.explain(false, false)?;

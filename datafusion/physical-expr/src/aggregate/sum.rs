@@ -307,6 +307,10 @@ impl Accumulator for SumAccumulator {
             Ok(self.sum.clone())
         }
     }
+
+    fn out_type(&self) -> Result<DataType> {
+        Ok(self.sum.get_datatype())
+    }
 }
 
 #[derive(Debug)]

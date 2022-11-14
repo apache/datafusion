@@ -20,7 +20,7 @@
 
 use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_expr::{BuiltinWindowState, RankState};
-use crate::window::{BuiltInWindowFunctionExpr, WindowState};
+use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
@@ -114,8 +114,11 @@ impl PartitionEvaluator for RankEvaluator {
         true
     }
 
-    fn get_range(&self, state: &WindowState) -> Result<(usize, usize)> {
-        Ok((state.last_idx, state.last_idx + 1))
+    fn get_range(&self, state: &WindowAggState) -> Result<Range<usize>> {
+        Ok(Range {
+            start: state.last_idx,
+            end: state.last_idx + 1,
+        })
     }
 
     fn state(&self) -> Result<BuiltinWindowState> {
@@ -136,7 +139,7 @@ impl PartitionEvaluator for RankEvaluator {
 
     fn update_state(
         &mut self,
-        state: &WindowState,
+        state: &WindowAggState,
         range_columns: &[ArrayRef],
         sort_partition_points: &[Range<usize>],
     ) -> Result<()> {
@@ -162,7 +165,7 @@ impl PartitionEvaluator for RankEvaluator {
     }
 
     /// evaluate window function result inside given range
-    fn evaluate_stream(&self, _state: &WindowState) -> Result<ScalarValue> {
+    fn evaluate_stream(&self, _state: &WindowAggState) -> Result<ScalarValue> {
         match self.rank_type {
             RankType::Basic => Ok(ScalarValue::UInt64(Some(
                 self.state.last_rank_boundary as u64 + 1,

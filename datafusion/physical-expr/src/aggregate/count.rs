@@ -166,6 +166,10 @@ impl Accumulator for CountAccumulator {
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(self.count)))
     }
+
+    fn out_type(&self) -> Result<DataType> {
+        Ok(DataType::Int64)
+    }
 }
 
 #[derive(Debug)]

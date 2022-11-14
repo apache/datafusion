@@ -19,7 +19,7 @@
 //! at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::{BuiltInWindowFunctionExpr, WindowState};
+use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
 use arrow::compute::cast;
@@ -170,23 +170,29 @@ fn shift_with_default_value(
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {
-    fn get_range(&self, state: &WindowState) -> Result<(usize, usize)> {
+    fn get_range(&self, state: &WindowAggState) -> Result<Range<usize>> {
         if self.shift_offset > 0 {
             let start = if state.last_idx > self.shift_offset as usize {
                 state.last_idx - self.shift_offset as usize
             } else {
                 0
             };
-            Ok((start, state.last_idx + 1))
+            Ok(Range {
+                start,
+                end: state.last_idx + 1,
+            })
         } else {
             let end = state.last_idx + (-self.shift_offset) as usize;
             let n_rows = self.values[0].len();
             let end = min(end, n_rows);
-            Ok((state.last_idx, end))
+            Ok(Range {
+                start: state.last_idx,
+                end,
+            })
         }
     }
 
-    fn evaluate_stream(&self, state: &WindowState) -> Result<ScalarValue> {
+    fn evaluate_stream(&self, state: &WindowAggState) -> Result<ScalarValue> {
         let dtype = self.values[0].data_type();
         let idx = state.last_idx as i64 - self.shift_offset;
         if idx < 0 || idx as usize >= self.values[0].len() {

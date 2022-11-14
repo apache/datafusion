@@ -19,9 +19,8 @@
 
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
-use crate::window::common::concat_cols;
-use crate::window::window_expr::BatchState;
-use crate::window::{WindowAggState, WindowState};
+use crate::window::window_expr::PartitionBatches;
+use crate::window::{PartitionWindowAggStates, WindowAggState};
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use arrow::array::Array;
 use arrow::compute::{concat, SortOptions};
@@ -128,8 +127,8 @@ impl WindowExpr for BuiltInWindowExpr {
                         &vec![],
                     )?;
                     let range = Range {
-                        start: partition_range.start + range.0,
-                        end: partition_range.start + range.1,
+                        start: partition_range.start + range.start,
+                        end: partition_range.start + range.end,
                     };
                     let value = evaluator.evaluate_inside_range(range)?;
                     row_wise_results.push(value.to_array());
@@ -151,8 +150,8 @@ impl WindowExpr for BuiltInWindowExpr {
     /// evaluate the window function values against the batch
     fn evaluate_stream(
         &self,
-        batch_state: &BatchState,
-        window_accumulators: &mut WindowAggState,
+        partition_batches: &PartitionBatches,
+        window_agg_state: &mut PartitionWindowAggStates,
         window_sort_keys: &WindowSortKeys,
         is_end: bool,
     ) -> Result<()> {
@@ -160,13 +159,15 @@ impl WindowExpr for BuiltInWindowExpr {
             window_sort_keys[self.partition_by.len()..window_sort_keys.len()].to_vec();
         let sort_options: Vec<SortOptions> =
             self.order_by.iter().map(|o| o.options).collect();
-        for (partition_row, partition_batch) in batch_state.iter() {
+        for (partition_row, partition_batch) in partition_batches.iter() {
             let mut evaluator = self.expr.create_evaluator(partition_batch)?;
-            let mut state = if let Some(state) = window_accumulators.get(partition_row) {
+            let field = self.expr.field()?;
+            let out_type = field.data_type();
+            let mut state = if let Some(state) = window_agg_state.get(partition_row) {
                 state.clone()
             } else {
-                let state = WindowState::default();
-                window_accumulators.insert(partition_row.clone(), state.clone());
+                let state = WindowAggState::new(out_type)?;
+                window_agg_state.insert(partition_row.clone(), state.clone());
                 state.clone()
             };
             evaluator.set_state(&state.builtin_window_state)?;
@@ -182,6 +183,7 @@ impl WindowExpr for BuiltInWindowExpr {
             // We iterate on each row to perform a running calculation.
             // First, cur_range is calculated, then it is compared with last_range.
             let mut row_wise_results: Vec<ScalarValue> = vec![];
+            let mut last_range = state.cur_range.clone();
             for idx in state.last_idx..num_rows {
                 state.cur_range = if !evaluator.uses_window_frame() {
                     evaluator.get_range(&state)?
@@ -198,11 +200,11 @@ impl WindowExpr for BuiltInWindowExpr {
 
                 evaluator.update_state(&state, &order_bys, &sort_partition_points)?;
                 // exit if range end index is length, need kind of flag to stop
-                if state.cur_range.1 == num_rows && !is_end {
-                    state.cur_range = state.last_range;
+                if state.cur_range.end == num_rows && !is_end {
+                    state.cur_range = last_range.clone();
                     break;
                 }
-                if state.cur_range.0 == state.cur_range.1 {
+                if state.cur_range.start == state.cur_range.end {
                     // We produce None if the window is empty.
                     row_wise_results
                         .push(ScalarValue::try_from(self.expr.field()?.data_type())?)
@@ -210,20 +212,22 @@ impl WindowExpr for BuiltInWindowExpr {
                     let res = evaluator.evaluate_stream(&state)?;
                     row_wise_results.push(res);
                 }
-                state.last_range = state.cur_range;
+                last_range = state.cur_range.clone();
                 state.last_idx = idx + 1;
             }
-            let col = if !row_wise_results.is_empty() {
-                Some(ScalarValue::iter_to_array(row_wise_results.into_iter())?)
+            state.cur_range = last_range;
+            let out_col = if !row_wise_results.is_empty() {
+                ScalarValue::iter_to_array(row_wise_results.into_iter())?
             } else {
-                None
+                let a = ScalarValue::try_from(self.expr.field()?.data_type())?;
+                a.to_array_of_size(0)
             };
 
-            state.col = concat_cols(state.col, col)?;
-            state.num_rows = num_rows;
+            state.out_col = concat(&[&state.out_col, &out_col])?;
+            state.n_row_result_missing = num_rows - state.last_idx;
 
             state.builtin_window_state = evaluator.state()?;
-            window_accumulators.insert(partition_row.clone(), state.clone());
+            window_agg_state.insert(partition_row.clone(), state.clone());
         }
         Ok(())
     }

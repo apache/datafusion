@@ -16,10 +16,12 @@
 // under the License.
 
 use crate::{PhysicalExpr, PhysicalSortExpr};
+use arrow::array::Array;
 use arrow::compute::kernels::partition::lexicographical_partition_ranges;
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
+use arrow_schema::DataType;
 use datafusion_common::bisect::bisect;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use std::any::Any;
@@ -32,6 +34,7 @@ use datafusion_expr::utils::WindowSortKeys;
 use datafusion_expr::{AggregateState, WindowFrameBound};
 use datafusion_expr::{WindowFrame, WindowFrameUnits};
 use indexmap::IndexMap;
+use itertools::Itertools;
 
 /// A window expression that:
 /// * knows its resulting field
@@ -70,8 +73,8 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// evaluate the window function values against the batch
     fn evaluate_stream(
         &self,
-        _batch_state: &BatchState,
-        _window_accumulators: &mut WindowAggState,
+        _partition_batches: &PartitionBatches,
+        _window_agg_state: &mut PartitionWindowAggStates,
         _window_sort_keys: &WindowSortKeys,
         _is_end: bool,
     ) -> Result<()> {
@@ -93,6 +96,8 @@ pub trait WindowExpr: Send + Sync + Debug {
                 end: num_rows,
             }])
         } else {
+            // get_linear_partition_points(partition_columns)
+            // println!("range linear:{:?}", ranges);
             Ok(lexicographical_partition_ranges(partition_columns)
                 .map_err(DataFusionError::ArrowError)?
                 .collect::<Vec<_>>())
@@ -141,34 +146,12 @@ pub trait WindowExpr: Send + Sync + Debug {
         length: usize,
         idx: usize,
         window_sort_keys: &WindowSortKeys,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<Range<usize>> {
+        let window_frame =
+            get_window_frame_to_use(window_frame, sort_options, window_sort_keys)?;
         if let Some(window_frame) = window_frame {
             match window_frame.units {
                 WindowFrameUnits::Range => {
-                    let window_frame = if !window_sort_keys.is_empty() {
-                        let physical_sorting = window_sort_keys.first().unwrap();
-                        if let Some(column_info) = physical_sorting.column_info {
-                            let is_descending: bool = sort_options
-                                .first()
-                                .ok_or_else(|| {
-                                    DataFusionError::Internal(
-                                        "Array is empty".to_string(),
-                                    )
-                                })?
-                                .descending;
-                            let is_physical_descending = !column_info.is_ascending;
-                            if is_physical_descending != is_descending {
-                                get_reversed_window_frame(window_frame)?
-                            } else {
-                                Arc::clone(window_frame)
-                            }
-                        } else {
-                            Arc::clone(window_frame)
-                        }
-                    } else {
-                        Arc::clone(window_frame)
-                    };
-
                     let start = match &window_frame.start_bound {
                         // UNBOUNDED PRECEDING
                         WindowFrameBound::Preceding(n) => {
@@ -245,7 +228,7 @@ pub trait WindowExpr: Send + Sync + Debug {
                             }
                         }
                     };
-                    Ok((start, end))
+                    Ok(Range { start, end })
                 }
                 WindowFrameUnits::Rows => {
                     let start = match window_frame.start_bound {
@@ -312,14 +295,17 @@ pub trait WindowExpr: Send + Sync + Debug {
                             ))
                         }
                     };
-                    Ok((start, end))
+                    Ok(Range { start, end })
                 }
                 WindowFrameUnits::Groups => Err(DataFusionError::NotImplemented(
                     "Window frame for groups is not implemented".to_string(),
                 )),
             }
         } else {
-            Ok((0, length))
+            Ok(Range {
+                start: 0,
+                end: length,
+            })
         }
     }
 }
@@ -400,31 +386,103 @@ fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
     bisect::<BISECT_SIDE>(range_columns, &end_range, &new_sort_options)
 }
 
-fn get_reversed_window_frame(window_frame: &WindowFrame) -> Result<Arc<WindowFrame>> {
-    let mut new_window_frame = window_frame.clone();
-    match &window_frame.start_bound {
-        WindowFrameBound::Preceding(elem) => {
-            new_window_frame.end_bound = WindowFrameBound::Following(elem.clone())
-        }
-        WindowFrameBound::Following(elem) => {
-            new_window_frame.end_bound = WindowFrameBound::Preceding(elem.clone())
-        }
-        WindowFrameBound::CurrentRow => {
-            new_window_frame.end_bound = WindowFrameBound::CurrentRow
+fn get_window_frame_to_use(
+    window_frame: &Option<Arc<WindowFrame>>,
+    sort_options: &[SortOptions],
+    window_sort_keys: &WindowSortKeys,
+) -> Result<Option<Arc<WindowFrame>>> {
+    if reverse_window_frame_flag(sort_options, window_sort_keys)? {
+        get_reversed_window_frame(window_frame)
+    } else {
+        Ok(window_frame.clone())
+    }
+}
+
+fn reverse_window_frame_flag(
+    sort_options: &[SortOptions],
+    window_sort_keys: &WindowSortKeys,
+) -> Result<bool> {
+    if !window_sort_keys.is_empty() {
+        let physical_sorting = window_sort_keys.first().unwrap();
+        if let Some(column_info) = physical_sorting.column_info {
+            let is_descending: bool = sort_options
+                .first()
+                .ok_or_else(|| DataFusionError::Internal("Array is empty".to_string()))?
+                .descending;
+            let is_physical_descending = !column_info.is_ascending;
+            if is_physical_descending != is_descending {
+                return Ok(true);
+            };
         }
     };
-    match &window_frame.end_bound {
-        WindowFrameBound::Preceding(elem) => {
-            new_window_frame.start_bound = WindowFrameBound::Following(elem.clone())
+    Ok(false)
+}
+
+fn get_reversed_window_frame(
+    window_frame: &Option<Arc<WindowFrame>>,
+) -> Result<Option<Arc<WindowFrame>>> {
+    if let Some(window_frame) = &window_frame {
+        let mut new_window_frame = (*window_frame.clone()).clone();
+        match &window_frame.start_bound {
+            WindowFrameBound::Preceding(elem) => {
+                new_window_frame.end_bound = WindowFrameBound::Following(elem.clone())
+            }
+            WindowFrameBound::Following(elem) => {
+                new_window_frame.end_bound = WindowFrameBound::Preceding(elem.clone())
+            }
+            WindowFrameBound::CurrentRow => {
+                new_window_frame.end_bound = WindowFrameBound::CurrentRow
+            }
+        };
+        match &window_frame.end_bound {
+            WindowFrameBound::Preceding(elem) => {
+                new_window_frame.start_bound = WindowFrameBound::Following(elem.clone())
+            }
+            WindowFrameBound::Following(elem) => {
+                new_window_frame.start_bound = WindowFrameBound::Preceding(elem.clone())
+            }
+            WindowFrameBound::CurrentRow => {
+                new_window_frame.start_bound = WindowFrameBound::CurrentRow
+            }
+        };
+        Ok(Some(Arc::new(new_window_frame)))
+    } else {
+        Ok(window_frame.clone())
+    }
+}
+
+#[allow(dead_code)]
+fn get_linear_partition_points(
+    partition_columns: &[SortColumn],
+) -> Result<Vec<Range<usize>>> {
+    let values = partition_columns
+        .iter()
+        .map(|elem| elem.values.clone())
+        .collect_vec();
+    let n_rows = values[0].len();
+    let mut last_row = None;
+    let mut start = 0;
+    let mut ranges = vec![];
+    for idx in 0..n_rows {
+        let current_row = values
+            .iter()
+            .map(|arr| ScalarValue::try_from_array(arr, idx))
+            .collect::<Result<Vec<ScalarValue>>>()?;
+        if let Some(last_row_inner) = last_row.clone() {
+            if last_row_inner != current_row {
+                ranges.push(Range { start, end: idx });
+                start = idx;
+                last_row = Some(current_row);
+            }
+        } else {
+            last_row = Some(current_row);
+            start = idx;
+        };
+        if idx == n_rows - 1 {
+            ranges.push(Range { start, end: n_rows });
         }
-        WindowFrameBound::Following(elem) => {
-            new_window_frame.start_bound = WindowFrameBound::Preceding(elem.clone())
-        }
-        WindowFrameBound::CurrentRow => {
-            new_window_frame.start_bound = WindowFrameBound::CurrentRow
-        }
-    };
-    Ok(Arc::new(new_window_frame))
+    }
+    Ok(ranges)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -441,19 +499,33 @@ pub enum BuiltinWindowState {
     Default,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct WindowState {
-    pub last_range: (usize, usize),
-    pub cur_range: (usize, usize),
+#[derive(Debug, Clone)]
+pub struct WindowAggState {
+    pub cur_range: Range<usize>,
     pub last_idx: usize,
     pub n_retracted: usize,
     pub aggregate_state: Vec<AggregateState>,
     pub builtin_window_state: BuiltinWindowState,
     // Keeps the results
-    pub col: Option<ArrayRef>,
-    pub num_rows: usize,
+    pub out_col: ArrayRef,
+    pub n_row_result_missing: usize,
 }
 
 pub type PartitionKey = Vec<ScalarValue>;
-pub type WindowAggState = IndexMap<PartitionKey, WindowState>;
-pub type BatchState = IndexMap<PartitionKey, RecordBatch>;
+pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowAggState>;
+pub type PartitionBatches = IndexMap<PartitionKey, RecordBatch>;
+
+impl WindowAggState {
+    pub fn new(out_type: &DataType) -> Result<Self> {
+        let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0);
+        Ok(Self {
+            cur_range: Range { start: 0, end: 0 },
+            last_idx: 0,
+            n_retracted: 0,
+            aggregate_state: vec![],
+            builtin_window_state: BuiltinWindowState::Default,
+            out_col: empty_out_col,
+            n_row_result_missing: 0,
+        })
+    }
+}

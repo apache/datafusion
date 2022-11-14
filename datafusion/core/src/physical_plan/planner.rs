@@ -64,8 +64,8 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{
-    can_run_frame_in_streaming, expand_wildcard, expr_to_columns,
-    remove_redundant_order_bys,
+    can_run_frames_in_streaming, expand_wildcard, expr_to_columns,
+    is_all_window_functions_aggregate,
 };
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_optimizer::utils::unalias;
@@ -573,6 +573,10 @@ impl DefaultPhysicalPlanner {
                         }
                         _ => unreachable!(),
                     };
+
+                    // We will receive this information from source
+                    let mut is_stream = true;
+
                     let sort_keys = get_sort_keys(&window_expr[0])?;
                     if window_expr.len() > 1 {
                         debug_assert!(
@@ -582,19 +586,44 @@ impl DefaultPhysicalPlanner {
                             "all window expressions shall have the same sort keys, as guaranteed by logical planning"
                         );
                     }
-                    println!("window expr: {:?}", window_expr);
                     let window_exprs = window_expr.iter().collect_vec();
-                    let non_inc_sort_keys = remove_redundant_order_bys(&sort_keys, &window_exprs)?;
-                    // We will receive this information from source
-                    let mut is_stream = true;
-                    if is_stream && !can_run_frame_in_streaming(&window_expr[0])? {
+
+                    let can_run_in_streaming = can_run_frames_in_streaming(window_expr)?;
+                    if is_stream && !can_run_in_streaming {
                         //TODO: Raise error
                         println!("should have raise error");
                         // return Err(DataFusionError::Execution("Window Frame should be bounded to support streaming".to_string()));
                     }
-                    let non_inc_sort_keys = if is_stream {
-                        if non_inc_sort_keys.is_empty() {
-                            non_inc_sort_keys
+                    is_stream = is_stream && can_run_in_streaming;
+
+
+                    let unsorted_sort_keys = sort_keys.iter().filter(|elem| !elem.can_skip).cloned().collect_vec();
+                    // let unsorted_sort_keys = remove_unnecessary_sorts(&sort_keys, &window_exprs)?;
+                    // let unsorted_partition_keys = unsorted_sort_keys.iter().filter(|elem| elem.is_partition).cloned().collect_vec();
+                    let unsorted_orderby_keys = unsorted_sort_keys.iter().filter(|elem| !elem.is_partition).cloned().collect_vec();
+                    let skippable_reverse_flags = sort_keys.iter().filter(|elem| elem.can_skip).map(|elem| {elem.is_reversed}).collect_vec();
+                    // We expect to have same kind of ordering among different order bys
+                    // otherwise we cannot skip these ORDER BYS such as OVER(ORDER BY inc_col ASC, desc_col ASC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+                    // Hence skippable_reverse_flags either should have all false or all true
+                    if !skippable_reverse_flags.is_empty(){
+                        let reverse_flag = skippable_reverse_flags[0];
+                        let is_all_same = skippable_reverse_flags.iter().all(|elem| *elem ==reverse_flag);
+                        if !is_all_same {
+                            return Err(DataFusionError::Execution("Cannot run conflicting multiple orderbys in streaming mode".to_string()));
+                        } else {
+                            // If ORDER BY direction and physical direction are different we only support aggregate functions
+                            // Since their result is invariant of the direction (given correct range)
+                            if reverse_flag && !is_all_window_functions_aggregate(&window_exprs)? {
+                                return Err(DataFusionError::NotImplemented("Currently we do not support running Non-aggregate functions when ORDER BY direction and physical direction are different".to_string()));
+                            }
+                        }
+                    }
+                    let sort_keys_to_use = if is_stream {
+                        // If we can skip order by sorting we do not sort according to
+                        // partition column since this would violate incremental running
+                        if unsorted_orderby_keys.is_empty() {
+                            // unsorted_partition_keys
+                            unsorted_orderby_keys.clone()
                         } else {
                             // TODO: Raise error here
                             sort_keys.clone()
@@ -603,19 +632,19 @@ impl DefaultPhysicalPlanner {
                         sort_keys.clone()
                     };
 
-                    let non_inc_sort_keys = non_inc_sort_keys.iter().map(|window_sort_key|{
+                    let unsorted_keys = sort_keys_to_use.iter().map(|window_sort_key|{
                         window_sort_key.expr.clone()
                     }).collect_vec();
 
-                    is_stream = non_inc_sort_keys.is_empty() && is_stream;
+                    is_stream = unsorted_orderby_keys.is_empty() && is_stream;
 
                     let logical_input_schema = input.schema();
 
-                    let physical_sort_keys = if non_inc_sort_keys.is_empty() {
+                    let physical_sort_keys = if unsorted_keys.is_empty() {
                         None
                     } else {
                         let physical_input_schema = input_exec.schema();
-                        let sort_keys = non_inc_sort_keys
+                        let sort_keys = unsorted_keys
                             .iter()
                             .map(|e| match e {
                                 Expr::Sort {

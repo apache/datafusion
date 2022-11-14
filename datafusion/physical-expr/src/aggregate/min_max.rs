@@ -525,23 +525,6 @@ impl Accumulator for MaxAccumulator {
         Ok(vec![AggregateState::Scalar(self.max.clone())])
     }
 
-    fn set_state(&mut self, state_data: &[AggregateState]) -> Result<()> {
-        // TODO set state for all accumulators
-        let max_state = &state_data[0];
-        match max_state {
-            AggregateState::Scalar(max_val) => {
-                self.max = max_val.clone();
-            }
-            max_state => {
-                return Err(DataFusionError::Execution(format!(
-                    "Unexpected State received for max {:?}",
-                    max_state
-                )))
-            }
-        }
-        Ok(())
-    }
-
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(self.max.clone())
     }
@@ -693,23 +676,6 @@ impl MinAccumulator {
 impl Accumulator for MinAccumulator {
     fn state(&self) -> Result<Vec<AggregateState>> {
         Ok(vec![AggregateState::Scalar(self.min.clone())])
-    }
-
-    fn set_state(&mut self, state_data: &[AggregateState]) -> Result<()> {
-        // TODO set state for all accumulators
-        let min_state = &state_data[0];
-        match min_state {
-            AggregateState::Scalar(min_val) => {
-                self.min = min_val.clone();
-            }
-            min_state => {
-                return Err(DataFusionError::Execution(format!(
-                    "Unexpected State received for min {:?}",
-                    min_state
-                )))
-            }
-        }
-        Ok(())
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
