@@ -65,6 +65,8 @@ mod row_groups;
 
 pub use metrics::ParquetFileMetrics;
 
+use super::get_output_ordering;
+
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
@@ -235,82 +237,8 @@ impl ExecutionPlan for ParquetExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
-    /// The ParquetExec does not attempt to read all files
-    /// concurrently, instead it will read files in sequence within a
-    /// partition.  This is an important property as it allows plans
-    /// to run against 1000s of files and not try to open them all
-    /// concurrently.
-    ///
-    /// However, it means if we assign more than one file to a
-    /// partitition the output sort order will not be preserved as
-    /// illustrated in the following diagrams:
-    ///
-    /// When only 1 file is assigned to each partition, each partition
-    /// is correctly sorted on `(A, B, C)`
-    ///
-    /// ```text
-    ///┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┓
-    ///  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
-    ///┃   ┌───────────────┐     ┌──────────────┐ │   ┌──────────────┐ │   ┌─────────────┐   ┃
-    ///  │ │   1.parquet   │ │ │ │  2.parquet   │   │ │  3.parquet   │   │ │  4.parquet  │ │
-    ///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │   │Sort: A, B, C │ │   │Sort: A, B, C│   ┃
-    ///  │ └───────────────┘ │ │ └──────────────┘   │ └──────────────┘   │ └─────────────┘ │
-    ///┃                                          │                    │                     ┃
-    ///  │                   │ │                    │                    │                 │
-    ///┃                                          │                    │                     ┃
-    ///  │                   │ │                    │                    │                 │
-    ///┃                                          │                    │                     ┃
-    ///  │                   │ │                    │                    │                 │
-    ///┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
-    ///     DataFusion           DataFusion           DataFusion           DataFusion
-    ///┃    Partition 1          Partition 2          Partition 3          Partition 4       ┃
-    /// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
-    ///
-    ///                                      ParquetExec
-    ///```
-    ///
-    /// However, when more than 1 file is assigned to each partition,
-    /// each partition is NOT correctly sorted on `(A, B, C)`. Once
-    /// the second file is scanned, the same values for A, B and C can
-    /// be repeated in the same sorted stream
-    ///
-    ///```text
-    ///┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
-    ///  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
-    ///┃   ┌───────────────┐     ┌──────────────┐ │
-    ///  │ │   1.parquet   │ │ │ │  2.parquet   │   ┃
-    ///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
-    ///  │ └───────────────┘ │ │ └──────────────┘   ┃
-    ///┃   ┌───────────────┐     ┌──────────────┐ │
-    ///  │ │   3.parquet   │ │ │ │  4.parquet   │   ┃
-    ///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
-    ///  │ └───────────────┘ │ │ └──────────────┘   ┃
-    ///┃                                          │
-    ///  │                   │ │                    ┃
-    ///┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
-    ///     DataFusion           DataFusion         ┃
-    ///┃    Partition 1          Partition 2
-    /// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┛
-    ///
-    ///              ParquetExec
-    ///```
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        if let Some(output_ordering) = self.base_config.output_ordering.as_ref() {
-            if self
-                .base_config
-                .file_groups
-                .iter()
-                .any(|group| group.len() > 1)
-            {
-                debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
-                       output_ordering, self.base_config.file_groups);
-                None
-            } else {
-                Some(output_ordering)
-            }
-        } else {
-            None
-        }
+        get_output_ordering(&self.base_config)
     }
 
     fn with_new_children(

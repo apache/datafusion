@@ -53,7 +53,7 @@ use crate::{
 use arrow::array::{new_null_array, UInt16BufferBuilder};
 use arrow::record_batch::RecordBatchOptions;
 use lazy_static::lazy_static;
-use log::info;
+use log::{debug, info};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::{
@@ -445,6 +445,81 @@ impl From<ObjectMeta> for FileMeta {
             range: None,
             extensions: None,
         }
+    }
+}
+
+/// The various listing tables does not attempt to read all files
+/// concurrently, instead they will read files in sequence within a
+/// partition.  This is an important property as it allows plans to
+/// run against 1000s of files and not try to open them all
+/// concurrently.
+///
+/// However, it means if we assign more than one file to a partitition
+/// the output sort order will not be preserved as illustrated in the
+/// following diagrams:
+///
+/// When only 1 file is assigned to each partition, each partition is
+/// correctly sorted on `(A, B, C)`
+///
+/// ```text
+///┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┓
+///  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+///┃   ┌───────────────┐     ┌──────────────┐ │   ┌──────────────┐ │   ┌─────────────┐   ┃
+///  │ │   1.parquet   │ │ │ │  2.parquet   │   │ │  3.parquet   │   │ │  4.parquet  │ │
+///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │   │Sort: A, B, C │ │   │Sort: A, B, C│   ┃
+///  │ └───────────────┘ │ │ └──────────────┘   │ └──────────────┘   │ └─────────────┘ │
+///┃                                          │                    │                     ┃
+///  │                   │ │                    │                    │                 │
+///┃                                          │                    │                     ┃
+///  │                   │ │                    │                    │                 │
+///┃                                          │                    │                     ┃
+///  │                   │ │                    │                    │                 │
+///┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
+///     DataFusion           DataFusion           DataFusion           DataFusion
+///┃    Partition 1          Partition 2          Partition 3          Partition 4       ┃
+/// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
+///
+///                                      ParquetExec
+///```
+///
+/// However, when more than 1 file is assigned to each partition, each
+/// partition is NOT correctly sorted on `(A, B, C)`. Once the second
+/// file is scanned, the same values for A, B and C can be repeated in
+/// the same sorted stream
+///
+///```text
+///┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
+///  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
+///┃   ┌───────────────┐     ┌──────────────┐ │
+///  │ │   1.parquet   │ │ │ │  2.parquet   │   ┃
+///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
+///  │ └───────────────┘ │ │ └──────────────┘   ┃
+///┃   ┌───────────────┐     ┌──────────────┐ │
+///  │ │   3.parquet   │ │ │ │  4.parquet   │   ┃
+///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
+///  │ └───────────────┘ │ │ └──────────────┘   ┃
+///┃                                          │
+///  │                   │ │                    ┃
+///┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+///     DataFusion           DataFusion         ┃
+///┃    Partition 1          Partition 2
+/// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┛
+///
+///              ParquetExec
+///```
+pub(crate) fn get_output_ordering(
+    base_config: &FileScanConfig,
+) -> Option<&[PhysicalSortExpr]> {
+    if let Some(output_ordering) = base_config.output_ordering.as_ref() {
+        if base_config.file_groups.iter().any(|group| group.len() > 1) {
+            debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
+                   output_ordering, base_config.file_groups);
+            None
+        } else {
+            Some(output_ordering)
+        }
+    } else {
+        None
     }
 }
 

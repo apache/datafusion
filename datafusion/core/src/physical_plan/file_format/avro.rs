@@ -28,7 +28,7 @@ use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
 use std::any::Any;
 use std::sync::Arc;
 
-use super::FileScanConfig;
+use super::{FileScanConfig, get_output_ordering};
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
@@ -73,7 +73,7 @@ impl ExecutionPlan for AvroExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        get_output_ordering(&self.base_config)
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

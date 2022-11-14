@@ -43,7 +43,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::task::{self, JoinHandle};
 
-use super::FileScanConfig;
+use super::{FileScanConfig, get_output_ordering};
 
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]
@@ -88,7 +88,7 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        get_output_ordering(&self.base_config)
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
