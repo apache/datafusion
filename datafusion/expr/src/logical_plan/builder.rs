@@ -419,6 +419,18 @@ impl LogicalPlanBuilder {
         Ok(Self::from(union_with_alias(self.plan.clone(), plan, None)?))
     }
 
+    pub fn union_with_alias(
+        &self,
+        plan: LogicalPlan,
+        alias: Option<String>,
+    ) -> Result<Self> {
+        Ok(Self::from(union_with_alias(
+            self.plan.clone(),
+            plan,
+            alias,
+        )?))
+    }
+
     /// Apply a union, removing duplicate rows
     pub fn union_distinct(&self, plan: LogicalPlan) -> Result<Self> {
         // unwrap top-level Distincts, to avoid duplication

@@ -17,7 +17,7 @@
 
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
-use datafusion_expr::{EmptyRelation, JoinType, Projection};
+use datafusion_expr::{EmptyRelation, JoinType, Projection, Union};
 use std::sync::Arc;
 
 use crate::{utils, OptimizerConfig, OptimizerRule};
@@ -93,24 +93,35 @@ impl OptimizerRule for PropagateEmptyRelation {
                 }
             }
             LogicalPlan::Union(union) => {
-                let (left_empty, right_empty) = binary_plan_children_is_empty(plan)?;
-                if left_empty && right_empty {
+                let new_inputs = union
+                    .inputs
+                    .iter()
+                    .filter(|input| match &***input {
+                        LogicalPlan::EmptyRelation(empty) => empty.produce_one_row,
+                        _ => true,
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                if new_inputs.len() == union.inputs.len() {
+                    Ok(optimized_children_plan)
+                } else if new_inputs.is_empty() {
                     Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
                         schema: plan.schema().clone(),
                     }))
-                } else if !left_empty && right_empty {
+                } else if new_inputs.len() == 1 {
                     Ok(LogicalPlan::Projection(Projection::new_from_schema(
                         Arc::new((**(union.inputs.get(0).unwrap())).clone()),
                         plan.schema().clone(),
-                    )))
-                } else if left_empty && !right_empty {
-                    Ok(LogicalPlan::Projection(Projection::new_from_schema(
-                        Arc::new((**(union.inputs.get(1).unwrap())).clone()),
-                        plan.schema().clone(),
+                        union.alias.clone(),
                     )))
                 } else {
-                    Ok(optimized_children_plan)
+                    Ok(LogicalPlan::Union(Union {
+                        inputs: new_inputs,
+                        schema: union.schema.clone(),
+                        alias: union.alias.clone(),
+                    }))
                 }
             }
             LogicalPlan::Aggregate(agg) => {
@@ -188,7 +199,9 @@ fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
 mod tests {
     use crate::eliminate_filter::EliminateFilter;
     use crate::test::{test_table_scan, test_table_scan_with_name};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Column, ScalarValue};
+    use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr, JoinType,
         Operator,
@@ -233,78 +246,6 @@ mod tests {
     }
 
     #[test]
-    fn propagate_union_right_empty() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let left = LogicalPlanBuilder::from(table_scan).build()?;
-        let right_table_scan = test_table_scan_with_name("test2")?;
-        let right = LogicalPlanBuilder::from(right_table_scan)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
-            .build()?;
-
-        let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
-
-        let expected = "Projection: a, b, c\
-            \n  TableScan: test";
-        assert_together_optimized_plan_eq(&plan, expected);
-
-        Ok(())
-    }
-
-    #[test]
-    fn propagate_union_left_empty() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let left = LogicalPlanBuilder::from(table_scan)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
-            .build()?;
-        let right_table_scan = test_table_scan_with_name("test2")?;
-        let right = LogicalPlanBuilder::from(right_table_scan).build()?;
-
-        let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
-
-        let expected = "Projection: a, b, c\
-            \n  TableScan: test2";
-        assert_together_optimized_plan_eq(&plan, expected);
-
-        Ok(())
-    }
-
-    #[test]
-    fn propagate_union_all_empty() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let left = LogicalPlanBuilder::from(table_scan)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
-            .build()?;
-        let right_table_scan = test_table_scan_with_name("test2")?;
-        let right = LogicalPlanBuilder::from(right_table_scan)
-            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
-            .build()?;
-
-        let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
-
-        let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(&plan, expected);
-
-        Ok(())
-    }
-
-    #[test]
-    fn cross_join_empty() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let left = LogicalPlanBuilder::from(table_scan).build()?;
-        let right = LogicalPlanBuilder::empty(false).build()?;
-
-        let plan = LogicalPlanBuilder::from(left)
-            .cross_join(&right)?
-            .filter(col("a").lt_eq(lit(1i64)))?
-            .build()?;
-
-        let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(&plan, expected);
-
-        Ok(())
-    }
-
-    #[test]
     fn cooperate_with_eliminate_filter() -> Result<()> {
         let table_scan = test_table_scan()?;
         let left = LogicalPlanBuilder::from(table_scan).build()?;
@@ -320,6 +261,139 @@ mod tests {
                 JoinType::Inner,
                 vec![Column::from_name("a".to_string())],
             )?
+            .filter(col("a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        let expected = "EmptyRelation";
+        assert_together_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn propagate_union_empty() -> Result<()> {
+        let left = LogicalPlanBuilder::from(test_table_scan()?).build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
+
+        let expected = "Projection: a, b, c\
+            \n  TableScan: test";
+        assert_together_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn propagate_union_multi_empty() -> Result<()> {
+        let one =
+            LogicalPlanBuilder::from(test_table_scan_with_name("test1")?).build()?;
+        let two = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+        let three = LogicalPlanBuilder::from(test_table_scan_with_name("test3")?)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+        let four =
+            LogicalPlanBuilder::from(test_table_scan_with_name("test4")?).build()?;
+
+        let plan = LogicalPlanBuilder::from(one)
+            .union(two)?
+            .union(three)?
+            .union(four)?
+            .build()?;
+
+        let expected = "Union\
+            \n  TableScan: test1\
+            \n  TableScan: test4";
+        assert_together_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn propagate_union_all_empty() -> Result<()> {
+        let one = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+        let two = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+        let three = LogicalPlanBuilder::from(test_table_scan_with_name("test3")?)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+        let four = LogicalPlanBuilder::from(test_table_scan_with_name("test4")?)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(one)
+            .union(two)?
+            .union(three)?
+            .union(four)?
+            .build()?;
+
+        let expected = "EmptyRelation";
+        assert_together_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn propagate_union_children_different_schema() -> Result<()> {
+        let one_schema = Schema::new(vec![Field::new("t1a", DataType::UInt32, false)]);
+        let t1_scan = table_scan(Some("test1"), &one_schema, None)?.build()?;
+        let one = LogicalPlanBuilder::from(t1_scan)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+
+        let two_schema = Schema::new(vec![Field::new("t2a", DataType::UInt32, false)]);
+        let t2_scan = table_scan(Some("test2"), &two_schema, None)?.build()?;
+        let two = LogicalPlanBuilder::from(t2_scan).build()?;
+
+        let three_schema = Schema::new(vec![Field::new("t3a", DataType::UInt32, false)]);
+        let t3_scan = table_scan(Some("test3"), &three_schema, None)?.build()?;
+        let three = LogicalPlanBuilder::from(t3_scan).build()?;
+
+        let plan = LogicalPlanBuilder::from(one)
+            .union(two)?
+            .union(three)?
+            .build()?;
+
+        let expected = "Union\
+            \n  TableScan: test2\
+            \n  TableScan: test3";
+        assert_together_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn propagate_union_alias() -> Result<()> {
+        let left = LogicalPlanBuilder::from(test_table_scan()?).build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
+            .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .union_with_alias(right, Some("union".to_string()))?
+            .build()?;
+
+        let expected = "Projection: union.a, union.b, union.c, alias=union\
+            \n  TableScan: test";
+        assert_together_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn cross_join_empty() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right = LogicalPlanBuilder::empty(false).build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .cross_join(&right)?
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
 

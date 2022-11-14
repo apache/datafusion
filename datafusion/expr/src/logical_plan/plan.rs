@@ -1146,7 +1146,11 @@ impl Projection {
     }
 
     /// Create a new Projection using the specified output schema
-    pub fn new_from_schema(input: Arc<LogicalPlan>, schema: DFSchemaRef) -> Self {
+    pub fn new_from_schema(
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+        alias: Option<String>,
+    ) -> Self {
         let expr: Vec<Expr> = schema
             .fields()
             .iter()
@@ -1157,7 +1161,7 @@ impl Projection {
             expr,
             input,
             schema,
-            alias: None,
+            alias,
         }
     }
 
