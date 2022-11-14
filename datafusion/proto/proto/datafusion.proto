@@ -843,17 +843,10 @@ message ScalarValue{
         ScalarDictionaryValue dictionary_value = 27;
         bytes binary_value = 28;
         bytes large_binary_value = 29;
-<<<<<<< HEAD
         ScalarTime64Value time64_value = 30;
         IntervalMonthDayNanoValue interval_month_day_nano = 31;
         StructValue struct_value = 32;
         ScalarFixedSizeBinary fixed_size_binary_value = 34;
-=======
-        ScalarTime32Value time32_value = 30;
-        ScalarTime64Value time64_value = 31;
-        IntervalMonthDayNanoValue interval_month_day_nano = 32;
-        StructValue struct_value = 33;
->>>>>>> Changes in proto to provide full support for Time32 and Time64
     }
 }
 
