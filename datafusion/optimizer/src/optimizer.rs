@@ -48,7 +48,18 @@ use std::time::Instant;
 /// way. If there are no suitable transformations for the input plan,
 /// the optimizer can simply return it as is.
 pub trait OptimizerRule {
-    /// Rewrite `plan` to an optimized form
+    /// Try and rewrite `plan` to an optimized form, returning None if the plan cannot be
+    /// optimized by this rule.
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
+        self.optimize(plan, optimizer_config).map(|plan| Some(plan))
+    }
+
+    /// Rewrite `plan` to an optimized form. This method will eventually be deprecated and
+    /// replace by `try_optimize`.
     fn optimize(
         &self,
         plan: &LogicalPlan,
@@ -209,10 +220,14 @@ impl Optimizer {
             log_plan(&format!("Optimizer input (pass {})", i), &new_plan);
 
             for rule in &self.rules {
-                let result = rule.optimize(&new_plan, optimizer_config);
+                let result = rule.try_optimize(&new_plan, optimizer_config);
                 match result {
-                    Ok(plan) => {
+                    Ok(Some(plan)) => {
                         new_plan = plan;
+                        observer(&new_plan, rule.as_ref());
+                        log_plan(rule.name(), &new_plan);
+                    }
+                    Ok(None) => {
                         observer(&new_plan, rule.as_ref());
                         log_plan(rule.name(), &new_plan);
                     }
