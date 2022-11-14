@@ -706,7 +706,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .unwrap_or(Ok(join))?
                         .build()
                 } else {
-                    // Wrap projection fro left input if left join keys has normal expression.
+                    // Wrap projection for left input if left join keys contain normal expression.
                     let left_child =
                         wrap_projection_for_join_if_necessary(&left_keys, left)?;
                     let left_join_keys = left_keys
@@ -717,7 +717,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    // Wrap projection fro left input if left join keys has normal expression.
+                    // Wrap projection for right input if right join keys contains normal expression.
                     let right_child =
                         wrap_projection_for_join_if_necessary(&right_keys, right)?;
                     let right_join_keys = right_keys
@@ -2862,7 +2862,7 @@ fn remove_join_expressions(
 /// foo = bar AND bar = baz => accum=[(foo, bar), (bar, baz)] accum_filter=[]
 /// foo = bar AND baz > 1 => accum=[(foo, bar)] accum_filter=[baz > 1]
 ///
-/// For normal expression join key, assume we have a(c0, c1 c2) and b(c0, c1, c2):
+/// For normal expression join key, assume we have tables -- a(c0, c1 c2) and b(c0, c1, c2):
 /// (a.c0 = 10) => accum=[], accum_filter=[a.c0 = 10]
 /// (a.c0 + 1 = b.c0 * 2) => accum=[(a.c0 + 1, b.c0 * 2)],  accum_filter=[]
 /// (a.c0 + b.c0 = 10) =>  accum=[], accum_filter=[a.c0 + b.c0 = 10]
