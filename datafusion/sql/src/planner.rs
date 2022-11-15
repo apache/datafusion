@@ -2754,7 +2754,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     )))
                 }
             }
-            SQLDataType::Decimal(exact_number_info) => {
+            SQLDataType::Numeric(exact_number_info)
+            |SQLDataType::Decimal(exact_number_info) => {
                 let (precision, scale) = match *exact_number_info {
                     ExactNumberInfo::None => (None, None),
                     ExactNumberInfo::Precision(precision) => (Some(precision), None),
@@ -2791,7 +2792,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 | SQLDataType::Timestamp(Some(_), _)
             // precision is not supported
                 | SQLDataType::Time(Some(_), _)
-                | SQLDataType::Numeric(_)
                 | SQLDataType::Dec(_)
             | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL type {:?}",
