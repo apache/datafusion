@@ -992,7 +992,6 @@ mod ci {
         verify_query(5).await
     }
 
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/4024
     #[tokio::test]
     async fn verify_q6() -> Result<()> {
         verify_query(6).await
