@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::physical_expr::with_new_children_if_necessary;
-use crate::PhysicalExpr;
+//! Trait to make Executionplan rewritable
+
+use crate::physical_plan::with_new_children_if_necessary;
+use crate::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
 
 use std::sync::Arc;
@@ -147,7 +149,7 @@ pub enum RewriteRecursion {
     Skip,
 }
 
-impl TreeNodeRewritable for Arc<dyn PhysicalExpr> {
+impl TreeNodeRewritable for Arc<dyn ExecutionPlan> {
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,

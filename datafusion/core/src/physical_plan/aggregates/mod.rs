@@ -49,6 +49,7 @@ use crate::physical_plan::aggregates::row_hash::GroupedHashAggregateStreamV2;
 use crate::physical_plan::EquivalenceProperties;
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
+use datafusion_physical_expr::equivalence::project_equivalence_properties;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
 use datafusion_row::{row_supported, RowType};
@@ -153,19 +154,19 @@ impl PhysicalGroupBy {
 #[derive(Debug)]
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
-    mode: AggregateMode,
+    pub(crate) mode: AggregateMode,
     /// Group by expressions
-    group_by: PhysicalGroupBy,
+    pub(crate) group_by: PhysicalGroupBy,
     /// Aggregate expressions
-    aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+    pub(crate) aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
-    input: Arc<dyn ExecutionPlan>,
+    pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
     schema: SchemaRef,
     /// Input schema before any aggregation is applied. For partial aggregate this will be the
     /// same as input.schema() but for the final aggregate it will be the same as the input
     /// to the partial aggregate
-    input_schema: SchemaRef,
+    pub(crate) input_schema: SchemaRef,
     /// The alias map used to normalize out expressions like Partitioning and PhysicalSortExpr
     /// The key is the column from the input schema and the values are the columns from the output schema
     alias_map: HashMap<Column, Vec<Column>>,
@@ -315,10 +316,13 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        let mut input_equivalence_properties = self.input.equivalence_properties();
-        input_equivalence_properties.merge_properties_with_alias(&self.alias_map);
-        input_equivalence_properties.truncate_properties_not_in_schema(&self.schema);
-        input_equivalence_properties
+        let mut new_properties = EquivalenceProperties::new(self.schema());
+        project_equivalence_properties(
+            self.input.equivalence_properties(),
+            &self.alias_map,
+            &mut new_properties,
+        );
+        new_properties
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

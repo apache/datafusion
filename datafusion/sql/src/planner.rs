@@ -31,8 +31,7 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::utils::{
     can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
-    expr_to_columns, find_aggregate_exprs, find_column_exprs, find_window_exprs,
-    COUNT_STAR_EXPANSION,
+    find_aggregate_exprs, find_column_exprs, find_window_exprs, COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
     and, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable, GetIndexedField,
@@ -210,7 +209,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .project(
                             plan.schema().fields().iter().zip(columns.into_iter()).map(
                                 |(field, ident)| {
-                                    col(field.name()).alias(&normalize_ident(&ident))
+                                    col(field.name()).alias(normalize_ident(&ident))
                                 },
                             ),
                         )
@@ -690,8 +689,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let join_filter = filter
                     .into_iter()
                     .map(|expr| {
-                        let mut using_columns = HashSet::new();
-                        expr_to_columns(&expr, &mut using_columns)?;
+                        let using_columns = expr.to_columns()?;
 
                         normalize_col_with_schemas(
                             expr,
@@ -719,7 +717,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
-                    .map(|x| Column::from_name(&normalize_ident(&x)))
+                    .map(|x| Column::from_name(normalize_ident(&x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
                     .join_using(&right, join_type, keys)?
@@ -783,7 +781,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let normalized_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
                 let logical_plan = self.query_to_plan_with_alias(
                     *subquery,
-                    normalized_alias.clone(),
+                    None,
                     ctes,
                     outer_query_schema,
                 )?;
@@ -842,7 +840,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Ok(LogicalPlanBuilder::from(plan.clone())
                 .project_with_alias(
                     plan.schema().fields().iter().zip(columns_alias.iter()).map(
-                        |(field, ident)| col(field.name()).alias(&normalize_ident(ident)),
+                        |(field, ident)| col(field.name()).alias(normalize_ident(ident)),
                     ),
                     Some(normalize_ident(&alias.name)),
                 )?
@@ -3195,10 +3193,10 @@ mod tests {
                      ) AS a
                    ) AS b";
         let expected = "Projection: b.fn2, b.last_name\
-                        \n  Projection: b.fn2, b.last_name, b.birth_date, alias=b\
-                        \n    Projection: a.fn1 AS fn2, a.last_name, a.birth_date, alias=b\
-                        \n      Projection: a.fn1, a.last_name, a.birth_date, a.age, alias=a\
-                        \n        Projection: person.first_name AS fn1, person.last_name, person.birth_date, person.age, alias=a\
+                        \n  Projection: fn2, a.last_name, a.birth_date, alias=b\
+                        \n    Projection: a.fn1 AS fn2, a.last_name, a.birth_date\
+                        \n      Projection: fn1, person.last_name, person.birth_date, person.age, alias=a\
+                        \n        Projection: person.first_name AS fn1, person.last_name, person.birth_date, person.age\
                         \n          TableScan: person";
         quick_test(sql, expected);
     }
@@ -3215,8 +3213,8 @@ mod tests {
 
         let expected = "Projection: a.fn1, a.age\
                         \n  Filter: a.fn1 = Utf8(\"X\") AND a.age < Int64(30)\
-                        \n    Projection: a.fn1, a.age, alias=a\
-                        \n      Projection: person.first_name AS fn1, person.age, alias=a\
+                        \n    Projection: fn1, person.age, alias=a\
+                        \n      Projection: person.first_name AS fn1, person.age\
                         \n        Filter: person.age > Int64(20)\
                         \n          TableScan: person";
 
@@ -3566,8 +3564,8 @@ mod tests {
             "SELECT * FROM (SELECT first_name, last_name FROM person) AS a GROUP BY first_name, last_name",
             "Projection: a.first_name, a.last_name\
              \n  Aggregate: groupBy=[[a.first_name, a.last_name]], aggr=[[]]\
-             \n    Projection: a.first_name, a.last_name, alias=a\
-             \n      Projection: person.first_name, person.last_name, alias=a\
+             \n    Projection: person.first_name, person.last_name, alias=a\
+             \n      Projection: person.first_name, person.last_name\
              \n        TableScan: person",
         );
     }
@@ -4475,13 +4473,13 @@ mod tests {
             \n  Union\
             \n    Projection: CAST(x.a AS Float64) AS a\
             \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n        Projection: x.a, alias=x\
-            \n          Projection: Int64(1) AS a, alias=x\
+            \n        Projection: a, alias=x\
+            \n          Projection: Int64(1) AS a\
             \n            EmptyRelation\
             \n    Projection: x.a\
             \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n        Projection: x.a, alias=x\
-            \n          Projection: Float64(1.1) AS a, alias=x\
+            \n        Projection: a, alias=x\
+            \n          Projection: Float64(1.1) AS a\
             \n            EmptyRelation";
         quick_test(sql, expected);
     }
@@ -4492,13 +4490,13 @@ mod tests {
         let expected = "Union\
             \n  Projection: CAST(Float64(0) + x.a AS Float64) AS Float64(0) + x.a\
             \n    Aggregate: groupBy=[[CAST(Float64(0) + x.a AS Int32)]], aggr=[[]]\
-            \n      Projection: x.a, alias=x\
-            \n        Projection: Int64(1) AS a, alias=x\
+            \n      Projection: a, alias=x\
+            \n        Projection: Int64(1) AS a\
             \n          EmptyRelation\
             \n  Projection: Float64(2.1) + x.a\
             \n    Aggregate: groupBy=[[Float64(2.1) + x.a]], aggr=[[]]\
-            \n      Projection: x.a, alias=x\
-            \n        Projection: Int64(1) AS a, alias=x\
+            \n      Projection: a, alias=x\
+            \n        Projection: Int64(1) AS a\
             \n          EmptyRelation";
         quick_test(sql, expected);
     }
@@ -4509,13 +4507,13 @@ mod tests {
         let expected = "Union\
             \n  Projection: CAST(x.a AS Float64) AS a1\
             \n    Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n      Projection: x.a, alias=x\
-            \n        Projection: Int64(1) AS a, alias=x\
+            \n      Projection: a, alias=x\
+            \n        Projection: Int64(1) AS a\
             \n          EmptyRelation\
             \n  Projection: x.a AS a1\
             \n    Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n      Projection: x.a, alias=x\
-            \n        Projection: Float64(1.1) AS a, alias=x\
+            \n      Projection: a, alias=x\
+            \n        Projection: Float64(1.1) AS a\
             \n          EmptyRelation";
         quick_test(sql, expected);
     }

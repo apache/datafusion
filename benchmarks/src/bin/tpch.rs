@@ -247,7 +247,7 @@ async fn benchmark_query(
         }
 
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-        millis.push(elapsed as f64);
+        millis.push(elapsed);
         let row_count = result.iter().map(|b| b.num_rows()).sum();
         println!(
             "Query {} iteration {} took {:.1} ms and returned {} rows",
@@ -391,13 +391,11 @@ async fn get_table(
         };
     let schema = Arc::new(get_tpch_table_schema(table));
 
-    let options = ListingOptions {
-        format,
-        file_extension: extension.to_owned(),
-        target_partitions,
-        collect_stat: ctx.config.collect_statistics,
-        table_partition_cols: vec![],
-    };
+    let options = ListingOptions::new(format)
+        .with_file_extension(extension)
+        .with_target_partitions(target_partitions)
+        .with_collect_stat(ctx.config.collect_statistics)
+        .with_table_partition_cols(vec![]);
 
     let table_path = ListingTableUrl::parse(path)?;
     let config = ListingTableConfig::new(table_path).with_listing_options(options);

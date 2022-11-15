@@ -60,22 +60,41 @@ pub fn bisect<const SIDE: bool>(
     target: &[ScalarValue],
     sort_options: &[SortOptions],
 ) -> Result<usize> {
-    let mut low: usize = 0;
-    let mut high: usize = item_columns
+    let low: usize = 0;
+    let high: usize = item_columns
         .get(0)
         .ok_or_else(|| {
             DataFusionError::Internal("Column array shouldn't be empty".to_string())
         })?
         .len();
+    let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
+        let cmp = compare(current, target, sort_options)?;
+        Ok(if SIDE { cmp.is_lt() } else { cmp.is_le() })
+    };
+    find_bisect_point(item_columns, target, compare_fn, low, high)
+}
+
+/// This function searches for a tuple of target values among the given rows using the bisection algorithm.
+/// The boolean-valued function `compare_fn` specifies whether we bisect on the left (with return value `false`),
+/// or on the right (with return value `true`) as we compare the target value with the current value as we iteratively
+/// bisect the input.
+pub fn find_bisect_point<F>(
+    item_columns: &[ArrayRef],
+    target: &[ScalarValue],
+    compare_fn: F,
+    mut low: usize,
+    mut high: usize,
+) -> Result<usize>
+where
+    F: Fn(&[ScalarValue], &[ScalarValue]) -> Result<bool>,
+{
     while low < high {
         let mid = ((high - low) / 2) + low;
         let val = item_columns
             .iter()
             .map(|arr| ScalarValue::try_from_array(arr, mid))
             .collect::<Result<Vec<ScalarValue>>>()?;
-        let cmp = compare(&val, target, sort_options)?;
-        let flag = if SIDE { cmp.is_lt() } else { cmp.is_le() };
-        if flag {
+        if compare_fn(&val, target)? {
             low = mid + 1;
         } else {
             high = mid;

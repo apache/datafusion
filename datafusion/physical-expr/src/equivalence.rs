@@ -23,27 +23,48 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 /// Equivalence Properties is a vec of EquivalentClass.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct EquivalenceProperties {
     classes: Vec<EquivalentClass>,
+    schema: SchemaRef,
 }
 
 impl EquivalenceProperties {
-    pub fn new() -> Self {
-        EquivalenceProperties { classes: vec![] }
+    pub fn new(schema: SchemaRef) -> Self {
+        EquivalenceProperties {
+            classes: vec![],
+            schema,
+        }
     }
 
     pub fn classes(&self) -> &[EquivalentClass] {
         &self.classes
     }
 
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
     pub fn extend<I: IntoIterator<Item = EquivalentClass>>(&mut self, iter: I) {
-        self.classes.extend(iter)
+        for ec in iter {
+            for column in ec.iter() {
+                assert_eq!(column.name(), self.schema.fields()[column.index()].name());
+            }
+            self.classes.push(ec)
+        }
     }
 
     /// Add new equal conditions into the EquivalenceProperties, the new equal conditions are usually comming from the
     /// equality predicates in Join or Filter
     pub fn add_equal_conditions(&mut self, new_conditions: (&Column, &Column)) {
+        assert_eq!(
+            new_conditions.0.name(),
+            self.schema.fields()[new_conditions.0.index()].name()
+        );
+        assert_eq!(
+            new_conditions.1.name(),
+            self.schema.fields()[new_conditions.1.index()].name()
+        );
         let mut idx1: Option<usize> = None;
         let mut idx2: Option<usize> = None;
         for (idx, class) in self.classes.iter_mut().enumerate() {
@@ -88,47 +109,6 @@ impl EquivalenceProperties {
             }
             _ => {}
         }
-    }
-
-    pub fn merge_properties_with_alias(
-        &mut self,
-        alias_map: &HashMap<Column, Vec<Column>>,
-    ) {
-        for (column, columns) in alias_map {
-            let mut find_match = false;
-            for class in self.classes.iter_mut() {
-                if class.contains(column) {
-                    for col in columns {
-                        class.insert(col.clone());
-                    }
-                    find_match = true;
-                    break;
-                }
-            }
-            if !find_match {
-                self.classes
-                    .push(EquivalentClass::new(column.clone(), columns.clone()));
-            }
-        }
-    }
-
-    pub fn truncate_properties_not_in_schema(&mut self, schema: &SchemaRef) {
-        for class in self.classes.iter_mut() {
-            let mut columns_to_remove = vec![];
-            for column in class.iter() {
-                if let Ok(idx) = schema.index_of(column.name()) {
-                    if idx != column.index() {
-                        columns_to_remove.push(column.clone());
-                    }
-                } else {
-                    columns_to_remove.push(column.clone());
-                }
-            }
-            for column in columns_to_remove {
-                class.remove(&column);
-            }
-        }
-        self.classes.retain(|props| props.len() > 1);
     }
 }
 
@@ -195,15 +175,70 @@ impl EquivalentClass {
     }
 }
 
+/// Project Equivalence Properties.
+/// 1) Add Alias, Alias can introduce additional equivalence properties,
+///    For example:  Projection(a, a as a1, a as a2)
+/// 2) Truncate the EquivalentClasses that are not in the output schema
+pub fn project_equivalence_properties(
+    input_eq: EquivalenceProperties,
+    alias_map: &HashMap<Column, Vec<Column>>,
+    output_eq: &mut EquivalenceProperties,
+) {
+    let mut ec_classes = input_eq.classes().to_vec();
+    for (column, columns) in alias_map {
+        let mut find_match = false;
+        for class in ec_classes.iter_mut() {
+            if class.contains(column) {
+                for col in columns {
+                    class.insert(col.clone());
+                }
+                find_match = true;
+                break;
+            }
+        }
+        if !find_match {
+            ec_classes.push(EquivalentClass::new(column.clone(), columns.clone()));
+        }
+    }
+
+    let schema = output_eq.schema();
+    for class in ec_classes.iter_mut() {
+        let mut columns_to_remove = vec![];
+        for column in class.iter() {
+            if column.index() >= schema.fields().len()
+                || schema.fields()[column.index()].name() != column.name()
+            {
+                columns_to_remove.push(column.clone());
+            }
+        }
+        for column in columns_to_remove {
+            class.remove(&column);
+        }
+    }
+    ec_classes.retain(|props| props.len() > 1);
+    output_eq.extend(ec_classes);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::expressions::Column;
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
+
+    use std::sync::Arc;
 
     #[test]
     fn add_equal_conditions_test() -> Result<()> {
-        let mut eq_properties = EquivalenceProperties::new();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+            Field::new("c", DataType::Int64, true),
+            Field::new("x", DataType::Int64, true),
+            Field::new("y", DataType::Int64, true),
+        ]));
+
+        let mut eq_properties = EquivalenceProperties::new(schema);
         let new_condition = (&Column::new("a", 0), &Column::new("b", 1));
         eq_properties.add_equal_conditions(new_condition);
         assert_eq!(eq_properties.classes().len(), 1);
@@ -212,45 +247,75 @@ mod tests {
         eq_properties.add_equal_conditions(new_condition);
         assert_eq!(eq_properties.classes().len(), 1);
         assert_eq!(eq_properties.classes()[0].len(), 2);
+        assert!(eq_properties.classes()[0].contains(&Column::new("a", 0)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("b", 1)));
 
         let new_condition = (&Column::new("b", 1), &Column::new("c", 2));
         eq_properties.add_equal_conditions(new_condition);
         assert_eq!(eq_properties.classes().len(), 1);
         assert_eq!(eq_properties.classes()[0].len(), 3);
+        assert!(eq_properties.classes()[0].contains(&Column::new("a", 0)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("b", 1)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("c", 2)));
 
-        let new_condition = (&Column::new("x", 99), &Column::new("y", 100));
+        let new_condition = (&Column::new("x", 3), &Column::new("y", 4));
         eq_properties.add_equal_conditions(new_condition);
         assert_eq!(eq_properties.classes().len(), 2);
 
-        let new_condition = (&Column::new("x", 99), &Column::new("a", 0));
+        let new_condition = (&Column::new("x", 3), &Column::new("a", 0));
         eq_properties.add_equal_conditions(new_condition);
         assert_eq!(eq_properties.classes().len(), 1);
         assert_eq!(eq_properties.classes()[0].len(), 5);
+        assert!(eq_properties.classes()[0].contains(&Column::new("a", 0)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("b", 1)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("c", 2)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("x", 3)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("y", 4)));
 
         Ok(())
     }
 
     #[test]
-    fn merge_equivalence_properties_with_alias_test() -> Result<()> {
-        let mut eq_properties = EquivalenceProperties::new();
+    fn project_equivalence_properties_test() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+            Field::new("c", DataType::Int64, true),
+        ]));
+
+        let mut input_properties = EquivalenceProperties::new(input_schema);
+        let new_condition = (&Column::new("a", 0), &Column::new("b", 1));
+        input_properties.add_equal_conditions(new_condition);
+        let new_condition = (&Column::new("b", 1), &Column::new("c", 2));
+        input_properties.add_equal_conditions(new_condition);
+
+        let out_schema = Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int64, true),
+            Field::new("a2", DataType::Int64, true),
+            Field::new("a3", DataType::Int64, true),
+            Field::new("a4", DataType::Int64, true),
+        ]));
+
         let mut alias_map = HashMap::new();
         alias_map.insert(
             Column::new("a", 0),
-            vec![Column::new("a1", 1), Column::new("a2", 2)],
+            vec![
+                Column::new("a1", 0),
+                Column::new("a2", 1),
+                Column::new("a3", 2),
+                Column::new("a4", 3),
+            ],
         );
+        let mut out_properties = EquivalenceProperties::new(out_schema);
 
-        eq_properties.merge_properties_with_alias(&alias_map);
-        assert_eq!(eq_properties.classes().len(), 1);
-        assert_eq!(eq_properties.classes()[0].len(), 3);
+        project_equivalence_properties(input_properties, &alias_map, &mut out_properties);
+        assert_eq!(out_properties.classes().len(), 1);
+        assert_eq!(out_properties.classes()[0].len(), 4);
+        assert!(out_properties.classes()[0].contains(&Column::new("a1", 0)));
+        assert!(out_properties.classes()[0].contains(&Column::new("a2", 1)));
+        assert!(out_properties.classes()[0].contains(&Column::new("a3", 2)));
+        assert!(out_properties.classes()[0].contains(&Column::new("a4", 3)));
 
-        let mut alias_map = HashMap::new();
-        alias_map.insert(
-            Column::new("a", 0),
-            vec![Column::new("a3", 1), Column::new("a4", 2)],
-        );
-        eq_properties.merge_properties_with_alias(&alias_map);
-        assert_eq!(eq_properties.classes().len(), 1);
-        assert_eq!(eq_properties.classes()[0].len(), 5);
         Ok(())
     }
 }

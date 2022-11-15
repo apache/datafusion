@@ -73,7 +73,6 @@ use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
-use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
@@ -82,6 +81,7 @@ use crate::config::{
 };
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
+use crate::physical_optimizer::enforcement::BasicEnforcement;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
@@ -558,13 +558,12 @@ impl SessionContext {
                 } else {
                     Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
                 };
-                let options = ListingOptions {
-                    format: file_format,
-                    collect_stat: self.copied_config().collect_statistics,
-                    file_extension: file_extension.to_owned(),
-                    target_partitions: self.copied_config().target_partitions,
-                    table_partition_cols: cmd.table_partition_cols.clone(),
-                };
+                let options = ListingOptions::new(file_format)
+                    .with_collect_stat(self.copied_config().collect_statistics)
+                    .with_file_extension(file_extension)
+                    .with_target_partitions(self.copied_config().target_partitions)
+                    .with_table_partition_cols(cmd.table_partition_cols.clone());
+
                 self.register_listing_table(
                     cmd.name.as_str(),
                     cmd.location.clone(),
@@ -807,7 +806,7 @@ impl SessionContext {
         table_path: impl AsRef<str>,
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
-        sql: Option<String>,
+        sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
         let resolved_schema = match provided_schema {
@@ -817,7 +816,7 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config)?.with_definition(sql);
+        let table = ListingTable::try_new(config)?.with_definition(sql_definition);
         self.register_table(name, Arc::new(table))?;
         Ok(())
     }
@@ -1227,6 +1226,8 @@ pub struct SessionConfig {
     pub parquet_pruning: bool,
     /// Should DataFusion collect statistics after listing files
     pub collect_statistics: bool,
+    /// Should DataFusion optimizer run a top down process to reorder the join keys
+    pub top_down_join_key_reordering: bool,
     /// Configuration options
     pub config_options: Arc<RwLock<ConfigOptions>>,
     /// Opaque extensions.
@@ -1246,6 +1247,7 @@ impl Default for SessionConfig {
             repartition_windows: true,
             parquet_pruning: true,
             collect_statistics: false,
+            top_down_join_key_reordering: true,
             config_options: Arc::new(RwLock::new(ConfigOptions::new())),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
@@ -1568,6 +1570,7 @@ impl SessionState {
             Arc::new(AggregateStatistics::new()),
             Arc::new(HashBuildProbeOrder::new()),
         ];
+        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
         if config
             .config_options
             .read()
@@ -1585,7 +1588,9 @@ impl SessionState {
             )));
         }
         physical_optimizers.push(Arc::new(Repartition::new()));
-        physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
+        // Repartition rule could introduce additional RepartitionExec with RoundRobin partitioning.
+        // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
+        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
 
         SessionState {
             session_id,
@@ -1625,7 +1630,7 @@ impl SessionState {
             Some(host) => format!("{}://{}", url.scheme(), host),
             None => format!("{}://", url.scheme()),
         };
-        let path = &url.as_str()[authority.len() as usize..];
+        let path = &url.as_str()[authority.len()..];
         let path = object_store::path::Path::parse(path).expect("Can't parse path");
         let store = ObjectStoreUrl::parse(authority.as_str())
             .expect("Invalid default catalog url");
@@ -2644,7 +2649,7 @@ mod tests {
         // generate a partitioned file
         for partition in 0..partition_count {
             let filename = format!("partition-{}.{}", partition, file_extension);
-            let file_path = tmp_dir.path().join(&filename);
+            let file_path = tmp_dir.path().join(filename);
             let mut file = File::create(file_path)?;
 
             // generate some data

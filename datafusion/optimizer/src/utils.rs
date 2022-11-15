@@ -43,12 +43,11 @@ pub fn optimize_children(
     optimizer_config: &mut OptimizerConfig,
 ) -> Result<LogicalPlan> {
     let new_exprs = plan.expressions();
-    let new_inputs = plan
-        .inputs()
-        .into_iter()
-        .map(|plan| optimizer.optimize(plan, optimizer_config))
-        .collect::<Result<Vec<_>>>()?;
-
+    let mut new_inputs = Vec::with_capacity(plan.inputs().len());
+    for input in plan.inputs() {
+        let new_input = optimizer.try_optimize(input, optimizer_config)?;
+        new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
+    }
     from_plan(plan, &new_exprs, &new_inputs)
 }
 

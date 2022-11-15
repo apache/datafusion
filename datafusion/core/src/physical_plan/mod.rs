@@ -125,11 +125,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Specifies the data distribution requirements for all the
     /// children for this operator, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if !self.children().is_empty() {
-            vec![Distribution::UnspecifiedDistribution; self.children().len()]
-        } else {
-            vec![Distribution::UnspecifiedDistribution]
-        }
+        vec![Distribution::UnspecifiedDistribution; self.children().len()]
     }
 
     /// Specifies the ordering requirements for all the
@@ -197,7 +193,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 
     /// Get the EquivalenceProperties within the plan
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        EquivalenceProperties::new()
+        EquivalenceProperties::new(self.schema())
     }
 
     /// Get a list of child execution plans that provide the input for this plan. The returned list
@@ -256,14 +252,15 @@ pub fn with_new_children_if_necessary(
     plan: Arc<dyn ExecutionPlan>,
     children: Vec<Arc<dyn ExecutionPlan>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    if children.len() != plan.children().len() {
+    let old_children = plan.children();
+    if children.len() != old_children.len() {
         Err(DataFusionError::Internal(
             "Wrong number of children".to_string(),
         ))
     } else if children.is_empty()
         || children
             .iter()
-            .zip(plan.children().iter())
+            .zip(old_children.iter())
             .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
     {
         plan.with_new_children(children)
@@ -477,6 +474,66 @@ impl Partitioning {
             RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
         }
     }
+
+    /// Returns true when the guarantees made by this [[Partitioning]] are sufficient to
+    /// satisfy the partitioning scheme mandated by the `required` [[Distribution]]
+    pub fn satisfy<F: FnOnce() -> EquivalenceProperties>(
+        &self,
+        required: Distribution,
+        equal_properties: F,
+    ) -> bool {
+        match required {
+            Distribution::UnspecifiedDistribution => true,
+            Distribution::SinglePartition if self.partition_count() == 1 => true,
+            Distribution::HashPartitioned(required_exprs) => {
+                match self {
+                    // Here we do not check the partition count for hash partitioning and assumes the partition count
+                    // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
+                    // then we need to have the partition count and hash functions validation.
+                    Partitioning::Hash(partition_exprs, _) => {
+                        let fast_match =
+                            expr_list_eq_strict_order(&required_exprs, partition_exprs);
+                        // If the required exprs do not match, need to leverage the eq_properties provided by the child
+                        // and normalize both exprs based on the eq_properties
+                        if !fast_match {
+                            let eq_properties = equal_properties();
+                            let eq_classes = eq_properties.classes();
+                            if !eq_classes.is_empty() {
+                                let normalized_required_exprs = required_exprs
+                                    .iter()
+                                    .map(|e| {
+                                        normalize_expr_with_equivalence_properties(
+                                            e.clone(),
+                                            eq_classes,
+                                        )
+                                    })
+                                    .collect::<Vec<_>>();
+                                let normalized_partition_exprs = partition_exprs
+                                    .iter()
+                                    .map(|e| {
+                                        normalize_expr_with_equivalence_properties(
+                                            e.clone(),
+                                            eq_classes,
+                                        )
+                                    })
+                                    .collect::<Vec<_>>();
+                                expr_list_eq_strict_order(
+                                    &normalized_required_exprs,
+                                    &normalized_partition_exprs,
+                                )
+                            } else {
+                                fast_match
+                            }
+                        } else {
+                            fast_match
+                        }
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
 }
 
 impl PartialEq for Partitioning {
@@ -508,10 +565,27 @@ pub enum Distribution {
     HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
-use datafusion_physical_expr::expr_list_eq_strict_order;
+impl Distribution {
+    /// Creates a Partitioning for this Distribution to satisfy itself
+    pub fn create_partitioning(&self, partition_count: usize) -> Partitioning {
+        match self {
+            Distribution::UnspecifiedDistribution => {
+                Partitioning::UnknownPartitioning(partition_count)
+            }
+            Distribution::SinglePartition => Partitioning::UnknownPartitioning(1),
+            Distribution::HashPartitioned(expr) => {
+                Partitioning::Hash(expr.clone(), partition_count)
+            }
+        }
+    }
+}
+
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{
+    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
+};
 pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
@@ -571,6 +645,7 @@ pub mod metrics;
 pub mod planner;
 pub mod projection;
 pub mod repartition;
+pub mod rewrite;
 pub mod sorts;
 pub mod stream;
 pub mod udaf;
@@ -582,3 +657,81 @@ use crate::execution::context::TaskContext;
 pub use datafusion_physical_expr::{
     expressions, functions, hash_utils, type_coercion, udf,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::DataType;
+    use arrow::datatypes::Schema;
+
+    use crate::physical_plan::Distribution;
+    use crate::physical_plan::Partitioning;
+    use crate::physical_plan::PhysicalExpr;
+    use datafusion_physical_expr::expressions::Column;
+
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn partitioning_satisfy_distribution() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            arrow::datatypes::Field::new("column_1", DataType::Int64, false),
+            arrow::datatypes::Field::new("column_2", DataType::Utf8, false),
+        ]));
+
+        let partition_exprs1: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new_with_schema("column_1", &schema).unwrap()),
+            Arc::new(Column::new_with_schema("column_2", &schema).unwrap()),
+        ];
+
+        let partition_exprs2: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Column::new_with_schema("column_2", &schema).unwrap()),
+            Arc::new(Column::new_with_schema("column_1", &schema).unwrap()),
+        ];
+
+        let distribution_types = vec![
+            Distribution::UnspecifiedDistribution,
+            Distribution::SinglePartition,
+            Distribution::HashPartitioned(partition_exprs1.clone()),
+        ];
+
+        let single_partition = Partitioning::UnknownPartitioning(1);
+        let unspecified_partition = Partitioning::UnknownPartitioning(10);
+        let round_robin_partition = Partitioning::RoundRobinBatch(10);
+        let hash_partition1 = Partitioning::Hash(partition_exprs1, 10);
+        let hash_partition2 = Partitioning::Hash(partition_exprs2, 10);
+
+        for distribution in distribution_types {
+            let result = (
+                single_partition.satisfy(distribution.clone(), || {
+                    EquivalenceProperties::new(schema.clone())
+                }),
+                unspecified_partition.satisfy(distribution.clone(), || {
+                    EquivalenceProperties::new(schema.clone())
+                }),
+                round_robin_partition.satisfy(distribution.clone(), || {
+                    EquivalenceProperties::new(schema.clone())
+                }),
+                hash_partition1.satisfy(distribution.clone(), || {
+                    EquivalenceProperties::new(schema.clone())
+                }),
+                hash_partition2.satisfy(distribution.clone(), || {
+                    EquivalenceProperties::new(schema.clone())
+                }),
+            );
+
+            match distribution {
+                Distribution::UnspecifiedDistribution => {
+                    assert_eq!(result, (true, true, true, true, true))
+                }
+                Distribution::SinglePartition => {
+                    assert_eq!(result, (true, false, false, false, false))
+                }
+                Distribution::HashPartitioned(_) => {
+                    assert_eq!(result, (false, false, false, true, false))
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
