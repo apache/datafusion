@@ -1581,7 +1581,8 @@ impl SessionState {
             Some(factory) => factory,
             _ => return,
         };
-        let schema = ListingSchemaProvider::new(authority, path, factory.clone(), store);
+        let schema =
+            ListingSchemaProvider::new(authority, path, factory.clone(), store, format);
         let _ = default_catalog
             .register_schema("default", Arc::new(schema))
             .expect("Failed to register default schema");
@@ -2234,15 +2235,11 @@ mod tests {
         let path = path.join("tests/tpch-csv");
         let url = format!("file://{}", path.display());
 
-        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
-            RuntimeConfig::default().table_factories;
-        let factory = Arc::new(ListingTableFactory::new());
-        table_factories.insert("test".to_string(), factory);
-        let rt_cfg = RuntimeConfig::new().with_table_factories(table_factories);
+        let rt_cfg = RuntimeConfig::new();
         let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())
-            .set_str("datafusion.catalog.type", "test");
+            .set_str("datafusion.catalog.type", "CSV");
         let session_state = SessionState::with_config_rt(cfg, runtime);
         let ctx = SessionContext::with_state(session_state);
         ctx.refresh_catalogs().await?;

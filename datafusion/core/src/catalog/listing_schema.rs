@@ -49,6 +49,7 @@ pub struct ListingSchemaProvider {
     factory: Arc<dyn TableProviderFactory>,
     store: Arc<dyn ObjectStore>,
     tables: Arc<Mutex<HashMap<String, Arc<dyn TableProvider>>>>,
+    format: String,
 }
 
 impl ListingSchemaProvider {
@@ -59,11 +60,13 @@ impl ListingSchemaProvider {
     /// `path`: The root path that contains subfolders which represent tables
     /// `factory`: The `TableProviderFactory` to use to instantiate tables for each subfolder
     /// `store`: The `ObjectStore` containing the table data
+    /// `format`: The `FileFormat` of the tables
     pub fn new(
         authority: String,
         path: object_store::path::Path,
         factory: Arc<dyn TableProviderFactory>,
         store: Arc<dyn ObjectStore>,
+        format: String,
     ) -> Self {
         Self {
             authority,
@@ -71,6 +74,7 @@ impl ListingSchemaProvider {
             factory,
             store,
             tables: Arc::new(Mutex::new(HashMap::new())),
+            format,
         }
     }
 
@@ -118,7 +122,7 @@ impl ListingSchemaProvider {
                             schema: Arc::new(DFSchema::empty()),
                             name: table_name.to_string(),
                             location: table_url,
-                            file_type: "".to_string(),
+                            file_type: self.format.clone(),
                             has_header: false,
                             delimiter: ',',
                             table_partition_cols: vec![],
