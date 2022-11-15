@@ -81,7 +81,7 @@ num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
 object_store = "0.5.0"
 parking_lot = "0.12"
-parquet = { version = "26.0.0", features = ["arrow", "async"] }
+parquet = { version = "27.0.0", features = ["arrow", "async"] }
 paste = "^1.0"
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"

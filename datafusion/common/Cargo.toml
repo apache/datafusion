@@ -44,6 +44,6 @@ arrow = { version = "26.0.0", default-features = false }
 chrono = { version = "0.4", default-features = false }
 cranelift-module = { version = "0.89.0", optional = true }
 object_store = { version = "0.5.0", default-features = false, optional = true }
-parquet = { version = "26.0.0", default-features = false, optional = true }
+parquet = { version = "27.0.0", default-features = false, optional = true }
 pyo3 = { version = "0.17.1", optional = true }
 sqlparser = "0.26"
