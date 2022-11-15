@@ -25,31 +25,38 @@ use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::joins::{
     utils::{ColumnIndex, JoinFilter, JoinSide},
-    CrossJoinExec, HashJoinExec,
+    CrossJoinExec, HashJoinExec, PartitionMode,
 };
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::{ExecutionPlan, PhysicalExpr};
 
 use super::optimizer::PhysicalOptimizerRule;
-use super::utils::optimize_children;
 use crate::error::Result;
+use crate::physical_plan::rewrite::TreeNodeRewritable;
 
-/// BuildProbeOrder reorders the build and probe phase of
-/// hash joins. This uses the amount of rows that a datasource has.
-/// The rule optimizes the order such that the left (build) side of the join
+/// For hash join with the partition mode [PartitionMode::Auto], JoinSelection rule will make
+/// a cost based decision to select which PartitionMode mode(Partitioned/CollectLeft) is optimal
+/// based on the available statistics that the inputs have.
+/// If the statistics information is not available, the partition mode will fall back to [PartitionMode::Partitioned].
+///
+/// JoinSelection rule will also reorder the build and probe phase of the hash joins
+/// based on the avaliable statistics that the inputs have.
+/// The rule optimizes the order such that the left (build) side of the join is the smallest.
+/// If the statistics information is not available, the order stays the same as the original query.
+/// JoinSelection rule will also swap the left and right sides for cross join to keep the left side
 /// is the smallest.
-/// If the information is not available, the order stays the same,
-/// so that it could be optimized manually in a query.
 #[derive(Default)]
-pub struct HashBuildProbeOrder {}
+pub struct JoinSelection {}
 
-impl HashBuildProbeOrder {
+impl JoinSelection {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
+// TODO we need some performance test for Right Semi/Right Join swap to Left Semi/Left Join in case that the right side is smaller but not much smaller.
+// TODO In PrestoSQL, the optimizer flips join sides only if one side is much smaller than the other by more than SIZE_DIFFERENCE_THRESHOLD times, by default is is 8 times.
 fn should_swap_join_order(left: &dyn ExecutionPlan, right: &dyn ExecutionPlan) -> bool {
     // Get the left and right table's total bytes
     // If both the left and right tables contain total_byte_size statistics,
@@ -65,6 +72,19 @@ fn should_swap_join_order(left: &dyn ExecutionPlan, right: &dyn ExecutionPlan) -
     match (left_size, right_size) {
         (Some(l), Some(r)) => l > r,
         _ => false,
+    }
+}
+
+fn supports_collect_by_size(
+    plan: &dyn ExecutionPlan,
+    collection_size_threshold: usize,
+) -> bool {
+    if let Some(size) = plan.statistics().total_byte_size {
+        size < collection_size_threshold
+    } else if let Some(row_count) = plan.statistics().num_rows {
+        row_count < collection_size_threshold
+    } else {
+        false
     }
 }
 
@@ -91,6 +111,43 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
         JoinType::RightSemi => JoinType::LeftSemi,
         JoinType::LeftAnti => JoinType::RightAnti,
         JoinType::RightAnti => JoinType::LeftAnti,
+    }
+}
+
+fn swap_hash_join(
+    hash_join: &HashJoinExec,
+    partition_mode: PartitionMode,
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let new_join = HashJoinExec::try_new(
+        Arc::clone(right),
+        Arc::clone(left),
+        hash_join
+            .on()
+            .iter()
+            .map(|(l, r)| (r.clone(), l.clone()))
+            .collect(),
+        swap_join_filter(hash_join.filter()),
+        &swap_join_type(*hash_join.join_type()),
+        partition_mode,
+        hash_join.null_equals_null(),
+    )?;
+    if matches!(
+        hash_join.join_type(),
+        JoinType::LeftSemi
+            | JoinType::RightSemi
+            | JoinType::LeftAnti
+            | JoinType::RightAnti
+    ) {
+        Ok(Arc::new(new_join))
+    } else {
+        // TODO avoid adding ProjectionExec again and again, only adding Final Projection
+        let proj = ProjectionExec::try_new(
+            swap_reverting_projection(&left.schema(), &right.schema()),
+            Arc::new(new_join),
+        )?;
+        Ok(Arc::new(proj))
     }
 }
 
@@ -150,66 +207,139 @@ fn swap_join_filter(filter: &Option<JoinFilter>) -> Option<JoinFilter> {
     }
 }
 
-impl PhysicalOptimizerRule for HashBuildProbeOrder {
+impl PhysicalOptimizerRule for JoinSelection {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         session_config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan = optimize_children(self, plan, session_config)?;
-        if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
-            let left = hash_join.left();
-            let right = hash_join.right();
-            if should_swap_join_order(&**left, &**right)
-                && supports_swap(*hash_join.join_type())
-            {
-                let new_join = HashJoinExec::try_new(
-                    Arc::clone(right),
-                    Arc::clone(left),
-                    hash_join
-                        .on()
-                        .iter()
-                        .map(|(l, r)| (r.clone(), l.clone()))
-                        .collect(),
-                    swap_join_filter(hash_join.filter()),
-                    &swap_join_type(*hash_join.join_type()),
-                    *hash_join.partition_mode(),
-                    hash_join.null_equals_null(),
-                )?;
-                if matches!(
-                    hash_join.join_type(),
-                    JoinType::LeftSemi
-                        | JoinType::RightSemi
-                        | JoinType::LeftAnti
-                        | JoinType::RightAnti
-                ) {
-                    return Ok(Arc::new(new_join));
+        let collect_left_threshold = session_config.hash_join_collect_left_threshold;
+        plan.transform_up(&|plan| {
+            if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+                if matches!(hash_join.partition_mode(), PartitionMode::Auto) {
+                    try_collect_left(hash_join, collect_left_threshold)
+                        .unwrap()
+                        .or_else(|| Some(partitioned_hash_join(hash_join).unwrap()))
+                } else {
+                    let left = hash_join.left();
+                    let right = hash_join.right();
+                    if should_swap_join_order(&**left, &**right)
+                        && supports_swap(*hash_join.join_type())
+                    {
+                        Some(
+                            swap_hash_join(
+                                hash_join,
+                                *hash_join.partition_mode(),
+                                left,
+                                right,
+                            )
+                            .unwrap(),
+                        )
+                    } else {
+                        None
+                    }
                 }
-
-                let proj = ProjectionExec::try_new(
-                    swap_reverting_projection(&left.schema(), &right.schema()),
-                    Arc::new(new_join),
-                )?;
-                return Ok(Arc::new(proj));
+            } else if let Some(cross_join) = plan.as_any().downcast_ref::<CrossJoinExec>()
+            {
+                let left = cross_join.left();
+                let right = cross_join.right();
+                if should_swap_join_order(&**left, &**right) {
+                    let new_join =
+                        CrossJoinExec::try_new(Arc::clone(right), Arc::clone(left))
+                            .unwrap();
+                    // TODO avoid adding ProjectionExec again and again, only adding Final Projection
+                    let proj = ProjectionExec::try_new(
+                        swap_reverting_projection(&left.schema(), &right.schema()),
+                        Arc::new(new_join),
+                    )
+                    .unwrap();
+                    Some(Arc::new(proj))
+                } else {
+                    None
+                }
+            } else {
+                None
             }
-        } else if let Some(cross_join) = plan.as_any().downcast_ref::<CrossJoinExec>() {
-            let left = cross_join.left();
-            let right = cross_join.right();
-            if should_swap_join_order(&**left, &**right) {
-                let new_join =
-                    CrossJoinExec::try_new(Arc::clone(right), Arc::clone(left))?;
-                let proj = ProjectionExec::try_new(
-                    swap_reverting_projection(&left.schema(), &right.schema()),
-                    Arc::new(new_join),
-                )?;
-                return Ok(Arc::new(proj));
-            }
-        }
-        Ok(plan)
+        })
     }
 
     fn name(&self) -> &str {
-        "hash_build_probe_order"
+        "[CBO]join_selection"
+    }
+}
+
+fn try_collect_left(
+    hash_join: &HashJoinExec,
+    collect_left_threshold: usize,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    let left = hash_join.left();
+    let right = hash_join.right();
+    let left_can_collect = supports_collect_by_size(&**left, collect_left_threshold);
+    let right_can_collect = supports_collect_by_size(&**right, collect_left_threshold);
+    match (left_can_collect, right_can_collect) {
+        (true, true) => {
+            if should_swap_join_order(&**left, &**right)
+                && supports_swap(*hash_join.join_type())
+            {
+                Ok(Some(swap_hash_join(
+                    hash_join,
+                    PartitionMode::CollectLeft,
+                    left,
+                    right,
+                )?))
+            } else {
+                Ok(Some(Arc::new(HashJoinExec::try_new(
+                    Arc::clone(left),
+                    Arc::clone(right),
+                    hash_join.on().to_vec(),
+                    hash_join.filter().clone(),
+                    hash_join.join_type(),
+                    PartitionMode::CollectLeft,
+                    hash_join.null_equals_null(),
+                )?)))
+            }
+        }
+        (true, false) => Ok(Some(Arc::new(HashJoinExec::try_new(
+            Arc::clone(left),
+            Arc::clone(right),
+            hash_join.on().to_vec(),
+            hash_join.filter().clone(),
+            hash_join.join_type(),
+            PartitionMode::CollectLeft,
+            hash_join.null_equals_null(),
+        )?))),
+        (false, true) => {
+            if supports_swap(*hash_join.join_type()) {
+                Ok(Some(swap_hash_join(
+                    hash_join,
+                    PartitionMode::CollectLeft,
+                    left,
+                    right,
+                )?))
+            } else {
+                Ok(None)
+            }
+        }
+        (false, false) => Ok(None),
+    }
+}
+
+fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
+    let left = hash_join.left();
+    let right = hash_join.right();
+    if should_swap_join_order(&**left, &**right) && supports_swap(*hash_join.join_type())
+    {
+        swap_hash_join(hash_join, PartitionMode::Partitioned, left, right)
+    } else {
+        Ok(Arc::new(HashJoinExec::try_new(
+            Arc::clone(left),
+            Arc::clone(right),
+            hash_join.on().to_vec(),
+            hash_join.filter().clone(),
+            hash_join.join_type(),
+            PartitionMode::Partitioned,
+            hash_join.null_equals_null(),
+        )?))
     }
 }
 
@@ -336,7 +466,7 @@ mod tests {
         )
         .unwrap();
 
-        let optimized_join = HashBuildProbeOrder::new()
+        let optimized_join = JoinSelection::new()
             .optimize(Arc::new(join), &SessionConfig::new())
             .unwrap();
 
@@ -388,7 +518,7 @@ mod tests {
 
             let original_schema = join.schema();
 
-            let optimized_join = HashBuildProbeOrder::new()
+            let optimized_join = JoinSelection::new()
                 .optimize(Arc::new(join), &SessionConfig::new())
                 .unwrap();
 
@@ -417,7 +547,7 @@ mod tests {
             let expected_lines =
                 $EXPECTED_LINES.iter().map(|s| *s).collect::<Vec<&str>>();
 
-            let optimized = HashBuildProbeOrder::new()
+            let optimized = JoinSelection::new()
                 .optimize(Arc::new($PLAN), &SessionConfig::new())
                 .unwrap();
 
@@ -505,7 +635,7 @@ mod tests {
         )
         .unwrap();
 
-        let optimized_join = HashBuildProbeOrder::new()
+        let optimized_join = JoinSelection::new()
             .optimize(Arc::new(join), &SessionConfig::new())
             .unwrap();
 
@@ -554,5 +684,206 @@ mod tests {
             .expect("Projection items should be Column expression");
         assert_eq!(col.name(), name);
         assert_eq!(col.index(), index);
+    }
+
+    #[tokio::test]
+    async fn test_join_selection_collect_left() {
+        let big = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(10000000),
+                total_byte_size: Some(10000000),
+                ..Default::default()
+            },
+            Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
+        ));
+
+        let small = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(10),
+                total_byte_size: Some(10),
+                ..Default::default()
+            },
+            Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
+        ));
+
+        let empty = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: None,
+                total_byte_size: None,
+                ..Default::default()
+            },
+            Schema::new(vec![Field::new("empty_col", DataType::Int32, false)]),
+        ));
+
+        let join_on = vec![(
+            Column::new_with_schema("small_col", &small.schema()).unwrap(),
+            Column::new_with_schema("big_col", &big.schema()).unwrap(),
+        )];
+        check_join_partition_mode(
+            small.clone(),
+            big.clone(),
+            join_on,
+            false,
+            PartitionMode::CollectLeft,
+        );
+
+        let join_on = vec![(
+            Column::new_with_schema("big_col", &big.schema()).unwrap(),
+            Column::new_with_schema("small_col", &small.schema()).unwrap(),
+        )];
+        check_join_partition_mode(
+            big,
+            small.clone(),
+            join_on,
+            true,
+            PartitionMode::CollectLeft,
+        );
+
+        let join_on = vec![(
+            Column::new_with_schema("small_col", &small.schema()).unwrap(),
+            Column::new_with_schema("empty_col", &empty.schema()).unwrap(),
+        )];
+        check_join_partition_mode(
+            small.clone(),
+            empty.clone(),
+            join_on,
+            false,
+            PartitionMode::CollectLeft,
+        );
+
+        let join_on = vec![(
+            Column::new_with_schema("empty_col", &empty.schema()).unwrap(),
+            Column::new_with_schema("small_col", &small.schema()).unwrap(),
+        )];
+        check_join_partition_mode(
+            empty,
+            small,
+            join_on,
+            true,
+            PartitionMode::CollectLeft,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_join_selection_partitioned() {
+        let big1 = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(10000000),
+                total_byte_size: Some(10000000),
+                ..Default::default()
+            },
+            Schema::new(vec![Field::new("big_col1", DataType::Int32, false)]),
+        ));
+
+        let big2 = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(20000000),
+                total_byte_size: Some(20000000),
+                ..Default::default()
+            },
+            Schema::new(vec![Field::new("big_col2", DataType::Int32, false)]),
+        ));
+
+        let empty = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: None,
+                total_byte_size: None,
+                ..Default::default()
+            },
+            Schema::new(vec![Field::new("empty_col", DataType::Int32, false)]),
+        ));
+
+        let join_on = vec![(
+            Column::new_with_schema("big_col1", &big1.schema()).unwrap(),
+            Column::new_with_schema("big_col2", &big2.schema()).unwrap(),
+        )];
+        check_join_partition_mode(
+            big1.clone(),
+            big2.clone(),
+            join_on,
+            false,
+            PartitionMode::Partitioned,
+        );
+
+        let join_on = vec![(
+            Column::new_with_schema("big_col2", &big2.schema()).unwrap(),
+            Column::new_with_schema("big_col1", &big1.schema()).unwrap(),
+        )];
+        check_join_partition_mode(
+            big2,
+            big1.clone(),
+            join_on,
+            true,
+            PartitionMode::Partitioned,
+        );
+
+        let join_on = vec![(
+            Column::new_with_schema("empty_col", &empty.schema()).unwrap(),
+            Column::new_with_schema("big_col1", &big1.schema()).unwrap(),
+        )];
+        check_join_partition_mode(
+            empty.clone(),
+            big1.clone(),
+            join_on,
+            false,
+            PartitionMode::Partitioned,
+        );
+
+        let join_on = vec![(
+            Column::new_with_schema("big_col1", &big1.schema()).unwrap(),
+            Column::new_with_schema("empty_col", &empty.schema()).unwrap(),
+        )];
+        check_join_partition_mode(
+            big1,
+            empty,
+            join_on,
+            false,
+            PartitionMode::Partitioned,
+        );
+    }
+
+    fn check_join_partition_mode(
+        left: Arc<StatisticsExec>,
+        right: Arc<StatisticsExec>,
+        on: Vec<(Column, Column)>,
+        is_swapped: bool,
+        expected_mode: PartitionMode,
+    ) {
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Left,
+            PartitionMode::Auto,
+            &false,
+        )
+        .unwrap();
+
+        let optimized_join = JoinSelection::new()
+            .optimize(Arc::new(join), &SessionConfig::new())
+            .unwrap();
+
+        if !is_swapped {
+            let swapped_join = optimized_join
+                .as_any()
+                .downcast_ref::<HashJoinExec>()
+                .expect("The type of the plan should not be changed");
+            assert_eq!(*swapped_join.partition_mode(), expected_mode);
+        } else {
+            let swapping_projection = optimized_join
+                .as_any()
+                .downcast_ref::<ProjectionExec>()
+                .expect(
+                    "A proj is required to swap columns back to their original order",
+                );
+            let swapped_join = swapping_projection
+                .input()
+                .as_any()
+                .downcast_ref::<HashJoinExec>()
+                .expect("The type of the plan should not be changed");
+
+            assert_eq!(*swapped_join.partition_mode(), expected_mode);
+        }
     }
 }

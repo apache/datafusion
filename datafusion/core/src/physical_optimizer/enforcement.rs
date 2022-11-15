@@ -208,6 +208,10 @@ fn adjust_input_keys_ordering(
                     request_key_ordering: vec![None, new_right_request],
                 })
             }
+            PartitionMode::Auto => {
+                // Can not satisfy, clear the current requirements and generate new empty requirements
+                Some(PlanWithKeyRequirements::new(requirements.plan.clone()))
+            }
         }
     } else if let Some(CrossJoinExec { left, .. }) =
         plan_any.downcast_ref::<CrossJoinExec>()
