@@ -61,7 +61,7 @@ async-compression = { version = "0.3.14", features = ["bzip2", "gzip", "futures-
 async-trait = "0.1.41"
 bytes = "1.1"
 bzip2 = "0.4.3"
-chrono = { version = "0.4.22", default-features = false }
+chrono = { version = "0.4.23", default-features = false }
 dashmap = "5.4.0"
 datafusion-common = { path = "../common", version = "14.0.0", features = ["parquet", "object_store"] }
 datafusion-expr = { path = "../expr", version = "14.0.0" }

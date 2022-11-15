@@ -45,7 +45,7 @@ arrow-buffer = "27.0.0"
 arrow-schema = "27.0.0"
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
-chrono = { version = "0.4.22", default-features = false }
+chrono = { version = "0.4.23", default-features = false }
 datafusion-common = { path = "../common", version = "14.0.0" }
 datafusion-expr = { path = "../expr", version = "14.0.0" }
 datafusion-row = { path = "../row", version = "14.0.0" }
