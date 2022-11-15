@@ -55,11 +55,12 @@ impl OptimizerRule for PropagateEmptyRelation {
                 None => Ok(optimized_children_plan),
             },
             LogicalPlan::CrossJoin(_) => {
-                let (left_empty, right_empty) = binary_plan_children_is_empty(plan)?;
+                let (left_empty, right_empty) =
+                    binary_plan_children_is_empty(&optimized_children_plan)?;
                 if left_empty || right_empty {
                     Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
-                        schema: plan.schema().clone(),
+                        schema: optimized_children_plan.schema().clone(),
                     }))
                 } else {
                     Ok(optimized_children_plan)
@@ -79,11 +80,12 @@ impl OptimizerRule for PropagateEmptyRelation {
                 // For RightOut/Full Join, if the left side is empty, the Join can be eliminated with a Projection with right side
                 // columns + left side columns replaced with null values.
                 if join.join_type == JoinType::Inner {
-                    let (left_empty, right_empty) = binary_plan_children_is_empty(plan)?;
+                    let (left_empty, right_empty) =
+                        binary_plan_children_is_empty(&optimized_children_plan)?;
                     if left_empty || right_empty {
                         Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
-                            schema: plan.schema().clone(),
+                            schema: optimized_children_plan.schema().clone(),
                         }))
                     } else {
                         Ok(optimized_children_plan)
@@ -108,16 +110,16 @@ impl OptimizerRule for PropagateEmptyRelation {
                 } else if new_inputs.is_empty() {
                     Ok(LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
-                        schema: plan.schema().clone(),
+                        schema: optimized_children_plan.schema().clone(),
                     }))
                 } else if new_inputs.len() == 1 {
                     let child = (**(union.inputs.get(0).unwrap())).clone();
-                    if child.schema().eq(plan.schema()) {
+                    if child.schema().eq(optimized_children_plan.schema()) {
                         Ok(child)
                     } else {
                         Ok(LogicalPlan::Projection(Projection::new_from_schema(
                             Arc::new(child),
-                            plan.schema().clone(),
+                            optimized_children_plan.schema().clone(),
                             union.alias.clone(),
                         )))
                     }
