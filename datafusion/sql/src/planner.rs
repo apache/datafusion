@@ -188,25 +188,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let input_schema = plan.schema();
 
                 let plan = if !columns.is_empty() {
-                    match *query.body {
-                        SetExpr::Values(_) => {
-                            let schema = self.build_schema(columns)?.to_dfschema_ref()?;
-                            if schema.fields().len() != input_schema.fields().len() {
-                                return Err(DataFusionError::Plan(format!("Mismatch: {} columns specified, but result has {} columns", schema.fields.len(), input_schema.fields().len()))
-                            }
-                            let input_fields = input_schema.fields();
-                            let project_exprs = schema.fields().iter().zip(input_fields).map(|(field, input_field)| {
-                                cast(col(input_field.name()), field.data_type().clone()).alias(field.name())
-                            }).collect::<Vec<_>>();
-                            LogicalPlanBuilder::from(plan.clone())
-                                .project(project_exprs)?
-                                .build()?
-                        },
-                        _ => return Err(DataFusionError::Plan(
-                            "You can only specify schema when create table with a `values` statement"
-                                .to_string()
-                        ))
+                    let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                    if schema.fields().len() != input_schema.fields().len() {
+                        return Err(DataFusionError::Plan(format!(
+                            "Mismatch: {} columns specified, but result has {} columns",
+                            schema.fields().len(),
+                            input_schema.fields().len()
+                        )));
                     }
+                    let input_fields = input_schema.fields();
+                    let project_exprs = schema
+                        .fields()
+                        .iter()
+                        .zip(input_fields)
+                        .map(|(field, input_field)| {
+                            cast(col(input_field.name()), field.data_type().clone())
+                                .alias(field.name())
+                        })
+                        .collect::<Vec<_>>();
+                    LogicalPlanBuilder::from(plan.clone())
+                        .project(project_exprs)?
+                        .build()?
                 } else {
                     plan
                 };
