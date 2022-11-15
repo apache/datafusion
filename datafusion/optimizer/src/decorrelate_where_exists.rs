@@ -20,9 +20,11 @@ use crate::utils::{
     verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::context;
-use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::{context, Result};
+use datafusion_expr::{
+    logical_plan::{Filter, JoinType, Subquery},
+    Expr, LogicalPlan, LogicalPlanBuilder,
+};
 use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
@@ -47,7 +49,7 @@ impl DecorrelateWhereExists {
         &self,
         predicate: &Expr,
         optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
+    ) -> Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
         let filters = split_conjunction(predicate);
 
         let mut subqueries = vec![];
@@ -74,7 +76,7 @@ impl OptimizerRule for DecorrelateWhereExists {
         &self,
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<LogicalPlan> {
+    ) -> Result<LogicalPlan> {
         Ok(self
             .try_optimize(plan, optimizer_config)?
             .unwrap_or_else(|| plan.clone()))
@@ -84,7 +86,7 @@ impl OptimizerRule for DecorrelateWhereExists {
         &self,
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<Option<LogicalPlan>> {
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
                 let predicate = filter.predicate();
@@ -151,7 +153,7 @@ fn optimize_exists(
     query_info: &SubqueryInfo,
     outer_input: &LogicalPlan,
     outer_other_exprs: &[Expr],
-) -> datafusion_common::Result<Option<LogicalPlan>> {
+) -> Result<Option<LogicalPlan>> {
     let subqry_filter = match query_info.query.subquery.as_ref() {
         LogicalPlan::Distinct(subqry_distinct) => match subqry_distinct.input.as_ref() {
             LogicalPlan::Projection(subqry_proj) => {
