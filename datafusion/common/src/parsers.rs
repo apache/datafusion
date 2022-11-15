@@ -116,8 +116,8 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
         // Disallow duplicate interval types
         if used_interval_types & (it as u16) != 0 {
             return Err(DataFusionError::SQL(ParserError::ParserError(format!(
-                "Invalid input syntax for type interval: {:?}",
-                value
+                "Invalid input syntax for type interval: {:?}. Repeated type '{}'",
+                value, interval_type
             ))));
         } else {
             used_interval_types |= it as u16;
@@ -295,7 +295,7 @@ mod test {
         let err = parse_interval("months", "1 month 1 second 1 second")
             .expect_err("parsing interval should have failed");
         assert_eq!(
-            r#"SQL(ParserError("Invalid input syntax for type interval: \"1 month 1 second 1 second\""))"#,
+            r#"SQL(ParserError("Invalid input syntax for type interval: \"1 month 1 second 1 second\". Repeated type 'second'"))"#,
             format!("{:?}", err)
         );
     }
