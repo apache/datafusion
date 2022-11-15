@@ -2235,7 +2235,7 @@ mod tests {
         let url = format!("file://{}", path.display());
 
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
-            HashMap::new();
+            RuntimeConfig::default().table_factories;
         let factory = Arc::new(ListingTableFactory::new());
         table_factories.insert("test".to_string(), factory);
         let rt_cfg = RuntimeConfig::new().with_table_factories(table_factories);
