@@ -23,16 +23,17 @@ use datafusion_common::Column;
 use datafusion_common::ScalarValue;
 use log::debug;
 
-use parquet::{
-    file::{metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics},
-    schema::types::ColumnDescriptor,
+use parquet::file::{
+    metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics,
 };
 
+use crate::physical_plan::file_format::parquet::{
+    from_bytes_to_i128, parquet_to_arrow_decimal_type,
+};
 use crate::{
     datasource::listing::FileRange,
     physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
 };
-use parquet::basic::{ConvertedType, LogicalType};
 
 use super::ParquetFileMetrics;
 
@@ -83,23 +84,6 @@ pub(crate) fn prune_row_groups(
 struct RowGroupPruningStatistics<'a> {
     row_group_metadata: &'a RowGroupMetaData,
     parquet_schema: &'a Schema,
-}
-
-// TODO: consolidate code with arrow-rs
-// Convert the bytes array to i128.
-// The endian of the input bytes array must be big-endian.
-// Copy from the arrow-rs
-fn from_bytes_to_i128(b: &[u8]) -> i128 {
-    assert!(b.len() <= 16, "Decimal128Array supports only up to size 16");
-    let first_bit = b[0] & 128u8 == 128u8;
-    let mut result = if first_bit { [255u8; 16] } else { [0u8; 16] };
-    for (i, v) in b.iter().enumerate() {
-        result[i + (16 - b.len())] = *v;
-    }
-    // The bytes array are from parquet file and must be the big-endian.
-    // The endian is defined by parquet format, and the reference document
-    // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
-    i128::from_be_bytes(result)
 }
 
 /// Extract the min/max statistics from a `ParquetStatistics` object
@@ -215,24 +199,6 @@ macro_rules! get_null_count_values {
 
         Some(value.to_array())
     }};
-}
-
-// Convert parquet column schema to arrow data type, and just consider the
-// decimal data type.
-fn parquet_to_arrow_decimal_type(parquet_column: &ColumnDescriptor) -> Option<DataType> {
-    let type_ptr = parquet_column.self_type_ptr();
-    match type_ptr.get_basic_info().logical_type() {
-        Some(LogicalType::Decimal { scale, precision }) => {
-            Some(DataType::Decimal128(precision as u8, scale as u8))
-        }
-        _ => match type_ptr.get_basic_info().converted_type() {
-            ConvertedType::DECIMAL => Some(DataType::Decimal128(
-                type_ptr.get_precision() as u8,
-                type_ptr.get_scale() as u8,
-            )),
-            _ => None,
-        },
-    }
 }
 
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {

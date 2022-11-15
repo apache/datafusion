@@ -18,12 +18,15 @@
 //! Contains code to filter entire pages
 
 use arrow::array::{
-    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
+    BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array,
+    StringArray,
 };
+use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_optimizer::utils::split_conjunction;
 use log::{debug, error, trace};
+use parquet::schema::types::ColumnDescriptor;
 use parquet::{
     arrow::arrow_reader::{RowSelection, RowSelector},
     errors::ParquetError,
@@ -37,6 +40,9 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use crate::physical_plan::file_format::parquet::{
+    from_bytes_to_i128, parquet_to_arrow_decimal_type,
+};
 
 use super::metrics::ParquetFileMetrics;
 
@@ -134,6 +140,7 @@ pub(crate) fn build_page_filter(
                             &predicate,
                             rg_offset_indexes.get(col_id),
                             rg_page_indexes.get(col_id),
+                            groups[*r].column(col_id).column_descr(),
                             file_metrics,
                         )
                         .map_err(|e| {
@@ -307,15 +314,18 @@ fn prune_pages_in_one_row_group(
     predicate: &PruningPredicate,
     col_offset_indexes: Option<&Vec<PageLocation>>,
     col_page_indexes: Option<&Index>,
+    col_desc: &ColumnDescriptor,
     metrics: &ParquetFileMetrics,
 ) -> Result<Vec<RowSelector>> {
     let num_rows = group.num_rows() as usize;
     if let (Some(col_offset_indexes), Some(col_page_indexes)) =
         (col_offset_indexes, col_page_indexes)
     {
+        let target_type = parquet_to_arrow_decimal_type(col_desc);
         let pruning_stats = PagesPruningStatistics {
             col_page_indexes,
             col_offset_indexes,
+            target_type: &target_type,
         };
 
         match predicate.prune(&pruning_stats) {
@@ -384,6 +394,9 @@ fn create_row_count_in_each_page(
 struct PagesPruningStatistics<'a> {
     col_page_indexes: &'a Index,
     col_offset_indexes: &'a Vec<PageLocation>,
+    // target_type means the logical type in schema: like 'DECIMAL' is the logical type, but the
+    // real physical type in parquet file may be `INT32, INT64, FIXED_LEN_BYTE_ARRAY`
+    target_type: &'a Option<DataType>,
 }
 
 // Extract the min or max value calling `func` from page idex
@@ -392,16 +405,50 @@ macro_rules! get_min_max_values_for_page_index {
         match $self.col_page_indexes {
             Index::NONE => None,
             Index::INT32(index) => {
-                let vec = &index.indexes;
-                Some(Arc::new(Int32Array::from_iter(
-                    vec.iter().map(|x| x.$func().cloned()),
-                )))
+                match $self.target_type {
+                    // int32 to decimal with the precision and scale
+                    Some(DataType::Decimal128(precision, scale)) => {
+                        let vec = &index.indexes;
+                        if let Ok(arr) = Decimal128Array::from_iter_values(
+                            vec.iter().map(|x| *x.$func().unwrap() as i128),
+                        )
+                        .with_precision_and_scale(*precision, *scale)
+                        {
+                            return Some(Arc::new(arr));
+                        } else {
+                            return None;
+                        }
+                    }
+                    _ => {
+                        let vec = &index.indexes;
+                        Some(Arc::new(Int32Array::from_iter(
+                            vec.iter().map(|x| x.$func().cloned()),
+                        )))
+                    }
+                }
             }
             Index::INT64(index) => {
-                let vec = &index.indexes;
-                Some(Arc::new(Int64Array::from_iter(
-                    vec.iter().map(|x| x.$func().cloned()),
-                )))
+                match $self.target_type {
+                    // int64 to decimal with the precision and scale
+                    Some(DataType::Decimal128(precision, scale)) => {
+                        let vec = &index.indexes;
+                        if let Ok(arr) = Decimal128Array::from_iter_values(
+                            vec.iter().map(|x| *x.$func().unwrap() as i128),
+                        )
+                        .with_precision_and_scale(*precision, *scale)
+                        {
+                            return Some(Arc::new(arr));
+                        } else {
+                            return None;
+                        }
+                    }
+                    _ => {
+                        let vec = &index.indexes;
+                        Some(Arc::new(Int64Array::from_iter(
+                            vec.iter().map(|x| x.$func().cloned()),
+                        )))
+                    }
+                }
             }
             Index::FLOAT(index) => {
                 let vec = &index.indexes;
@@ -430,9 +477,27 @@ macro_rules! get_min_max_values_for_page_index {
                     .collect();
                 Some(Arc::new(array))
             }
-            Index::INT96(_) | Index::FIXED_LEN_BYTE_ARRAY(_) => {
+            Index::INT96(_) => {
                 //Todo support these type
                 None
+            }
+            Index::FIXED_LEN_BYTE_ARRAY(index) => {
+                match $self.target_type {
+                    // int32 to decimal with the precision and scale
+                    Some(DataType::Decimal128(precision, scale)) => {
+                        let vec = &index.indexes;
+                        if let Ok(array) = Decimal128Array::from_iter_values(
+                            vec.iter().map(|x| from_bytes_to_i128(x.$func().unwrap())),
+                        )
+                        .with_precision_and_scale(*precision, *scale)
+                        {
+                            return Some(Arc::new(array));
+                        } else {
+                            return None;
+                        }
+                    }
+                    _ => None,
+                }
             }
         }
     }};
