@@ -61,14 +61,11 @@ impl TableProviderFactory for ListingTableFactory {
             FileType::JSON => Arc::new(JsonFormat::default()),
         };
 
-        let options = ListingOptions {
-            format: file_format,
-            collect_stat: true,
-            file_extension: file_extension.to_owned(),
-            target_partitions: 1,
-            table_partition_cols: vec![],
-            file_sort_order: None,
-        };
+        let options = ListingOptions::new(file_format)
+            .with_collect_stat(true)
+            .with_file_extension(file_extension)
+            .with_target_partitions(1)
+            .with_table_partition_cols(vec![]);
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = options.infer_schema(state, &table_path).await?;
