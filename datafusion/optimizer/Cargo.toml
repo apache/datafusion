@@ -39,7 +39,7 @@ unicode_expressions = []
 [dependencies]
 arrow = { version = "26.0.0", features = ["prettyprint"] }
 async-trait = "0.1.41"
-chrono = { version = "0.4.22", default-features = false }
+chrono = { version = "0.4.23", default-features = false }
 datafusion-common = { path = "../common", version = "14.0.0" }
 datafusion-expr = { path = "../expr", version = "14.0.0" }
 datafusion-physical-expr = { path = "../physical-expr", version = "14.0.0" }
