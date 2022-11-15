@@ -1285,8 +1285,6 @@ pub struct Union {
     pub inputs: Vec<Arc<LogicalPlan>>,
     /// Union schema. Should be the same for all inputs.
     pub schema: DFSchemaRef,
-    /// Union output relation alias
-    pub alias: Option<String>,
 }
 
 /// Creates an in memory table.
