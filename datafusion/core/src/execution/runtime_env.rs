@@ -28,6 +28,7 @@ use crate::{
 use std::collections::HashMap;
 
 use crate::datasource::datasource::TableProviderFactory;
+use crate::datasource::listing_table_factory::ListingTableFactory;
 use crate::datasource::object_store::ObjectStoreRegistry;
 use datafusion_common::DataFusionError;
 use object_store::ObjectStore;
@@ -152,7 +153,16 @@ pub struct RuntimeConfig {
 impl RuntimeConfig {
     /// New with default values
     pub fn new() -> Self {
-        Default::default()
+        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
+            HashMap::new();
+        table_factories.insert("PARQUET".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("CSV".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("AVRO".into(), Arc::new(ListingTableFactory::new()));
+        Self {
+            table_factories,
+            ..Default::default()
+        }
     }
 
     /// Customize disk manager

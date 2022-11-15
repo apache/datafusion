@@ -20,7 +20,7 @@
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::file_format::avro::AvroFormat;
 use crate::datasource::file_format::csv::CsvFormat;
-use crate::datasource::file_format::file_type::{FileType, GetExt};
+use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::file_format::json::JsonFormat;
 use crate::datasource::file_format::parquet::ParquetFormat;
 use crate::datasource::file_format::FileFormat;
@@ -30,18 +30,24 @@ use crate::datasource::listing::{
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
 use async_trait::async_trait;
+use datafusion_common::DataFusionError;
 use datafusion_expr::CreateExternalTable;
+use std::str::FromStr;
 use std::sync::Arc;
 
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
-pub struct ListingTableFactory {
-    file_type: FileType,
-}
+pub struct ListingTableFactory {}
 
 impl ListingTableFactory {
     /// Creates a new `ListingTableFactory`
-    pub fn new(file_type: FileType) -> Self {
-        Self { file_type }
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Default for ListingTableFactory {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -52,24 +58,65 @@ impl TableProviderFactory for ListingTableFactory {
         state: &SessionState,
         cmd: &CreateExternalTable,
     ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
-        let file_extension = self.file_type.get_ext();
+        let file_compression_type =
+            match FileCompressionType::from_str(cmd.file_compression_type.as_str()) {
+                Ok(t) => t,
+                Err(_) => Err(DataFusionError::Execution(
+                    "Only known FileCompressionTypes can be ListingTables!".to_string(),
+                ))?,
+            };
 
-        let file_format: Arc<dyn FileFormat> = match self.file_type {
-            FileType::CSV => Arc::new(CsvFormat::default()),
-            FileType::PARQUET => Arc::new(ParquetFormat::default()),
-            FileType::AVRO => Arc::new(AvroFormat::default()),
-            FileType::JSON => Arc::new(JsonFormat::default()),
+        let file_type = match FileType::from_str(cmd.file_type.as_str()) {
+            Ok(t) => t,
+            Err(_) => Err(DataFusionError::Execution(
+                "Only known FileTypes can be ListingTables!".to_string(),
+            ))?,
         };
 
-        let options =
-            ListingOptions::new(file_format).with_file_extension(file_extension);
+        let file_extension =
+            file_type.get_ext_with_compression(file_compression_type.to_owned())?;
+
+        let file_format: Arc<dyn FileFormat> = match file_type {
+            FileType::CSV => Arc::new(
+                CsvFormat::default()
+                    .with_has_header(cmd.has_header)
+                    .with_delimiter(cmd.delimiter as u8)
+                    .with_file_compression_type(file_compression_type),
+            ),
+            FileType::PARQUET => Arc::new(ParquetFormat::default()),
+            FileType::AVRO => Arc::new(AvroFormat::default()),
+            FileType::JSON => Arc::new(
+                JsonFormat::default().with_file_compression_type(file_compression_type),
+            ),
+        };
+
+        let provided_schema = if cmd.schema.fields().is_empty() {
+            None
+        } else {
+            Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
+        };
+
+        let copied_config = state.config.clone();
+
+        let options = ListingOptions {
+            format: file_format,
+            collect_stat: copied_config.collect_statistics,
+            file_extension: file_extension.to_owned(),
+            target_partitions: copied_config.target_partitions,
+            table_partition_cols: cmd.table_partition_cols.clone(),
+            file_sort_order: None,
+	};
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
-        let resolved_schema = options.infer_schema(state, &table_path).await?;
+        let resolved_schema = match provided_schema {
+            None => options.infer_schema(state, &table_path).await?,
+            Some(s) => s,
+        };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config)?;
+        let table =
+            ListingTable::try_new(config)?.with_definition(cmd.definition.clone());
         Ok(Arc::new(table))
     }
 }
