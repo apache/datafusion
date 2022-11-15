@@ -93,17 +93,9 @@ pub trait ContextProvider {
 }
 
 /// SQL parser options
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ParserOptions {
     parse_float_as_decimal: bool,
-}
-
-impl Default for ParserOptions {
-    fn default() -> Self {
-        Self {
-            parse_float_as_decimal: false,
-        }
-    }
 }
 
 /// SQL query planner
@@ -2693,7 +2685,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Parse number in sql string, convert to Expr::Literal
     fn parse_sql_number(&self, n: &str) -> Result<Expr> {
-        if let Some(_) = n.find('E') {
+        if n.find('E').is_some() {
             // not implemented yet
             // https://github.com/apache/arrow-datafusion/issues/3448
             Err(DataFusionError::NotImplemented(
