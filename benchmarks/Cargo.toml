@@ -33,7 +33,7 @@ simd = ["datafusion/simd"]
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
-arrow = "26.0.0"
+arrow = "27.0.0"
 datafusion = { path = "../datafusion/core", version = "14.0.0" }
 env_logger = "0.9"
 futures = "0.3"

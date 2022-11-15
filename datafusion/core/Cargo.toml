@@ -56,7 +56,7 @@ unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 apache-avro = { version = "0.14", optional = true }
-arrow = { version = "26.0.0", features = ["prettyprint"] }
+arrow = { version = "27.0.0", features = ["prettyprint"] }
 async-compression = { version = "0.3.14", features = ["bzip2", "gzip", "futures-io", "tokio"] }
 async-trait = "0.1.41"
 bytes = "1.1"
@@ -98,7 +98,7 @@ url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]
-arrow = { version = "26.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
+arrow = { version = "27.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
 async-trait = "0.1.53"
 criterion = "0.4"
 csv = "1.1.6"

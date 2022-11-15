@@ -40,7 +40,7 @@ unicode_expressions = ["unicode-segmentation"]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-arrow = { version = "26.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
+arrow = { version = "27.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
 arrow-buffer = "26.0.0"
 arrow-schema = "26.0.0"
 blake2 = { version = "^0.10.2", optional = true }
@@ -63,7 +63,7 @@ unicode-segmentation = { version = "^1.7.1", optional = true }
 uuid = { version = "^1.2", features = ["v4"] }
 
 [dev-dependencies]
-arrow = { version = "26.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
+arrow = { version = "27.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
 criterion = "0.4"
 rand = "0.8"
 

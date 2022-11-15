@@ -34,7 +34,7 @@ path = "examples/avro_sql.rs"
 required-features = ["datafusion/avro"]
 
 [dev-dependencies]
-arrow = "26.0.0"
+arrow = "27.0.0"
 arrow-flight = "26.0.0"
 async-trait = "0.1.41"
 datafusion = { path = "../datafusion/core" }
