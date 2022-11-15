@@ -1719,8 +1719,7 @@ version = "27.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54bd654e4ff294122f6d64938f400a433aee755433e6d9cb28b1861781ea1a3b"
 dependencies = [
-<<<<<<< HEAD
- "ahash 0.8.1",
+ "ahash 0.8.2",
  "arrow-array",
  "arrow-buffer",
  "arrow-cast",
@@ -1728,10 +1727,6 @@ dependencies = [
  "arrow-ipc",
  "arrow-schema",
  "arrow-select",
-=======
- "ahash 0.8.2",
- "arrow",
->>>>>>> apache/master
  "base64",
  "brotli",
  "bytes",
