@@ -814,8 +814,6 @@ async fn query_on_string_dictionary() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    // filtering with Time32 and Time64 types
-
     // Expression evaluation
     let sql = "SELECT concat(d1, '-foo') FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
