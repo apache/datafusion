@@ -558,14 +558,12 @@ impl SessionContext {
                 } else {
                     Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
                 };
-                let options = ListingOptions {
-                    format: file_format,
-                    collect_stat: self.copied_config().collect_statistics,
-                    file_extension: file_extension.to_owned(),
-                    target_partitions: self.copied_config().target_partitions,
-                    table_partition_cols: cmd.table_partition_cols.clone(),
-                    file_sort_order: None,
-                };
+                let options = ListingOptions::new(file_format)
+                    .with_collect_stat(self.copied_config().collect_statistics)
+                    .with_file_extension(file_extension)
+                    .with_target_partitions(self.copied_config().target_partitions)
+                    .with_table_partition_cols(cmd.table_partition_cols.clone());
+
                 self.register_listing_table(
                     cmd.name.as_str(),
                     cmd.location.clone(),
