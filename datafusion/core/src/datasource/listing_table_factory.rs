@@ -105,7 +105,7 @@ impl TableProviderFactory for ListingTableFactory {
             target_partitions: copied_config.target_partitions,
             table_partition_cols: cmd.table_partition_cols.clone(),
             file_sort_order: None,
-	};
+        };
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = match provided_schema {
