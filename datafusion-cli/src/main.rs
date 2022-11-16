@@ -16,9 +16,6 @@
 // under the License.
 
 use clap::Parser;
-use datafusion::datasource::datasource::TableProviderFactory;
-use datafusion::datasource::file_format::file_type::FileType;
-use datafusion::datasource::listing_table_factory::ListingTableFactory;
 use datafusion::datasource::object_store::ObjectStoreRegistry;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
@@ -29,7 +26,6 @@ use datafusion_cli::{
     exec, print_format::PrintFormat, print_options::PrintOptions, DATAFUSION_CLI_VERSION,
 };
 use mimalloc::MiMalloc;
-use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::sync::Arc;
