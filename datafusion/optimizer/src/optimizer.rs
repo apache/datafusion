@@ -225,6 +225,12 @@ impl Optimizer {
                 let result = rule.try_optimize(&new_plan, optimizer_config);
                 match result {
                     Ok(Some(plan)) => {
+                        if plan.schema() != new_plan.schema() {
+                            return Err(DataFusionError::Internal(format!(
+                                "Optimizer rule '{}' failed, due to generate a different schema",
+                                rule.name(),
+                            )));
+                        }
                         new_plan = plan;
                         observer(&new_plan, rule.as_ref());
                         log_plan(rule.name(), &new_plan);
