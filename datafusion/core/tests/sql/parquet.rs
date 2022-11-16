@@ -57,10 +57,8 @@ async fn parquet_with_sort_order_specified() {
     let target_partitions = 2;
 
     // The sort order is not specified
-    let options_no_sort = ListingOptions {
-        file_sort_order: None,
-        ..parquet_read_options.to_listing_options(target_partitions)
-    };
+    let options_no_sort = ListingOptions::from_options(parquet_read_options.to_listing_options(target_partitions))
+        .with_file_sort_order(None);
 
     // The sort order is specified (not actually correct in this case)
     let file_sort_order = [col("string_col"), col("int_col")]
@@ -72,10 +70,8 @@ async fn parquet_with_sort_order_specified() {
         })
         .collect::<Vec<_>>();
 
-    let options_sort = ListingOptions {
-        file_sort_order: Some(file_sort_order),
-        ..parquet_read_options.to_listing_options(target_partitions)
-    };
+    let options_sort = ListingOptions::from_options(parquet_read_options.to_listing_options(target_partitions))
+        .with_file_sort_order(Some(file_sort_order));
 
     // This string appears in ParquetExec if the output ordering is
     // specified

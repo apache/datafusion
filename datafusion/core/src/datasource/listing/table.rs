@@ -160,14 +160,12 @@ impl ListingTableConfig {
         let (format, file_extension) =
             ListingTableConfig::infer_format(file.location.as_ref())?;
 
-        let listing_options = ListingOptions {
-            format,
-            collect_stat: true,
-            file_extension,
-            target_partitions: ctx.config.target_partitions,
-            table_partition_cols: vec![],
-            file_sort_order: None,
-        };
+        let listing_options = ListingOptions::new(format)
+            .with_collect_stat(true)
+            .with_file_extension(file_extension)
+            .with_target_partitions(ctx.config.target_partitions)
+            .with_table_partition_cols(vec![])
+            .with_file_sort_order(None);
 
         Ok(Self {
             table_paths: self.table_paths,
@@ -254,6 +252,26 @@ impl ListingOptions {
             file_sort_order: None,
         }
     }
+
+    /// Build ListingOptions from an existing set of ListingOptions
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    ///
+    /// let existing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_target_partitions(3);
+    /// 
+    /// let listing_options = ListingOptions::from_options(existing_options)
+    ///     .with_collect_stat(false);
+    ///
+    /// assert_eq!(listing_options.target_partitions, 3);
+    /// assert_eq!(listing_options.collect_stat, false);
+    /// ```
+    pub fn from_options(options: ListingOptions) -> Self {
+        Self { ..options }
+    }
+
     /// Set file extension on [`ListingOptions`] and returns self.
     ///
     /// ```
@@ -773,10 +791,9 @@ mod tests {
         ];
 
         for (file_sort_order, expected_result) in cases {
-            let options = ListingOptions {
-                file_sort_order,
-                ..options.clone()
-            };
+            let options = ListingOptions::from_options(options.clone())
+                .with_file_sort_order(file_sort_order);
+
             let config = ListingTableConfig::new(table_path.clone())
                 .with_listing_options(options)
                 .with_schema(schema.clone());
