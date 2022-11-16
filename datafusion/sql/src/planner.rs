@@ -199,7 +199,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 && table_properties.is_empty()
                 && with_options.is_empty() =>
             {
-                let plan = self.query_to_plan(*query.clone(), &mut HashMap::new())?;
+                let plan = self.query_to_plan(*query, &mut HashMap::new())?;
                 let input_schema = plan.schema();
 
                 let plan = if !columns.is_empty() {
