@@ -5788,7 +5788,7 @@ mod tests {
 
     #[test]
     fn test_one_side_constant_full_join() {
-        // TODO: this sql should transfer to join after
+        // TODO: this sql should be parsed as join after
         // https://github.com/apache/arrow-datafusion/issues/2877 is resolved.
         let sql = "SELECT id, order_id \
             FROM person \
