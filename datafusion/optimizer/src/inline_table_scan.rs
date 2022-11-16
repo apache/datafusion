@@ -56,7 +56,7 @@ impl OptimizerRule for InlineTableScan {
                         utils::optimize_children(self, sub_plan, _optimizer_config)?;
                     let plan = LogicalPlanBuilder::from(plan).project_with_alias(
                         vec![Expr::Wildcard],
-                        Some(table_name.to_string()),
+                        table_name.to_string(),
                     )?;
                     plan.build()
                 } else {

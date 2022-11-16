@@ -267,14 +267,31 @@ impl LogicalPlanBuilder {
         &self,
         expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        self.project_with_alias(expr, None)
+        Ok(Self::from(project(
+            self.plan.clone(),
+            expr,
+        )?))
+    }
+
+    /// Apply a projection with alias
+    pub fn subquery_alias(
+        &self,
+        alias: String,
+    ) -> Result<Self> {
+        let input_schema = (**self.plan.schema()).clone();
+        let new_schema = input_schema.replace_qualifier(alias.as_str());
+        Ok(Self::from(LogicalPlan::SubqueryAlias(SubqueryAlias {
+            input: Arc::new(self.plan.clone()),
+            alias,
+            schema: Arc::new(new_schema),
+        })))
     }
 
     /// Apply a projection with alias
     pub fn project_with_alias(
         &self,
         expr: impl IntoIterator<Item = impl Into<Expr>>,
-        alias: Option<String>,
+        alias: String,
     ) -> Result<Self> {
         Ok(Self::from(project_with_alias(
             self.plan.clone(),
@@ -343,7 +360,10 @@ impl LogicalPlanBuilder {
                 // projected alias.
                 missing_exprs.retain(|e| !expr.contains(e));
                 expr.extend(missing_exprs);
-                Ok(project_with_alias((*input).clone(), expr, alias)?)
+                match alias {
+                    Some(alias) => Ok(project_with_alias((*input).clone(), expr, alias)?),
+                    None => Ok(project((*input).clone(), expr)?)
+                }
             }
             _ => {
                 let new_inputs = curr_plan
@@ -845,14 +865,14 @@ pub(crate) fn validate_unique_names<'a>(
             None => {
                 unique_names.insert(name, (position, expr));
                 Ok(())
-            },
+            }
             Some((existing_position, existing_expr)) => {
                 Err(DataFusionError::Plan(
                     format!("{} require unique expression names \
                              but the expression \"{:?}\" at position {} and \"{:?}\" \
                              at position {} have the same name. Consider aliasing (\"AS\") one of them.",
-                             node_name, existing_expr, existing_position, expr, position,
-                            )
+                            node_name, existing_expr, existing_position, expr, position,
+                    )
                 ))
             }
         }
@@ -906,12 +926,12 @@ pub fn union_with_alias(
                 comparison_coercion(left_field.data_type(), right_field.data_type())
                     .ok_or_else(|| {
                         DataFusionError::Plan(format!(
-                    "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
-                    right_field.name(),
-                    right_field.data_type(),
-                    left_field.name(),
-                    left_field.data_type()
-                ))
+                            "UNION Column {} (type: {}) is not compatible with column {} (type: {})",
+                            right_field.name(),
+                            right_field.data_type(),
+                            left_field.name(),
+                            left_field.data_type()
+                        ))
                     })?;
 
             Ok(DFField::new(
@@ -961,15 +981,14 @@ pub fn union_with_alias(
     }))
 }
 
-/// Project with optional alias
+/// Project without alias
 /// # Errors
 /// This function errors under any of the following conditions:
 /// * Two or more expressions have the same name
 /// * An invalid expression is used (e.g. a `sort` expression)
-pub fn project_with_alias(
+pub fn project(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = impl Into<Expr>>,
-    alias: Option<String>,
 ) -> Result<LogicalPlan> {
     let input_schema = plan.schema();
     let mut projected_expr = vec![];
@@ -986,20 +1005,37 @@ pub fn project_with_alias(
         }
     }
     validate_unique_names("Projections", projected_expr.iter())?;
-    let input_schema = DFSchema::new_with_metadata(
+    let schema = DFSchema::new_with_metadata(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),
     )?;
-    let schema = match alias {
-        Some(ref alias) => input_schema.replace_qualifier(alias.as_str()),
-        None => input_schema,
-    };
 
     Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         projected_expr,
         Arc::new(plan.clone()),
         DFSchemaRef::new(schema),
-        alias,
+        None,
+    )?))
+}
+
+/// Project with optional alias
+/// # Errors
+/// This function errors under any of the following conditions:
+/// * Two or more expressions have the same name
+/// * An invalid expression is used (e.g. a `sort` expression)
+pub fn project_with_alias(
+    plan: LogicalPlan,
+    expr: impl IntoIterator<Item = impl Into<Expr>>,
+    alias: String,
+) -> Result<LogicalPlan> {
+    let project = project(plan, expr)?;
+    let schema = (**project.schema()).clone().replace_qualifier(alias.as_str());
+
+    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+        project.expressions(),
+        Arc::new(project),
+        DFSchemaRef::new(schema),
+        Some(alias),
     )?))
 }
 
@@ -1319,14 +1355,14 @@ mod tests {
             // project id and first_name by column index
             Some(vec![0, 1]),
         )?
-        // two columns with the same name => error
-        .project(vec![col("id"), col("first_name").alias("id")]);
+            // two columns with the same name => error
+            .project(vec![col("id"), col("first_name").alias("id")]);
 
         match plan {
             Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                qualifier,
-                name,
-            })) => {
+                                                 qualifier,
+                                                 name,
+                                             })) => {
                 assert_eq!("employee_csv", qualifier.unwrap().as_str());
                 assert_eq!("id", &name);
                 Ok(())
@@ -1345,14 +1381,14 @@ mod tests {
             // project state and salary by column index
             Some(vec![3, 4]),
         )?
-        // two columns with the same name => error
-        .aggregate(vec![col("state")], vec![sum(col("salary")).alias("state")]);
+            // two columns with the same name => error
+            .aggregate(vec![col("state")], vec![sum(col("salary")).alias("state")]);
 
         match plan {
             Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
-                qualifier,
-                name,
-            })) => {
+                                                 qualifier,
+                                                 name,
+                                             })) => {
                 assert_eq!("employee_csv", qualifier.unwrap().as_str());
                 assert_eq!("state", &name);
                 Ok(())

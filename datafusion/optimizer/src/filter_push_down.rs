@@ -1208,7 +1208,7 @@ mod tests {
     fn union_all_on_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
         let table = LogicalPlanBuilder::from(table_scan)
-            .project_with_alias(vec![col("a").alias("b")], Some("test2".to_string()))?;
+            .project_with_alias(vec![col("a").alias("b")], "test2".to_string())?;
 
         let plan = table
             .union(table.build()?)?
@@ -2316,8 +2316,8 @@ mod tests {
     fn test_propagation_of_optimized_inner_filters_with_projections() -> Result<()> {
         // SELECT a FROM (SELECT 1 AS a) b WHERE b.a = 1
         let plan = LogicalPlanBuilder::empty(true)
-            .project_with_alias(vec![lit(0i64).alias("a")], Some("b".to_owned()))?
-            .project_with_alias(vec![col("b.a")], Some("b".to_owned()))?
+            .project_with_alias(vec![lit(0i64).alias("a")], "b".to_owned())?
+            .project_with_alias(vec![col("b.a")], "b".to_owned())?
             .filter(col("b.a").eq(lit(1i64)))?
             .project(vec![col("b.a")])?
             .build()?;

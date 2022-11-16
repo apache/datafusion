@@ -50,6 +50,7 @@ impl OptimizerRule for ProjectionPushDown {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        let str = format!("{:?}", plan);
         // set of all columns referred by the plan (and thus considered required by the root)
         let required_columns = plan
             .schema()

@@ -51,7 +51,7 @@ use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
-use datafusion_expr::logical_plan::builder::project_with_alias;
+use datafusion_expr::logical_plan::builder::{project, project_with_alias};
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
 
@@ -772,7 +772,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Some(cte_alias) => project_with_alias(
                                 cte_plan.clone(),
                                 vec![Expr::Wildcard],
-                                Some(cte_alias),
+                                cte_alias,
                             ),
                             _ => Ok(cte_plan.clone()),
                         },
@@ -800,18 +800,32 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     ctes,
                     outer_query_schema,
                 )?;
-                (
-                    project_with_alias(
-                        logical_plan.clone(),
-                        logical_plan
-                            .schema()
-                            .fields()
-                            .iter()
-                            .map(|field| col(field.name())),
-                        normalized_alias,
-                    )?,
-                    alias,
-                )
+                match normalized_alias {
+                    Some(normalized_alias) => (
+                        project_with_alias(
+                            logical_plan.clone(),
+                            logical_plan
+                                .schema()
+                                .fields()
+                                .iter()
+                                .map(|field| col(field.name())),
+                            normalized_alias,
+                        )?,
+                        alias,
+                    ),
+                    None => (
+                        project(
+                            logical_plan.clone(),
+                            logical_plan
+                                .schema()
+                                .fields()
+                                .iter()
+                                .map(|field| col(field.name())),
+                        )?,
+                        alias
+                    )
+                }
+
             }
             TableFactor::NestedJoin {
                 table_with_joins,
@@ -857,7 +871,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     plan.schema().fields().iter().zip(columns_alias.iter()).map(
                         |(field, ident)| col(field.name()).alias(normalize_ident(ident)),
                     ),
-                    Some(normalize_ident(&alias.name)),
+                    normalize_ident(&alias.name),
                 )?
                 .build()?)
         }
@@ -1199,7 +1213,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // final projection
-        let plan = project_with_alias(plan, select_exprs_post_aggr, alias)?;
+        let plan = match alias {
+            Some(alias) => project_with_alias(plan, select_exprs_post_aggr, alias)?,
+            None => project(plan, select_exprs_post_aggr)?
+        };
 
         // process distinct clause
         let plan = if select.distinct {

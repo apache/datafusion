@@ -56,13 +56,15 @@ where c_acctbal < (
       Inner Join: customer.c_custkey = __sq_2.o_custkey
         TableScan: customer projection=[c_custkey, c_acctbal]
         Projection: orders.o_custkey, SUM(orders.o_totalprice) AS __value, alias=__sq_2
-          Aggregate: groupBy=[[orders.o_custkey]], aggr=[[SUM(orders.o_totalprice)]]
-            Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __sq_1.__value
-              Inner Join: orders.o_orderkey = __sq_1.l_orderkey
-                TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]
-                Projection: lineitem.l_orderkey, SUM(lineitem.l_extendedprice) AS price AS __value, alias=__sq_1
-                  Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_extendedprice)]]
-                    TableScan: lineitem projection=[l_orderkey, l_extendedprice]"#
+          Projection: orders.o_custkey
+            Aggregate: groupBy=[[orders.o_custkey]], aggr=[[SUM(orders.o_totalprice)]]
+              Filter: CAST(orders.o_totalprice AS Decimal128(25, 2)) < __sq_1.__value
+                Inner Join: orders.o_orderkey = __sq_1.l_orderkey
+                  TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice]
+                  Projection: lineitem.l_orderkey, SUM(lineitem.l_extendedprice) AS price AS __value, alias=__sq_1
+                    Projection: lineitem.l_orderkey
+                      Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_extendedprice)]]
+                        TableScan: lineitem projection=[l_orderkey, l_extendedprice]"#
         .to_string();
     assert_eq!(actual, expected);
 
@@ -154,15 +156,16 @@ order by s_acctbal desc, n_name, s_name, p_partkey;"#;
         Filter: region.r_name = Utf8("EUROPE")
           TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8("EUROPE")]
       Projection: partsupp.ps_partkey, MIN(partsupp.ps_supplycost) AS __value, alias=__sq_1
-        Aggregate: groupBy=[[partsupp.ps_partkey]], aggr=[[MIN(partsupp.ps_supplycost)]]
-          Inner Join: nation.n_regionkey = region.r_regionkey
-            Inner Join: supplier.s_nationkey = nation.n_nationkey
-              Inner Join: partsupp.ps_suppkey = supplier.s_suppkey
-                TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
-                TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment]
-              TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
-            Filter: region.r_name = Utf8("EUROPE")
-              TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8("EUROPE")]"#
+        Projection: partsupp.ps_partkey
+          Aggregate: groupBy=[[partsupp.ps_partkey]], aggr=[[MIN(partsupp.ps_supplycost)]]
+            Inner Join: nation.n_regionkey = region.r_regionkey
+              Inner Join: supplier.s_nationkey = nation.n_nationkey
+                Inner Join: partsupp.ps_suppkey = supplier.s_suppkey
+                  TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
+                  TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment]
+                TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
+              Filter: region.r_name = Utf8("EUROPE")
+                TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8("EUROPE")]"#
         .to_string();
     assert_eq!(actual, expected);
 
@@ -336,9 +339,10 @@ order by s_name;
                 Filter: part.p_name LIKE Utf8("forest%")
                   TableScan: part projection=[p_partkey, p_name], partial_filters=[part.p_name LIKE Utf8("forest%")]
             Projection: lineitem.l_partkey, lineitem.l_suppkey, Float64(0.5) * CAST(SUM(lineitem.l_quantity) AS Float64) AS __value, alias=__sq_3
-              Aggregate: groupBy=[[lineitem.l_partkey, lineitem.l_suppkey]], aggr=[[SUM(lineitem.l_quantity)]]
-                Filter: lineitem.l_shipdate >= Date32("8766")
-                  TableScan: lineitem projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], partial_filters=[lineitem.l_shipdate >= Date32("8766")]"#
+              Projection: lineitem.l_partkey, lineitem.l_suppkey
+                Aggregate: groupBy=[[lineitem.l_partkey, lineitem.l_suppkey]], aggr=[[SUM(lineitem.l_quantity)]]
+                  Filter: lineitem.l_shipdate >= Date32("8766")
+                    TableScan: lineitem projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], partial_filters=[lineitem.l_shipdate >= Date32("8766")]"#
         .to_string();
     assert_eq!(actual, expected);
 
@@ -383,17 +387,18 @@ order by cntrycode;"#;
   Projection: custsale.cntrycode, COUNT(UInt8(1)) AS numcust, SUM(custsale.c_acctbal) AS totacctbal
     Aggregate: groupBy=[[custsale.cntrycode]], aggr=[[COUNT(UInt8(1)), SUM(custsale.c_acctbal)]]
       Projection: cntrycode, customer.c_acctbal, alias=custsale
-        Projection: substr(customer.c_phone, Int64(1), Int64(2)) AS cntrycode, customer.c_acctbal
-          Filter: CAST(customer.c_acctbal AS Decimal128(19, 6)) > __sq_1.__value
-            CrossJoin:
-              LeftAnti Join: customer.c_custkey = orders.o_custkey
-                Filter: substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
-                  TableScan: customer projection=[c_custkey, c_phone, c_acctbal], partial_filters=[substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])]
-                TableScan: orders projection=[o_custkey]
-              Projection: AVG(customer.c_acctbal) AS __value, alias=__sq_1
-                Aggregate: groupBy=[[]], aggr=[[AVG(customer.c_acctbal)]]
-                  Filter: customer.c_acctbal > Decimal128(Some(0),15,2) AND substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
-                    TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[CAST(customer.c_acctbal AS Decimal128(30, 15)) > Decimal128(Some(0),30,15), substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")]), customer.c_acctbal > Decimal128(Some(0),15,2)]"#
+        Projection: cntrycode, customer.c_acctbal
+          Projection: substr(customer.c_phone, Int64(1), Int64(2)) AS cntrycode, customer.c_acctbal
+            Filter: CAST(customer.c_acctbal AS Decimal128(19, 6)) > __sq_1.__value
+              CrossJoin:
+                LeftAnti Join: customer.c_custkey = orders.o_custkey
+                  Filter: substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
+                    TableScan: customer projection=[c_custkey, c_phone, c_acctbal], partial_filters=[substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])]
+                  TableScan: orders projection=[o_custkey]
+                Projection: AVG(customer.c_acctbal) AS __value, alias=__sq_1
+                  Aggregate: groupBy=[[]], aggr=[[AVG(customer.c_acctbal)]]
+                    Filter: customer.c_acctbal > Decimal128(Some(0),15,2) AND substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
+                      TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[CAST(customer.c_acctbal AS Decimal128(30, 15)) > Decimal128(Some(0),30,15), substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")]), customer.c_acctbal > Decimal128(Some(0),15,2)]"#
         .to_string();
     assert_eq!(expected, actual);
 

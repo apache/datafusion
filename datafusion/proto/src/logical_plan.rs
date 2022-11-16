@@ -345,16 +345,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .iter()
                     .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
-                LogicalPlanBuilder::from(input)
-                    .project_with_alias(
-                        x,
-                        projection.optional_alias.as_ref().map(|a| match a {
-                            protobuf::projection_node::OptionalAlias::Alias(alias) => {
-                                alias.clone()
-                            }
-                        }),
-                    )?
-                    .build()
+
+                let alias_opt = projection.optional_alias.as_ref().map(|a| match a {
+                    protobuf::projection_node::OptionalAlias::Alias(alias) => {
+                        alias.clone()
+                    }});
+
+                match alias_opt {
+                    Some(alias) => LogicalPlanBuilder::from(input)
+                        .project_with_alias(x, alias)?
+                        .build(),
+                    None => LogicalPlanBuilder::from(input)
+                        .project(x)?
+                        .build(),
+                }
             }
             LogicalPlanType::Selection(selection) => {
                 let input: LogicalPlan =
