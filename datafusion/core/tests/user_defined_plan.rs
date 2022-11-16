@@ -58,6 +58,7 @@
 //! N elements, reducing the total amount of required buffer memory.
 //!
 
+use datafusion_common::cast::as_string_array;
 use futures::{Stream, StreamExt};
 
 use arrow::{
@@ -546,11 +547,8 @@ fn accumulate_batch(
     // Assuming the input columns are
     // column[0]: customer_id / UTF8
     // column[1]: revenue: Int64
-    let customer_id = input_batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("Column 0 is not customer_id");
+    let customer_id =
+        as_string_array(input_batch.column(0)).expect("Column 0 is not customer_id");
 
     let revenue = as_int64_array(input_batch.column(1)).unwrap();
 

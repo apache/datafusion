@@ -19,6 +19,7 @@ use std::{fs, path::Path};
 
 use ::parquet::arrow::ArrowWriter;
 use datafusion::datasource::listing::ListingOptions;
+use datafusion_common::cast::as_string_array;
 use tempfile::TempDir;
 
 use super::*;
@@ -257,11 +258,7 @@ async fn parquet_list_columns() {
     );
 
     assert_eq!(
-        utf8_list_array
-            .value(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap(),
+        as_string_array(&utf8_list_array.value(0)).unwrap(),
         &StringArray::try_from(vec![Some("abc"), Some("efg"), Some("hij"),]).unwrap()
     );
 
@@ -286,7 +283,7 @@ async fn parquet_list_columns() {
     );
 
     let result = utf8_list_array.value(2);
-    let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+    let result = as_string_array(&result).unwrap();
 
     assert_eq!(result.value(0), "efg");
     assert!(result.is_null(1));
