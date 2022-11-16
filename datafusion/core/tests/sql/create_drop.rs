@@ -81,17 +81,12 @@ async fn create_table_with_schema_as_select_mismatch() -> Result<()> {
 
     let sql = "CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) \
     AS SELECT * FROM aggregate_simple";
-    let expected_err = ctx.sql(sql).await;
-    if let Err(DataFusionError::Plan(err_msg)) = expected_err {
-        if err_msg
-            == "Mismatch: 4 columns specified, but result has 3 columns".to_string()
-        {
-            return Ok(());
-        }
-    }
-    Err(DataFusionError::Internal(
-        "Result isn't as expected".to_string(),
-    ))
+    let expected_err = ctx.sql(sql).await.unwrap_err();
+    assert_contains!(
+        expected_err.to_string(),
+        "Mismatch: 4 columns specified, but result has 3 columns"
+    );
+    Ok(())
 }
 
 #[tokio::test]
