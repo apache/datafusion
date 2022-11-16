@@ -32,6 +32,7 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
 };
 use datafusion_expr::expr::{BinaryExpr, Cast};
+use datafusion_expr::round_ws_digits;
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
@@ -937,7 +938,14 @@ pub fn parse_expr(
                 ScalarFunction::Log10 => Ok(log10(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Floor => Ok(floor(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], registry)?)),
-                ScalarFunction::Round => Ok(round(parse_expr(&args[0], registry)?)),
+                ScalarFunction::Round => Ok(if args.len() < 2 {
+                    round(parse_expr(&args[0], registry)?)
+                } else {
+                    round_ws_digits(
+                        parse_expr(&args[0], registry)?,
+                        parse_expr(&args[1], registry)?,
+                    )
+                }),
                 ScalarFunction::Trunc => Ok(trunc(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Abs => Ok(abs(parse_expr(&args[0], registry)?)),
                 ScalarFunction::Signum => Ok(signum(parse_expr(&args[0], registry)?)),

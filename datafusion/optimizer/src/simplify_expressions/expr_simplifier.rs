@@ -29,7 +29,8 @@ use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarVa
 use datafusion_expr::{
     and,
     expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
-    lit, or, BinaryExpr, BuiltinScalarFunction, ColumnarValue, Expr, Volatility,
+    lit, or, power, round, BinaryExpr, BuiltinScalarFunction, Cast, ColumnarValue, Expr,
+    Volatility,
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
@@ -726,6 +727,30 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                     fun: BuiltinScalarFunction::ConcatWithSeparator,
                     args,
                 },
+            },
+
+            // unfold the expression round(source, n)
+            Expr::ScalarFunction {
+                fun: BuiltinScalarFunction::Round,
+                args,
+            } => match &args[..] {
+                [source, n] => {
+                    println!("I am here, source = {:?}, n = {:?}", source, n);
+                    let exp = Box::new(power(
+                        lit(10.0),
+                        Expr::Cast(Cast::new(n.clone().into(), DataType::Float64)),
+                    ));
+                    Expr::BinaryExpr(BinaryExpr {
+                        left: Box::new(round(Expr::BinaryExpr(BinaryExpr {
+                            left: Box::new(source.clone()),
+                            op: Multiply,
+                            right: exp.clone(),
+                        }))),
+                        op: Divide,
+                        right: exp,
+                    })
+                }
+                _ => round(args[0].clone()),
             },
 
             //

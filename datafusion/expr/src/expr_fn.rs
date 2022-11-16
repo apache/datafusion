@@ -373,6 +373,7 @@ unary_scalar_expr!(Ln, ln, "natural logarithm");
 scalar_expr!(NullIf, nullif, arg_1, arg_2);
 scalar_expr!(Power, power, base, exponent);
 scalar_expr!(Atan2, atan2, y, x);
+scalar_expr!(Round, round_ws_digits, source, n);
 
 // string functions
 scalar_expr!(Ascii, ascii, string);
@@ -620,7 +621,6 @@ mod test {
         test_unary_scalar_expr!(Atan, atan);
         test_unary_scalar_expr!(Floor, floor);
         test_unary_scalar_expr!(Ceil, ceil);
-        test_unary_scalar_expr!(Round, round);
         test_unary_scalar_expr!(Trunc, trunc);
         test_unary_scalar_expr!(Abs, abs);
         test_unary_scalar_expr!(Signum, signum);
