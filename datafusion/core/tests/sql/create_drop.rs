@@ -431,7 +431,7 @@ async fn create_pipe_delimited_csv_table() -> Result<()> {
 
 #[tokio::test]
 async fn create_custom_table() -> Result<()> {
-    let mut cfg = RuntimeConfig::new(); //.with_table_factories(table_factories);
+    let mut cfg = RuntimeConfig::new();
     cfg.table_factories
         .insert("DELTATABLE".to_string(), Arc::new(TestTableFactory {}));
     let env = RuntimeEnv::new(cfg).unwrap();
