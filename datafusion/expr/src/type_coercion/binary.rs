@@ -98,8 +98,12 @@ pub fn coerce_types(
         | Operator::BitwiseShiftRight
         | Operator::BitwiseShiftLeft => bitwise_coercion(lhs_type, rhs_type),
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {
-            // logical binary boolean operators can only be evaluated in bools
+            // logical binary boolean operators can only be evaluated in bools or nulls
             (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
+            (DataType::Null, DataType::Null) => Some(DataType::Null),
+            (DataType::Boolean, DataType::Null) | (DataType::Null, DataType::Boolean) => {
+                Some(DataType::Boolean)
+            }
             _ => None,
         },
         // logical comparison operators have their own rules, and always return a boolean
@@ -1021,6 +1025,30 @@ mod tests {
             DataType::Boolean,
             Operator::Or,
             DataType::Boolean
+        );
+        test_coercion_binary_rule!(
+            DataType::Boolean,
+            DataType::Null,
+            Operator::And,
+            DataType::Boolean
+        );
+        test_coercion_binary_rule!(
+            DataType::Boolean,
+            DataType::Null,
+            Operator::Or,
+            DataType::Boolean
+        );
+        test_coercion_binary_rule!(
+            DataType::Null,
+            DataType::Null,
+            Operator::Or,
+            DataType::Null
+        );
+        test_coercion_binary_rule!(
+            DataType::Null,
+            DataType::Null,
+            Operator::And,
+            DataType::Null
         );
         Ok(())
     }
