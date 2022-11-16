@@ -192,7 +192,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         SetExpr::Values(_) => {
                             let schema = self.build_schema(columns)?.to_dfschema_ref()?;
                             if schema.fields().len() != input_schema.fields().len() {
-                                return Err(DataFusionError::Plan("Mismatch between schema and batches".to_string()))
+                                return Err(DataFusionError::Plan(format!("Mismatch: {} columns specified, but result has {} columns", schema.fields.len(), input_schema.fields().len()))
                             }
                             let input_fields = input_schema.fields();
                             let project_exprs = schema.fields().iter().zip(input_fields).map(|(field, input_field)| {
