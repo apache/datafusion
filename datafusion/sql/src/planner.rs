@@ -3010,7 +3010,7 @@ fn wrap_projection_for_join_if_necessary(
         .cloned()
         .collect::<Vec<_>>();
 
-    let plan = if expr_join_keys.is_empty().not() {
+    let plan = if !expr_join_keys.is_empty() {
         let mut projection = vec![Expr::Wildcard];
         projection.extend_from_slice(&expr_join_keys);
 
