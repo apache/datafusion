@@ -62,10 +62,7 @@ impl TableProviderFactory for ListingTableFactory {
         };
 
         let options = ListingOptions::new(file_format)
-            .with_collect_stat(true)
-            .with_file_extension(file_extension)
-            .with_target_partitions(1)
-            .with_table_partition_cols(vec![]);
+            .with_file_extension(file_extension);
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = options.infer_schema(state, &table_path).await?;

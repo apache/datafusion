@@ -146,7 +146,6 @@ impl<'a> CsvReadOptions<'a> {
             .with_file_compression_type(self.file_compression_type.to_owned());
 
         ListingOptions::new(Arc::new(file_format))
-            .with_collect_stat(false)
             .with_file_extension(self.file_extension)
             .with_target_partitions(target_partitions)
             .with_table_partition_cols(self.table_partition_cols.clone())
@@ -218,7 +217,6 @@ impl<'a> ParquetReadOptions<'a> {
             .with_skip_metadata(self.skip_metadata);
 
         ListingOptions::new(Arc::new(file_format))
-            .with_collect_stat(true)
             .with_file_extension(self.file_extension)
             .with_target_partitions(target_partitions)
             .with_table_partition_cols(self.table_partition_cols.clone())
@@ -265,7 +263,6 @@ impl<'a> AvroReadOptions<'a> {
         let file_format = AvroFormat::default();
 
         ListingOptions::new(Arc::new(file_format))
-            .with_collect_stat(false)
             .with_file_extension(self.file_extension)
             .with_target_partitions(target_partitions)
             .with_table_partition_cols(self.table_partition_cols.clone())
@@ -336,7 +333,6 @@ impl<'a> NdJsonReadOptions<'a> {
             .with_file_compression_type(self.file_compression_type.to_owned());
 
         ListingOptions::new(Arc::new(file_format))
-            .with_collect_stat(false)
             .with_file_extension(self.file_extension)
             .with_target_partitions(target_partitions)
             .with_table_partition_cols(self.table_partition_cols.clone())
