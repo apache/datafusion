@@ -50,6 +50,7 @@ pub struct ListingSchemaProvider {
     store: Arc<dyn ObjectStore>,
     tables: Arc<Mutex<HashMap<String, Arc<dyn TableProvider>>>>,
     format: String,
+    has_header: bool,
 }
 
 impl ListingSchemaProvider {
@@ -61,12 +62,14 @@ impl ListingSchemaProvider {
     /// `factory`: The `TableProviderFactory` to use to instantiate tables for each subfolder
     /// `store`: The `ObjectStore` containing the table data
     /// `format`: The `FileFormat` of the tables
+    /// `has_header`: Indicates whether the created external table has the has_header flag enabled
     pub fn new(
         authority: String,
         path: object_store::path::Path,
         factory: Arc<dyn TableProviderFactory>,
         store: Arc<dyn ObjectStore>,
         format: String,
+        has_header: bool,
     ) -> Self {
         Self {
             authority,
@@ -75,6 +78,7 @@ impl ListingSchemaProvider {
             store,
             tables: Arc::new(Mutex::new(HashMap::new())),
             format,
+            has_header,
         }
     }
 
@@ -123,7 +127,7 @@ impl ListingSchemaProvider {
                             name: table_name.to_string(),
                             location: table_url,
                             file_type: self.format.clone(),
-                            has_header: false,
+                            has_header: self.has_header,
                             delimiter: ',',
                             table_partition_cols: vec![],
                             if_not_exists: false,

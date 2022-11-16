@@ -15,10 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::io::Write;
 
-use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::test_util::TestTableFactory;
 use tempfile::TempDir;
@@ -433,10 +431,9 @@ async fn create_pipe_delimited_csv_table() -> Result<()> {
 
 #[tokio::test]
 async fn create_custom_table() -> Result<()> {
-    let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
-        HashMap::new();
-    table_factories.insert("deltatable".to_string(), Arc::new(TestTableFactory {}));
-    let cfg = RuntimeConfig::new().with_table_factories(table_factories);
+    let mut cfg = RuntimeConfig::new(); //.with_table_factories(table_factories);
+    cfg.table_factories
+        .insert("DELTATABLE".to_string(), Arc::new(TestTableFactory {}));
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();
     let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
@@ -454,10 +451,9 @@ async fn create_custom_table() -> Result<()> {
 
 #[tokio::test]
 async fn create_external_table_with_ddl() -> Result<()> {
-    let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
-        HashMap::new();
-    table_factories.insert("mocktable".to_string(), Arc::new(TestTableFactory {}));
-    let cfg = RuntimeConfig::new().with_table_factories(table_factories);
+    let mut cfg = RuntimeConfig::new();
+    cfg.table_factories
+        .insert("MOCKTABLE".to_string(), Arc::new(TestTableFactory {}));
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();
     let ctx = SessionContext::with_config_rt(ses, Arc::new(env));

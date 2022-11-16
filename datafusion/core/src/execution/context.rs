@@ -33,6 +33,7 @@ use crate::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
@@ -505,7 +506,7 @@ impl SessionContext {
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
         let state = self.state.read().clone();
-        let file_type = cmd.file_type.to_lowercase();
+        let file_type = cmd.file_type.to_uppercase();
         let factory = &state
             .runtime_env
             .table_factories
@@ -1564,6 +1565,15 @@ impl SessionState {
         }
         let url = url.to_string();
         let format = format.to_string();
+
+        let has_header = config
+            .config_options
+            .read()
+            .get("datafusion.catalog.has_header");
+        let has_header: bool = has_header
+            .map(|x| FromStr::from_str(&x.to_string()).unwrap_or_default())
+            .unwrap_or_default();
+
         let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
         let authority = match url.host_str() {
             Some(host) => format!("{}://{}", url.scheme(), host),
@@ -1581,8 +1591,14 @@ impl SessionState {
             Some(factory) => factory,
             _ => return,
         };
-        let schema =
-            ListingSchemaProvider::new(authority, path, factory.clone(), store, format);
+        let schema = ListingSchemaProvider::new(
+            authority,
+            path,
+            factory.clone(),
+            store,
+            format,
+            has_header,
+        );
         let _ = default_catalog
             .register_schema("default", Arc::new(schema))
             .expect("Failed to register default schema");
@@ -1973,8 +1989,6 @@ impl FunctionRegistry for TaskContext {
 mod tests {
     use super::*;
     use crate::assert_batches_eq;
-    use crate::datasource::datasource::TableProviderFactory;
-    use crate::datasource::listing_table_factory::ListingTableFactory;
     use crate::execution::context::QueryPlanner;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::expressions::AvgAccumulator;
@@ -2239,7 +2253,8 @@ mod tests {
         let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())
-            .set_str("datafusion.catalog.type", "CSV");
+            .set_str("datafusion.catalog.type", "CSV")
+            .set_str("datafusion.catalog.has_header", "true");
         let session_state = SessionState::with_config_rt(cfg, runtime);
         let ctx = SessionContext::with_state(session_state);
         ctx.refresh_catalogs().await?;
