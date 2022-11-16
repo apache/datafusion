@@ -65,6 +65,8 @@ mod row_groups;
 
 pub use metrics::ParquetFileMetrics;
 
+use super::get_output_ordering;
+
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
@@ -236,7 +238,7 @@ impl ExecutionPlan for ParquetExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        get_output_ordering(&self.base_config)
     }
 
     fn with_new_children(
@@ -301,24 +303,29 @@ impl ExecutionPlan for ParquetExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                if let Some(pre) = &self.pruning_predicate {
-                    write!(
-                        f,
-                        "ParquetExec: limit={:?}, partitions={}, predicate={}, projection={}",
-                        self.base_config.limit,
-                        super::FileGroupsDisplay(&self.base_config.file_groups),
-                        pre.predicate_expr(),
-                        super::ProjectSchemaDisplay(&self.projected_schema),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "ParquetExec: limit={:?}, partitions={}, projection={}",
-                        self.base_config.limit,
-                        super::FileGroupsDisplay(&self.base_config.file_groups),
-                        super::ProjectSchemaDisplay(&self.projected_schema),
-                    )
-                }
+                let pruning_predicate_string = self
+                    .pruning_predicate
+                    .as_ref()
+                    // TODO change this to be pruning_predicate rather than 'predicate'
+                    // to avoid confusion
+                    // https://github.com/apache/arrow-datafusion/issues/4020
+                    .map(|pre| format!(", predicate={}", pre.predicate_expr()))
+                    .unwrap_or_default();
+
+                let output_ordering_string = self
+                    .output_ordering()
+                    .map(make_output_ordering_string)
+                    .unwrap_or_default();
+
+                write!(
+                    f,
+                    "ParquetExec: limit={:?}, partitions={}{}{}, projection={}",
+                    self.base_config.limit,
+                    super::FileGroupsDisplay(&self.base_config.file_groups),
+                    pruning_predicate_string,
+                    output_ordering_string,
+                    super::ProjectSchemaDisplay(&self.projected_schema),
+                )
             }
         }
     }
@@ -330,6 +337,20 @@ impl ExecutionPlan for ParquetExec {
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
     }
+}
+
+fn make_output_ordering_string(ordering: &[PhysicalSortExpr]) -> String {
+    use std::fmt::Write;
+    let mut w: String = ", output_ordering=[".into();
+
+    for (i, e) in ordering.iter().enumerate() {
+        if i > 0 {
+            write!(&mut w, ", ").unwrap()
+        }
+        write!(&mut w, "{}", e).unwrap()
+    }
+    write!(&mut w, "]").unwrap();
+    w
 }
 
 /// Implements [`FormatReader`] for a parquet file
@@ -731,6 +752,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
+                output_ordering: None,
             },
             predicate,
             None,
@@ -1260,6 +1282,7 @@ mod tests {
                     limit: None,
                     table_partition_cols: vec![],
                     config_options: ConfigOptions::new().into_shareable(),
+                    output_ordering: None,
                 },
                 None,
                 None,
@@ -1362,6 +1385,7 @@ mod tests {
                     "day".to_owned(),
                 ],
                 config_options: ConfigOptions::new().into_shareable(),
+                output_ordering: None,
             },
             None,
             None,
@@ -1421,6 +1445,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
+                output_ordering: None,
             },
             None,
             None,

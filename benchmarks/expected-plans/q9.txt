@@ -1,8 +1,8 @@
 Sort: profit.nation ASC NULLS LAST, profit.o_year DESC NULLS FIRST
   Projection: profit.nation, profit.o_year, SUM(profit.amount) AS sum_profit
     Aggregate: groupBy=[[profit.nation, profit.o_year]], aggr=[[SUM(profit.amount)]]
-      Projection: profit.nation, profit.o_year, profit.amount, alias=profit
-        Projection: nation.n_name AS nation, datepart(Utf8("YEAR"), orders.o_orderdate) AS o_year, CAST(lineitem.l_extendedprice AS Decimal128(38, 4)) * CAST(Decimal128(Some(100),23,2) - CAST(lineitem.l_discount AS Decimal128(23, 2)) AS Decimal128(38, 4)) - CAST(partsupp.ps_supplycost * lineitem.l_quantity AS Decimal128(38, 4)) AS amount, alias=profit
+      Projection: nation, o_year, amount, alias=profit
+        Projection: nation.n_name AS nation, datepart(Utf8("YEAR"), orders.o_orderdate) AS o_year, CAST(lineitem.l_extendedprice AS Decimal128(38, 4)) * CAST(Decimal128(Some(100),23,2) - CAST(lineitem.l_discount AS Decimal128(23, 2)) AS Decimal128(38, 4)) - CAST(partsupp.ps_supplycost * lineitem.l_quantity AS Decimal128(38, 4)) AS amount
           Inner Join: supplier.s_nationkey = nation.n_nationkey
             Inner Join: lineitem.l_orderkey = orders.o_orderkey
               Inner Join: lineitem.l_suppkey = partsupp.ps_suppkey, lineitem.l_partkey = partsupp.ps_partkey

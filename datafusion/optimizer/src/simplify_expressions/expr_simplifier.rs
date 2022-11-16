@@ -471,6 +471,22 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: Or,
                 right,
             }) if is_false(&right) => *left,
+            // A OR !A ---> true (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Or,
+                right,
+            }) if is_not_of(&right, &left) && !info.nullable(&left)? => {
+                Expr::Literal(ScalarValue::Boolean(Some(true)))
+            }
+            // !A OR A ---> true (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Or,
+                right,
+            }) if is_not_of(&left, &right) && !info.nullable(&right)? => {
+                Expr::Literal(ScalarValue::Boolean(Some(true)))
+            }
             // (..A..) OR A --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -524,6 +540,22 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 op: And,
                 right,
             }) if is_false(&right) => *right,
+            // A AND !A ---> false (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: And,
+                right,
+            }) if is_not_of(&right, &left) && !info.nullable(&left)? => {
+                Expr::Literal(ScalarValue::Boolean(Some(false)))
+            }
+            // !A AND A ---> false (if A not nullable)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: And,
+                right,
+            }) if is_not_of(&left, &right) && !info.nullable(&right)? => {
+                Expr::Literal(ScalarValue::Boolean(Some(false)))
+            }
             // (..A..) AND A --> (..A..)
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -1103,6 +1135,18 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_or_not_self() {
+        // A OR !A if A is not nullable --> true
+        // !A OR A if A is not nullable --> true
+        let expr_a = col("c2_non_null").or(col("c2_non_null").not());
+        let expr_b = col("c2_non_null").not().or(col("c2_non_null"));
+        let expected = lit(true);
+
+        assert_eq!(simplify(expr_a), expected);
+        assert_eq!(simplify(expr_b), expected);
+    }
+
+    #[test]
     fn test_simplify_and_false() {
         let expr_a = lit(false).and(col("c2"));
         let expr_b = col("c2").and(lit(false));
@@ -1125,6 +1169,18 @@ mod tests {
         let expr_a = lit(true).and(col("c2"));
         let expr_b = col("c2").and(lit(true));
         let expected = col("c2");
+
+        assert_eq!(simplify(expr_a), expected);
+        assert_eq!(simplify(expr_b), expected);
+    }
+
+    #[test]
+    fn test_simplify_and_not_self() {
+        // A AND !A if A is not nullable --> false
+        // !A AND A if A is not nullable --> false
+        let expr_a = col("c2_non_null").and(col("c2_non_null").not());
+        let expr_b = col("c2_non_null").not().and(col("c2_non_null"));
+        let expected = lit(false);
 
         assert_eq!(simplify(expr_a), expected);
         assert_eq!(simplify(expr_b), expected);
