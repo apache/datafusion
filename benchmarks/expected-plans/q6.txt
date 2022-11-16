@@ -1,6 +1,4 @@
 Projection: SUM(lineitem.l_extendedprice * lineitem.l_discount) AS revenue
   Aggregate: groupBy=[[]], aggr=[[SUM(lineitem.l_extendedprice * lineitem.l_discount)]]
-    Projection: lineitem.l_extendedprice, lineitem.l_discount
-      Filter: lineitem.l_shipdate >= Date32("8766") AND lineitem.l_shipdate < Date32("9131") AND CAST(lineitem.l_discount AS Decimal128(30, 15))lineitem.l_discount >= Decimal128(Some(49999999999999),30,15) AND CAST(lineitem.l_discount AS Decimal128(30, 15))lineitem.l_discount <= Decimal128(Some(69999999999999),30,15) AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
-        Projection: CAST(lineitem.l_discount AS Decimal128(30, 15)) AS CAST(lineitem.l_discount AS Decimal128(30, 15))lineitem.l_discount, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, lineitem.l_shipdate
-          TableScan: lineitem projection=[l_quantity, l_extendedprice, l_discount, l_shipdate]
+    Filter: lineitem.l_shipdate >= Date32("8766") AND lineitem.l_shipdate < Date32("9131") AND lineitem.l_discount >= Decimal128(Some(5),15,2) AND lineitem.l_discount <= Decimal128(Some(7),15,2) AND lineitem.l_quantity < Decimal128(Some(2400),15,2)
+      TableScan: lineitem projection=[l_quantity, l_extendedprice, l_discount, l_shipdate]

@@ -247,11 +247,16 @@ mod tests {
         eq_properties.add_equal_conditions(new_condition);
         assert_eq!(eq_properties.classes().len(), 1);
         assert_eq!(eq_properties.classes()[0].len(), 2);
+        assert!(eq_properties.classes()[0].contains(&Column::new("a", 0)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("b", 1)));
 
         let new_condition = (&Column::new("b", 1), &Column::new("c", 2));
         eq_properties.add_equal_conditions(new_condition);
         assert_eq!(eq_properties.classes().len(), 1);
         assert_eq!(eq_properties.classes()[0].len(), 3);
+        assert!(eq_properties.classes()[0].contains(&Column::new("a", 0)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("b", 1)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("c", 2)));
 
         let new_condition = (&Column::new("x", 3), &Column::new("y", 4));
         eq_properties.add_equal_conditions(new_condition);
@@ -261,6 +266,11 @@ mod tests {
         eq_properties.add_equal_conditions(new_condition);
         assert_eq!(eq_properties.classes().len(), 1);
         assert_eq!(eq_properties.classes()[0].len(), 5);
+        assert!(eq_properties.classes()[0].contains(&Column::new("a", 0)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("b", 1)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("c", 2)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("x", 3)));
+        assert!(eq_properties.classes()[0].contains(&Column::new("y", 4)));
 
         Ok(())
     }
@@ -301,6 +311,10 @@ mod tests {
         project_equivalence_properties(input_properties, &alias_map, &mut out_properties);
         assert_eq!(out_properties.classes().len(), 1);
         assert_eq!(out_properties.classes()[0].len(), 4);
+        assert!(out_properties.classes()[0].contains(&Column::new("a1", 0)));
+        assert!(out_properties.classes()[0].contains(&Column::new("a2", 1)));
+        assert!(out_properties.classes()[0].contains(&Column::new("a3", 2)));
+        assert!(out_properties.classes()[0].contains(&Column::new("a4", 3)));
 
         Ok(())
     }

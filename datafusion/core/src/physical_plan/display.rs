@@ -167,7 +167,7 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
             ShowMetrics::Aggregated => {
                 if let Some(metrics) = plan.metrics() {
                     let metrics = metrics
-                        .aggregate_by_partition()
+                        .aggregate_by_name()
                         .sorted_for_display()
                         .timestamps_removed();
 

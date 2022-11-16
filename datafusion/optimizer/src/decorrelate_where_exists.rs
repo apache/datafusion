@@ -20,9 +20,11 @@ use crate::utils::{
     verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{context, plan_err, DataFusionError};
-use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::{context, Result};
+use datafusion_expr::{
+    logical_plan::{Filter, JoinType, Subquery},
+    Expr, LogicalPlan, LogicalPlanBuilder,
+};
 use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
@@ -47,7 +49,7 @@ impl DecorrelateWhereExists {
         &self,
         predicate: &Expr,
         optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
+    ) -> Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
         let filters = split_conjunction(predicate);
 
         let mut subqueries = vec![];
@@ -74,7 +76,17 @@ impl OptimizerRule for DecorrelateWhereExists {
         &self,
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<LogicalPlan> {
+    ) -> Result<LogicalPlan> {
+        Ok(self
+            .try_optimize(plan, optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
                 let predicate = filter.predicate();
@@ -91,19 +103,28 @@ impl OptimizerRule for DecorrelateWhereExists {
                 )?);
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
-                    return Ok(optimized_plan);
+                    return Ok(Some(optimized_plan));
                 }
 
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
-                    cur_input = optimize_exists(&subquery, &cur_input, &other_exprs)?;
+                    if let Some(x) = optimize_exists(&subquery, &cur_input, &other_exprs)?
+                    {
+                        cur_input = x;
+                    } else {
+                        return Ok(None);
+                    }
                 }
-                Ok(cur_input)
+                Ok(Some(cur_input))
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, optimizer_config)
+                Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
             }
         }
     }
@@ -132,20 +153,22 @@ fn optimize_exists(
     query_info: &SubqueryInfo,
     outer_input: &LogicalPlan,
     outer_other_exprs: &[Expr],
-) -> datafusion_common::Result<LogicalPlan> {
+) -> Result<Option<LogicalPlan>> {
     let subqry_filter = match query_info.query.subquery.as_ref() {
         LogicalPlan::Distinct(subqry_distinct) => match subqry_distinct.input.as_ref() {
             LogicalPlan::Projection(subqry_proj) => {
                 Filter::try_from_plan(&subqry_proj.input)
             }
-            _ => Err(DataFusionError::NotImplemented(
-                "Subquery currently only supports distinct or projection".to_string(),
-            )),
+            _ => {
+                // Subquery currently only supports distinct or projection
+                return Ok(None);
+            }
         },
         LogicalPlan::Projection(subqry_proj) => Filter::try_from_plan(&subqry_proj.input),
-        _ => Err(DataFusionError::NotImplemented(
-            "Subquery currently only supports distinct or projection".to_string(),
-        )),
+        _ => {
+            // Subquery currently only supports distinct or projection
+            return Ok(None);
+        }
     }
     .map_err(|e| context!("cannot optimize non-correlated subquery", e))?;
 
@@ -159,7 +182,8 @@ fn optimize_exists(
     let (outer_cols, subqry_cols, join_filters) =
         exprs_to_join_cols(&col_exprs, subqry_filter.input().schema(), false)?;
     if subqry_cols.is_empty() || outer_cols.is_empty() {
-        plan_err!("cannot optimize non-correlated subquery")?;
+        // cannot optimize non-correlated subquery
+        return Ok(None);
     }
 
     // build subquery side of join - the thing the subquery was querying
@@ -188,7 +212,7 @@ fn optimize_exists(
     }
 
     let result = new_plan.build()?;
-    Ok(result)
+    Ok(Some(result))
 }
 
 struct SubqueryInfo {
@@ -318,9 +342,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"cannot optimize non-correlated subquery"#;
-
-        assert_optimizer_err(&DecorrelateWhereExists::new(), &plan, expected);
+        assert_optimization_skipped(&DecorrelateWhereExists::new(), &plan);
         Ok(())
     }
 
@@ -339,9 +361,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"cannot optimize non-correlated subquery"#;
-
-        assert_optimizer_err(&DecorrelateWhereExists::new(), &plan, expected);
+        assert_optimization_skipped(&DecorrelateWhereExists::new(), &plan);
         Ok(())
     }
 
@@ -360,9 +380,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"cannot optimize non-correlated subquery"#;
-
-        assert_optimizer_err(&DecorrelateWhereExists::new(), &plan, expected);
+        assert_optimization_skipped(&DecorrelateWhereExists::new(), &plan);
         Ok(())
     }
 
@@ -426,9 +444,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"cannot optimize non-correlated subquery"#;
-
-        assert_optimizer_err(&DecorrelateWhereExists::new(), &plan, expected);
+        assert_optimization_skipped(&DecorrelateWhereExists::new(), &plan);
         Ok(())
     }
 

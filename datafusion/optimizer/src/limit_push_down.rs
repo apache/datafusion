@@ -172,11 +172,7 @@ fn limit_push_down(
             )?))
         }
         (
-            LogicalPlan::Union(Union {
-                inputs,
-                alias,
-                schema,
-            }),
+            LogicalPlan::Union(Union { inputs, schema }),
             Ancestor::FromLimit {
                 skip: ancestor_skip,
                 fetch: Some(ancestor_fetch),
@@ -205,7 +201,6 @@ fn limit_push_down(
                 .collect::<Result<_>>()?;
             Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs,
-                alias: alias.clone(),
                 schema: schema.clone(),
             }))
         }
