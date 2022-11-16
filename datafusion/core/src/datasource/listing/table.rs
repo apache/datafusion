@@ -337,7 +337,7 @@ impl ListingOptions {
         self
     }
 
-    /// Set number of target partitions on [`ListingOptions`] and returns self.
+    /// Set file sort order on [`ListingOptions`] and returns self.
     ///
     /// ```
     /// use std::sync::Arc;
