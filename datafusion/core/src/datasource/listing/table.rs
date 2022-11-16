@@ -160,14 +160,9 @@ impl ListingTableConfig {
         let (format, file_extension) =
             ListingTableConfig::infer_format(file.location.as_ref())?;
 
-        let listing_options = ListingOptions {
-            format,
-            collect_stat: true,
-            file_extension,
-            target_partitions: ctx.config.target_partitions,
-            table_partition_cols: vec![],
-            file_sort_order: None,
-        };
+        let listing_options = ListingOptions::new(format)
+            .with_file_extension(file_extension)
+            .with_target_partitions(ctx.config.target_partitions);
 
         Ok(Self {
             table_paths: self.table_paths,
@@ -254,6 +249,7 @@ impl ListingOptions {
             file_sort_order: None,
         }
     }
+
     /// Set file extension on [`ListingOptions`] and returns self.
     ///
     /// ```
@@ -322,7 +318,7 @@ impl ListingOptions {
         self
     }
 
-    /// Set number of target partitions on [`ListingOptions`] and returns self.
+    /// Set file sort order on [`ListingOptions`] and returns self.
     ///
     /// ```
     /// use std::sync::Arc;
@@ -773,10 +769,8 @@ mod tests {
         ];
 
         for (file_sort_order, expected_result) in cases {
-            let options = ListingOptions {
-                file_sort_order,
-                ..options.clone()
-            };
+            let options = options.clone().with_file_sort_order(file_sort_order);
+
             let config = ListingTableConfig::new(table_path.clone())
                 .with_listing_options(options)
                 .with_schema(schema.clone());
@@ -814,8 +808,7 @@ mod tests {
         let opt = ListingOptions::new(Arc::new(AvroFormat {}))
             .with_file_extension(FileType::AVRO.get_ext())
             .with_table_partition_cols(vec![String::from("p1")])
-            .with_target_partitions(4)
-            .with_collect_stat(true);
+            .with_target_partitions(4);
 
         let table_path = ListingTableUrl::parse("test:///table/").unwrap();
         let file_schema =
@@ -1013,9 +1006,7 @@ mod tests {
 
         let opt = ListingOptions::new(Arc::new(format))
             .with_file_extension("")
-            .with_table_partition_cols(vec![])
-            .with_target_partitions(target_partitions)
-            .with_collect_stat(true);
+            .with_target_partitions(target_partitions);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
@@ -1048,9 +1039,7 @@ mod tests {
 
         let opt = ListingOptions::new(Arc::new(format))
             .with_file_extension("")
-            .with_table_partition_cols(vec![])
-            .with_target_partitions(target_partitions)
-            .with_collect_stat(true);
+            .with_target_partitions(target_partitions);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
