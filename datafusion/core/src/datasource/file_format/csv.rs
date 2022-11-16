@@ -21,7 +21,6 @@ use std::any::Any;
 
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
 use bytes::Buf;
@@ -34,6 +33,7 @@ use object_store::{ObjectMeta, ObjectStore};
 use super::FileFormat;
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
+use crate::datasource::try_merge_schemas;
 use crate::error::Result;
 use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
@@ -144,7 +144,7 @@ impl FileFormat for CsvFormat {
             }
         }
 
-        let merged_schema = Schema::try_merge(schemas)?;
+        let merged_schema = try_merge_schemas(schemas)?;
         Ok(Arc::new(merged_schema))
     }
 

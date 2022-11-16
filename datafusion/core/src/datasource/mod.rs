@@ -28,6 +28,7 @@ pub mod memory;
 pub mod object_store;
 pub mod view;
 
+use arrow::error::ArrowError;
 use futures::Stream;
 
 pub use self::datasource::TableProvider;
@@ -42,6 +43,7 @@ use crate::error::Result;
 pub use crate::logical_expr::TableType;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
+use datafusion_common::DataFusionError;
 use futures::StreamExt;
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
@@ -174,4 +176,42 @@ fn get_col_stats(
             }
         })
         .collect()
+}
+
+/// Specialized copy of Schema::try_merge that supports merging fields that have different,
+/// but compatible, data types
+pub(crate) fn try_merge_schemas(
+    schemas: impl IntoIterator<Item = Schema>,
+) -> Result<Schema> {
+    schemas
+        .into_iter()
+        .try_fold(Schema::empty(), |mut merged, schema| {
+            let Schema { metadata, fields } = schema;
+            for (key, value) in metadata.into_iter() {
+                // merge metadata
+                if let Some(old_val) = merged.metadata.get(&key) {
+                    if old_val != &value {
+                        return Err(DataFusionError::ArrowError(
+                            ArrowError::SchemaError(format!(
+                                "Fail to merge schema due to conflicting metadata. \
+                                         Key '{}' has different values '{}' and '{}'",
+                                key, old_val, value
+                            )),
+                        ));
+                    }
+                }
+                merged.metadata.insert(key, value);
+            }
+            // merge fields
+            for field in fields.into_iter() {
+                let merged_field =
+                    merged.fields.iter_mut().find(|f| f.name() == field.name());
+                match merged_field {
+                    Some(merged_field) => merged_field.try_merge(&field)?,
+                    // found a new field, add to field list
+                    None => merged.fields.push(field),
+                }
+            }
+            Ok(merged)
+        })
 }

@@ -22,7 +22,6 @@ use std::any::Any;
 use std::io::BufReader;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use arrow::json::reader::infer_json_schema_from_iterator;
 use arrow::json::reader::ValueIter;
@@ -35,6 +34,7 @@ use super::FileFormat;
 use super::FileScanConfig;
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
+use crate::datasource::try_merge_schemas;
 use crate::error::Result;
 use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::NdJsonExec;
@@ -123,7 +123,7 @@ impl FileFormat for JsonFormat {
             }
         }
 
-        let schema = Schema::try_merge(schemas)?;
+        let schema = try_merge_schemas(schemas)?;
         Ok(Arc::new(schema))
     }
 

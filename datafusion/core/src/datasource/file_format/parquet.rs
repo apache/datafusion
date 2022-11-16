@@ -39,7 +39,7 @@ use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use crate::arrow::datatypes::{DataType, Field};
-use crate::datasource::{create_max_min_accs, get_col_stats};
+use crate::datasource::{create_max_min_accs, get_col_stats, try_merge_schemas};
 use crate::error::Result;
 use crate::logical_expr::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
@@ -144,9 +144,9 @@ impl FileFormat for ParquetFormat {
         }
 
         let schema = if self.skip_metadata {
-            Schema::try_merge(clear_metadata(schemas))
+            try_merge_schemas(clear_metadata(schemas))
         } else {
-            Schema::try_merge(schemas)
+            try_merge_schemas(schemas)
         }?;
 
         Ok(Arc::new(schema))

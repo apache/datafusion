@@ -20,13 +20,13 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
 use object_store::{GetResult, ObjectMeta, ObjectStore};
 
 use super::FileFormat;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
+use crate::datasource::try_merge_schemas;
 use crate::error::Result;
 use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
@@ -62,7 +62,7 @@ impl FileFormat for AvroFormat {
             };
             schemas.push(schema);
         }
-        let merged_schema = Schema::try_merge(schemas)?;
+        let merged_schema = try_merge_schemas(schemas)?;
         Ok(Arc::new(merged_schema))
     }
 
