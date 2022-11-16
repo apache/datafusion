@@ -96,16 +96,12 @@ impl TableProviderFactory for ListingTableFactory {
             Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
         };
 
-        let copied_config = state.config.clone();
-
-        let options = ListingOptions {
-            format: file_format,
-            collect_stat: copied_config.collect_statistics,
-            file_extension: file_extension.to_owned(),
-            target_partitions: copied_config.target_partitions,
-            table_partition_cols: cmd.table_partition_cols.clone(),
-            file_sort_order: None,
-        };
+        let options = ListingOptions::new(file_format)
+            .with_collect_stat(state.config.collect_statistics)
+            .with_file_extension(file_extension)
+            .with_target_partitions(state.config.target_partitions)
+            .with_table_partition_cols(cmd.table_partition_cols.clone())
+            .with_file_sort_order(None);
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;
         let resolved_schema = match provided_schema {
