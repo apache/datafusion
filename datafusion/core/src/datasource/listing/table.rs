@@ -258,7 +258,7 @@ impl ListingOptions {
     ///
     /// let existing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
     ///     .with_target_partitions(3);
-    /// 
+    ///
     /// let listing_options = ListingOptions::from_options(existing_options)
     ///     .with_collect_stat(false);
     ///
