@@ -58,7 +58,6 @@
 //! N elements, reducing the total amount of required buffer memory.
 //!
 
-use datafusion_common::cast::as_string_array;
 use futures::{Stream, StreamExt};
 
 use arrow::{
@@ -69,7 +68,7 @@ use arrow::{
     util::pretty::pretty_format_batches,
 };
 use datafusion::{
-    common::cast::as_int64_array,
+    common::cast::{as_int64_array, as_string_array},
     common::DFSchemaRef,
     error::{DataFusionError, Result},
     execution::{

@@ -32,7 +32,7 @@ use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{cast::as_string_array, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
@@ -183,7 +183,7 @@ fn make_set(array: &dyn Array) -> Result<Box<dyn Set>> {
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Utf8 => {
-            let array = as_string_array(array);
+            let array = as_string_array(array)?;
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::LargeUtf8 => {

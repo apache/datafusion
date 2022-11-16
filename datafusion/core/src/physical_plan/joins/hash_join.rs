@@ -22,7 +22,7 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        as_dictionary_array, as_string_array, ArrayData, ArrayRef, BooleanArray,
+        as_dictionary_array, ArrayData, ArrayRef, BooleanArray,
         Date32Array, Date64Array, Decimal128Array, DictionaryArray, LargeStringArray,
         PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
@@ -52,6 +52,8 @@ use arrow::array::{
     StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
     UInt8Array,
 };
+
+use datafusion_common::cast::as_string_array;
 
 use hashbrown::raw::RawTable;
 
@@ -1122,9 +1124,9 @@ macro_rules! equal_rows_elem_with_string_dict {
                     .to_usize()
                     .expect("Can not convert index to usize in dictionary");
 
-                (as_string_array(left_array.values()), Some(values_index))
+                (as_string_array(left_array.values()).unwrap(), Some(values_index))
             } else {
-                (as_string_array(left_array.values()), None)
+                (as_string_array(left_array.values()).unwrap(), None)
             }
         };
         let (right_values, right_values_index) = {
@@ -1135,9 +1137,9 @@ macro_rules! equal_rows_elem_with_string_dict {
                     .to_usize()
                     .expect("Can not convert index to usize in dictionary");
 
-                (as_string_array(right_array.values()), Some(values_index))
+                (as_string_array(right_array.values()).unwrap(), Some(values_index))
             } else {
-                (as_string_array(right_array.values()), None)
+                (as_string_array(right_array.values()).unwrap(), None)
             }
         };
 
