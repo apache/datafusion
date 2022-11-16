@@ -772,7 +772,6 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                 args,
             } => match &args[..] {
                 [source, n] => {
-                    println!("I am here, source = {:?}, n = {:?}", source, n);
                     let exp = Box::new(power(
                         lit(10.0),
                         Expr::Cast(Cast::new(n.clone().into(), DataType::Float64)),
