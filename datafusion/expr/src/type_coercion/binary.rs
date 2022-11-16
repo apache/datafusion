@@ -1050,6 +1050,18 @@ mod tests {
             Operator::And,
             DataType::Null
         );
+        test_coercion_binary_rule!(
+            DataType::Null,
+            DataType::Boolean,
+            Operator::And,
+            DataType::Boolean
+        );
+        test_coercion_binary_rule!(
+            DataType::Null,
+            DataType::Boolean,
+            Operator::Or,
+            DataType::Boolean
+        );
         Ok(())
     }
 }
