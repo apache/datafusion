@@ -250,25 +250,6 @@ impl ListingOptions {
         }
     }
 
-    /// Build ListingOptions from an existing set of ListingOptions
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
-    ///
-    /// let existing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_target_partitions(3);
-    ///
-    /// let listing_options = ListingOptions::from_options(existing_options)
-    ///     .with_collect_stat(false);
-    ///
-    /// assert_eq!(listing_options.target_partitions, 3);
-    /// assert_eq!(listing_options.collect_stat, false);
-    /// ```
-    pub fn from_options(options: ListingOptions) -> Self {
-        Self { ..options }
-    }
-
     /// Set file extension on [`ListingOptions`] and returns self.
     ///
     /// ```
@@ -788,7 +769,7 @@ mod tests {
         ];
 
         for (file_sort_order, expected_result) in cases {
-            let options = ListingOptions::from_options(options.clone())
+            let options = options.clone()
                 .with_file_sort_order(file_sort_order);
 
             let config = ListingTableConfig::new(table_path.clone())
