@@ -356,7 +356,7 @@ impl SortPreservingMergeStream {
                 Ok(SortField::new_with_options(data_type, expr.options))
             })
             .collect::<Result<Vec<_>>>()?;
-        let row_converter = RowConverter::new(sort_fields);
+        let row_converter = RowConverter::new(sort_fields)?;
 
         Ok(Self {
             schema,

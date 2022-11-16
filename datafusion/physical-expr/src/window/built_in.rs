@@ -17,6 +17,7 @@
 
 //! Physical exec for built-in window function expressions.
 
+use super::window_frame_state::WindowFrameContext;
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
@@ -113,10 +114,10 @@ impl WindowExpr for BuiltInWindowExpr {
                     .iter()
                     .map(|v| v.slice(partition_range.start, length))
                     .collect::<Vec<_>>();
+                let mut window_frame_ctx = WindowFrameContext::new(&window_frame);
                 // We iterate on each row to calculate window frame range and and window function result
                 for idx in 0..length {
-                    let range = self.calculate_range(
-                        &window_frame,
+                    let range = window_frame_ctx.calculate_range(
                         &slice_order_bys,
                         &sort_options,
                         num_rows,

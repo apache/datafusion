@@ -50,7 +50,7 @@ impl OptimizerRule for ProjectionPushDown {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        // set of all columns refered by the plan (and thus considered required by the root)
+        // set of all columns referred by the plan (and thus considered required by the root)
         let required_columns = plan
             .schema()
             .fields()
@@ -392,11 +392,7 @@ fn optimize_plan(
                 schema: a.schema.clone(),
             }))
         }
-        LogicalPlan::Union(Union {
-            inputs,
-            schema,
-            alias,
-        }) => {
+        LogicalPlan::Union(Union { inputs, schema }) => {
             // UNION inputs will reference the same column with different identifiers, so we need
             // to populate new_required_columns by unqualified column name based on required fields
             // from the resulting UNION output
@@ -438,7 +434,6 @@ fn optimize_plan(
             Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs.iter().cloned().map(Arc::new).collect(),
                 schema: Arc::new(new_schema),
-                alias: alias.clone(),
             }))
         }
         LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {

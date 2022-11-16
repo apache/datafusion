@@ -399,7 +399,7 @@ mod test {
     #[should_panic(expected = "building candidate failed")]
     fn test_filter_candidate_builder_ignore_projected_columns() {
         let testdata = crate::test_util::parquet_test_data();
-        let file = std::fs::File::open(&format!("{}/alltypes_plain.parquet", testdata))
+        let file = std::fs::File::open(format!("{}/alltypes_plain.parquet", testdata))
             .expect("opening file");
 
         let reader = SerializedFileReader::new(file).expect("creating reader");
@@ -423,7 +423,7 @@ mod test {
     #[test]
     fn test_filter_candidate_builder_ignore_complex_types() {
         let testdata = crate::test_util::parquet_test_data();
-        let file = std::fs::File::open(&format!("{}/list_columns.parquet", testdata))
+        let file = std::fs::File::open(format!("{}/list_columns.parquet", testdata))
             .expect("opening file");
 
         let reader = SerializedFileReader::new(file).expect("creating reader");
@@ -447,7 +447,7 @@ mod test {
     #[test]
     fn test_filter_candidate_builder_rewrite_missing_column() {
         let testdata = crate::test_util::parquet_test_data();
-        let file = std::fs::File::open(&format!("{}/alltypes_plain.parquet", testdata))
+        let file = std::fs::File::open(format!("{}/alltypes_plain.parquet", testdata))
             .expect("opening file");
 
         let reader = SerializedFileReader::new(file).expect("creating reader");

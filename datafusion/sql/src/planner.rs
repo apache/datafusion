@@ -93,9 +93,16 @@ pub trait ContextProvider {
     fn get_config_option(&self, variable: &str) -> Option<ScalarValue>;
 }
 
+/// SQL parser options
+#[derive(Debug, Default)]
+pub struct ParserOptions {
+    parse_float_as_decimal: bool,
+}
+
 /// SQL query planner
 pub struct SqlToRel<'a, S: ContextProvider> {
     schema_provider: &'a S,
+    options: ParserOptions,
 }
 
 fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
@@ -138,7 +145,15 @@ fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Create a new query planner
     pub fn new(schema_provider: &'a S) -> Self {
-        SqlToRel { schema_provider }
+        Self::new_with_options(schema_provider, ParserOptions::default())
+    }
+
+    /// Create a new query planner
+    pub fn new_with_options(schema_provider: &'a S, options: ParserOptions) -> Self {
+        SqlToRel {
+            schema_provider,
+            options,
+        }
     }
 
     /// Generate a logical plan from an DataFusion SQL statement
@@ -210,7 +225,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .project(
                             plan.schema().fields().iter().zip(columns.into_iter()).map(
                                 |(field, ident)| {
-                                    col(field.name()).alias(&normalize_ident(&ident))
+                                    col(field.name()).alias(normalize_ident(&ident))
                                 },
                             ),
                         )
@@ -740,7 +755,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
-                    .map(|x| Column::from_name(&normalize_ident(&x)))
+                    .map(|x| Column::from_name(normalize_ident(&x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
                     .join_using(&right, join_type, keys)?
@@ -804,7 +819,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let normalized_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
                 let logical_plan = self.query_to_plan_with_alias(
                     *subquery,
-                    normalized_alias.clone(),
+                    None,
                     ctes,
                     outer_query_schema,
                 )?;
@@ -863,7 +878,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Ok(LogicalPlanBuilder::from(plan.clone())
                 .project_with_alias(
                     plan.schema().fields().iter().zip(columns_alias.iter()).map(
-                        |(field, ident)| col(field.name()).alias(&normalize_ident(ident)),
+                        |(field, ident)| col(field.name()).alias(normalize_ident(ident)),
                     ),
                     Some(normalize_ident(&alias.name)),
                 )?
@@ -1722,7 +1737,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|row| {
                 row.into_iter()
                     .map(|v| match v {
-                        SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
+                        SQLExpr::Value(Value::Number(n, _)) => self.parse_sql_number(&n),
                         SQLExpr::Value(
                             Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
                         ) => Ok(lit(s)),
@@ -1776,7 +1791,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<Expr> {
         match sql {
-            SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
+            SQLExpr::Value(Value::Number(n, _)) => self.parse_sql_number(&n),
             SQLExpr::Value(Value::SingleQuotedString(ref s) | Value::DoubleQuotedString(ref s)) => Ok(lit(s.clone())),
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
             SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Null)),
@@ -2691,6 +2706,51 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    /// Parse number in sql string, convert to Expr::Literal
+    fn parse_sql_number(&self, n: &str) -> Result<Expr> {
+        if n.find('E').is_some() {
+            // not implemented yet
+            // https://github.com/apache/arrow-datafusion/issues/3448
+            Err(DataFusionError::NotImplemented(
+                "sql numeric literals in scientific notation are not supported"
+                    .to_string(),
+            ))
+        } else if let Ok(n) = n.parse::<i64>() {
+            Ok(lit(n))
+        } else if self.options.parse_float_as_decimal {
+            // remove leading zeroes
+            let str = n.trim_start_matches('0');
+            if let Some(i) = str.find('.') {
+                let p = str.len() - 1;
+                let s = str.len() - i - 1;
+                let str = str.replace('.', "");
+                let n = str.parse::<i128>().map_err(|_| {
+                    DataFusionError::from(ParserError(format!(
+                        "Cannot parse {} as i128 when building decimal",
+                        str
+                    )))
+                })?;
+                Ok(Expr::Literal(ScalarValue::Decimal128(
+                    Some(n),
+                    p as u8,
+                    s as u8,
+                )))
+            } else {
+                let number = n.parse::<i128>().map_err(|_| {
+                    DataFusionError::from(ParserError(format!(
+                        "Cannot parse {} as i128 when building decimal",
+                        n
+                    )))
+                })?;
+                Ok(Expr::Literal(ScalarValue::Decimal128(Some(number), 38, 0)))
+            }
+        } else {
+            n.parse::<f64>().map(lit).map_err(|_| {
+                DataFusionError::from(ParserError(format!("Cannot parse {} as f64", n)))
+            })
+        }
+    }
+
     fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
             SQLDataType::Array(inner_sql_type) => {
@@ -2983,21 +3043,6 @@ fn extract_possible_join_keys(
     }
 }
 
-// Parse number in sql string, convert to Expr::Literal
-fn parse_sql_number(n: &str) -> Result<Expr> {
-    // parse first as i64
-    n.parse::<i64>()
-        .map(lit)
-        // if parsing as i64 fails try f64
-        .or_else(|_| n.parse::<f64>().map(lit))
-        .map_err(|_| {
-            DataFusionError::from(ParserError(format!(
-                "Cannot parse {} as i64 or f64",
-                n
-            )))
-        })
-}
-
 /// Wrap projection for a plan, if the join keys contains normal expression.
 fn wrap_projection_for_join_if_necessary(
     join_keys: &[Expr],
@@ -3029,6 +3074,33 @@ mod tests {
     use datafusion_common::assert_contains;
     use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
     use std::any::Any;
+
+    #[test]
+    fn parse_decimals() {
+        let test_data = [
+            ("1", "Int64(1)"),
+            ("001", "Int64(1)"),
+            ("0.1", "Decimal128(Some(1),1,1)"),
+            ("0.01", "Decimal128(Some(1),2,2)"),
+            ("1.0", "Decimal128(Some(10),2,1)"),
+            ("10.01", "Decimal128(Some(1001),4,2)"),
+            (
+                "10000000000000000000.00",
+                "Decimal128(Some(1000000000000000000000),22,2)",
+            ),
+        ];
+        for (a, b) in test_data {
+            let sql = format!("SELECT {}", a);
+            let expected = format!("Projection: {}\n  EmptyRelation", b);
+            quick_test_with_options(
+                &sql,
+                &expected,
+                ParserOptions {
+                    parse_float_as_decimal: true,
+                },
+            );
+        }
+    }
 
     #[test]
     fn select_no_relation() {
@@ -3282,10 +3354,10 @@ mod tests {
                      ) AS a
                    ) AS b";
         let expected = "Projection: b.fn2, b.last_name\
-                        \n  Projection: b.fn2, b.last_name, b.birth_date, alias=b\
-                        \n    Projection: a.fn1 AS fn2, a.last_name, a.birth_date, alias=b\
-                        \n      Projection: a.fn1, a.last_name, a.birth_date, a.age, alias=a\
-                        \n        Projection: person.first_name AS fn1, person.last_name, person.birth_date, person.age, alias=a\
+                        \n  Projection: fn2, a.last_name, a.birth_date, alias=b\
+                        \n    Projection: a.fn1 AS fn2, a.last_name, a.birth_date\
+                        \n      Projection: fn1, person.last_name, person.birth_date, person.age, alias=a\
+                        \n        Projection: person.first_name AS fn1, person.last_name, person.birth_date, person.age\
                         \n          TableScan: person";
         quick_test(sql, expected);
     }
@@ -3302,8 +3374,8 @@ mod tests {
 
         let expected = "Projection: a.fn1, a.age\
                         \n  Filter: a.fn1 = Utf8(\"X\") AND a.age < Int64(30)\
-                        \n    Projection: a.fn1, a.age, alias=a\
-                        \n      Projection: person.first_name AS fn1, person.age, alias=a\
+                        \n    Projection: fn1, person.age, alias=a\
+                        \n      Projection: person.first_name AS fn1, person.age\
                         \n        Filter: person.age > Int64(20)\
                         \n          TableScan: person";
 
@@ -3653,8 +3725,8 @@ mod tests {
             "SELECT * FROM (SELECT first_name, last_name FROM person) AS a GROUP BY first_name, last_name",
             "Projection: a.first_name, a.last_name\
              \n  Aggregate: groupBy=[[a.first_name, a.last_name]], aggr=[[]]\
-             \n    Projection: a.first_name, a.last_name, alias=a\
-             \n      Projection: person.first_name, person.last_name, alias=a\
+             \n    Projection: person.first_name, person.last_name, alias=a\
+             \n      Projection: person.first_name, person.last_name\
              \n        TableScan: person",
         );
     }
@@ -4562,13 +4634,13 @@ mod tests {
             \n  Union\
             \n    Projection: CAST(x.a AS Float64) AS a\
             \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n        Projection: x.a, alias=x\
-            \n          Projection: Int64(1) AS a, alias=x\
+            \n        Projection: a, alias=x\
+            \n          Projection: Int64(1) AS a\
             \n            EmptyRelation\
             \n    Projection: x.a\
             \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n        Projection: x.a, alias=x\
-            \n          Projection: Float64(1.1) AS a, alias=x\
+            \n        Projection: a, alias=x\
+            \n          Projection: Float64(1.1) AS a\
             \n            EmptyRelation";
         quick_test(sql, expected);
     }
@@ -4579,13 +4651,13 @@ mod tests {
         let expected = "Union\
             \n  Projection: CAST(Float64(0) + x.a AS Float64) AS Float64(0) + x.a\
             \n    Aggregate: groupBy=[[CAST(Float64(0) + x.a AS Int32)]], aggr=[[]]\
-            \n      Projection: x.a, alias=x\
-            \n        Projection: Int64(1) AS a, alias=x\
+            \n      Projection: a, alias=x\
+            \n        Projection: Int64(1) AS a\
             \n          EmptyRelation\
             \n  Projection: Float64(2.1) + x.a\
             \n    Aggregate: groupBy=[[Float64(2.1) + x.a]], aggr=[[]]\
-            \n      Projection: x.a, alias=x\
-            \n        Projection: Int64(1) AS a, alias=x\
+            \n      Projection: a, alias=x\
+            \n        Projection: Int64(1) AS a\
             \n          EmptyRelation";
         quick_test(sql, expected);
     }
@@ -4596,13 +4668,13 @@ mod tests {
         let expected = "Union\
             \n  Projection: CAST(x.a AS Float64) AS a1\
             \n    Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n      Projection: x.a, alias=x\
-            \n        Projection: Int64(1) AS a, alias=x\
+            \n      Projection: a, alias=x\
+            \n        Projection: Int64(1) AS a\
             \n          EmptyRelation\
             \n  Projection: x.a AS a1\
             \n    Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n      Projection: x.a, alias=x\
-            \n        Projection: Float64(1.1) AS a, alias=x\
+            \n      Projection: a, alias=x\
+            \n        Projection: Float64(1.1) AS a\
             \n          EmptyRelation";
         quick_test(sql, expected);
     }
@@ -5002,8 +5074,15 @@ mod tests {
     }
 
     fn logical_plan(sql: &str) -> Result<LogicalPlan> {
+        logical_plan_with_options(sql, ParserOptions::default())
+    }
+
+    fn logical_plan_with_options(
+        sql: &str,
+        options: ParserOptions,
+    ) -> Result<LogicalPlan> {
         let dialect = &GenericDialect {};
-        logical_plan_with_dialect(sql, dialect)
+        logical_plan_with_dialect_and_options(sql, dialect, options)
     }
 
     fn logical_plan_with_dialect(
@@ -5016,9 +5095,25 @@ mod tests {
         planner.statement_to_plan(ast.pop_front().unwrap())
     }
 
+    fn logical_plan_with_dialect_and_options(
+        sql: &str,
+        dialect: &dyn Dialect,
+        options: ParserOptions,
+    ) -> Result<LogicalPlan> {
+        let planner = SqlToRel::new_with_options(&MockContextProvider {}, options);
+        let result = DFParser::parse_sql_with_dialect(sql, dialect);
+        let mut ast = result?;
+        planner.statement_to_plan(ast.pop_front().unwrap())
+    }
+
     /// Create logical plan, write with formatter, compare to expected output
     fn quick_test(sql: &str, expected: &str) {
         let plan = logical_plan(sql).unwrap();
+        assert_eq!(format!("{:?}", plan), expected);
+    }
+
+    fn quick_test_with_options(sql: &str, expected: &str, options: ParserOptions) {
+        let plan = logical_plan_with_options(sql, options).unwrap();
         assert_eq!(format!("{:?}", plan), expected);
     }
 

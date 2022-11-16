@@ -546,13 +546,10 @@ pub fn from_plan(
         LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),
         })),
-        LogicalPlan::Union(Union { schema, alias, .. }) => {
-            Ok(LogicalPlan::Union(Union {
-                inputs: inputs.iter().cloned().map(Arc::new).collect(),
-                schema: schema.clone(),
-                alias: alias.clone(),
-            }))
-        }
+        LogicalPlan::Union(Union { schema, .. }) => Ok(LogicalPlan::Union(Union {
+            inputs: inputs.iter().cloned().map(Arc::new).collect(),
+            schema: schema.clone(),
+        })),
         LogicalPlan::Distinct(Distinct { .. }) => Ok(LogicalPlan::Distinct(Distinct {
             input: Arc::new(inputs[0].clone()),
         })),

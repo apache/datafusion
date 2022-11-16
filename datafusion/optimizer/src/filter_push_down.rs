@@ -607,11 +607,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // sort is filter-commutable
             push_down(&state, plan)
         }
-        LogicalPlan::Union(Union {
-            inputs: _,
-            schema,
-            alias: _,
-        }) => {
+        LogicalPlan::Union(Union { inputs: _, schema }) => {
             // union changing all qualifiers while building logical plan so we need
             // to rewrite filters to push unqualified columns to inputs
             let projection = schema
@@ -716,7 +712,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                             // replace keys in join_cols_to_replace with values in resulting column
                             // set
                             .filter(|c| !join_cols_to_replace.contains_key(c))
-                            .chain(join_cols_to_replace.iter().map(|(_, v)| (*v).clone()))
+                            .chain(join_cols_to_replace.values().map(|v| (*v).clone()))
                             .collect();
 
                         Some(Ok((join_side_predicate, join_side_columns)))

@@ -193,14 +193,15 @@ pub fn with_new_children_if_necessary(
     expr: Arc<dyn PhysicalExpr>,
     children: Vec<Arc<dyn PhysicalExpr>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    if children.len() != expr.children().len() {
+    let old_children = expr.children();
+    if children.len() != old_children.len() {
         Err(DataFusionError::Internal(
             "PhysicalExpr: Wrong number of children".to_string(),
         ))
     } else if children.is_empty()
         || children
             .iter()
-            .zip(expr.children().iter())
+            .zip(old_children.iter())
             .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
     {
         expr.with_new_children(children)

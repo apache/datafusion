@@ -33,6 +33,8 @@ use datafusion_expr::WindowFrame;
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use crate::{window::WindowExpr, AggregateExpr};
 
+use super::window_frame_state::WindowFrameContext;
+
 /// A window expr that takes the form of an aggregate function
 #[derive(Debug)]
 pub struct AggregateWindowExpr {
@@ -114,13 +116,13 @@ impl WindowExpr for AggregateWindowExpr {
                 .map(|v| v.slice(partition_range.start, length))
                 .collect::<Vec<_>>();
 
+            let mut window_frame_ctx = WindowFrameContext::new(&window_frame);
             let mut last_range: (usize, usize) = (0, 0);
 
             // We iterate on each row to perform a running calculation.
             // First, cur_range is calculated, then it is compared with last_range.
             for i in 0..length {
-                let cur_range = self.calculate_range(
-                    &window_frame,
+                let cur_range = window_frame_ctx.calculate_range(
                     &slice_order_bys,
                     &sort_options,
                     length,
