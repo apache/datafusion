@@ -274,6 +274,13 @@ impl PhysicalOptimizerRule for JoinSelection {
     }
 }
 
+/// Try to create the PartitionMode::CollectLeft HashJoinExec when possible.
+/// The method will first consider the current join type and check whether it is applicable to run CollectLeft mode
+/// and will try to swap the join if the orignal type is unapplicable to run CollectLeft.
+/// When the collect_threshold is provided, the method will also check both the left side and right side sizes
+///
+/// For [JoinType::Full], it is alway unable to run CollectLeft mode and will return None.
+/// For [JoinType::Left] and [JoinType::LeftAnti], can not run CollectLeft mode, should swap join type to [JoinType::Right] and [JoinType::RightAnti]
 fn try_collect_left(
     hash_join: &HashJoinExec,
     collect_threshold: Option<usize>,
