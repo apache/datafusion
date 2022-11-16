@@ -181,8 +181,14 @@ fn create_case_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
-fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
+fn create_join_context(
+    column_left: &str,
+    column_right: &str,
+    repartition_joins: bool,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::with_config(
+        SessionConfig::new().with_repartition_joins(repartition_joins),
+    );
 
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new(column_left, DataType::UInt32, true),

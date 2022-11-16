@@ -216,27 +216,33 @@ impl PhysicalOptimizerRule for JoinSelection {
         let collect_left_threshold = session_config.hash_join_collect_left_threshold;
         plan.transform_up(&|plan| {
             if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
-                if matches!(hash_join.partition_mode(), PartitionMode::Auto) {
-                    try_collect_left(hash_join, collect_left_threshold)
+                match hash_join.partition_mode() {
+                    PartitionMode::Auto => {
+                        try_collect_left(hash_join, Some(collect_left_threshold))
+                            .unwrap()
+                            .or_else(|| Some(partitioned_hash_join(hash_join).unwrap()))
+                    }
+                    PartitionMode::CollectLeft => try_collect_left(hash_join, None)
                         .unwrap()
-                        .or_else(|| Some(partitioned_hash_join(hash_join).unwrap()))
-                } else {
-                    let left = hash_join.left();
-                    let right = hash_join.right();
-                    if should_swap_join_order(&**left, &**right)
-                        && supports_swap(*hash_join.join_type())
-                    {
-                        Some(
-                            swap_hash_join(
-                                hash_join,
-                                *hash_join.partition_mode(),
-                                left,
-                                right,
+                        .or_else(|| Some(partitioned_hash_join(hash_join).unwrap())),
+                    PartitionMode::Partitioned => {
+                        let left = hash_join.left();
+                        let right = hash_join.right();
+                        if should_swap_join_order(&**left, &**right)
+                            && supports_swap(*hash_join.join_type())
+                        {
+                            Some(
+                                swap_hash_join(
+                                    hash_join,
+                                    PartitionMode::Partitioned,
+                                    left,
+                                    right,
+                                )
+                                .unwrap(),
                             )
-                            .unwrap(),
-                        )
-                    } else {
-                        None
+                        } else {
+                            None
+                        }
                     }
                 }
             } else if let Some(cross_join) = plan.as_any().downcast_ref::<CrossJoinExec>()
@@ -270,12 +276,32 @@ impl PhysicalOptimizerRule for JoinSelection {
 
 fn try_collect_left(
     hash_join: &HashJoinExec,
-    collect_left_threshold: usize,
+    collect_threshold: Option<usize>,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     let left = hash_join.left();
     let right = hash_join.right();
-    let left_can_collect = supports_collect_by_size(&**left, collect_left_threshold);
-    let right_can_collect = supports_collect_by_size(&**right, collect_left_threshold);
+    let join_type = hash_join.join_type();
+
+    let left_can_collect = match join_type {
+        JoinType::Left | JoinType::Full | JoinType::LeftAnti => false,
+        JoinType::Inner
+        | JoinType::LeftSemi
+        | JoinType::Right
+        | JoinType::RightSemi
+        | JoinType::RightAnti => collect_threshold.map_or(true, |threshold| {
+            supports_collect_by_size(&**left, threshold)
+        }),
+    };
+    let right_can_collect = match join_type {
+        JoinType::Right | JoinType::Full | JoinType::RightAnti => false,
+        JoinType::Inner
+        | JoinType::RightSemi
+        | JoinType::Left
+        | JoinType::LeftSemi
+        | JoinType::LeftAnti => collect_threshold.map_or(true, |threshold| {
+            supports_collect_by_size(&**right, threshold)
+        }),
+    };
     match (left_can_collect, right_can_collect) {
         (true, true) => {
             if should_swap_join_order(&**left, &**right)
@@ -497,6 +523,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_left_join_with_swap() {
+        let (big, small) = create_big_and_small();
+        // Left out join should alway swap when the mode is PartitionMode::CollectLeft, even left side is small and right side is large
+        let join = HashJoinExec::try_new(
+            Arc::clone(&small),
+            Arc::clone(&big),
+            vec![(
+                Column::new_with_schema("small_col", &small.schema()).unwrap(),
+                Column::new_with_schema("big_col", &big.schema()).unwrap(),
+            )],
+            None,
+            &JoinType::Left,
+            PartitionMode::CollectLeft,
+            &false,
+        )
+        .unwrap();
+
+        let optimized_join = JoinSelection::new()
+            .optimize(Arc::new(join), &SessionConfig::new())
+            .unwrap();
+
+        let swapping_projection = optimized_join
+            .as_any()
+            .downcast_ref::<ProjectionExec>()
+            .expect("A proj is required to swap columns back to their original order");
+
+        assert_eq!(swapping_projection.expr().len(), 2);
+        println!("swapping_projection {:?}", swapping_projection);
+        let (col, name) = &swapping_projection.expr()[0];
+        assert_eq!(name, "small_col");
+        assert_col_expr(col, "small_col", 1);
+        let (col, name) = &swapping_projection.expr()[1];
+        assert_eq!(name, "big_col");
+        assert_col_expr(col, "big_col", 0);
+
+        let swapped_join = swapping_projection
+            .input()
+            .as_any()
+            .downcast_ref::<HashJoinExec>()
+            .expect("The type of the plan should not be changed");
+
+        assert_eq!(
+            swapped_join.left().statistics().total_byte_size,
+            Some(100000)
+        );
+        assert_eq!(swapped_join.right().statistics().total_byte_size, Some(10));
+    }
+
+    #[tokio::test]
     async fn test_join_with_swap_semi() {
         let join_types = [JoinType::LeftSemi, JoinType::LeftAnti];
         for join_type in join_types {
@@ -511,7 +586,7 @@ mod tests {
                 )],
                 None,
                 &join_type,
-                PartitionMode::CollectLeft,
+                PartitionMode::Partitioned,
                 &false,
             )
             .unwrap();
@@ -620,7 +695,6 @@ mod tests {
     #[tokio::test]
     async fn test_join_no_swap() {
         let (big, small) = create_big_and_small();
-
         let join = HashJoinExec::try_new(
             Arc::clone(&small),
             Arc::clone(&big),
@@ -629,7 +703,7 @@ mod tests {
                 Column::new_with_schema("big_col", &big.schema()).unwrap(),
             )],
             None,
-            &JoinType::Left,
+            &JoinType::Inner,
             PartitionMode::CollectLeft,
             &false,
         )
@@ -854,7 +928,7 @@ mod tests {
             right,
             on,
             None,
-            &JoinType::Left,
+            &JoinType::Inner,
             PartitionMode::Auto,
             &false,
         )

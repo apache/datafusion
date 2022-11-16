@@ -939,7 +939,7 @@ impl DefaultPhysicalPlanner {
                         // Sort-Merge join support currently is experimental
                         if join_filter.is_some() {
                             // TODO SortMergeJoinExec need to support join filter
-                            Err(DataFusionError::Plan("SortMergeJoinExec does not support join_filter now.".to_string()))
+                            Err(DataFusionError::NotImplemented("SortMergeJoinExec does not support join_filter now.".to_string()))
                         } else {
                             let join_on_len = join_on.len();
                             Ok(Arc::new(SortMergeJoinExec::try_new(
