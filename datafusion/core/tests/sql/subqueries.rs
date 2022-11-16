@@ -382,8 +382,8 @@ order by cntrycode;"#;
     let expected = r#"Sort: custsale.cntrycode ASC NULLS LAST
   Projection: custsale.cntrycode, COUNT(UInt8(1)) AS numcust, SUM(custsale.c_acctbal) AS totacctbal
     Aggregate: groupBy=[[custsale.cntrycode]], aggr=[[COUNT(UInt8(1)), SUM(custsale.c_acctbal)]]
-      Projection: custsale.cntrycode, custsale.c_acctbal, alias=custsale
-        Projection: substr(customer.c_phone, Int64(1), Int64(2)) AS cntrycode, customer.c_acctbal, alias=custsale
+      Projection: cntrycode, customer.c_acctbal, alias=custsale
+        Projection: substr(customer.c_phone, Int64(1), Int64(2)) AS cntrycode, customer.c_acctbal
           Filter: CAST(customer.c_acctbal AS Decimal128(19, 6)) > __sq_1.__value
             CrossJoin:
               LeftAnti Join: customer.c_custkey = orders.o_custkey

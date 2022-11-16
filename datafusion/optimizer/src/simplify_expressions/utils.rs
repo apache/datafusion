@@ -152,6 +152,11 @@ pub fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
     matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()))
 }
 
+/// returns true if `not_expr` is !`expr`
+pub fn is_not_of(not_expr: &Expr, expr: &Expr) -> bool {
+    matches!(not_expr, Expr::Not(inner) if expr == inner.as_ref())
+}
+
 /// returns the contained boolean value in `expr` as
 /// `Expr::Literal(ScalarValue::Boolean(v))`.
 pub fn as_bool_lit(expr: Expr) -> Result<Option<bool>> {
