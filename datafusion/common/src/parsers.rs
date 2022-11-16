@@ -148,8 +148,11 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
     if (result_nanos % 1_000_000 != 0)
         || (result_month != 0 && (result_days != 0 || result_nanos != 0))
     {
-        let result: i128 =
-            ((result_month as i128) << 96) | ((result_days as i128) << 64) | result_nanos;
+        let result: i128 = ((result_month as i128) << 96)
+            // ensure discard high 32 bits of result_days before casting to i128
+            | (((result_days & u32::MAX as i64) as i128) << 64)
+            // ensure discard high 64 bits of result_nanos
+            | (result_nanos & u64::MAX as i128);
 
         return Ok(ScalarValue::IntervalMonthDayNano(Some(result)));
     }
@@ -160,7 +163,9 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
     }
 
     // IntervalMonthDayNano uses nanos, but IntervalDayTime uses millis
-    let result: i64 = (result_days << 32) | (result_nanos as i64 / 1_000_000);
+    let result: i64 =
+        // ensure discard high 32 bits of milliseconds
+        (result_days << 32) | ((result_nanos as i64 / 1_000_000) & (u32::MAX as i64));
     Ok(ScalarValue::IntervalDayTime(Some(result)))
 }
 
@@ -194,6 +199,21 @@ mod test {
                 .to_string(),
             r#"Invalid input syntax for type interval: "1 centurys 1 month""#
         );
+
+        assert_eq!(
+            parse_interval("months", "3 year -1 month").unwrap(),
+            ScalarValue::new_interval_ym(3, -1)
+        );
+
+        assert_eq!(
+            parse_interval("months", "-3 year -1 month").unwrap(),
+            ScalarValue::new_interval_ym(-3, -1)
+        );
+
+        assert_eq!(
+            parse_interval("months", "-3 year 1 month").unwrap(),
+            ScalarValue::new_interval_ym(-3, 1)
+        );
     }
 
     #[test]
@@ -213,7 +233,25 @@ mod test {
 
         assert_eq!(
             parse_interval("months", "7 days 5 minutes").unwrap(),
-            ScalarValue::new_interval_dt(7, (5.0 * 60.0 * MILLIS_PER_SECOND) as i32)
+            ScalarValue::new_interval_dt(7, 5 * 60 * MILLIS_PER_SECOND as i32)
+        );
+
+        assert_eq!(
+            parse_interval("months", "7 days -5 minutes").unwrap(),
+            ScalarValue::new_interval_dt(7, -5 * 60 * MILLIS_PER_SECOND as i32)
+        );
+
+        assert_eq!(
+            parse_interval("months", "-7 days 5 hours").unwrap(),
+            ScalarValue::new_interval_dt(-7, 5 * 60 * 60 * MILLIS_PER_SECOND as i32)
+        );
+
+        assert_eq!(
+            parse_interval("months", "-7 days -5 hours -5 minutes -5 seconds").unwrap(),
+            ScalarValue::new_interval_dt(
+                -7,
+                -(5 * 60 * 60 + 5 * 60 + 5) * MILLIS_PER_SECOND as i32
+            )
         );
     }
 
@@ -232,6 +270,16 @@ mod test {
         assert_eq!(
             parse_interval("months", "1 year 1 day 0.1 milliseconds").unwrap(),
             ScalarValue::new_interval_mdn(12, 1, 1_00 * 1_000)
+        );
+
+        assert_eq!(
+            parse_interval("months", "1 month -1 second").unwrap(),
+            ScalarValue::new_interval_mdn(1, 0, -1_000_000_000)
+        );
+
+        assert_eq!(
+            parse_interval("months", "-1 year -1 month -1 week -1 day -1 hour -1 minute -1 second -1.11 millisecond").unwrap(),
+            ScalarValue::new_interval_mdn(-13, -8, -(60 * 60 + 60 + 1) * NANOS_PER_SECOND as i64 - 1_110_000)
         );
     }
 }
