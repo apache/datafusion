@@ -1304,7 +1304,7 @@ mod tests {
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
 
-        let plan = crate::test::user_defined::new(plan);
+        let plan = user_defined::new(plan);
 
         let expected = "\
             TestUserDefined\
