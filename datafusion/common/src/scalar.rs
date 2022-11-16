@@ -2652,9 +2652,10 @@ mod tests {
 
     use arrow::compute::kernels;
     use arrow::datatypes::ArrowPrimitiveType;
-    
+
     use crate::cast::as_string_array;
     use crate::from_slice::FromSlice;
+
     use super::*;
 
     #[test]
