@@ -24,7 +24,7 @@ use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
-use crate::cast::as_struct_array;
+use crate::cast::{as_decimal128_array, as_struct_array};
 use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
 use arrow::{
@@ -525,7 +525,7 @@ macro_rules! get_sign {
 
 #[inline]
 pub fn date32_add(days: i32, scalar: &ScalarValue, sign: i32) -> Result<i32> {
-    let epoch = NaiveDate::from_ymd(1970, 1, 1);
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let prior = epoch.add(Duration::days(days as i64));
     let posterior = do_date_math(prior, scalar, sign)?;
     Ok(posterior.sub(epoch).num_days() as i32)
@@ -533,7 +533,7 @@ pub fn date32_add(days: i32, scalar: &ScalarValue, sign: i32) -> Result<i32> {
 
 #[inline]
 pub fn date64_add(ms: i64, scalar: &ScalarValue, sign: i32) -> Result<i64> {
-    let epoch = NaiveDate::from_ymd(1970, 1, 1);
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     let prior = epoch.add(Duration::milliseconds(ms));
     let posterior = do_date_math(prior, scalar, sign)?;
     Ok(posterior.sub(epoch).num_milliseconds())
@@ -572,7 +572,12 @@ fn do_date_time_math(
     scalar: &ScalarValue,
     sign: i32,
 ) -> Result<NaiveDateTime> {
-    let prior = NaiveDateTime::from_timestamp(secs, nsecs);
+    let prior = NaiveDateTime::from_timestamp_opt(secs, nsecs).ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "Could not conert to NaiveDateTime: secs {} nsecs {} scalar {:?} sign {}",
+            secs, nsecs, scalar, sign
+        ))
+    })?;
     do_date_math(prior, scalar, sign)
 }
 
@@ -1882,12 +1887,13 @@ impl ScalarValue {
         index: usize,
         precision: u8,
         scale: u8,
-    ) -> ScalarValue {
-        let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+    ) -> Result<ScalarValue> {
+        let array = as_decimal128_array(array)?;
         if array.is_null(index) {
-            ScalarValue::Decimal128(None, precision, scale)
+            Ok(ScalarValue::Decimal128(None, precision, scale))
         } else {
-            ScalarValue::Decimal128(Some(array.value(index)), precision, scale)
+            let value = array.value(index);
+            Ok(ScalarValue::Decimal128(Some(value), precision, scale))
         }
     }
 
@@ -1903,7 +1909,7 @@ impl ScalarValue {
             DataType::Decimal128(precision, scale) => {
                 ScalarValue::get_decimal_value_from_array(
                     array, index, *precision, *scale,
-                )
+                )?
             }
             DataType::Boolean => typed_cast!(array, index, BooleanArray, Boolean),
             DataType::Float64 => typed_cast!(array, index, Float64Array, Float64),
@@ -2074,14 +2080,16 @@ impl ScalarValue {
         value: &Option<i128>,
         precision: u8,
         scale: u8,
-    ) -> bool {
-        let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+    ) -> Result<bool> {
+        let array = as_decimal128_array(array)?;
         if array.precision() != precision || array.scale() != scale {
-            return false;
+            return Ok(false);
         }
-        match value {
-            None => array.is_null(index),
-            Some(v) => !array.is_null(index) && array.value(index) == *v,
+        let is_null = array.is_null(index);
+        if let Some(v) = value {
+            Ok(!array.is_null(index) && array.value(index) == *v)
+        } else {
+            Ok(is_null)
         }
     }
 
@@ -2106,6 +2114,7 @@ impl ScalarValue {
         match self {
             ScalarValue::Decimal128(v, precision, scale) => {
                 ScalarValue::eq_array_decimal(array, index, v, *precision, *scale)
+                    .unwrap()
             }
             ScalarValue::Boolean(val) => {
                 eq_array_primitive!(array, index, BooleanArray, val)
@@ -2697,14 +2706,14 @@ mod tests {
 
         // decimal scalar to array
         let array = decimal_value.to_array();
-        let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        let array = as_decimal128_array(&array)?;
         assert_eq!(1, array.len());
         assert_eq!(DataType::Decimal128(10, 1), array.data_type().clone());
         assert_eq!(123i128, array.value(0));
 
         // decimal scalar to array with size
         let array = decimal_value.to_array_of_size(10);
-        let array_decimal = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        let array_decimal = as_decimal128_array(&array)?;
         assert_eq!(10, array.len());
         assert_eq!(DataType::Decimal128(10, 1), array.data_type().clone());
         assert_eq!(123i128, array_decimal.value(0));

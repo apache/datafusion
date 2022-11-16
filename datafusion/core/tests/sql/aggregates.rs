@@ -2185,7 +2185,7 @@ async fn run_count_distinct_integers_aggregated_scenario(
 
     for (i, partition) in partitions.iter().enumerate() {
         let filename = format!("partition-{}.csv", i);
-        let file_path = tmp_dir.path().join(&filename);
+        let file_path = tmp_dir.path().join(filename);
         let mut file = File::create(file_path)?;
         for row in partition {
             let row_str = format!(

@@ -195,7 +195,10 @@ pub fn make_current_date(
     now_ts: DateTime<Utc>,
 ) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
     let days = Some(
-        now_ts.num_days_from_ce() - NaiveDate::from_ymd(1970, 1, 1).num_days_from_ce(),
+        now_ts.num_days_from_ce()
+            - NaiveDate::from_ymd_opt(1970, 1, 1)
+                .unwrap()
+                .num_days_from_ce(),
     );
     move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Date32(days)))
 }

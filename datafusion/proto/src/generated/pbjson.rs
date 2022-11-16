@@ -6883,6 +6883,9 @@ impl serde::Serialize for ListingTableScanNode {
         if self.target_partitions != 0 {
             len += 1;
         }
+        if !self.file_sort_order.is_empty() {
+            len += 1;
+        }
         if self.file_format_type.is_some() {
             len += 1;
         }
@@ -6913,6 +6916,9 @@ impl serde::Serialize for ListingTableScanNode {
         }
         if self.target_partitions != 0 {
             struct_ser.serialize_field("targetPartitions", &self.target_partitions)?;
+        }
+        if !self.file_sort_order.is_empty() {
+            struct_ser.serialize_field("fileSortOrder", &self.file_sort_order)?;
         }
         if let Some(v) = self.file_format_type.as_ref() {
             match v {
@@ -6951,6 +6957,8 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             "collectStat",
             "target_partitions",
             "targetPartitions",
+            "file_sort_order",
+            "fileSortOrder",
             "csv",
             "parquet",
             "avro",
@@ -6967,6 +6975,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             TablePartitionCols,
             CollectStat,
             TargetPartitions,
+            FileSortOrder,
             Csv,
             Parquet,
             Avro,
@@ -7000,6 +7009,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
                             "collectStat" | "collect_stat" => Ok(GeneratedField::CollectStat),
                             "targetPartitions" | "target_partitions" => Ok(GeneratedField::TargetPartitions),
+                            "fileSortOrder" | "file_sort_order" => Ok(GeneratedField::FileSortOrder),
                             "csv" => Ok(GeneratedField::Csv),
                             "parquet" => Ok(GeneratedField::Parquet),
                             "avro" => Ok(GeneratedField::Avro),
@@ -7031,6 +7041,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                 let mut table_partition_cols__ = None;
                 let mut collect_stat__ = None;
                 let mut target_partitions__ = None;
+                let mut file_sort_order__ = None;
                 let mut file_format_type__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
@@ -7090,6 +7101,12 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                                 Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::FileSortOrder => {
+                            if file_sort_order__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fileSortOrder"));
+                            }
+                            file_sort_order__ = Some(map.next_value()?);
+                        }
                         GeneratedField::Csv => {
                             if file_format_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("csv"));
@@ -7123,6 +7140,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
                     collect_stat: collect_stat__.unwrap_or_default(),
                     target_partitions: target_partitions__.unwrap_or_default(),
+                    file_sort_order: file_sort_order__.unwrap_or_default(),
                     file_format_type: file_format_type__,
                 })
             }

@@ -917,11 +917,11 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '0.499 day'",
-        "0 years 0 mons 0 days 11 hours 58 mins 33.596 secs"
+        "0 years 0 mons 0 days 11 hours 58 mins 33.600 secs"
     );
     test_expression!(
         "interval '0.4999 day'",
-        "0 years 0 mons 0 days 11 hours 59 mins 51.364 secs"
+        "0 years 0 mons 0 days 11 hours 59 mins 51.360 secs"
     );
     test_expression!(
         "interval '0.49999 day'",
@@ -929,7 +929,7 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '0.49999999999 day'",
-        "0 years 0 mons 0 days 12 hours 0 mins 0.00 secs"
+        "0 years 0 mons 0 days 11 hours 59 mins 59.999999136 secs"
     );
     test_expression!(
         "interval '5 day'",

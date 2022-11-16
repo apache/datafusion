@@ -47,8 +47,8 @@ fn case_when() -> Result<()> {
 
     let sql = "SELECT CASE WHEN col_uint32 > 0 THEN 1 ELSE 0 END FROM test";
     let plan = test_sql(sql)?;
-    let expected = "Projection: CASE WHEN CAST(test.col_uint32 AS Int64) > Int64(0) THEN Int64(1) ELSE Int64(0) END\
-    \n  TableScan: test projection=[col_uint32]";
+    let expected = "Projection: CASE WHEN test.col_uint32 > UInt32(0) THEN Int64(1) ELSE Int64(0) END AS CASE WHEN test.col_uint32 > Int64(0) THEN Int64(1) ELSE Int64(0) END\
+                    \n  TableScan: test projection=[col_uint32]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
 }
@@ -91,7 +91,7 @@ fn unsigned_target_type() -> Result<()> {
     let sql = "SELECT col_utf8 FROM test WHERE col_uint32 > 0";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_utf8\
-                    \n  Filter: CAST(test.col_uint32 AS Int64) > Int64(0)\
+                    \n  Filter: test.col_uint32 > UInt32(0)\
                     \n    TableScan: test projection=[col_uint32, col_utf8]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
@@ -236,7 +236,8 @@ fn timestamp_nano_ts_none_predicates() -> Result<()> {
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
     let expected =
-        "Projection: test.col_int32\n  Filter: CAST(test.col_ts_nano_none AS Timestamp(Nanosecond, Some(\"+00:00\"))) < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
+        "Projection: test.col_int32\
+         \n  Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)\
          \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
     assert_eq!(expected, format!("{:?}", plan));
     Ok(())
@@ -269,8 +270,8 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
     // hard code the return value of now()
-    let now_time =
-        DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(1666615693, 0), Utc);
+    let ts = NaiveDateTime::from_timestamp_opt(1666615693, 0).unwrap();
+    let now_time = DateTime::<Utc>::from_utc(ts, Utc);
     let mut config = OptimizerConfig::new()
         .with_skip_failing_rules(false)
         .with_query_execution_start_time(now_time);

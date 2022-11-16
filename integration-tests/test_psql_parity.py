@@ -82,11 +82,10 @@ test_files = set(root.glob("*.sql"))
 
 class TestPsqlParity:
     def test_tests_count(self):
-        assert len(test_files) == 25, "tests are missed"
+        assert len(test_files) == 26, "tests are missed"
 
     @pytest.mark.parametrize("fname", test_files, ids=str)
     def test_sql_file(self, fname):
         datafusion_output = pd.read_csv(io.BytesIO(generate_csv_from_datafusion(fname)))
         psql_output = pd.read_csv(io.BytesIO(generate_csv_from_psql(fname)))
         np.testing.assert_allclose(datafusion_output, psql_output, equal_nan=True, verbose=True)
-
