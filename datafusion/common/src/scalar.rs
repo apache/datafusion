@@ -1600,10 +1600,14 @@ impl ScalarValue {
         let mut valid = BooleanBufferBuilder::new(0);
         let mut flat_len = 0i32;
         for scalar in scalars {
-            if let ScalarValue::List(values, _) = scalar {
+            if let ScalarValue::List(values, field) = scalar {
                 match values {
                     Some(values) => {
-                        let element_array = ScalarValue::iter_to_array(values)?;
+                        let element_array = if !values.is_empty() {
+                            ScalarValue::iter_to_array(values)?
+                        } else {
+                            arrow::array::new_empty_array(field.data_type())
+                        };
 
                         // Add new offset index
                         flat_len += element_array.len() as i32;
