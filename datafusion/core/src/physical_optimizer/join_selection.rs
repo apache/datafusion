@@ -79,10 +79,12 @@ fn supports_collect_by_size(
     plan: &dyn ExecutionPlan,
     collection_size_threshold: usize,
 ) -> bool {
+    // Currently we do not trust the 0 value from stats, due to stats collection might have bug
+    // TODO check the logic in datasource::get_statistics_with_limit()
     if let Some(size) = plan.statistics().total_byte_size {
-        size < collection_size_threshold
+        size != 0 && size < collection_size_threshold
     } else if let Some(row_count) = plan.statistics().num_rows {
-        row_count < collection_size_threshold
+        row_count != 0 && row_count < collection_size_threshold
     } else {
         false
     }
