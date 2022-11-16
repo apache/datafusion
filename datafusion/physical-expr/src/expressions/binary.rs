@@ -2970,7 +2970,7 @@ mod tests {
         ];
 
         for ((operator, rhs), (exp_selectivity, _, _)) in cases {
-            let context = AnalysisContext::from_statistics(&schema, statistics.clone());
+            let context = AnalysisContext::from_statistics(&schema, &statistics);
             let left = col("a", &schema).unwrap();
             let right = ScalarValue::Int64(Some(rhs));
             let boundaries =
@@ -3039,7 +3039,7 @@ mod tests {
         ];
 
         for ((operator, rhs), (exp_selectivity, _, _)) in cases {
-            let context = AnalysisContext::from_statistics(&schema, statistics.clone());
+            let context = AnalysisContext::from_statistics(&schema, &statistics);
             let left = col("a", &schema).unwrap();
             let right = ScalarValue::from(rhs);
             let boundaries =
@@ -3085,7 +3085,7 @@ mod tests {
             &schema,
         );
 
-        let context = AnalysisContext::from_statistics(&schema, statistics);
+        let context = AnalysisContext::from_statistics(&schema, &statistics);
         let predicate_boundaries = gt
             .boundaries(&context)
             .expect("boundaries should not be None");
@@ -3113,7 +3113,7 @@ mod tests {
             &schema,
         );
 
-        let context = AnalysisContext::from_statistics(&schema, statistics);
+        let context = AnalysisContext::from_statistics(&schema, &statistics);
         let predicate_boundaries = gt
             .boundaries(&context)
             .expect("boundaries should not be None");
