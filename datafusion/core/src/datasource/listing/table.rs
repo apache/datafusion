@@ -769,8 +769,7 @@ mod tests {
         ];
 
         for (file_sort_order, expected_result) in cases {
-            let options = options.clone()
-                .with_file_sort_order(file_sort_order);
+            let options = options.clone().with_file_sort_order(file_sort_order);
 
             let config = ListingTableConfig::new(table_path.clone())
                 .with_listing_options(options)
