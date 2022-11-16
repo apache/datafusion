@@ -53,7 +53,7 @@ use datafusion_row::layout::RowLayout;
 use datafusion_row::reader::{read_row, RowReader};
 use datafusion_row::writer::{write_row, RowWriter};
 use datafusion_row::{MutableRecordBatch, RowType};
-use hashbrown::raw::RawTable;
+use hashbrown::raw::{Bucket, RawTable};
 
 /// Grouping aggregate with row-format aggregation states inside.
 ///
@@ -281,7 +281,7 @@ async fn group_aggregate_batch(
         group_states,
         memory_consumer,
     } = aggr_state;
-    let mut memory_pool = ShortLivedMemoryPool::new(memory_consumer);
+    let mut allocated = 0usize;
 
     for group_values in grouping_by_values {
         let group_rows: Vec<Vec<u8>> = create_group_rows(group_values, group_schema);
@@ -321,20 +321,9 @@ async fn group_aggregate_batch(
                         groups_with_rows.push(*group_idx);
                     };
 
-                    // ensure we have enough indices allocated
-                    if group_state.indices.capacity() == group_state.indices.len() {
-                        // allocate more
-
-                        // growth factor: 2, but at least 2 elements
-                        let bump_elements = (group_state.indices.capacity() * 2).max(2);
-                        let bump_size = std::mem::size_of::<u32>() * bump_elements;
-
-                        memory_pool.alloc(bump_size).await?;
-
-                        group_state.indices.reserve(bump_elements);
-                    }
-
-                    group_state.indices.push(row as u32); // remember this row
+                    group_state
+                        .indices
+                        .push_accounted(row as u32, &mut allocated); // remember this row
                 }
                 //  1.2 Need to create new entry
                 None => {
@@ -347,62 +336,31 @@ async fn group_aggregate_batch(
                     let group_idx = group_states.len();
 
                     // NOTE: do NOT include the `RowGroupState` struct size in here because this is captured by
-                    // `group_states` (see allocation check down below)
-                    let mut bump_size_total = (std::mem::size_of::<u8>()
+                    // `group_states` (see allocation down below)
+                    allocated += (std::mem::size_of::<u8>()
                         * group_state.group_by_values.capacity())
                         + (std::mem::size_of::<u8>()
                             * group_state.aggregation_buffer.capacity())
                         + (std::mem::size_of::<u32>() * group_state.indices.capacity());
 
-                    // ensure that `group_states` has enough space
-                    let reserve_groups_states =
-                        if group_states.capacity() == group_states.len() {
-                            // growth factor: 2, but at least 16 elements
-                            let bump_elements = (group_states.capacity() * 2).max(16);
-                            let bump_size =
-                                bump_elements * std::mem::size_of::<RowGroupState>();
-                            bump_size_total += bump_size;
-
-                            Some(bump_elements)
-                        } else {
-                            None
-                        };
-
                     // for hasher function, use precomputed hash value
-                    let reserve_map =
-                        if map.try_insert_no_grow(hash, (hash, group_idx)).is_err() {
-                            // need to request more memory
+                    map.insert_accounted(
+                        (hash, group_idx),
+                        |(hash, _group_index)| *hash,
+                        &mut allocated,
+                    );
 
-                            let bump_elements = (map.capacity() * 2).max(16);
-                            let bump_size =
-                                bump_elements * std::mem::size_of::<(u64, usize)>();
-                            bump_size_total += bump_size;
-
-                            Some(bump_elements)
-                        } else {
-                            None
-                        };
-
-                    // allocate once
-                    memory_pool.alloc(bump_size_total).await?;
-
-                    if let Some(bump_elements) = reserve_groups_states {
-                        group_states.reserve(bump_elements);
-                    }
-                    group_states.push(group_state);
+                    group_states.push_accounted(group_state, &mut allocated);
 
                     groups_with_rows.push(group_idx);
-
-                    if let Some(bump_elements) = reserve_map {
-                        map.reserve(bump_elements, |(hash, _group_index)| *hash);
-
-                        // still need to insert the element since first try failed
-                        map.try_insert_no_grow(hash, (hash, group_idx))
-                            .expect("just grew the container");
-                    }
                 }
             };
         }
+
+        // allocate memory
+        // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
+        // overshooting a bit. Also this means we either store the whole record batch or not.
+        memory_consumer.alloc(allocated).await?;
 
         // Collect all indices + offsets based on keys in this vec
         let mut batch_indices: UInt32Builder = UInt32Builder::with_capacity(0);
@@ -570,6 +528,14 @@ impl MemoryConsumer for AggregationStateMemoryConsumer {
     }
 }
 
+impl AggregationStateMemoryConsumer {
+    async fn alloc(&mut self, bytes: usize) -> Result<()> {
+        self.try_grow(bytes).await?;
+        self.used = self.used.checked_add(bytes).expect("overflow");
+        Ok(())
+    }
+}
+
 impl Drop for AggregationStateMemoryConsumer {
     fn drop(&mut self) {
         self.memory_manager
@@ -577,53 +543,71 @@ impl Drop for AggregationStateMemoryConsumer {
     }
 }
 
-/// Memory pool that can be used in a function scope.
-///
-/// This is helpful if there are many small memory allocations (so the overhead if tracking them in [`MemoryManager`] is
-/// high due to lock contention) and pre-calculating the entire allocation for a whole [`RecordBatch`] is complicated or
-/// expensive.
-///
-/// The pool will try to allocate a whole block of memory and gives back overallocated memory on [drop](Self::drop).
-struct ShortLivedMemoryPool<'a> {
-    pool: &'a mut AggregationStateMemoryConsumer,
-    block_size: usize,
-    remaining: usize,
+trait VecAllocExt {
+    type T;
+
+    fn push_accounted(&mut self, x: Self::T, accounting: &mut usize);
 }
 
-impl<'a> ShortLivedMemoryPool<'a> {
-    fn new(pool: &'a mut AggregationStateMemoryConsumer) -> Self {
-        Self {
-            pool,
-            block_size: 1024 * 1024, // 1MB
-            remaining: 0,
-        }
-    }
+impl<T> VecAllocExt for Vec<T> {
+    type T = T;
 
-    async fn alloc(&mut self, mut bytes: usize) -> Result<()> {
-        // are there enough bytes left within the current block?
-        if bytes <= self.remaining {
-            self.remaining -= bytes;
-            return Ok(());
+    fn push_accounted(&mut self, x: Self::T, accounting: &mut usize) {
+        if self.capacity() == self.len() {
+            // allocate more
+
+            // growth factor: 2, but at least 2 elements
+            let bump_elements = (self.capacity() * 2).max(2);
+            let bump_size = std::mem::size_of::<u32>() * bump_elements;
+            self.reserve(bump_elements);
+            *accounting = (*accounting).checked_add(bump_size).expect("overflow");
         }
 
-        // we can already use the remaining bytes from the current block
-        bytes -= self.remaining;
-
-        // need to allocate a new block
-        let alloc_size = bytes.max(self.block_size);
-        self.pool.try_grow(alloc_size).await?;
-        self.pool.used += alloc_size;
-        self.remaining = alloc_size - bytes;
-
-        Ok(())
+        self.push(x);
     }
 }
 
-impl<'a> Drop for ShortLivedMemoryPool<'a> {
-    fn drop(&mut self) {
-        // give back over-allocated memory
-        self.pool.shrink(self.remaining);
-        self.pool.used -= self.remaining;
+trait RawTableAllocExt {
+    type T;
+
+    fn insert_accounted(
+        &mut self,
+        x: Self::T,
+        hasher: impl Fn(&Self::T) -> u64,
+        accounting: &mut usize,
+    ) -> Bucket<Self::T>;
+}
+
+impl<T> RawTableAllocExt for RawTable<T> {
+    type T = T;
+
+    fn insert_accounted(
+        &mut self,
+        x: Self::T,
+        hasher: impl Fn(&Self::T) -> u64,
+        accounting: &mut usize,
+    ) -> Bucket<Self::T> {
+        let hash = hasher(&x);
+
+        match self.try_insert_no_grow(hash, x) {
+            Ok(bucket) => bucket,
+            Err(x) => {
+                // need to request more memory
+
+                let bump_elements = (self.capacity() * 2).max(16);
+                let bump_size = bump_elements * std::mem::size_of::<T>();
+                *accounting = (*accounting).checked_add(bump_size).expect("overflow");
+
+                self.reserve(bump_elements, hasher);
+
+                // still need to insert the element since first try failed
+                // Note: cannot use `.expect` here because `T` may not implement `Debug`
+                match self.try_insert_no_grow(hash, x) {
+                    Ok(bucket) => bucket,
+                    Err(_) => panic!("just grew the container"),
+                }
+            }
+        }
     }
 }
 
