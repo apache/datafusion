@@ -2314,11 +2314,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(*e, schema, ctes),
 
-            SQLExpr::Exists { subquery, negated } => self.parse_exists_subquery(&subquery, negated, schema, ctes),
+            SQLExpr::Exists { subquery, negated } => self.parse_exists_subquery(*subquery, negated, schema, ctes),
 
-            SQLExpr::InSubquery { expr, subquery, negated } => self.parse_in_subquery(&expr, &subquery, negated, schema, ctes),
+            SQLExpr::InSubquery { expr, subquery, negated } => self.parse_in_subquery(*expr, *subquery, negated, schema, ctes),
 
-            SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(&subquery, schema, ctes),
+            SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(*subquery, schema, ctes),
 
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node in sqltorel: {:?}",
@@ -2329,7 +2329,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn parse_exists_subquery(
         &self,
-        subquery: &Query,
+        subquery: Query,
         negated: bool,
         input_schema: &DFSchema,
         ctes: &mut HashMap<String, LogicalPlan>,
@@ -2337,7 +2337,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         Ok(Expr::Exists {
             subquery: Subquery {
                 subquery: Arc::new(self.subquery_to_plan(
-                    subquery.clone(),
+                    subquery,
                     ctes,
                     input_schema,
                 )?),
@@ -2348,17 +2348,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn parse_in_subquery(
         &self,
-        expr: &SQLExpr,
-        subquery: &Query,
+        expr: SQLExpr,
+        subquery: Query,
         negated: bool,
         input_schema: &DFSchema,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<Expr> {
         Ok(Expr::InSubquery {
-            expr: Box::new(self.sql_to_rex(expr.clone(), input_schema, ctes)?),
+            expr: Box::new(self.sql_to_rex(expr, input_schema, ctes)?),
             subquery: Subquery {
                 subquery: Arc::new(self.subquery_to_plan(
-                    subquery.clone(),
+                    subquery,
                     ctes,
                     input_schema,
                 )?),
@@ -2369,16 +2369,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn parse_scalar_subquery(
         &self,
-        subquery: &Query,
+        subquery: Query,
         input_schema: &DFSchema,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<Expr> {
         Ok(Expr::ScalarSubquery(Subquery {
-            subquery: Arc::new(self.subquery_to_plan(
-                subquery.clone(),
-                ctes,
-                input_schema,
-            )?),
+            subquery: Arc::new(self.subquery_to_plan(subquery, ctes, input_schema)?),
         }))
     }
 
