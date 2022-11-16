@@ -255,7 +255,12 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::GroupingSet(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. } => false,
-            Expr::ScalarFunction { fun, .. } => Self::volatility_ok(fun.volatility()),
+            Expr::ScalarFunction { fun, args } => match fun {
+                // round(source, n) is a syntax sugar and
+                // isn't supported in physical stage
+                BuiltinScalarFunction::Round if args.len() > 1 => false,
+                _ => Self::volatility_ok(fun.volatility()),
+            },
             Expr::ScalarUDF { fun, .. } => Self::volatility_ok(fun.signature.volatility),
             Expr::Literal(_)
             | Expr::BinaryExpr { .. }

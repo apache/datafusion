@@ -227,6 +227,39 @@ fn concat_ws_literals() -> Result<()> {
 }
 
 #[test]
+fn unfold_round() -> Result<()> {
+    let sql = "SELECT round(col_f32, col_int32) as col from test";
+    let plan = test_sql(sql)?;
+    let expected =
+        "Projection: round(CAST(test.col_f32 AS Float64) * power(Float64(10), CAST(CAST(test.col_int32 AS Int64) AS Float64))CAST(CAST(test.col_int32 AS Int64) AS Float64)CAST(test.col_int32 AS Int64)test.col_int32Float64(10) AS power(Float64(10),test.col_int32)) / power(Float64(10), CAST(CAST(test.col_int32 AS Int64) AS Float64))CAST(CAST(test.col_int32 AS Int64) AS Float64)CAST(test.col_int32 AS Int64)test.col_int32Float64(10) AS power(Float64(10),test.col_int32) AS col\
+        \n  Projection: power(Float64(10), CAST(CAST(test.col_int32 AS Int64) AS Float64)) AS power(Float64(10), CAST(CAST(test.col_int32 AS Int64) AS Float64))CAST(CAST(test.col_int32 AS Int64) AS Float64)CAST(test.col_int32 AS Int64)test.col_int32Float64(10), test.col_f32\
+        \n    TableScan: test projection=[col_int32, col_f32]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn round_partially_execute() -> Result<()> {
+    let sql = "SELECT round(col_f32, 2) as col from test";
+    let plan = test_sql(sql)?;
+    let expected =
+        "Projection: round(CAST(test.col_f32 AS Float64) * Float64(100)) / Float64(100) AS col\
+        \n  TableScan: test projection=[col_f32]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
+fn round_const_eval() -> Result<()> {
+    let sql = "SELECT round(1.29, 1) as col from test";
+    let plan = test_sql(sql)?;
+    let expected = "Projection: Float64(1.3) AS col\
+        \n  TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{:?}", plan));
+    Ok(())
+}
+
+#[test]
 fn timestamp_nano_ts_none_predicates() -> Result<()> {
     let sql = "SELECT col_int32
         FROM test
@@ -293,6 +326,7 @@ impl ContextProvider for MySchemaProvider {
                 vec![
                     Field::new("col_int32", DataType::Int32, true),
                     Field::new("col_uint32", DataType::UInt32, true),
+                    Field::new("col_f32", DataType::Float32, true),
                     Field::new("col_utf8", DataType::Utf8, true),
                     Field::new("col_date32", DataType::Date32, true),
                     Field::new("col_date64", DataType::Date64, true),
