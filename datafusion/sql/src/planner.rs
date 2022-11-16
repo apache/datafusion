@@ -41,7 +41,6 @@ use datafusion_expr::{
     window_function::WindowFunction, BuiltinScalarFunction, TableSource,
 };
 use std::collections::{HashMap, HashSet};
-use std::ops::Not;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
@@ -2862,7 +2861,7 @@ fn remove_join_expressions(
 /// foo = bar AND bar = baz => accum=[(foo, bar), (bar, baz)] accum_filter=[]
 /// foo = bar AND baz > 1 => accum=[(foo, bar)] accum_filter=[baz > 1]
 ///
-/// For normal expression join key, assume we have tables -- a(c0, c1 c2) and b(c0, c1, c2):
+/// For equijoin join key, assume we have tables -- a(c0, c1 c2) and b(c0, c1, c2):
 /// (a.c0 = 10) => accum=[], accum_filter=[a.c0 = 10]
 /// (a.c0 + 1 = b.c0 * 2) => accum=[(a.c0 + 1, b.c0 * 2)],  accum_filter=[]
 /// (a.c0 + b.c0 = 10) =>  accum=[], accum_filter=[a.c0 + b.c0 = 10]
@@ -5688,6 +5687,21 @@ mod tests {
         \n  Inner Join: person.id = orders.customer_id * Int64(2) - orders.price\
         \n    TableScan: person\
         \n    Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
+        \n      TableScan: orders";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_one_side_constant_full_join() {
+        let sql = "SELECT id, order_id \
+            FROM person \
+            FULL OUTER JOIN orders \
+            ON person.id = 10";
+
+        let expected = "Projection: person.id, orders.order_id\
+        \n  Filter: person.id = Int64(10)\
+        \n    CrossJoin:\
+        \n      TableScan: person\
         \n      TableScan: orders";
         quick_test(sql, expected);
     }
