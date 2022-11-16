@@ -643,7 +643,7 @@ struct RowGroupPruningStatistics<'a> {
 // Convert the bytes array to i128.
 // The endian of the input bytes array must be big-endian.
 // Copy from the arrow-rs
-fn from_bytes_to_i128(b: &[u8]) -> i128 {
+pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
     assert!(b.len() <= 16, "Decimal128Array supports only up to size 16");
     let first_bit = b[0] & 128u8 == 128u8;
     let mut result = if first_bit { [255u8; 16] } else { [0u8; 16] };
@@ -773,7 +773,9 @@ macro_rules! get_null_count_values {
 
 // Convert parquet column schema to arrow data type, and just consider the
 // decimal data type.
-fn parquet_to_arrow_decimal_type(parquet_column: &ColumnDescriptor) -> Option<DataType> {
+pub(crate) fn parquet_to_arrow_decimal_type(
+    parquet_column: &ColumnDescriptor,
+) -> Option<DataType> {
     let type_ptr = parquet_column.self_type_ptr();
     match type_ptr.get_basic_info().logical_type() {
         Some(LogicalType::Decimal { scale, precision }) => {
