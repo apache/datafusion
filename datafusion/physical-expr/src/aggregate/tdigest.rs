@@ -213,16 +213,6 @@ impl TDigest {
         }
     }
 
-    fn clamp(v: f64, lo: f64, hi: f64) -> f64 {
-        if v > hi {
-            hi
-        } else if v < lo {
-            lo
-        } else {
-            v
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn merge_unsorted_f64(&self, unsorted_values: Vec<f64>) -> TDigest {
         let mut values = unsorted_values;
@@ -523,7 +513,8 @@ impl TDigest {
 
         let value = self.centroids[pos].mean()
             + ((rank - t) / self.centroids[pos].weight() - 0.5) * delta;
-        Self::clamp(value, min, max)
+
+        value.clamp(min, max)
     }
 
     /// This method decomposes the [`TDigest`] and its [`Centroid`] instances
@@ -684,7 +675,7 @@ mod tests {
         let mut t = TDigest::new(10);
 
         for v in vals {
-            t = t.merge_unsorted_f64(vec![v as f64]);
+            t = t.merge_unsorted_f64(vec![v]);
         }
 
         assert_error_bounds!(t, quantile = 0.5, want = 1.0);

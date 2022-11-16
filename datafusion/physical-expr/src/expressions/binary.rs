@@ -2439,8 +2439,8 @@ mod tests {
             &[
                 Some(value), // 1.23
                 None,
-                Some((value - 1) as i128), // 1.22
-                Some(value + 1),           // 1.24
+                Some(value - 1), // 1.22
+                Some(value + 1), // 1.24
             ],
             10,
             2,
@@ -2561,10 +2561,10 @@ mod tests {
         let value: i128 = 123;
         let decimal_array = Arc::new(create_decimal_array(
             &[
-                Some(value as i128), // 1.23
+                Some(value), // 1.23
                 None,
-                Some(value - 1),           // 1.22
-                Some((value + 1) as i128), // 1.24
+                Some(value - 1), // 1.22
+                Some(value + 1), // 1.24
             ],
             10,
             2,
@@ -2682,8 +2682,8 @@ mod tests {
             &[
                 Some(value), // 1.23
                 None,
-                Some((value - 1) as i128), // 1.22
-                Some(value + 1),           // 1.24
+                Some(value - 1), // 1.22
+                Some(value + 1), // 1.24
             ],
             10,
             2,
