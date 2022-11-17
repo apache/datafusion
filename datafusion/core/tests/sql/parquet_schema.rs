@@ -125,12 +125,30 @@ async fn merge_compatible_schemas() -> Result<()> {
     create_parquet_file(tmp_dir.path(), "t2.parquet", &schema2).await?;
 
     let ctx = SessionContext::default();
+
+    // with type coercion disabled
+    let err = ctx
+        .register_parquet(
+            "test",
+            tmp_dir.path().to_str().unwrap(),
+            ParquetReadOptions::default().with_coerce_types(false),
+        )
+        .await
+        .expect_err("should fail");
+    assert_eq!("Execution error: Schema merge failed due to different, but compatible, data types \
+    for field 'c' (Int16 vs Int32). \
+    Set 'datafusion.file_format.coerce_types=true' \
+    (or call with_coerce_types(true) on reader options) to enable merging this field",
+               err.to_string());
+
+    // with type coercion enabled
     ctx.register_parquet(
         "test",
         tmp_dir.path().to_str().unwrap(),
         ParquetReadOptions::default().with_coerce_types(true),
     )
     .await?;
+
     let df = ctx.table("test")?;
 
     let expected_schema = Schema::new_with_metadata(
