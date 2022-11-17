@@ -665,6 +665,7 @@ mod tests {
     use crate::datasource::listing::{FileRange, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::options::CsvReadOptions;
+    use crate::physical_plan::file_format::partition_type_wrap;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use crate::{
@@ -1387,9 +1388,9 @@ mod tests {
                     "day".to_owned(),
                 ],
                 table_partition_cols_types: vec![
-                    DataType::Utf8,
-                    DataType::Utf8,
-                    DataType::Utf8,
+                    partition_type_wrap(DataType::Utf8),
+                    partition_type_wrap(DataType::Utf8),
+                    partition_type_wrap(DataType::Utf8),
                 ],
                 config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
