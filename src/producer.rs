@@ -14,7 +14,8 @@ use substrait::protobuf::{
         field_reference::ReferenceType,
         literal::LiteralType,
         mask_expression::{StructItem, StructSelect},
-        FieldReference, Literal, MaskExpression, RexType, ScalarFunction,
+        reference_segment,
+        FieldReference, Literal, MaskExpression, ReferenceSegment, RexType, ScalarFunction,
     },
     extensions::{self, simple_extension_declaration::{MappingType, ExtensionFunction}},
     function_argument::ArgType,
@@ -434,14 +435,13 @@ fn substrait_sort_field(expr: &Expr, schema: &DFSchemaRef, extension_info: &mut 
 fn substrait_field_ref(index: usize) -> Result<Expression> {
     Ok(Expression {
         rex_type: Some(RexType::Selection(Box::new(FieldReference {
-            reference_type: Some(ReferenceType::MaskedReference(MaskExpression {
-                select: Some(StructSelect {
-                    struct_items: vec![StructItem {
+            reference_type: Some(ReferenceType::DirectReference(ReferenceSegment {
+                reference_type: Some(reference_segment::ReferenceType::StructField(
+                    Box::new(reference_segment::StructField {
                         field: index as i32,
                         child: None,
-                    }],
-                }),
-                maintain_singular_struct: false,
+                    }),
+                )),
             })),
             root_type: None,
         }))),

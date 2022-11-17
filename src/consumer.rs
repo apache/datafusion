@@ -14,7 +14,10 @@ use datafusion::{
 use substrait::protobuf::{
     aggregate_function::AggregationInvocation,
     expression::{
-        field_reference::ReferenceType::MaskedReference, literal::LiteralType, MaskExpression,
+        field_reference::ReferenceType::DirectReference,
+        literal::LiteralType,
+        MaskExpression,
+        reference_segment::ReferenceType::StructField,
         RexType,
     },
     extensions::simple_extension_declaration::MappingType,
@@ -384,16 +387,21 @@ pub async fn from_substrait_agg_func(
 pub async fn from_substrait_rex(e: &Expression, input_schema: &DFSchema, extensions: &HashMap<u32, &String>) -> Result<Arc<Expr>> {
     match &e.rex_type {
         Some(RexType::Selection(field_ref)) => match &field_ref.reference_type {
-            Some(MaskedReference(mask)) => match &mask.select.as_ref() {
-                Some(x) if x.struct_items.len() == 1 => Ok(Arc::new(Expr::Column(Column {
-                    relation: None,
-                    name: input_schema
-                        .field(x.struct_items[0].field as usize)
-                        .name()
-                        .to_string(),
-                }))),
+            Some(DirectReference(direct)) => match &direct.reference_type.as_ref() {
+                Some(StructField(x)) => match &x.child.as_ref() {
+                    Some(_) => Err(DataFusionError::NotImplemented(
+                        "Direct reference StructField with child is not supported".to_string(),
+                    )),
+                    None => Ok(Arc::new(Expr::Column(Column {
+                        relation: None,
+                        name: input_schema
+                            .field(x.field as usize)
+                            .name()
+                            .to_string(),
+                    }))),
+                },
                 _ => Err(DataFusionError::NotImplemented(
-                    "invalid field reference".to_string(),
+                    "Direct reference with types other than StructField is not supported".to_string(),
                 )),
             },
             _ => Err(DataFusionError::NotImplemented(
