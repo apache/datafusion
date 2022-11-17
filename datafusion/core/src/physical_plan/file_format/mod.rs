@@ -46,14 +46,13 @@ use parking_lot::RwLock;
 
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{config::ConfigOptions, datasource::listing::FileRange};
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
-use arrow::array::{new_null_array, UInt16BufferBuilder};
+use crate::{error::Result, scalar::ScalarValue};
+use arrow::array::{new_null_array, Array, UInt16BufferBuilder};
+use arrow::compute::cast;
 use arrow::record_batch::RecordBatchOptions;
+use datafusion_common::DataFusionError;
 use lazy_static::lazy_static;
-use log::{debug, info};
+use log::debug;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::{
@@ -261,8 +260,9 @@ impl SchemaAdapter {
         for idx in projections {
             let field = self.table_schema.field(*idx);
             if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
+                //TODO check for compatible types rather than an exact match
                 //if file_schema.field(mapped_idx).data_type() == field.data_type() {
-                    mapped.push(mapped_idx)
+                mapped.push(mapped_idx)
                 // } else {
                 //     let msg = format!("Failed to map column projection for field {}. Incompatible data types {:?} and {:?}", field.name(), file_schema.field(mapped_idx).data_type(), field.data_type());
                 //     info!("{}", msg);
@@ -293,7 +293,19 @@ impl SchemaAdapter {
             if let Some((batch_idx, _name)) =
                 batch_schema.column_with_name(table_field.name().as_str())
             {
-                cols.push(batch_cols[batch_idx].clone());
+                let array = batch_cols[batch_idx].clone();
+
+                // convert to output schema type
+                let array = if array.data_type() == table_field.data_type() {
+                    array
+                } else {
+                    cast(&array, table_field.data_type())
+                        .map_err(|e| DataFusionError::Internal(
+                            format!("Could not cast field '{}' with type {} to output schema type {}: {}",
+                                    table_field.name(), array.data_type(), table_field.data_type(), e)))?
+                };
+
+                cols.push(array);
             } else {
                 cols.push(new_null_array(table_field.data_type(), batch_rows))
             }

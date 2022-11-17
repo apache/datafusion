@@ -150,6 +150,7 @@ impl TableProvider for MemTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::try_merge_schemas;
     use crate::from_slice::FromSlice;
     use crate::prelude::SessionContext;
     use arrow::array::Int32Array;
