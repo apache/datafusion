@@ -237,6 +237,11 @@ pub fn to_substrait_rel(plan: &LogicalPlan, extension_info: &mut (Vec<extensions
                 ))
             }
         }
+        LogicalPlan::SubqueryAlias(alias) => {
+            // Do nothing if encounters SubqueryAlias
+            // since there is no corresponding relation type in Substrait
+            to_substrait_rel(alias.input.as_ref(), extension_info)
+        }
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported operator: {:?}",
             plan
@@ -284,10 +289,10 @@ pub fn to_substrait_agg_measure(expr: &Expr, schema: &DFSchemaRef, extension_inf
                 arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(arg, schema, extension_info)?)) });
             }
             let function_name = fun.to_string().to_lowercase();
-            _register_function(function_name, extension_info);
+            let function_anchor = _register_function(function_name, extension_info);
             Ok(Measure {
                 measure: Some(AggregateFunction {
-                    function_reference: 0,
+                    function_reference: function_anchor,
                     arguments: arguments,
                     sorts: vec![],
                     output_type: None,
@@ -402,6 +407,9 @@ pub fn to_substrait_rex(expr: &Expr, schema: &DFSchemaRef, extension_info: &mut 
                     literal_type,
                 })),
             })
+        }
+        Expr::Alias(expr, _alias) => {
+            to_substrait_rex(expr, schema, extension_info)
         }
         _ => Err(DataFusionError::NotImplemented(format!(
             "Unsupported expression: {:?}",

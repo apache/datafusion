@@ -75,6 +75,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn simple_alias() -> Result<()> {
+        test_alias(
+            "SELECT d1.a, d1.b FROM data d1",
+            "SELECT a, b FROM data",
+        ).await
+    }
+
+    #[tokio::test]
+    async fn two_table_alias() -> Result<()> {
+        test_alias(
+            "SELECT d1.a FROM data d1 JOIN data2 d2 ON d1.a = d2.a",
+            "SELECT data.a FROM data JOIN data2 ON data.a = data2.a",
+        )
+        .await
+    }
+
+    #[tokio::test]
     async fn roundtrip_inner_join() -> Result<()> {
         roundtrip("SELECT data.a FROM data JOIN data2 ON data.a = data2.a").await
     }
@@ -116,6 +133,29 @@ mod tests {
         let plan1str = format!("{:?}", plan1).replace("None", "0");
         let plan2str = format!("{:?}", plan2).replace("None", "0");
 
+        assert_eq!(plan1str, plan2str);
+        Ok(())
+    }
+
+    async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
+        // Since we ignore the SubqueryAlias in the producer, the result should be
+        // the same as producing a Substrait plan from the same query without aliases
+        // sql_with_alias -> substrait -> logical plan = sql_no_alias -> substrait -> logical plan
+        let mut ctx = create_context().await?;
+
+        let df_a = ctx.sql(sql_with_alias).await?;
+        let proto_a = to_substrait_plan(&df_a.to_logical_plan()?)?;
+        let plan_with_alias = from_substrait_plan(&mut ctx, &proto_a).await?.to_logical_plan()?;
+
+        let df = ctx.sql(sql_no_alias).await?;
+        let proto = to_substrait_plan(&df.to_logical_plan()?)?;
+        let plan = from_substrait_plan(&mut ctx, &proto).await?.to_logical_plan()?;
+
+        println!("{:#?}", plan_with_alias);
+        println!("{:#?}", plan);
+
+        let plan1str = format!("{:?}", plan_with_alias);
+        let plan2str = format!("{:?}", plan);
         assert_eq!(plan1str, plan2str);
         Ok(())
     }
