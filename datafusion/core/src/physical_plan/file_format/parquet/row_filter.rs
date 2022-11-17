@@ -19,6 +19,7 @@ use arrow::array::{Array, BooleanArray};
 use arrow::datatypes::{DataType, Schema};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 
@@ -133,17 +134,12 @@ impl ArrowPredicate for DatafusionArrowPredicate {
             .map(|v| v.into_array(batch.num_rows()))
         {
             Ok(array) => {
-                if let Some(mask) = array.as_any().downcast_ref::<BooleanArray>() {
-                    let bool_arr = BooleanArray::from(mask.data().clone());
-                    let num_filtered = bool_arr.len() - bool_arr.true_count();
-                    self.rows_filtered.add(num_filtered);
-                    timer.stop();
-                    Ok(bool_arr)
-                } else {
-                    Err(ArrowError::ComputeError(
-                        "Unexpected result of predicate evaluation, expected BooleanArray".to_owned(),
-                    ))
-                }
+                let mask = as_boolean_array(&array)?;
+                let bool_arr = BooleanArray::from(mask.data().clone());
+                let num_filtered = bool_arr.len() - bool_arr.true_count();
+                self.rows_filtered.add(num_filtered);
+                timer.stop();
+                Ok(bool_arr)
             }
             Err(e) => Err(ArrowError::ComputeError(format!(
                 "Error evaluating filter predicate: {:?}",

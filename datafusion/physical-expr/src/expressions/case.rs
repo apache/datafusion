@@ -26,7 +26,7 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, eq_dyn, is_null, not, or, or_kleene};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{cast::as_boolean_array, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use itertools::Itertools;
@@ -195,10 +195,7 @@ impl CaseExpr {
                 _ => when_value,
             };
             let when_value = when_value.into_array(batch.num_rows());
-            let when_value = when_value
-                .as_ref()
-                .as_any()
-                .downcast_ref::<BooleanArray>()
+            let when_value = as_boolean_array(&when_value)
                 .expect("WHEN expression did not return a BooleanArray");
 
             let then_value = self.when_then_expr[i]
