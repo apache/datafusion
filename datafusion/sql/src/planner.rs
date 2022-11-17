@@ -5898,7 +5898,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dumplicated_left_join_key_inner_join() {
+    fn test_duplicated_left_join_key_inner_join() {
         //  person.id * 2 happen twice in left side.
         let sql = "SELECT person.id, person.age 
             FROM person 
@@ -5916,7 +5916,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dumplicated_right_join_key_inner_join() {
+    fn test_duplicated_right_join_key_inner_join() {
         //  orders.customer_id + 10 happen twice in right side.
         let sql = "SELECT person.id, person.age 
             FROM person 
