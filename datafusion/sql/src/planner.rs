@@ -55,7 +55,7 @@ use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
 
-use sqlparser::ast::{TimezoneInfo, SetQuantifier, ArrayAgg};
+use sqlparser::ast::{ArrayAgg, SetQuantifier, TimezoneInfo};
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
@@ -2348,7 +2348,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }))
     }
 
-
     fn parse_array_agg(
         &self,
         array_agg: ArrayAgg,
@@ -2356,13 +2355,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<Expr> {
         // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
-        let ArrayAgg { distinct, expr, order_by, limit, within_group } = array_agg;
+        let ArrayAgg {
+            distinct,
+            expr,
+            order_by,
+            limit,
+            within_group,
+        } = array_agg;
 
-        // TODO: order_by, limit or within_group throw not supported
+        if let Some(order_by) = order_by {
+            return Err(DataFusionError::NotImplemented(format!(
+                "ORDER BY not supported in ARRAY_AGG: {}",
+                order_by
+            )));
+        }
+
+        if let Some(limit) = limit {
+            return Err(DataFusionError::NotImplemented(format!(
+                "LIMIT not supported in ARRAY_AGG: {}",
+                limit
+            )));
+        }
+
+        if within_group {
+            return Err(DataFusionError::NotImplemented(
+                "WITHIN GROUP not supported in ARRAY_AGG".to_string(),
+            ));
+        }
 
         let args = vec![self.sql_expr_to_logical_expr(*expr, input_schema, ctes)?];
         // next, aggregate built-ins
-        let fun  = AggregateFunction::ArrayAgg;
+        let fun = AggregateFunction::ArrayAgg;
 
         Ok(Expr::AggregateFunction {
             fun,
@@ -2522,7 +2545,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Value::SingleQuotedString(s) => s.to_string(),
                 Value::Number(_, _) | Value::Boolean(_) => v.to_string(),
                 Value::DoubleQuotedString(_)
-                    | Value::UnQuotedString(_)
+                | Value::UnQuotedString(_)
                 | Value::EscapedStringLiteral(_)
                 | Value::NationalStringLiteral(_)
                 | Value::HexStringLiteral(_)
@@ -2709,11 +2732,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     "field", data_type, true,
                 ))))
             }
-            SQLDataType::Array(None) => {
-                Err(DataFusionError::NotImplemented(
-                    "Arrays with unspecified type is not supported".to_string()
-                ))
-            }
+            SQLDataType::Array(None) => Err(DataFusionError::NotImplemented(
+                "Arrays with unspecified type is not supported".to_string(),
+            )),
             other => self.convert_simple_data_type(other),
         }
     }
