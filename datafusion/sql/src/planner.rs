@@ -46,6 +46,8 @@ use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::builder::project_with_alias;
+use datafusion_expr::logical_plan::Join as HashJoin;
+use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
@@ -1124,6 +1126,39 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // process `from` clause
         let plans = self.plan_from_tables(select.from, ctes, outer_query_schema)?;
         let empty_from = matches!(plans.first(), Some(LogicalPlan::EmptyRelation(_)));
+        // build from schema for unqualifier column ambiguous check
+        // we should get only one field for this unqualifier column from schema.
+        let from_schema = {
+            let mut fields = vec![];
+            let mut metadata = std::collections::HashMap::new();
+            for plan in &plans {
+                if let LogicalPlan::Join(HashJoin {
+                    join_constraint: HashJoinConstraint::Using,
+                    on,
+                    left,
+                    ..
+                }) = plan
+                {
+                    // For query: select id from t1 join t2 using(id), this is legal.
+                    // We should dedup the fields for cols in using clause.
+                    let mut plan_fields = plan.schema().fields().clone();
+                    for join_cols in on.iter() {
+                        let left_field = left.schema().field_from_column(&join_cols.0)?;
+                        plan_fields.retain(|field| {
+                            field.unqualified_column().name
+                                != left_field.unqualified_column().name
+                        });
+                        plan_fields.push(left_field.clone());
+                    }
+                    fields.extend_from_slice(&plan_fields);
+                    metadata.extend(plan.schema().metadata().clone());
+                } else {
+                    fields.extend_from_slice(plan.schema().fields());
+                    metadata.extend(plan.schema().metadata().clone());
+                }
+            }
+            DFSchema::new_with_metadata(fields, metadata)?
+        };
 
         // process `where` clause
         let plan =
@@ -1136,6 +1171,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             empty_from,
             outer_query_schema,
             ctes,
+            &from_schema,
         )?;
 
         // having and group by clause may reference aliases defined in select projection
@@ -1297,11 +1333,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         empty_from: bool,
         outer_query_schema: Option<&DFSchema>,
         ctes: &mut HashMap<String, LogicalPlan>,
+        from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
         projection
             .into_iter()
             .map(|expr| {
-                self.sql_select_to_rex(expr, plan, empty_from, outer_query_schema, ctes)
+                self.sql_select_to_rex(
+                    expr,
+                    plan,
+                    empty_from,
+                    outer_query_schema,
+                    ctes,
+                    from_schema,
+                )
             })
             .flat_map(|result| match result {
                 Ok(vec) => vec.into_iter().map(Ok).collect(),
@@ -1573,6 +1617,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
     }
 
+    /// ambiguous check for unqualifier column
+    fn column_reference_ambiguous_check(
+        &self,
+        schema: &DFSchema,
+        exprs: &[Expr],
+    ) -> Result<()> {
+        find_column_exprs(exprs)
+            .iter()
+            .try_for_each(|col| match col {
+                Expr::Column(col) => match &col.relation {
+                    None => {
+                        // should get only one field in from_schema.
+                        if schema.fields_with_unqualified_name(&col.name).len() != 1 {
+                            Err(DataFusionError::Internal(format!(
+                                "column reference {} is ambiguous",
+                                col.name
+                            )))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    _ => Ok(()),
+                },
+                _ => Ok(()),
+            })
+    }
+
     /// Generate a relational expression from a select SQL expression
     fn sql_select_to_rex(
         &self,
@@ -1581,6 +1652,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         empty_from: bool,
         outer_query_schema: Option<&DFSchema>,
         ctes: &mut HashMap<String, LogicalPlan>,
+        from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
         let input_schema = match outer_query_schema {
             Some(x) => {
@@ -1594,13 +1666,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match sql {
             SelectItem::UnnamedExpr(expr) => {
                 let expr = self.sql_to_rex(expr, &input_schema, ctes)?;
+                self.column_reference_ambiguous_check(from_schema, &[expr.clone()])?;
                 Ok(vec![normalize_col(expr, plan)?])
             }
             SelectItem::ExprWithAlias { expr, alias } => {
-                let expr = Alias(
-                    Box::new(self.sql_to_rex(expr, &input_schema, ctes)?),
-                    normalize_ident(&alias),
-                );
+                let select_expr = self.sql_to_rex(expr, &input_schema, ctes)?;
+                self.column_reference_ambiguous_check(
+                    from_schema,
+                    &[select_expr.clone()],
+                )?;
+                let expr = Alias(Box::new(select_expr), normalize_ident(&alias));
                 Ok(vec![normalize_col(expr, plan)?])
             }
             SelectItem::Wildcard => {
@@ -3502,6 +3577,29 @@ mod tests {
             "Plan(\"Source table contains 3 columns but only 2 names given as column alias\")",
             format!("{:?}", err)
         );
+    }
+
+    #[test]
+    fn select_with_ambiguous_column() {
+        let sql = "SELECT id FROM person a, person b";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Internal(\"column reference id is ambiguous\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn join_with_ambiguous_column() {
+        // This is legal.
+        let sql = "SELECT id FROM person a join person b using(id)";
+        let expected = "Projection: a.id\
+                        \n  Inner Join: Using a.id = b.id\
+                        \n    SubqueryAlias: a\
+                        \n      TableScan: person\
+                        \n    SubqueryAlias: b\
+                        \n      TableScan: person";
+        quick_test(sql, expected);
     }
 
     #[test]
