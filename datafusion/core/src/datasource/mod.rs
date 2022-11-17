@@ -40,6 +40,7 @@ use self::listing::PartitionedFile;
 pub use self::memory::MemTable;
 pub use self::view::ViewTable;
 use crate::arrow::datatypes::{Schema, SchemaRef};
+use crate::config::OPT_FILE_FORMAT_COERCE_TYPES;
 use crate::error::Result;
 pub use crate::logical_expr::TableType;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
@@ -217,15 +218,15 @@ pub(crate) fn try_merge_schemas(
                             if merge_compatible_types {
                                 fields[i] = merge_field.clone().with_data_type(new_type);
                             } else {
-                                return Err(DataFusionError::SchemaError(
-                                    SchemaMergeError {
-                                        field_name: field.name().to_owned(),
-                                        data_types: (
-                                            field.data_type().clone(),
-                                            merge_field.data_type().clone(),
-                                        ),
-                                    },
-                                ));
+                                return Err(DataFusionError::Execution(format!(
+                                    "Schema merge failed due to different, but compatible, data types for field '{}' ({} vs {}). \
+                                    Set '{}=true' (or call with_coerce_types(true) on reader options) \
+                                    to enable merging this field",
+                                    field.name(),
+                                    merge_field.data_type(),
+                                    field.data_type(),
+                                    OPT_FILE_FORMAT_COERCE_TYPES
+                                )));
                             }
                         }
                     } else {
