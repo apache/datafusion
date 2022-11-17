@@ -227,7 +227,7 @@ pub(crate) fn try_merge_schemas(
     Ok(Schema::new_with_metadata(fields, metadata))
 }
 
-fn get_wider_type(t1: &DataType, t2: &DataType) -> Option<DataType> {
+pub(crate) fn get_wider_type(t1: &DataType, t2: &DataType) -> Option<DataType> {
     use DataType::*;
     match (t1, t2) {
         (Null, _) => Some(t2.clone()),

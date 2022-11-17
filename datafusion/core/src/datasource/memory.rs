@@ -150,7 +150,6 @@ impl TableProvider for MemTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::try_merge_schemas;
     use crate::from_slice::FromSlice;
     use crate::prelude::SessionContext;
     use arrow::array::Int32Array;
@@ -358,7 +357,7 @@ mod tests {
             Field::new("c", DataType::Int32, false),
         ]);
 
-        let merged_schema = try_merge_schemas(vec![schema1.clone(), schema2.clone()])?;
+        let merged_schema = Schema::try_merge(vec![schema1.clone(), schema2.clone()])?;
 
         let batch1 = RecordBatch::try_new(
             Arc::new(schema1),

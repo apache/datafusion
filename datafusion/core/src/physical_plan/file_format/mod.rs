@@ -44,7 +44,9 @@ pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
 use parking_lot::RwLock;
 
-use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
+use crate::datasource::{
+    get_wider_type, listing::PartitionedFile, object_store::ObjectStoreUrl,
+};
 use crate::{config::ConfigOptions, datasource::listing::FileRange};
 use crate::{error::Result, scalar::ScalarValue};
 use arrow::array::{new_null_array, Array, UInt16BufferBuilder};
@@ -52,7 +54,7 @@ use arrow::compute::cast;
 use arrow::record_batch::RecordBatchOptions;
 use datafusion_common::DataFusionError;
 use lazy_static::lazy_static;
-use log::debug;
+use log::{debug, info};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::{
@@ -261,13 +263,18 @@ impl SchemaAdapter {
             let field = self.table_schema.field(*idx);
             if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
                 //TODO check for compatible types rather than an exact match
-                //if file_schema.field(mapped_idx).data_type() == field.data_type() {
-                mapped.push(mapped_idx)
-                // } else {
-                //     let msg = format!("Failed to map column projection for field {}. Incompatible data types {:?} and {:?}", field.name(), file_schema.field(mapped_idx).data_type(), field.data_type());
-                //     info!("{}", msg);
-                //     return Err(DataFusionError::Execution(msg));
-                // }
+                let file_type = file_schema.field(mapped_idx).data_type();
+                let field_type = field.data_type();
+                if file_type == field_type
+                    || get_wider_type(file_type, field_type).is_some()
+                    || get_wider_type(field_type, file_type).is_some()
+                {
+                    mapped.push(mapped_idx)
+                } else {
+                    let msg = format!("Failed to map column projection for field {}. Incompatible data types {:?} and {:?}", field.name(), file_schema.field(mapped_idx).data_type(), field_type);
+                    info!("{}", msg);
+                    return Err(DataFusionError::Execution(msg));
+                }
             }
         }
         Ok(mapped)
