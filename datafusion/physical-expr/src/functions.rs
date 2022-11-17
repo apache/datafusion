@@ -2847,6 +2847,7 @@ mod tests {
     #[cfg(feature = "regex_expressions")]
     fn test_regexp_match() -> Result<()> {
         use arrow::array::ListArray;
+        use datafusion_common::cast::as_string_array;
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
         let execution_props = ExecutionProps::new();
 
@@ -2873,7 +2874,7 @@ mod tests {
         // downcast works
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
         let first_row = result.value(0);
-        let first_row = first_row.as_any().downcast_ref::<StringArray>().unwrap();
+        let first_row = as_string_array(&first_row)?;
 
         // value is correct
         let expected = "555".to_string();
@@ -2886,6 +2887,7 @@ mod tests {
     #[cfg(feature = "regex_expressions")]
     fn test_regexp_match_all_literals() -> Result<()> {
         use arrow::array::ListArray;
+        use datafusion_common::cast::as_string_array;
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let execution_props = ExecutionProps::new();
 
@@ -2912,7 +2914,7 @@ mod tests {
         // downcast works
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
         let first_row = result.value(0);
-        let first_row = first_row.as_any().downcast_ref::<StringArray>().unwrap();
+        let first_row = as_string_array(&first_row)?;
 
         // value is correct
         let expected = "555".to_string();

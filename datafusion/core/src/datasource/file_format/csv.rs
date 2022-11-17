@@ -174,12 +174,11 @@ impl FileFormat for CsvFormat {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::StringArray;
-
     use super::super::test_util::scan_format;
     use super::*;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
+    use datafusion_common::cast::as_string_array;
     use futures::StreamExt;
 
     #[tokio::test]
@@ -270,11 +269,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(100, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+        let array = as_string_array(batches[0].column(0))?;
         let mut values: Vec<&str> = vec![];
         for i in 0..5 {
             values.push(array.value(i));
