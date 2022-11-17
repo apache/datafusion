@@ -48,6 +48,8 @@ pub const DEFAULT_JSON_EXTENSION: &str = ".json";
 pub struct JsonFormat {
     schema_infer_max_rec: Option<usize>,
     file_compression_type: FileCompressionType,
+    /// Specify whether compatible types can be coerced when merging schemas
+    coerce_types: bool,
 }
 
 impl Default for JsonFormat {
@@ -55,6 +57,7 @@ impl Default for JsonFormat {
         Self {
             schema_infer_max_rec: Some(DEFAULT_SCHEMA_INFER_MAX_RECORD),
             file_compression_type: FileCompressionType::UNCOMPRESSED,
+            coerce_types: false,
         }
     }
 }
@@ -74,6 +77,12 @@ impl JsonFormat {
         file_compression_type: FileCompressionType,
     ) -> Self {
         self.file_compression_type = file_compression_type;
+        self
+    }
+
+    /// Specify whether compatible types can be coerced when merging schemas
+    pub fn with_coerce_types(mut self, coerce_types: bool) -> Self {
+        self.coerce_types = coerce_types;
         self
     }
 }
@@ -123,7 +132,7 @@ impl FileFormat for JsonFormat {
             }
         }
 
-        let schema = try_merge_schemas(schemas)?;
+        let schema = try_merge_schemas(schemas, self.coerce_types)?;
         Ok(Arc::new(schema))
     }
 

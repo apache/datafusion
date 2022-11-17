@@ -175,6 +175,8 @@ pub struct ParquetReadOptions<'a> {
     /// metadata.  Defaults to true.
     // TODO move this into ConfigOptions
     pub skip_metadata: bool,
+    /// Specify whether compatible types can be coerced when merging schemas
+    pub coerce_types: bool,
 }
 
 impl<'a> Default for ParquetReadOptions<'a> {
@@ -186,6 +188,7 @@ impl<'a> Default for ParquetReadOptions<'a> {
             table_partition_cols: vec![],
             parquet_pruning: format_default.enable_pruning(),
             skip_metadata: format_default.skip_metadata(),
+            coerce_types: false,
         }
     }
 }
@@ -211,11 +214,18 @@ impl<'a> ParquetReadOptions<'a> {
         self
     }
 
+    /// Specify whether compatible types can be coerced when merging schemas
+    pub fn with_coerce_types(mut self, coerce_types: bool) -> Self {
+        self.coerce_types = coerce_types;
+        self
+    }
+
     /// Helper to convert these user facing options to `ListingTable` options
     pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
         let file_format = ParquetFormat::default()
             .with_enable_pruning(self.parquet_pruning)
-            .with_skip_metadata(self.skip_metadata);
+            .with_skip_metadata(self.skip_metadata)
+            .with_coerce_types(self.coerce_types);
 
         ListingOptions::new(Arc::new(file_format))
             .with_collect_stat(true)

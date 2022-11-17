@@ -811,7 +811,7 @@ mod tests {
         let path = String::from("table/p1=v1/file.avro");
         register_test_store(&ctx, &[(&path, 100)]);
 
-        let opt = ListingOptions::new(Arc::new(AvroFormat {}))
+        let opt = ListingOptions::new(Arc::new(AvroFormat::default()))
             .with_file_extension(FileType::AVRO.get_ext())
             .with_table_partition_cols(vec![String::from("p1")])
             .with_target_partitions(4)
@@ -1009,7 +1009,7 @@ mod tests {
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
-        let format = AvroFormat {};
+        let format = AvroFormat::default();
 
         let opt = ListingOptions::new(Arc::new(format))
             .with_file_extension("")
@@ -1044,7 +1044,7 @@ mod tests {
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
-        let format = AvroFormat {};
+        let format = AvroFormat::default();
 
         let opt = ListingOptions::new(Arc::new(format))
             .with_file_extension("")

@@ -55,6 +55,8 @@ pub struct ParquetFormat {
     enable_pruning: bool,
     metadata_size_hint: Option<usize>,
     skip_metadata: bool,
+    /// Specify whether compatible types can be coerced when merging schemas
+    coerce_types: bool,
 }
 
 impl Default for ParquetFormat {
@@ -63,6 +65,7 @@ impl Default for ParquetFormat {
             enable_pruning: true,
             metadata_size_hint: None,
             skip_metadata: true,
+            coerce_types: false,
         }
     }
 }
@@ -106,6 +109,12 @@ impl ParquetFormat {
     pub fn skip_metadata(&self) -> bool {
         self.skip_metadata
     }
+
+    /// Specify whether compatible types can be coerced when merging schemas
+    pub fn with_coerce_types(mut self, coerce_types: bool) -> Self {
+        self.coerce_types = coerce_types;
+        self
+    }
 }
 
 /// Clears all metadata (Schema level and field level) on an iterator
@@ -144,9 +153,9 @@ impl FileFormat for ParquetFormat {
         }
 
         let schema = if self.skip_metadata {
-            try_merge_schemas(clear_metadata(schemas))
+            try_merge_schemas(clear_metadata(schemas), self.coerce_types)
         } else {
-            try_merge_schemas(schemas)
+            try_merge_schemas(schemas, self.coerce_types)
         }?;
 
         Ok(Arc::new(schema))

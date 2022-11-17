@@ -37,7 +37,18 @@ use crate::physical_plan::Statistics;
 pub const DEFAULT_AVRO_EXTENSION: &str = ".avro";
 /// Avro `FileFormat` implementation.
 #[derive(Default, Debug)]
-pub struct AvroFormat;
+pub struct AvroFormat {
+    /// Specify whether compatible types can be coerced when merging schemas
+    coerce_types: bool,
+}
+
+impl AvroFormat {
+    /// Specify whether compatible types can be coerced when merging schemas
+    pub fn with_coerce_types(mut self, coerce_types: bool) -> Self {
+        self.coerce_types = coerce_types;
+        self
+    }
+}
 
 #[async_trait]
 impl FileFormat for AvroFormat {
@@ -62,7 +73,7 @@ impl FileFormat for AvroFormat {
             };
             schemas.push(schema);
         }
-        let merged_schema = try_merge_schemas(schemas)?;
+        let merged_schema = try_merge_schemas(schemas, self.coerce_types)?;
         Ok(Arc::new(merged_schema))
     }
 
@@ -364,7 +375,7 @@ mod tests {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::arrow_test_data();
         let store_root = format!("{}/avro", testdata);
-        let format = AvroFormat {};
+        let format = AvroFormat::default();
         scan_format(&format, &store_root, file_name, projection, limit).await
     }
 }
@@ -379,7 +390,7 @@ mod tests {
 
     #[tokio::test]
     async fn test() -> Result<()> {
-        let format = AvroFormat {};
+        let format = AvroFormat::default();
         let testdata = crate::test_util::arrow_test_data();
         let filename = "avro/alltypes_plain.avro";
         let result = scan_format(&format, &testdata, filename, None, None).await;

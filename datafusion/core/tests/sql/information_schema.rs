@@ -706,6 +706,7 @@ async fn show_all() {
         "| datafusion.execution.time_zone                  | +00:00  |",
         "| datafusion.explain.logical_plan_only            | false   |",
         "| datafusion.explain.physical_plan_only           | false   |",
+        "| datafusion.file_format.coerce_types             | false   |",
         "| datafusion.optimizer.filter_null_join_keys      | false   |",
         "| datafusion.optimizer.max_passes                 | 3       |",
         "| datafusion.optimizer.skip_failed_rules          | true    |",

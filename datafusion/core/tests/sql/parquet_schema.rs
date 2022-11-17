@@ -128,7 +128,7 @@ async fn merge_compatible_schemas() -> Result<()> {
     ctx.register_parquet(
         "test",
         tmp_dir.path().to_str().unwrap(),
-        ParquetReadOptions::default(),
+        ParquetReadOptions::default().with_coerce_types(true),
     )
     .await?;
     let df = ctx.table("test")?;

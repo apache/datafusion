@@ -46,6 +46,7 @@ use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
 use arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
+use datafusion_common::SchemaError::SchemaMergeError;
 use futures::StreamExt;
 use itertools::Itertools;
 
@@ -185,6 +186,7 @@ fn get_col_stats(
 /// but compatible, data types
 pub(crate) fn try_merge_schemas(
     schemas: impl IntoIterator<Item = Schema>,
+    merge_compatible_types: bool,
 ) -> Result<Schema> {
     let mut metadata = HashMap::new();
     let mut fields: Vec<Field> = vec![];
@@ -212,11 +214,32 @@ pub(crate) fn try_merge_schemas(
                         get_wider_type(merge_field.data_type(), field.data_type())
                     {
                         if &new_type != merge_field.data_type() {
-                            fields[i] = merge_field.clone().with_data_type(new_type);
+                            if merge_compatible_types {
+                                fields[i] = merge_field.clone().with_data_type(new_type);
+                            } else {
+                                return Err(DataFusionError::SchemaError(
+                                    SchemaMergeError {
+                                        field_name: field.name().to_owned(),
+                                        data_types: (
+                                            field.data_type().clone(),
+                                            merge_field.data_type().clone(),
+                                        ),
+                                    },
+                                ));
+                            }
                         }
+                    } else {
+                        return Err(DataFusionError::SchemaError(SchemaMergeError {
+                            field_name: field.name().to_owned(),
+                            data_types: (
+                                field.data_type().clone(),
+                                merge_field.data_type().clone(),
+                            ),
+                        }));
                     }
                 }
             } else {
+                // first time seeing this field
                 fields.push(field.clone());
             }
         }

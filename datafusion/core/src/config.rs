@@ -46,6 +46,9 @@ pub const OPT_COALESCE_BATCHES: &str = "datafusion.execution.coalesce_batches";
 pub const OPT_COALESCE_TARGET_BATCH_SIZE: &str =
     "datafusion.execution.coalesce_target_batch_size";
 
+/// Configuration option "datafusion.file_format.coerce_types"
+pub const OPT_FILE_FORMAT_COERCE_TYPES: &str = "datafusion.file_format.coerce_types";
+
 /// Configuration option "datafusion.execution.time_zone"
 pub const OPT_TIME_ZONE: &str = "datafusion.execution.time_zone";
 
@@ -217,6 +220,11 @@ impl BuiltInConfigs {
                  format!("Target batch size when coalescing batches. Uses in conjunction with the \
                           configuration setting '{}'.", OPT_COALESCE_BATCHES),
                  4096,
+            ),
+            ConfigDefinition::new_bool(
+                    OPT_FILE_FORMAT_COERCE_TYPES,
+                    "Enable this option to enable implicit casts when merging schemas.",
+                    false
             ),
             ConfigDefinition::new_string(
                 OPT_TIME_ZONE,

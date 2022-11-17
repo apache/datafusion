@@ -49,6 +49,8 @@ pub struct CsvFormat {
     delimiter: u8,
     schema_infer_max_rec: Option<usize>,
     file_compression_type: FileCompressionType,
+    /// Specify whether compatible types can be coerced when merging schemas
+    coerce_types: bool,
 }
 
 impl Default for CsvFormat {
@@ -58,6 +60,7 @@ impl Default for CsvFormat {
             has_header: true,
             delimiter: b',',
             file_compression_type: FileCompressionType::UNCOMPRESSED,
+            coerce_types: false,
         }
     }
 }
@@ -86,6 +89,12 @@ impl CsvFormat {
     /// - default to ','
     pub fn with_delimiter(mut self, delimiter: u8) -> Self {
         self.delimiter = delimiter;
+        self
+    }
+
+    /// Specify whether compatible types can be coerced when merging schemas
+    pub fn with_coerce_types(mut self, coerce_types: bool) -> Self {
+        self.coerce_types = coerce_types;
         self
     }
 
@@ -144,7 +153,7 @@ impl FileFormat for CsvFormat {
             }
         }
 
-        let merged_schema = try_merge_schemas(schemas)?;
+        let merged_schema = try_merge_schemas(schemas, self.coerce_types)?;
         Ok(Arc::new(merged_schema))
     }
 

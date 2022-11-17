@@ -25,6 +25,7 @@ use std::result;
 use crate::{Column, DFSchema};
 #[cfg(feature = "avro")]
 use apache_avro::Error as AvroError;
+use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 #[cfg(feature = "jit")]
 use cranelift_module::ModuleError;
@@ -126,6 +127,11 @@ pub enum SchemaError {
         field: Column,
         valid_fields: Option<Vec<Column>>,
     },
+    /// Schemas cannot be merged due to incompatible type
+    SchemaMergeError {
+        field_name: String,
+        data_types: (DataType, DataType),
+    },
 }
 
 /// Create a "field not found" DataFusion::SchemaError
@@ -198,6 +204,13 @@ impl Display for SchemaError {
                 } else {
                     write!(f, "Ambiguous reference to unqualified field '{}'", name)
                 }
+            }
+            Self::SchemaMergeError {
+                field_name,
+                data_types,
+            } => {
+                write!(f,"Failed to merge schema because field '{}' has different data types ({} and {})",
+                       field_name, data_types.0, data_types.1)
             }
         }
     }
