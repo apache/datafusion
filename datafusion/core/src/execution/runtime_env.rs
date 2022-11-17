@@ -158,6 +158,7 @@ impl RuntimeConfig {
         table_factories.insert("PARQUET".into(), Arc::new(ListingTableFactory::new()));
         table_factories.insert("CSV".into(), Arc::new(ListingTableFactory::new()));
         table_factories.insert("JSON".into(), Arc::new(ListingTableFactory::new()));
+        table_factories.insert("NDJSON".into(), Arc::new(ListingTableFactory::new()));
         table_factories.insert("AVRO".into(), Arc::new(ListingTableFactory::new()));
         Self {
             table_factories,
