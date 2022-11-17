@@ -140,7 +140,7 @@ impl Metric {
     }
 
     /// Add a new label to this metric
-    pub fn with(mut self, label: Label) -> Self {
+    pub fn with_label(mut self, label: Label) -> Self {
         self.labels.push(label);
         self
     }
@@ -259,15 +259,15 @@ impl MetricsSet {
     }
 
     /// Returns returns a new derived `MetricsSet` where all metrics
-    /// that had the same name and partition=`Some(..)` have been
+    /// that had the same name have been
     /// aggregated together. The resulting `MetricsSet` has all
     /// metrics with `Partition=None`
-    pub fn aggregate_by_partition(&self) -> Self {
+    pub fn aggregate_by_name(&self) -> Self {
         let mut map = HashMap::new();
 
         // There are all sorts of ways to make this more efficient
         for metric in &self.metrics {
-            let key = (metric.value.name(), metric.labels.clone());
+            let key = metric.value.name();
             map.entry(key)
                 .and_modify(|accum: &mut Metric| {
                     accum.value_mut().aggregate(metric.value());
@@ -275,11 +275,7 @@ impl MetricsSet {
                 .or_insert_with(|| {
                     // accumulate with no partition
                     let partition = None;
-                    let mut accum = Metric::new_with_labels(
-                        metric.value().new_empty(),
-                        partition,
-                        metric.labels().to_vec(),
-                    );
+                    let mut accum = Metric::new(metric.value().new_empty(), partition);
                     accum.value_mut().aggregate(metric.value());
                     accum
                 });
@@ -537,10 +533,10 @@ mod tests {
     }
 
     #[test]
-    fn test_aggregate_partition() {
+    fn test_aggregate_by_name() {
         let metrics = ExecutionPlanMetricsSet::new();
 
-        // Note cpu_time1 has labels so it is not aggregated with 2 and 3
+        // Note cpu_time1 has labels but it is still aggregated with metrics 2 and 3
         let elapsed_compute1 = MetricBuilder::new(&metrics)
             .with_new_label("foo", "bar")
             .elapsed_compute(1);
@@ -555,18 +551,15 @@ mod tests {
         let output_rows = MetricBuilder::new(&metrics).output_rows(1); // output rows
         output_rows.add(56);
 
-        let aggregated = metrics.clone_inner().aggregate_by_partition();
+        let aggregated = metrics.clone_inner().aggregate_by_name();
 
         // cpu time should be aggregated:
         let elapsed_computes = aggregated
             .iter()
-            .filter(|metric| {
-                matches!(metric.value(), MetricValue::ElapsedCompute(_))
-                    && metric.labels().is_empty()
-            })
+            .filter(|metric| matches!(metric.value(), MetricValue::ElapsedCompute(_)))
             .collect::<Vec<_>>();
         assert_eq!(elapsed_computes.len(), 1);
-        assert_eq!(elapsed_computes[0].value().as_usize(), 34 + 56);
+        assert_eq!(elapsed_computes[0].value().as_usize(), 12 + 34 + 56);
         assert!(elapsed_computes[0].partition().is_none());
 
         // output rows should
@@ -591,7 +584,7 @@ mod tests {
         time.add_duration(Duration::from_nanos(10));
 
         // can't aggregate time and count -- expect a panic
-        metrics.clone_inner().aggregate_by_partition();
+        metrics.clone_inner().aggregate_by_name();
     }
 
     #[test]
@@ -617,7 +610,7 @@ mod tests {
         end_timestamp1.set(t4);
 
         // aggregate
-        let aggregated = metrics.clone_inner().aggregate_by_partition();
+        let aggregated = metrics.clone_inner().aggregate_by_name();
 
         let mut ts = aggregated
             .iter()

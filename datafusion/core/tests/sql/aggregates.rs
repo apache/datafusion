@@ -2316,6 +2316,40 @@ async fn aggregate_with_alias() -> Result<()> {
 }
 
 #[tokio::test]
+async fn array_agg_zero() -> Result<()> {
+    let ctx = SessionContext::new();
+    // 2 different aggregate functions: avg and sum(distinct)
+    let sql = "SELECT ARRAY_AGG([]);";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------------------+",
+        "| ARRAYAGG(List([NULL])) |",
+        "+------------------------+",
+        "| []                     |",
+        "+------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn array_agg_one() -> Result<()> {
+    let ctx = SessionContext::new();
+    // 2 different aggregate functions: avg and sum(distinct)
+    let sql = "SELECT ARRAY_AGG([1]);";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+",
+        "| ARRAYAGG(List([1])) |",
+        "+---------------------+",
+        "| [[1]]               |",
+        "+---------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_approx_percentile_cont_decimal_support() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;

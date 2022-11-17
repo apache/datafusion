@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utitity functions for expression simplification
+//! Utility functions for expression simplification
 
 use arrow::datatypes::DECIMAL128_MAX_PRECISION;
 
@@ -171,7 +171,7 @@ pub fn as_bool_lit(expr: Expr) -> Result<Option<bool>> {
 
 /// negate a Not clause
 /// input is the clause to be negated.(args of Not clause)
-/// For BinaryExpr, use the negator of op instead.
+/// For BinaryExpr, use the negation of op instead.
 ///    not ( A > B) ===> (A <= B)
 /// For BoolExpr, not (A and B) ===> (not A) or (not B)
 ///     not (A or B) ===> (not A) and (not B)
