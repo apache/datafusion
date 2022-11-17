@@ -271,7 +271,6 @@ fn propagate_empty_relation() {
 fn join_keys_in_subquery_alias() {
     let sql = "SELECT * FROM test AS A, ( SELECT col_int32 as key FROM test ) AS B where A.col_int32 = B.key;";
     let plan = test_sql(sql).unwrap();
-    // when children exist EmptyRelation, it will bottom-up propagate.
     let expected =  "Projection: a.col_int32, a.col_uint32, a.col_utf8, a.col_date32, a.col_date64, a.col_ts_nano_none, a.col_ts_nano_utc, b.key\
     \n  Inner Join: a.col_int32 = b.key\
     \n    Filter: a.col_int32 IS NOT NULL\
@@ -281,6 +280,26 @@ fn join_keys_in_subquery_alias() {
     \n      Projection: test.col_int32 AS key\
     \n        Filter: test.col_int32 IS NOT NULL\
     \n          TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{:?}", plan));
+}
+
+#[test]
+fn join_keys_in_subquery_alias_1() {
+    let sql = "SELECT * FROM test AS A, ( SELECT test.col_int32 AS key FROM test JOIN test AS C on test.col_int32 = C.col_int32 ) AS B where A.col_int32 = B.key;";
+    let plan = test_sql(sql).unwrap();
+    let expected =  "Projection: a.col_int32, a.col_uint32, a.col_utf8, a.col_date32, a.col_date64, a.col_ts_nano_none, a.col_ts_nano_utc, b.key\
+    \n  Inner Join: a.col_int32 = b.key\
+    \n    Filter: a.col_int32 IS NOT NULL\
+    \n      SubqueryAlias: a\
+    \n        TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]\
+    \n    Projection: key, alias=b\
+    \n      Projection: test.col_int32 AS key\
+    \n        Inner Join: test.col_int32 = c.col_int32\
+    \n          Filter: test.col_int32 IS NOT NULL\
+    \n            TableScan: test projection=[col_int32]\
+    \n          Filter: c.col_int32 IS NOT NULL\
+    \n            SubqueryAlias: c\
+    \n              TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{:?}", plan));
 }
 
