@@ -261,13 +261,13 @@ impl SchemaAdapter {
         for idx in projections {
             let field = self.table_schema.field(*idx);
             if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
-                if file_schema.field(mapped_idx).data_type() == field.data_type() {
+                //if file_schema.field(mapped_idx).data_type() == field.data_type() {
                     mapped.push(mapped_idx)
-                } else {
-                    let msg = format!("Failed to map column projection for field {}. Incompatible data types {:?} and {:?}", field.name(), file_schema.field(mapped_idx).data_type(), field.data_type());
-                    info!("{}", msg);
-                    return Err(DataFusionError::Execution(msg));
-                }
+                // } else {
+                //     let msg = format!("Failed to map column projection for field {}. Incompatible data types {:?} and {:?}", field.name(), file_schema.field(mapped_idx).data_type(), field.data_type());
+                //     info!("{}", msg);
+                //     return Err(DataFusionError::Execution(msg));
+                // }
             }
         }
         Ok(mapped)
