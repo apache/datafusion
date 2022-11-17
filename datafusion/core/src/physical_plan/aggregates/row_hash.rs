@@ -479,8 +479,17 @@ fn create_batch_from_map(
                     results[i].push(acc.evaluate(&state_accessor).unwrap());
                 }
             }
-            for scalars in results {
-                columns.push(ScalarValue::iter_to_array(scalars)?);
+            // We skip over the first `columns.len()` elements.
+            //
+            // This shouldn't panic if the `output_schema` has enough fields.
+            let remaining_field_iterator = output_schema.fields()[columns.len()..].iter();
+
+            for (scalars, field) in results.into_iter().zip(remaining_field_iterator) {
+                if !scalars.is_empty() {
+                    columns.push(ScalarValue::iter_to_array(scalars)?);
+                } else {
+                    columns.push(arrow::array::new_empty_array(field.data_type()))
+                }
             }
         }
     }

@@ -22,7 +22,8 @@
 
 use crate::DataFusionError;
 use arrow::array::{
-    Array, Date32Array, Decimal128Array, Int32Array, Int64Array, StructArray,
+    Array, Date32Array, Decimal128Array, Float32Array, Float64Array, Int32Array,
+    Int64Array, StringArray, StructArray,
 };
 
 // Downcast ArrayRef to Date32Array
@@ -78,4 +79,40 @@ pub fn as_decimal128_array(
                 array.data_type()
             ))
         })
+}
+
+// Downcast ArrayRef to Float32Array
+pub fn as_float32_array(array: &dyn Array) -> Result<&Float32Array, DataFusionError> {
+    array
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Expected a Float32Array, got: {}",
+                array.data_type()
+            ))
+        })
+}
+
+// Downcast ArrayRef to Float64Array
+pub fn as_float64_array(array: &dyn Array) -> Result<&Float64Array, DataFusionError> {
+    array
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Expected a Float64Array, got: {}",
+                array.data_type()
+            ))
+        })
+}
+
+// Downcast ArrayRef to StringArray
+pub fn as_string_array(array: &dyn Array) -> Result<&StringArray, DataFusionError> {
+    array.as_any().downcast_ref::<StringArray>().ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "Expected a StringArray, got: {}",
+            array.data_type()
+        ))
+    })
 }

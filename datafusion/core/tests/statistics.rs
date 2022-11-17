@@ -238,8 +238,9 @@ async fn sql_filter() -> Result<()> {
         .await
         .unwrap();
 
-    // with a filtering condition we loose all knowledge about the statistics
-    assert_eq!(Statistics::default(), physical_plan.statistics());
+    let stats = physical_plan.statistics();
+    assert!(!stats.is_exact);
+    assert_eq!(stats.num_rows, Some(1));
 
     Ok(())
 }
