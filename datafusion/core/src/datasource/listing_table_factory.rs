@@ -58,20 +58,18 @@ impl TableProviderFactory for ListingTableFactory {
         state: &SessionState,
         cmd: &CreateExternalTable,
     ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
-        let file_compression_type =
-            match FileCompressionType::from_str(cmd.file_compression_type.as_str()) {
-                Ok(t) => t,
-                Err(_) => Err(DataFusionError::Execution(
-                    "Only known FileCompressionTypes can be ListingTables!".to_string(),
-                ))?,
-            };
-
-        let file_type = match FileType::from_str(cmd.file_type.as_str()) {
-            Ok(t) => t,
-            Err(_) => Err(DataFusionError::Execution(
-                "Only known FileTypes can be ListingTables!".to_string(),
-            ))?,
-        };
+        let file_compression_type = FileCompressionType::from_str(
+            cmd.file_compression_type.as_str(),
+        )
+        .map_err(|_| {
+            DataFusionError::Execution(format!(
+                "Unknown FileCompressionType {}",
+                cmd.file_compression_type.as_str()
+            ))
+        })?;
+        let file_type = FileType::from_str(cmd.file_type.as_str()).map_err(|_| {
+            DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
+        })?;
 
         let file_extension =
             file_type.get_ext_with_compression(file_compression_type.to_owned())?;
