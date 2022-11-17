@@ -170,7 +170,7 @@ async fn merge_compatible_schemas() -> Result<()> {
 
 async fn create_parquet_file(path: &Path, filename: &str, schema: &Schema) -> Result<()> {
     let ctx = SessionContext::default();
-    let options = CsvReadOptions::new().schema(&schema);
+    let options = CsvReadOptions::new().schema(schema);
     ctx.register_csv("t", "tests/example.csv", options).await?;
     let t = ctx.table("t")?;
     let path = path.join(filename);
