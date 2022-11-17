@@ -712,6 +712,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // parse ON expression
                 let expr = self.sql_to_rex(sql_expr, &join_schema, ctes)?;
 
+                // ambiguous check
+                ensure_any_column_reference_is_determined(
+                    &expr,
+                    &[left.schema().clone(), right.schema().clone()],
+                )?;
+
                 // expression that didn't match equi-join pattern
                 let mut filter = vec![];
 
@@ -3002,6 +3008,66 @@ fn extract_possible_join_keys(
             _ => Ok(()),
         },
         _ => Ok(()),
+    }
+}
+
+/// Ensure any column reference of the expression is determined.
+/// Assume we have two schema:
+/// schema1: a, b ,c
+/// schema2: a, d, e
+///
+/// `schema1.a + schema2.a` is determined.
+/// `a + d` is not determined, because `a` may come from schema1 or schema2.
+fn ensure_any_column_reference_is_determined(
+    expr: &Expr,
+    schemas: &[DFSchemaRef],
+) -> Result<()> {
+    if schemas.len() == 1 {
+        return Ok(());
+    }
+
+    // extract columns both in one more schemas.
+    let mut column_count_map: HashMap<String, usize> = HashMap::new();
+    schemas
+        .iter()
+        .flat_map(|schema| schema.fields())
+        .for_each(|field| {
+            column_count_map
+                .entry(field.name().into())
+                .and_modify(|v| *v += 1)
+                .or_insert(1usize);
+        });
+
+    let duplicated_column_set = column_count_map
+        .iter()
+        .filter(|(_, count)| **count > 1usize)
+        .map(|(column, _)| column)
+        .cloned()
+        .collect::<HashSet<String>>();
+
+    // check if there is ambiguous column.
+    let using_columns = expr.to_columns()?;
+    let ambiguous_column = using_columns.iter().find(|column| {
+        column.relation.is_none() && duplicated_column_set.contains(&column.name)
+    });
+
+    if let Some(column) = ambiguous_column {
+        let maybe_field = schemas
+            .iter()
+            .flat_map(|schema| {
+                schema
+                    .field_with_unqualified_name(&column.name)
+                    .map(|f| f.qualified_name())
+                    .ok()
+            })
+            .collect::<Vec<_>>();
+        Err(DataFusionError::Internal(format!(
+            "reference \'{}\' is ambiguous, could be {};",
+            column.name,
+            maybe_field.join(","),
+        )))
+    } else {
+        Ok(())
     }
 }
 
@@ -5631,6 +5697,19 @@ mod tests {
 
         // It should return error in other dialect.
         assert!(logical_plan("SELECT \"1\"").is_err());
+    }
+
+    #[test]
+    fn test_ambiguous_coulmn_referece_in_join() {
+        // The error message will be:
+        // reference 'id' is ambiguous, could be p1.id,p2.id;
+        let sql = "select p1.id, p1.age, p2.id 
+            from person as p1 
+            INNER JOIN person as p2 
+            ON id = 1";
+
+        // It should return error.
+        assert!(logical_plan(sql).is_err());
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
