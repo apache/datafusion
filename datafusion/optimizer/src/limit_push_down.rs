@@ -917,7 +917,6 @@ mod test {
             .limit(0, Some(1000))?
             .build()?;
 
-        // Limit pushdown Not supported in Join
         let expected = "Limit: skip=0, fetch=1000\
         \n  CrossJoin:\
         \n    TableScan: test, fetch=1000\
@@ -938,7 +937,6 @@ mod test {
             .limit(1000, Some(1000))?
             .build()?;
 
-        // Limit pushdown Not supported in Join
         let expected = "Limit: skip=1000, fetch=1000\
         \n  CrossJoin:\
         \n    TableScan: test, fetch=2000\
