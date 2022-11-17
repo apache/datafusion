@@ -252,7 +252,7 @@ impl SchemaAdapter {
     }
 
     /// Map projected column indexes to the file schema. This will fail if the table schema
-    /// and the file schema contain a field with the same name and different types.
+    /// and the file schema contain a field with the same name and incompatible types.
     pub fn map_projections(
         &self,
         file_schema: &Schema,
@@ -262,7 +262,7 @@ impl SchemaAdapter {
         for idx in projections {
             let field = self.table_schema.field(*idx);
             if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
-                //TODO check for compatible types rather than an exact match
+                // check for compatible types rather than an exact match
                 let file_type = file_schema.field(mapped_idx).data_type();
                 let field_type = field.data_type();
                 if file_type == field_type
