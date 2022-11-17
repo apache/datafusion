@@ -65,7 +65,7 @@ impl BuiltInWindowFunctionExpr for RowNumber {
         &self,
         _batch: &RecordBatch,
     ) -> Result<Box<dyn PartitionEvaluator>> {
-        Ok(Box::new(NumRowsEvaluator::default()))
+        Ok(Box::<NumRowsEvaluator>::default())
     }
 }
 
