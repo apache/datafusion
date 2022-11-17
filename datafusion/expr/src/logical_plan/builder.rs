@@ -416,19 +416,7 @@ impl LogicalPlanBuilder {
 
     /// Apply a union, preserving duplicate rows
     pub fn union(&self, plan: LogicalPlan) -> Result<Self> {
-        Ok(Self::from(union_with_alias(self.plan.clone(), plan, None)?))
-    }
-
-    pub fn union_with_alias(
-        &self,
-        plan: LogicalPlan,
-        alias: Option<String>,
-    ) -> Result<Self> {
-        Ok(Self::from(union_with_alias(
-            self.plan.clone(),
-            plan,
-            alias,
-        )?))
+        Ok(Self::from(union(self.plan.clone(), plan)?))
     }
 
     /// Apply a union, removing duplicate rows
@@ -445,7 +433,7 @@ impl LogicalPlanBuilder {
         };
 
         Ok(Self::from(LogicalPlan::Distinct(Distinct {
-            input: Arc::new(union_with_alias(left_plan, right_plan, None)?),
+            input: Arc::new(union(left_plan, right_plan)?),
         })))
     }
 
@@ -892,10 +880,9 @@ pub fn project_with_column_index_alias(
 }
 
 /// Union two logical plans with an optional alias.
-pub fn union_with_alias(
+pub fn union(
     left_plan: LogicalPlan,
     right_plan: LogicalPlan,
-    alias: Option<String>,
 ) -> Result<LogicalPlan> {
     let left_col_num = left_plan.schema().fields().len();
 
@@ -927,7 +914,7 @@ pub fn union_with_alias(
                     })?;
 
             Ok(DFField::new(
-                alias.as_deref(),
+                None,
                 left_field.name(),
                 data_type,
                 nullable,
@@ -962,14 +949,9 @@ pub fn union_with_alias(
         return Err(DataFusionError::Plan("Empty UNION".to_string()));
     }
 
-    let union_schema = Arc::new(match alias {
-        Some(ref alias) => union_schema.replace_qualifier(alias.as_str()),
-        None => union_schema.strip_qualifiers(),
-    });
-
     Ok(LogicalPlan::Union(Union {
         inputs,
-        schema: union_schema,
+        schema: Arc::new(union_schema),
     }))
 }
 
