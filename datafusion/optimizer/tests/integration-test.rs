@@ -258,6 +258,15 @@ fn timestamp_nano_ts_utc_predicates() {
     assert_eq!(expected, format!("{:?}", plan));
 }
 
+#[test]
+fn propagate_empty_relation() {
+    let sql = "SELECT col_int32 FROM test JOIN ( SELECT col_int32 FROM test WHERE false ) AS ta1 ON test.col_int32 = ta1.col_int32;";
+    let plan = test_sql(sql).unwrap();
+    // when children exist EmptyRelation, it will bottom-up propagate.
+    let expected = "EmptyRelation";
+    assert_eq!(expected, format!("{:?}", plan));
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...

@@ -1001,11 +1001,6 @@ mod tests {
         let expr = call_fn("to_timestamp", vec![col("a")]).unwrap();
         test_evaluate(expr.clone(), expr);
 
-        // check that non foldable arguments are folded
-        // to_timestamp(a) --> to_timestamp(a) [no rewrite possible]
-        let expr = call_fn("to_timestamp", vec![col("a")]).unwrap();
-        test_evaluate(expr.clone(), expr);
-
         // volatile / stable functions should not be evaluated
         // rand() + (1 + 2) --> rand() + 3
         let fun = BuiltinScalarFunction::Random;

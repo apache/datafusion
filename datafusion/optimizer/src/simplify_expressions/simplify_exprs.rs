@@ -552,7 +552,7 @@ mod tests {
         let table_scan = test_table_scan();
 
         let ts_string = "2020-09-08T12:05:00+00:00";
-        let time = chrono::Utc.timestamp_nanos(1599566400000000000i64);
+        let time = Utc.timestamp_nanos(1599566400000000000i64);
 
         //  cast(now() as int) < cast(to_timestamp(...) as int) + 50000_i64
         let plan =
@@ -580,7 +580,7 @@ mod tests {
         let table_scan = test_table_scan();
 
         let ts_string = "2020-09-08T12:05:00+00:00";
-        let time = chrono::Utc.timestamp_nanos(1599566400000000000i64);
+        let time = Utc.timestamp_nanos(1599566400000000000i64);
 
         //  now() < cast(to_timestamp(...) as int) + 5000000000
         let schema = table_scan.schema();

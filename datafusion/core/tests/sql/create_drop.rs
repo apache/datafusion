@@ -50,6 +50,71 @@ async fn create_table_as() -> Result<()> {
 }
 
 #[tokio::test]
+async fn create_table_with_schema_as_select() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
+
+    let sql = "CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) \
+    AS SELECT *,c3 as c4_tmp FROM aggregate_simple";
+    ctx.sql(sql).await.unwrap();
+
+    let sql_all = "SELECT * FROM my_table order by c1 LIMIT 1";
+    let results_all = execute_to_batches(&ctx, sql_all).await;
+
+    let expected = vec![
+        "+---------+----------------+------+----+",
+        "| c1      | c2             | c3   | c4 |",
+        "+---------+----------------+------+----+",
+        "| 0.00001 | 0.000000000001 | true | 1  |",
+        "+---------+----------------+------+----+",
+    ];
+
+    assert_batches_eq!(expected, &results_all);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_table_with_schema_as_select_mismatch() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
+
+    let sql = "CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) \
+    AS SELECT * FROM aggregate_simple";
+    let expected_err = ctx.sql(sql).await.unwrap_err();
+    assert_contains!(
+        expected_err.to_string(),
+        "Mismatch: 4 columns specified, but result has 3 columns"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_table_with_schema_as_values() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
+
+    let sql =
+        "CREATE TABLE my_table(c1 int, c2 float, c3 varchar) AS VALUES(1, 2, 'hello')";
+    ctx.sql(sql).await.unwrap();
+
+    let sql_all = "SELECT * FROM my_table";
+    let results_all = execute_to_batches(&ctx, sql_all).await;
+
+    let expected = vec![
+        "+----+----+-------+",
+        "| c1 | c2 | c3    |",
+        "+----+----+-------+",
+        "| 1  | 2  | hello |",
+        "+----+----+-------+",
+    ];
+
+    assert_batches_eq!(expected, &results_all);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_or_replace_table_as() -> Result<()> {
     // the information schema used to introduce cyclic Arcs
     let ctx =
