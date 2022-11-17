@@ -224,7 +224,7 @@ mod tests {
         let store = Arc::new(LocalFileSystem::new()) as _;
         let meta = local_unpartitioned_file(filename);
 
-        let file_schema = AvroFormat {}.infer_schema(&store, &[meta.clone()]).await?;
+        let file_schema = AvroFormat::default().infer_schema(&store, &[meta.clone()]).await?;
 
         let avro_exec = AvroExec::new(FileScanConfig {
             object_store_url: ObjectStoreUrl::local_filesystem(),
@@ -286,7 +286,7 @@ mod tests {
         let object_store = Arc::new(LocalFileSystem::new()) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
-        let actual_schema = AvroFormat {}
+        let actual_schema = AvroFormat::default()
             .infer_schema(&object_store, &[meta.clone()])
             .await?;
 
@@ -357,7 +357,7 @@ mod tests {
         let object_store = Arc::new(LocalFileSystem::new()) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
-        let file_schema = AvroFormat {}
+        let file_schema = AvroFormat::default()
             .infer_schema(&object_store, &[meta.clone()])
             .await?;
 
