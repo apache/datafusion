@@ -28,7 +28,7 @@ use arrow::{
     },
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
 };
-use datafusion_common::ScalarValue;
+use datafusion_common::{cast::as_string_array, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::any::type_name;
@@ -294,7 +294,7 @@ pub fn concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                         }
                         ColumnarValue::Array(v) => {
                             if v.is_valid(index) {
-                                let v = v.as_any().downcast_ref::<StringArray>().unwrap();
+                                let v = as_string_array(v).unwrap();
                                 owned_string.push_str(v.value(index));
                             }
                         }

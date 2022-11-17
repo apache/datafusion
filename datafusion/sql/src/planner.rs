@@ -17,45 +17,14 @@
 
 //! SQL Query Planner (produces logical plan from SQL AST)
 
-use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
-use arrow::datatypes::*;
-use datafusion_common::parsers::parse_interval;
-use datafusion_common::{context, ToDFSchema};
-use datafusion_expr::expr_rewriter::normalize_col;
-use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::{
-    Analyze, CreateCatalog, CreateCatalogSchema,
-    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DropTable, DropView, Explain, JoinType, LogicalPlan, LogicalPlanBuilder,
-    Partitioning, PlanType, SetVariable, ToStringifiedPlan,
-};
-use datafusion_expr::utils::{
-    can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
-    find_aggregate_exprs, find_column_exprs, find_window_exprs, COUNT_STAR_EXPANSION,
-};
-use datafusion_expr::{
-    and, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable, GetIndexedField,
-    Operator, ScalarUDF, WindowFrame, WindowFrameUnits,
-};
-use datafusion_expr::{
-    window_function::WindowFunction, BuiltinScalarFunction, TableSource,
-};
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
 
-use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
-use datafusion_common::TableReference;
-use datafusion_common::{
-    field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-};
-use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
-use datafusion_expr::logical_plan::builder::project_with_alias;
-use datafusion_expr::logical_plan::{Filter, Subquery};
-use datafusion_expr::Expr::Alias;
-
+use arrow::datatypes::*;
 use sqlparser::ast::TimezoneInfo;
+use sqlparser::ast::{ArrayAgg, ExactNumberInfo, SetQuantifier};
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
@@ -67,7 +36,38 @@ use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::parser::ParserError::ParserError;
 
-use sqlparser::ast::ExactNumberInfo;
+use datafusion_common::parsers::parse_interval;
+use datafusion_common::TableReference;
+use datafusion_common::{context, ToDFSchema};
+use datafusion_common::{
+    field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+};
+use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
+use datafusion_expr::expr_rewriter::normalize_col;
+use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
+use datafusion_expr::logical_plan::builder::project_with_alias;
+use datafusion_expr::logical_plan::{
+    Analyze, CreateCatalog, CreateCatalogSchema,
+    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
+    DropTable, DropView, Explain, JoinType, LogicalPlan, LogicalPlanBuilder,
+    Partitioning, PlanType, SetVariable, ToStringifiedPlan,
+};
+use datafusion_expr::logical_plan::{Filter, Subquery};
+use datafusion_expr::utils::{
+    can_hash, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr,
+    find_aggregate_exprs, find_column_exprs, find_window_exprs, COUNT_STAR_EXPANSION,
+};
+use datafusion_expr::Expr::Alias;
+use datafusion_expr::{
+    and, cast, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable,
+    GetIndexedField, Operator, ScalarUDF, WindowFrame, WindowFrameUnits,
+};
+use datafusion_expr::{
+    window_function::WindowFunction, BuiltinScalarFunction, TableSource,
+};
+
+use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
+use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
 
 use super::{
     parser::DFParser,
@@ -92,9 +92,16 @@ pub trait ContextProvider {
     fn get_config_option(&self, variable: &str) -> Option<ScalarValue>;
 }
 
+/// SQL parser options
+#[derive(Debug, Default)]
+pub struct ParserOptions {
+    parse_float_as_decimal: bool,
+}
+
 /// SQL query planner
 pub struct SqlToRel<'a, S: ContextProvider> {
     schema_provider: &'a S,
+    options: ParserOptions,
 }
 
 fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
@@ -137,7 +144,15 @@ fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Create a new query planner
     pub fn new(schema_provider: &'a S) -> Self {
-        SqlToRel { schema_provider }
+        Self::new_with_options(schema_provider, ParserOptions::default())
+    }
+
+    /// Create a new query planner
+    pub fn new_with_options(schema_provider: &'a S, options: ParserOptions) -> Self {
+        SqlToRel {
+            schema_provider,
+            options,
+        }
     }
 
     /// Generate a logical plan from an DataFusion SQL statement
@@ -180,12 +195,38 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if_not_exists,
                 or_replace,
                 ..
-            } if columns.is_empty()
-                && constraints.is_empty()
+            } if constraints.is_empty()
                 && table_properties.is_empty()
                 && with_options.is_empty() =>
             {
                 let plan = self.query_to_plan(*query, &mut HashMap::new())?;
+                let input_schema = plan.schema();
+
+                let plan = if !columns.is_empty() {
+                    let schema = self.build_schema(columns)?.to_dfschema_ref()?;
+                    if schema.fields().len() != input_schema.fields().len() {
+                        return Err(DataFusionError::Plan(format!(
+                            "Mismatch: {} columns specified, but result has {} columns",
+                            schema.fields().len(),
+                            input_schema.fields().len()
+                        )));
+                    }
+                    let input_fields = input_schema.fields();
+                    let project_exprs = schema
+                        .fields()
+                        .iter()
+                        .zip(input_fields)
+                        .map(|(field, input_field)| {
+                            cast(col(input_field.name()), field.data_type().clone())
+                                .alias(field.name())
+                        })
+                        .collect::<Vec<_>>();
+                    LogicalPlanBuilder::from(plan.clone())
+                        .project(project_exprs)?
+                        .build()?
+                } else {
+                    plan
+                };
 
                 Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                     name: name.to_string(),
@@ -419,8 +460,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 op,
                 left,
                 right,
-                all,
+                set_quantifier,
             } => {
+                let all = match set_quantifier {
+                    SetQuantifier::All => true,
+                    SetQuantifier::Distinct | SetQuantifier::None => false,
+                };
+
                 let left_plan =
                     self.set_expr_to_plan(*left, None, ctes, outer_query_schema)?;
                 let right_plan =
@@ -1699,7 +1745,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|row| {
                 row.into_iter()
                     .map(|v| match v {
-                        SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
+                        SQLExpr::Value(Value::Number(n, _)) => self.parse_sql_number(&n),
                         SQLExpr::Value(
                             Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
                         ) => Ok(lit(s)),
@@ -1753,7 +1799,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<Expr> {
         match sql {
-            SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
+            SQLExpr::Value(Value::Number(n, _)) => self.parse_sql_number(&n),
             SQLExpr::Value(Value::SingleQuotedString(ref s) | Value::DoubleQuotedString(ref s)) => Ok(lit(s.clone())),
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
             SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Null)),
@@ -2279,6 +2325,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(&subquery, schema, ctes),
 
+            SQLExpr::ArrayAgg(array_agg) => self.parse_array_agg(array_agg, schema, ctes),
+
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node in sqltorel: {:?}",
                 sql
@@ -2339,6 +2387,53 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 input_schema,
             )?),
         }))
+    }
+
+    fn parse_array_agg(
+        &self,
+        array_agg: ArrayAgg,
+        input_schema: &DFSchema,
+        ctes: &mut HashMap<String, LogicalPlan>,
+    ) -> Result<Expr> {
+        // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
+        let ArrayAgg {
+            distinct,
+            expr,
+            order_by,
+            limit,
+            within_group,
+        } = array_agg;
+
+        if let Some(order_by) = order_by {
+            return Err(DataFusionError::NotImplemented(format!(
+                "ORDER BY not supported in ARRAY_AGG: {}",
+                order_by
+            )));
+        }
+
+        if let Some(limit) = limit {
+            return Err(DataFusionError::NotImplemented(format!(
+                "LIMIT not supported in ARRAY_AGG: {}",
+                limit
+            )));
+        }
+
+        if within_group {
+            return Err(DataFusionError::NotImplemented(
+                "WITHIN GROUP not supported in ARRAY_AGG".to_string(),
+            ));
+        }
+
+        let args = vec![self.sql_expr_to_logical_expr(*expr, input_schema, ctes)?];
+        // next, aggregate built-ins
+        let fun = AggregateFunction::ArrayAgg;
+
+        Ok(Expr::AggregateFunction {
+            fun,
+            distinct,
+            args,
+            filter: None,
+        })
     }
 
     fn function_args_to_expr(
@@ -2491,6 +2586,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Value::SingleQuotedString(s) => s.to_string(),
                 Value::Number(_, _) | Value::Boolean(_) => v.to_string(),
                 Value::DoubleQuotedString(_)
+                | Value::UnQuotedString(_)
                 | Value::EscapedStringLiteral(_)
                 | Value::NationalStringLiteral(_)
                 | Value::HexStringLiteral(_)
@@ -2668,15 +2764,63 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    /// Parse number in sql string, convert to Expr::Literal
+    fn parse_sql_number(&self, n: &str) -> Result<Expr> {
+        if n.find('E').is_some() {
+            // not implemented yet
+            // https://github.com/apache/arrow-datafusion/issues/3448
+            Err(DataFusionError::NotImplemented(
+                "sql numeric literals in scientific notation are not supported"
+                    .to_string(),
+            ))
+        } else if let Ok(n) = n.parse::<i64>() {
+            Ok(lit(n))
+        } else if self.options.parse_float_as_decimal {
+            // remove leading zeroes
+            let str = n.trim_start_matches('0');
+            if let Some(i) = str.find('.') {
+                let p = str.len() - 1;
+                let s = str.len() - i - 1;
+                let str = str.replace('.', "");
+                let n = str.parse::<i128>().map_err(|_| {
+                    DataFusionError::from(ParserError(format!(
+                        "Cannot parse {} as i128 when building decimal",
+                        str
+                    )))
+                })?;
+                Ok(Expr::Literal(ScalarValue::Decimal128(
+                    Some(n),
+                    p as u8,
+                    s as u8,
+                )))
+            } else {
+                let number = n.parse::<i128>().map_err(|_| {
+                    DataFusionError::from(ParserError(format!(
+                        "Cannot parse {} as i128 when building decimal",
+                        n
+                    )))
+                })?;
+                Ok(Expr::Literal(ScalarValue::Decimal128(Some(number), 38, 0)))
+            }
+        } else {
+            n.parse::<f64>().map(lit).map_err(|_| {
+                DataFusionError::from(ParserError(format!("Cannot parse {} as f64", n)))
+            })
+        }
+    }
+
     fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
-            SQLDataType::Array(inner_sql_type) => {
+            SQLDataType::Array(Some(inner_sql_type)) => {
                 let data_type = self.convert_simple_data_type(inner_sql_type)?;
 
                 Ok(DataType::List(Box::new(Field::new(
                     "field", data_type, true,
                 ))))
             }
+            SQLDataType::Array(None) => Err(DataFusionError::NotImplemented(
+                "Arrays with unspecified type is not supported".to_string(),
+            )),
             other => self.convert_simple_data_type(other),
         }
     }
@@ -2700,7 +2844,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Varchar(_)
             | SQLDataType::Text
             | SQLDataType::String => Ok(DataType::Utf8),
-            SQLDataType::Timestamp(tz_info) => {
+            SQLDataType::Timestamp(None, tz_info) => {
                 let tz = if matches!(tz_info, TimezoneInfo::Tz)
                     || matches!(tz_info, TimezoneInfo::WithTimeZone)
                 {
@@ -2730,7 +2874,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(DataType::Timestamp(TimeUnit::Nanosecond, tz))
             }
             SQLDataType::Date => Ok(DataType::Date32),
-            SQLDataType::Time(tz_info) => {
+            SQLDataType::Time(None, tz_info) => {
                 if matches!(tz_info, TimezoneInfo::None)
                     || matches!(tz_info, TimezoneInfo::WithoutTimeZone)
                 {
@@ -2743,7 +2887,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     )))
                 }
             }
-            SQLDataType::Decimal(exact_number_info) => {
+            SQLDataType::Numeric(exact_number_info)
+            |SQLDataType::Decimal(exact_number_info) => {
                 let (precision, scale) = match *exact_number_info {
                     ExactNumberInfo::None => (None, None),
                     ExactNumberInfo::Precision(precision) => (Some(precision), None),
@@ -2762,10 +2907,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Binary(_)
             | SQLDataType::Varbinary(_)
             | SQLDataType::Blob(_)
-            | SQLDataType::Datetime
+            | SQLDataType::Datetime(_)
             | SQLDataType::Interval
             | SQLDataType::Regclass
-            | SQLDataType::Custom(_)
+            | SQLDataType::Custom(_, _)
             | SQLDataType::Array(_)
             | SQLDataType::Enum(_)
             | SQLDataType::Set(_)
@@ -2775,7 +2920,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharacterVarying(_)
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
-            | SQLDataType::CharLargeObject(_)
+                | SQLDataType::CharLargeObject(_)
+            // precision is not supported
+                | SQLDataType::Timestamp(Some(_), _)
+            // precision is not supported
+                | SQLDataType::Time(Some(_), _)
+                | SQLDataType::Dec(_)
             | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL type {:?}",
                 sql_type
@@ -2919,27 +3069,42 @@ fn extract_possible_join_keys(
     }
 }
 
-// Parse number in sql string, convert to Expr::Literal
-fn parse_sql_number(n: &str) -> Result<Expr> {
-    // parse first as i64
-    n.parse::<i64>()
-        .map(lit)
-        // if parsing as i64 fails try f64
-        .or_else(|_| n.parse::<f64>().map(lit))
-        .map_err(|_| {
-            DataFusionError::from(ParserError(format!(
-                "Cannot parse {} as i64 or f64",
-                n
-            )))
-        })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use datafusion_common::assert_contains;
-    use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
     use std::any::Any;
+
+    use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
+
+    use datafusion_common::assert_contains;
+
+    use super::*;
+
+    #[test]
+    fn parse_decimals() {
+        let test_data = [
+            ("1", "Int64(1)"),
+            ("001", "Int64(1)"),
+            ("0.1", "Decimal128(Some(1),1,1)"),
+            ("0.01", "Decimal128(Some(1),2,2)"),
+            ("1.0", "Decimal128(Some(10),2,1)"),
+            ("10.01", "Decimal128(Some(1001),4,2)"),
+            (
+                "10000000000000000000.00",
+                "Decimal128(Some(1000000000000000000000),22,2)",
+            ),
+        ];
+        for (a, b) in test_data {
+            let sql = format!("SELECT {}", a);
+            let expected = format!("Projection: {}\n  EmptyRelation", b);
+            quick_test_with_options(
+                &sql,
+                &expected,
+                ParserOptions {
+                    parse_float_as_decimal: true,
+                },
+            );
+        }
+    }
 
     #[test]
     fn select_no_relation() {
@@ -4913,8 +5078,15 @@ mod tests {
     }
 
     fn logical_plan(sql: &str) -> Result<LogicalPlan> {
+        logical_plan_with_options(sql, ParserOptions::default())
+    }
+
+    fn logical_plan_with_options(
+        sql: &str,
+        options: ParserOptions,
+    ) -> Result<LogicalPlan> {
         let dialect = &GenericDialect {};
-        logical_plan_with_dialect(sql, dialect)
+        logical_plan_with_dialect_and_options(sql, dialect, options)
     }
 
     fn logical_plan_with_dialect(
@@ -4927,9 +5099,25 @@ mod tests {
         planner.statement_to_plan(ast.pop_front().unwrap())
     }
 
+    fn logical_plan_with_dialect_and_options(
+        sql: &str,
+        dialect: &dyn Dialect,
+        options: ParserOptions,
+    ) -> Result<LogicalPlan> {
+        let planner = SqlToRel::new_with_options(&MockContextProvider {}, options);
+        let result = DFParser::parse_sql_with_dialect(sql, dialect);
+        let mut ast = result?;
+        planner.statement_to_plan(ast.pop_front().unwrap())
+    }
+
     /// Create logical plan, write with formatter, compare to expected output
     fn quick_test(sql: &str, expected: &str) {
         let plan = logical_plan(sql).unwrap();
+        assert_eq!(format!("{:?}", plan), expected);
+    }
+
+    fn quick_test_with_options(sql: &str, expected: &str, options: ParserOptions) {
+        let plan = logical_plan_with_options(sql, options).unwrap();
         assert_eq!(format!("{:?}", plan), expected);
     }
 

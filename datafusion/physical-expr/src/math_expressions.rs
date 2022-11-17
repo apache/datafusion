@@ -207,13 +207,14 @@ pub fn atan2(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
 
     use super::*;
-    use arrow::array::{Array, Float64Array, NullArray};
+    use arrow::array::{Float64Array, NullArray};
+    use datafusion_common::cast::{as_float32_array, as_float64_array};
 
     #[test]
     fn test_random_expression() {
         let args = vec![ColumnarValue::Array(Arc::new(NullArray::new(1)))];
         let array = random(&args).expect("fail").into_array(1);
-        let floats = array.as_any().downcast_ref::<Float64Array>().expect("fail");
+        let floats = as_float64_array(&array).expect("fail");
 
         assert_eq!(floats.len(), 1);
         assert!(0.0 <= floats.value(0) && floats.value(0) < 1.0);
@@ -227,10 +228,7 @@ mod tests {
         ];
 
         let result = atan2(&args).expect("fail");
-        let floats = result
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("fail");
+        let floats = as_float64_array(&result).expect("fail");
 
         assert_eq!(floats.len(), 4);
         assert_eq!(floats.value(0), (2.0_f64).atan2(1.0));
@@ -247,10 +245,7 @@ mod tests {
         ];
 
         let result = atan2(&args).expect("fail");
-        let floats = result
-            .as_any()
-            .downcast_ref::<Float32Array>()
-            .expect("fail");
+        let floats = as_float32_array(&result).expect("fail");
 
         assert_eq!(floats.len(), 4);
         assert_eq!(floats.value(0), (2.0_f32).atan2(1.0));

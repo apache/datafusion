@@ -19,6 +19,7 @@ use std::{fs, path::Path};
 
 use ::parquet::arrow::ArrowWriter;
 use datafusion::datasource::listing::ListingOptions;
+use datafusion_common::cast::as_string_array;
 use tempfile::TempDir;
 
 use super::*;
@@ -57,10 +58,9 @@ async fn parquet_with_sort_order_specified() {
     let target_partitions = 2;
 
     // The sort order is not specified
-    let options_no_sort = ListingOptions {
-        file_sort_order: None,
-        ..parquet_read_options.to_listing_options(target_partitions)
-    };
+    let options_no_sort = parquet_read_options
+        .to_listing_options(target_partitions)
+        .with_file_sort_order(None);
 
     // The sort order is specified (not actually correct in this case)
     let file_sort_order = [col("string_col"), col("int_col")]
@@ -72,10 +72,9 @@ async fn parquet_with_sort_order_specified() {
         })
         .collect::<Vec<_>>();
 
-    let options_sort = ListingOptions {
-        file_sort_order: Some(file_sort_order),
-        ..parquet_read_options.to_listing_options(target_partitions)
-    };
+    let options_sort = parquet_read_options
+        .to_listing_options(target_partitions)
+        .with_file_sort_order(Some(file_sort_order));
 
     // This string appears in ParquetExec if the output ordering is
     // specified
@@ -257,11 +256,7 @@ async fn parquet_list_columns() {
     );
 
     assert_eq!(
-        utf8_list_array
-            .value(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap(),
+        as_string_array(&utf8_list_array.value(0)).unwrap(),
         &StringArray::try_from(vec![Some("abc"), Some("efg"), Some("hij"),]).unwrap()
     );
 
@@ -286,7 +281,7 @@ async fn parquet_list_columns() {
     );
 
     let result = utf8_list_array.value(2);
-    let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+    let result = as_string_array(&result).unwrap();
 
     assert_eq!(result.value(0), "efg");
     assert!(result.is_null(1));

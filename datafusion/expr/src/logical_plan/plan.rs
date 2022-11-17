@@ -1145,6 +1145,26 @@ impl Projection {
         })
     }
 
+    /// Create a new Projection using the specified output schema
+    pub fn new_from_schema(
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+        alias: Option<String>,
+    ) -> Self {
+        let expr: Vec<Expr> = schema
+            .fields()
+            .iter()
+            .map(|field| field.qualified_column())
+            .map(Expr::Column)
+            .collect();
+        Self {
+            expr,
+            input,
+            schema,
+            alias,
+        }
+    }
+
     pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Projection> {
         match plan {
             LogicalPlan::Projection(it) => Ok(it),
@@ -1285,8 +1305,6 @@ pub struct Union {
     pub inputs: Vec<Arc<LogicalPlan>>,
     /// Union schema. Should be the same for all inputs.
     pub schema: DFSchemaRef,
-    /// Union output relation alias
-    pub alias: Option<String>,
 }
 
 /// Creates an in memory table.

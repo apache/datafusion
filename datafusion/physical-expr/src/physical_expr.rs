@@ -103,11 +103,11 @@ impl AnalysisContext {
     }
 
     /// Create a new analysis context from column statistics.
-    pub fn from_statistics(input_schema: &Schema, statistics: Statistics) -> Self {
+    pub fn from_statistics(input_schema: &Schema, statistics: &Statistics) -> Self {
         // Even if the underlying statistics object doesn't have any column level statistics,
         // we can still create an analysis context with the same number of columns and see whether
         // we can infer it during the way.
-        let column_boundaries = match statistics.column_statistics {
+        let column_boundaries = match &statistics.column_statistics {
             Some(columns) => columns
                 .iter()
                 .map(ExprBoundaries::from_column)

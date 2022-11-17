@@ -67,7 +67,7 @@ pub use function::{
 };
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::{
-    builder::{build_join_schema, union_with_alias, UNNAMED_TABLE},
+    builder::{build_join_schema, union, UNNAMED_TABLE},
     Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
     CreateMemoryTable, CreateView, CrossJoin, Distinct, DropTable, DropView,
     EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint, JoinType, Limit,
