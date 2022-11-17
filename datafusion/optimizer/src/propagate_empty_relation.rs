@@ -120,7 +120,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                         Ok(LogicalPlan::Projection(Projection::new_from_schema(
                             Arc::new(child),
                             optimized_children_plan.schema().clone(),
-                            None
+                            None,
                         )))
                     }
                 } else {
