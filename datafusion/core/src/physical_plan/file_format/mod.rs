@@ -267,7 +267,6 @@ impl SchemaAdapter {
                 let field_type = field.data_type();
                 if file_type == field_type
                     || get_wider_type(file_type, field_type).is_some()
-                    || get_wider_type(field_type, file_type).is_some()
                 {
                     mapped.push(mapped_idx)
                 } else {
@@ -755,7 +754,7 @@ mod tests {
         ]));
 
         let file_schema_3 =
-            Arc::new(Schema::new(vec![Field::new("c3", DataType::Float32, true)]));
+            Arc::new(Schema::new(vec![Field::new("c3", DataType::Date32, true)]));
 
         let adapter = SchemaAdapter::new(table_schema);
 

@@ -1204,7 +1204,7 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new("c1", DataType::Utf8, true),
             Field::new("c2", DataType::Int64, true),
-            Field::new("c3", DataType::Int8, true),
+            Field::new("c3", DataType::Date32, true),
         ]);
 
         // read/write them files:
@@ -1217,7 +1217,7 @@ mod tests {
         )
         .await;
         assert_contains!(read.unwrap_err().to_string(),
-                         "Execution error: Failed to map column projection for field c3. Incompatible data types Float32 and Int8");
+                         "Execution error: Failed to map column projection for field c3. Incompatible data types Int8 and Date32");
     }
 
     #[tokio::test]

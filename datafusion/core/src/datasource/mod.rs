@@ -210,9 +210,6 @@ pub(crate) fn try_merge_schemas(
                 if merge_field.data_type() != field.data_type() {
                     if let Some(new_type) =
                         get_wider_type(merge_field.data_type(), field.data_type())
-                            .or_else(|| {
-                                get_wider_type(field.data_type(), merge_field.data_type())
-                            })
                     {
                         if &new_type != merge_field.data_type() {
                             fields[i] = merge_field.clone().with_data_type(new_type);
@@ -228,16 +225,20 @@ pub(crate) fn try_merge_schemas(
 }
 
 pub(crate) fn get_wider_type(t1: &DataType, t2: &DataType) -> Option<DataType> {
-    use DataType::*;
-    match (t1, t2) {
-        (Null, _) => Some(t2.clone()),
-        (Int8, Int16 | Int32 | Int64) => Some(t2.clone()),
-        (Int16, Int32 | Int64) => Some(t2.clone()),
-        (Int32, Int64) => Some(t2.clone()),
-        (UInt8, UInt16 | UInt32 | UInt64) => Some(t2.clone()),
-        (UInt16, UInt32 | UInt64) => Some(t2.clone()),
-        (UInt32, UInt64) => Some(t2.clone()),
-        (Float32, Float64) => Some(t2.clone()),
-        _ => None,
+    fn _get_wider_type(t1: &DataType, t2: &DataType) -> Option<DataType> {
+        use DataType::*;
+        match (t1, t2) {
+            (Null, _) => Some(t2.clone()),
+            (Int8, Int16 | Int32 | Int64 | Float32 | Float64) => Some(t2.clone()),
+            (Int16, Int32 | Int64 | Float32 | Float64) => Some(t2.clone()),
+            (Int32, Int64 | Float32 | Float64) => Some(t2.clone()),
+            (UInt8, UInt16 | UInt32 | UInt64 | Float32 | Float64) => Some(t2.clone()),
+            (UInt16, UInt32 | UInt64 | Float32 | Float64) => Some(t2.clone()),
+            (UInt32, UInt64 | Float32 | Float64) => Some(t2.clone()),
+            (Float32, Float64) => Some(t2.clone()),
+            _ => None,
+        }
     }
+    // try both combinations
+    _get_wider_type(t1, t2).or_else(|| _get_wider_type(t2, t1))
 }
