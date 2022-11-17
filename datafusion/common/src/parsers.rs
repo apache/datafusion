@@ -166,7 +166,7 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
         let (diff_month, diff_days, diff_nanos) =
             calculate_from_part(interval_period_str.unwrap(), unit)?;
 
-        result_month += diff_month as i64;
+        result_month += diff_month;
 
         if result_month > (i32::MAX as i64) {
             return Err(DataFusionError::NotImplemented(format!(
@@ -175,7 +175,7 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
             )));
         }
 
-        result_days += diff_days as i64;
+        result_days += diff_days;
 
         if result_days > (i32::MAX as i64) {
             return Err(DataFusionError::NotImplemented(format!(
