@@ -17,13 +17,13 @@
 
 //! Optimizer rule to push down LIMIT in the query plan
 //! It will push down through projection, limits (taking the smaller limit)
-use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{DataFusionError, Result};
+use crate::{utils, OptimizerConfig, OptimizerRule};
+use datafusion_common::Result;
+use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     logical_plan::{
         Join, JoinType, Limit, LogicalPlan, Projection, Sort, TableScan, Union,
     },
-    utils::from_plan,
     CrossJoin,
 };
 use std::sync::Arc;
@@ -38,15 +38,6 @@ impl LimitPushDown {
     pub fn new() -> Self {
         Self {}
     }
-}
-
-/// Ancestor indicates the current ancestor in the LogicalPlan tree
-/// when traversing down related to "limit push down".
-enum Ancestor {
-    /// Limit
-    FromLimit { skip: usize, fetch: Option<usize> },
-    /// Other nodes that don't affect the adjustment of "Limit"
-    NotRelevant,
 }
 
 ///
@@ -68,311 +59,38 @@ enum Ancestor {
 /// When finally assign "limit" in TableScan, the "limit" is calculated
 /// by using ancestor's "fetch" and "skip".
 ///
-fn limit_push_down(
-    _optimizer: &LimitPushDown,
-    ancestor: Ancestor,
-    plan: &LogicalPlan,
-    _optimizer_config: &OptimizerConfig,
-) -> Result<LogicalPlan> {
-    match (plan, ancestor) {
-        (
-            LogicalPlan::Limit(Limit {
-                skip: current_skip,
-                fetch: current_fetch,
-                input,
-            }),
-            ancestor,
-        ) => {
-            let new_current_fetch = match ancestor {
-                Ancestor::FromLimit {
-                    skip: ancestor_skip,
-                    fetch: ancestor_fetch,
-                } => {
-                    if let Some(fetch) = current_fetch {
-                        // extend ancestor's fetch
-                        let ancestor_fetch = ancestor_fetch.map(|f| f + ancestor_skip);
-
-                        let new_current_fetch =
-                            ancestor_fetch.map_or(*fetch, |x| std::cmp::min(x, *fetch));
-
-                        Some(new_current_fetch)
-                    } else {
-                        // we dont have a "fetch", and we can push down our parent's "fetch"
-                        // extend ancestor's fetch
-                        ancestor_fetch.map(|f| f + ancestor_skip)
-                    }
-                }
-                _ => *current_fetch,
-            };
-
-            Ok(LogicalPlan::Limit(Limit {
-                // current node's "skip" is not updated, updating
-                // this value would violate the semantics of Limit operator
-                skip: *current_skip,
-                fetch: new_current_fetch,
-                input: Arc::new(limit_push_down(
-                    _optimizer,
-                    Ancestor::FromLimit {
-                        // current node's "skip" is passing to the subtree
-                        // so that the child can extend the "fetch"
-                        skip: *current_skip,
-                        fetch: new_current_fetch,
-                    },
-                    input.as_ref(),
-                    _optimizer_config,
-                )?),
-            }))
-        }
-        (
-            LogicalPlan::TableScan(TableScan {
-                table_name,
-                source,
-                projection,
-                filters,
-                fetch,
-                projected_schema,
-            }),
-            Ancestor::FromLimit {
-                skip: ancestor_skip,
-                fetch: Some(ancestor_fetch),
-                ..
-            },
-        ) => {
-            let ancestor_fetch = ancestor_fetch + ancestor_skip;
-            Ok(LogicalPlan::TableScan(TableScan {
-                table_name: table_name.clone(),
-                source: source.clone(),
-                projection: projection.clone(),
-                filters: filters.clone(),
-                fetch: fetch
-                    .map(|x| std::cmp::min(x, ancestor_fetch))
-                    .or(Some(ancestor_fetch)),
-                projected_schema: projected_schema.clone(),
-            }))
-        }
-        (
-            LogicalPlan::Projection(Projection {
-                expr,
-                input,
-                schema,
-                alias,
-            }),
-            ancestor,
-        ) => {
-            // Push down limit directly (projection doesn't change number of rows)
-            Ok(LogicalPlan::Projection(
-                Projection::try_new_with_schema_alias(
-                    expr.clone(),
-                    Arc::new(limit_push_down(
-                        _optimizer,
-                        ancestor,
-                        input.as_ref(),
-                        _optimizer_config,
-                    )?),
-                    schema.clone(),
-                    alias.clone(),
-                )?,
-            ))
-        }
-        (
-            LogicalPlan::Union(Union { inputs, schema }),
-            Ancestor::FromLimit {
-                skip: ancestor_skip,
-                fetch: Some(ancestor_fetch),
-                ..
-            },
-        ) => {
-            // Push down limit through UNION
-            let ancestor_fetch = ancestor_fetch + ancestor_skip;
-            let new_inputs = inputs
-                .iter()
-                .map(|x| {
-                    Ok(Arc::new(LogicalPlan::Limit(Limit {
-                        skip: 0,
-                        fetch: Some(ancestor_fetch),
-                        input: Arc::new(limit_push_down(
-                            _optimizer,
-                            Ancestor::FromLimit {
-                                skip: 0,
-                                fetch: Some(ancestor_fetch),
-                            },
-                            x,
-                            _optimizer_config,
-                        )?),
-                    })))
-                })
-                .collect::<Result<_>>()?;
-            Ok(LogicalPlan::Union(Union {
-                inputs: new_inputs,
-                schema: schema.clone(),
-            }))
-        }
-        (
-            LogicalPlan::CrossJoin(cross_join),
-            Ancestor::FromLimit {
-                skip: ancestor_skip,
-                fetch: Some(ancestor_fetch),
-                ..
-            },
-        ) => {
-            let left = &*cross_join.left;
-            let right = &*cross_join.right;
-            Ok(LogicalPlan::CrossJoin(CrossJoin {
-                left: Arc::new(limit_push_down(
-                    _optimizer,
-                    Ancestor::FromLimit {
-                        skip: 0,
-                        fetch: Some(ancestor_fetch + ancestor_skip),
-                    },
-                    left,
-                    _optimizer_config,
-                )?),
-                right: Arc::new(limit_push_down(
-                    _optimizer,
-                    Ancestor::FromLimit {
-                        skip: 0,
-                        fetch: Some(ancestor_fetch + ancestor_skip),
-                    },
-                    right,
-                    _optimizer_config,
-                )?),
-                schema: plan.schema().clone(),
-            }))
-        }
-        (
-            LogicalPlan::Join(Join { join_type, .. }),
-            Ancestor::FromLimit {
-                skip: ancestor_skip,
-                fetch: Some(ancestor_fetch),
-                ..
-            },
-        ) => {
-            let ancestor_fetch = ancestor_fetch + ancestor_skip;
-            match join_type {
-                JoinType::Left => {
-                    //if LeftOuter join push limit to left
-                    generate_push_down_join(
-                        _optimizer,
-                        _optimizer_config,
-                        plan,
-                        Some(ancestor_fetch),
-                        None,
-                    )
-                }
-                JoinType::Right =>
-                // If RightOuter join  push limit to right
-                {
-                    generate_push_down_join(
-                        _optimizer,
-                        _optimizer_config,
-                        plan,
-                        None,
-                        Some(ancestor_fetch),
-                    )
-                }
-                _ => generate_push_down_join(
-                    _optimizer,
-                    _optimizer_config,
-                    plan,
-                    None,
-                    None,
-                ),
-            }
-        }
-        (
-            LogicalPlan::Sort(Sort { expr, input, fetch }),
-            Ancestor::FromLimit {
-                skip: ancestor_skip,
-                fetch: Some(ancestor_fetch),
-                ..
-            },
-        ) => {
-            // Update Sort `fetch`, but simply recurse through children (sort should receive all input for sorting)
-            let input = push_down_children_limit(_optimizer, _optimizer_config, input)?;
-            let sort_fetch = ancestor_skip + ancestor_fetch;
-            let plan = LogicalPlan::Sort(Sort {
-                expr: expr.clone(),
-                input: Arc::new(input),
-                fetch: Some(fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch)),
-            });
-            Ok(plan)
-        }
-
-        // For other nodes we can't push down the limit
-        // But try to recurse and find other limit nodes to push down
-        _ => push_down_children_limit(_optimizer, _optimizer_config, plan),
-    }
-}
-
-fn generate_push_down_join(
-    _optimizer: &LimitPushDown,
-    _optimizer_config: &OptimizerConfig,
-    join: &LogicalPlan,
+// fn limit_push_down(
+fn pushdown_join(
+    join: &Join,
     left_limit: Option<usize>,
     right_limit: Option<usize>,
-) -> Result<LogicalPlan> {
-    if let LogicalPlan::Join(Join {
-        left,
-        right,
-        on,
-        filter,
-        join_type,
-        join_constraint,
-        schema,
-        null_equals_null,
-    }) = join
-    {
-        Ok(LogicalPlan::Join(Join {
-            left: Arc::new(limit_push_down(
-                _optimizer,
-                Ancestor::FromLimit {
-                    skip: 0,
-                    fetch: left_limit,
-                },
-                left.as_ref(),
-                _optimizer_config,
-            )?),
-            right: Arc::new(limit_push_down(
-                _optimizer,
-                Ancestor::FromLimit {
-                    skip: 0,
-                    fetch: right_limit,
-                },
-                right.as_ref(),
-                _optimizer_config,
-            )?),
-            on: on.clone(),
-            filter: filter.clone(),
-            join_type: *join_type,
-            join_constraint: *join_constraint,
-            schema: schema.clone(),
-            null_equals_null: *null_equals_null,
-        }))
-    } else {
-        Err(DataFusionError::Internal(format!(
-            "{:?} must be join type",
-            join
-        )))
-    }
-}
-
-fn push_down_children_limit(
-    _optimizer: &LimitPushDown,
-    _optimizer_config: &OptimizerConfig,
-    plan: &LogicalPlan,
-) -> Result<LogicalPlan> {
-    let expr = plan.expressions();
-
-    // apply the optimization to all inputs of the plan
-    let inputs = plan.inputs();
-    let new_inputs = inputs
-        .iter()
-        .map(|plan| {
-            limit_push_down(_optimizer, Ancestor::NotRelevant, plan, _optimizer_config)
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    from_plan(plan, &expr, &new_inputs)
+) -> LogicalPlan {
+    let left = match left_limit {
+        Some(limit) => LogicalPlan::Limit(Limit {
+            skip: 0,
+            fetch: Some(limit),
+            input: Arc::new((*join.left).clone()),
+        }),
+        None => (*join.left).clone(),
+    };
+    let right = match right_limit {
+        Some(limit) => LogicalPlan::Limit(Limit {
+            skip: 0,
+            fetch: Some(limit),
+            input: Arc::new((*join.right).clone()),
+        }),
+        None => (*join.right).clone(),
+    };
+    LogicalPlan::Join(Join {
+        left: Arc::new(left),
+        right: Arc::new(right),
+        on: join.on.clone(),
+        filter: join.filter.clone(),
+        join_type: join.join_type,
+        join_constraint: join.join_constraint,
+        schema: join.schema.clone(),
+        null_equals_null: join.null_equals_null,
+    })
 }
 
 impl OptimizerRule for LimitPushDown {
@@ -381,7 +99,134 @@ impl OptimizerRule for LimitPushDown {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        limit_push_down(self, Ancestor::NotRelevant, plan, optimizer_config)
+        let limit = match plan {
+            LogicalPlan::Limit(limit) => limit,
+            _ => return utils::optimize_children(self, plan, optimizer_config),
+        };
+
+        if let LogicalPlan::Limit(child_limit) = &*limit.input {
+            let parent_skip = limit.skip;
+            let parent_fetch = limit.fetch;
+
+            let new_fetch = match child_limit.fetch {
+                Some(child_fetch) => {
+                    let ancestor_fetch = parent_fetch.map(|f| f + parent_skip);
+                    let new_current_fetch = ancestor_fetch
+                        .map_or(child_fetch, |x| std::cmp::min(x, child_fetch));
+                    Some(new_current_fetch)
+                }
+                None => parent_fetch.map(|f| f + parent_skip),
+            };
+
+            let plan = LogicalPlan::Limit(Limit {
+                skip: child_limit.skip + limit.skip,
+                fetch: new_fetch,
+                input: Arc::new((*child_limit.input).clone()),
+            });
+            return self.optimize(&plan, optimizer_config);
+        }
+
+        let fetch = match limit.fetch {
+            Some(fetch) => fetch,
+            None => return utils::optimize_children(self, plan, optimizer_config),
+        };
+        let skip = limit.skip;
+
+        let plan = match &*limit.input {
+            // LogicalPlan::Limit(child_limit) => {
+            // }
+            LogicalPlan::TableScan(scan) => {
+                let limit = fetch + skip;
+                let new_input = LogicalPlan::TableScan(TableScan {
+                    table_name: scan.table_name.clone(),
+                    source: scan.source.clone(),
+                    projection: scan.projection.clone(),
+                    filters: scan.filters.clone(),
+                    fetch: scan.fetch.map(|x| std::cmp::min(x, limit)).or(Some(limit)),
+                    projected_schema: scan.projected_schema.clone(),
+                });
+                from_plan(plan, &plan.expressions(), &[new_input])?
+            }
+            LogicalPlan::Projection(projection) => {
+                let new_input = LogicalPlan::Limit(Limit {
+                    skip,
+                    fetch: Some(fetch),
+                    input: Arc::new((*projection.input).clone()),
+                });
+                // Push down limit directly (projection doesn't change number of rows)
+                LogicalPlan::Projection(Projection::try_new_with_schema_alias(
+                    projection.expr.clone(),
+                    Arc::new(new_input),
+                    projection.schema.clone(),
+                    projection.alias.clone(),
+                )?)
+            }
+            LogicalPlan::Union(union) => {
+                let new_inputs = union
+                    .inputs
+                    .iter()
+                    .map(|x| {
+                        Ok(Arc::new(LogicalPlan::Limit(Limit {
+                            skip: 0,
+                            fetch: Some(fetch + skip),
+                            input: Arc::new((**x).clone()),
+                        })))
+                    })
+                    .collect::<Result<_>>()?;
+                let union = LogicalPlan::Union(Union {
+                    inputs: new_inputs,
+                    schema: union.schema.clone(),
+                });
+                from_plan(plan, &plan.expressions(), &[union])?
+            }
+
+            LogicalPlan::CrossJoin(cross_join) => {
+                let left = &*cross_join.left;
+                let right = &*cross_join.right;
+                let new_left = LogicalPlan::Limit(Limit {
+                    skip: 0,
+                    fetch: Some(fetch + skip),
+                    input: Arc::new(left.clone()),
+                });
+                let new_right = LogicalPlan::Limit(Limit {
+                    skip: 0,
+                    fetch: Some(fetch + skip),
+                    input: Arc::new(right.clone()),
+                });
+                let new_input = LogicalPlan::CrossJoin(CrossJoin {
+                    left: Arc::new(new_left),
+                    right: Arc::new(new_right),
+                    schema: plan.schema().clone(),
+                });
+                from_plan(plan, &plan.expressions(), &[new_input])?
+            }
+
+            LogicalPlan::Join(join) => {
+                let limit = fetch + skip;
+                let new_join = match join.join_type {
+                    JoinType::Left => pushdown_join(join, Some(limit), None),
+                    JoinType::Right => pushdown_join(join, None, Some(limit)),
+                    _ => pushdown_join(join, None, None),
+                };
+                from_plan(plan, &plan.expressions(), &[new_join])?
+            }
+
+            LogicalPlan::Sort(sort) => {
+                // Update Sort `fetch`, but simply recurse through children (sort should receive all input for sorting)
+                let sort_fetch = skip + fetch;
+                let new_input = LogicalPlan::Sort(Sort {
+                    expr: sort.expr.clone(),
+                    input: Arc::new((*sort.input).clone()),
+                    fetch: Some(
+                        sort.fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch),
+                    ),
+                });
+                from_plan(plan, &plan.expressions(), &[new_input])?
+            }
+            _ => plan.clone(),
+        };
+
+        utils::optimize_children(self, &plan, optimizer_config)
     }
 
     fn name(&self) -> &str {
@@ -421,8 +266,8 @@ mod test {
 
         // Should push the limit down to table provider
         // When it has a select
-        let expected = "Limit: skip=0, fetch=1000\
-        \n  Projection: test.a\
+        let expected = "Projection: test.a\
+        \n  Limit: skip=0, fetch=1000\
         \n    TableScan: test, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -443,8 +288,7 @@ mod test {
         // Towards table scan
         // This rule doesn't replace multiple limits
         let expected = "Limit: skip=0, fetch=10\
-        \n  Limit: skip=0, fetch=10\
-        \n    TableScan: test, fetch=10";
+        \n  TableScan: test, fetch=10";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -578,8 +422,8 @@ mod test {
 
         // Should push the limit down to table provider
         // When it has a select
-        let expected = "Limit: skip=10, fetch=1000\
-        \n  Projection: test.a\
+        let expected = "Projection: test.a\
+        \n  Limit: skip=10, fetch=1000\
         \n    TableScan: test, fetch=1010";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -597,10 +441,9 @@ mod test {
             .limit(10, None)?
             .build()?;
 
-        let expected = "Limit: skip=10, fetch=None\
-        \n  Limit: skip=0, fetch=1000\
-        \n    Projection: test.a\
-        \n      TableScan: test, fetch=1000";
+        let expected = "Projection: test.a\
+        \n  Limit: skip=10, fetch=1000\
+        \n    TableScan: test, fetch=1010";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -617,10 +460,9 @@ mod test {
             .limit(0, Some(1000))?
             .build()?;
 
-        let expected = "Limit: skip=0, fetch=1000\
+        let expected = "Projection: test.a\
         \n  Limit: skip=10, fetch=1000\
-        \n    Projection: test.a\
-        \n      TableScan: test, fetch=1010";
+        \n    TableScan: test, fetch=1010";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -637,13 +479,8 @@ mod test {
             .limit(0, Some(10))?
             .build()?;
 
-        // Should push down the smallest limit
-        // Towards table scan
-        // This rule doesn't replace multiple limits
-        let expected = "Limit: skip=0, fetch=10\
-        \n  Limit: skip=0, fetch=10\
-        \n    Limit: skip=10, fetch=10\
-        \n      TableScan: test, fetch=20";
+        let expected = "Limit: skip=10, fetch=10\
+        \n  TableScan: test, fetch=20";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -823,7 +660,8 @@ mod test {
         // Limit pushdown Not supported in Join
         let expected = "Limit: skip=0, fetch=1000\
         \n  Left Join: test.a = test2.a\
-        \n    TableScan: test, fetch=1000\
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test, fetch=1000\
         \n    TableScan: test2";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -849,7 +687,8 @@ mod test {
         // Limit pushdown Not supported in Join
         let expected = "Limit: skip=10, fetch=1000\
         \n  Left Join: test.a = test2.a\
-        \n    TableScan: test, fetch=1010\
+        \n    Limit: skip=0, fetch=1010\
+        \n      TableScan: test, fetch=1010\
         \n    TableScan: test2";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -876,7 +715,8 @@ mod test {
         let expected = "Limit: skip=0, fetch=1000\
         \n  Right Join: test.a = test2.a\
         \n    TableScan: test\
-        \n    TableScan: test2, fetch=1000";
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test2, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -902,7 +742,8 @@ mod test {
         let expected = "Limit: skip=10, fetch=1000\
         \n  Right Join: test.a = test2.a\
         \n    TableScan: test\
-        \n    TableScan: test2, fetch=1010";
+        \n    Limit: skip=0, fetch=1010\
+        \n      TableScan: test2, fetch=1010";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -921,8 +762,10 @@ mod test {
 
         let expected = "Limit: skip=0, fetch=1000\
         \n  CrossJoin:\
-        \n    TableScan: test, fetch=1000\
-        \n    TableScan: test2, fetch=1000";
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test, fetch=1000\
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test2, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -941,8 +784,10 @@ mod test {
 
         let expected = "Limit: skip=1000, fetch=1000\
         \n  CrossJoin:\
-        \n    TableScan: test, fetch=2000\
-        \n    TableScan: test2, fetch=2000";
+        \n    Limit: skip=0, fetch=2000\
+        \n      TableScan: test, fetch=2000\
+        \n    Limit: skip=0, fetch=2000\
+        \n      TableScan: test2, fetch=2000";
 
         assert_optimized_plan_eq(&plan, expected);
 
