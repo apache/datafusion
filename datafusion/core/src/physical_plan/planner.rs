@@ -576,6 +576,7 @@ impl DefaultPhysicalPlanner {
 
                     // We will receive this information from source
                     let mut is_stream = true;
+                    // let mut is_stream = false;
 
                     let sort_keys = get_sort_keys(&window_expr[0])?;
                     if window_expr.len() > 1 {
@@ -605,7 +606,7 @@ impl DefaultPhysicalPlanner {
                     // We expect to have same kind of ordering among different order bys
                     // otherwise we cannot skip these ORDER BYS such as OVER(ORDER BY inc_col ASC, desc_col ASC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
                     // Hence skippable_reverse_flags either should have all false or all true
-                    if !skippable_reverse_flags.is_empty(){
+                    if !skippable_reverse_flags.is_empty() && is_stream {
                         let reverse_flag = skippable_reverse_flags[0];
                         let is_all_same = skippable_reverse_flags.iter().all(|elem| *elem ==reverse_flag);
                         if !is_all_same {
@@ -636,6 +637,7 @@ impl DefaultPhysicalPlanner {
                         window_sort_key.expr.clone()
                     }).collect_vec();
 
+                    // TODO: once we have source unbounded information below coe will be removed
                     is_stream = unsorted_orderby_keys.is_empty() && is_stream;
 
                     let logical_input_schema = input.schema();

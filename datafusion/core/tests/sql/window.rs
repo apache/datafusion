@@ -83,8 +83,8 @@ fn mock_data_running_test() -> Result<(SchemaRef, Vec<RecordBatch>)> {
         (String::from("is_ascending"), String::from("true")),
     ])));
 
-    let non_sorted_non_unique_field =
-        Field::new("non_sorted_non_unique_field", DataType::Int32, false);
+    let unsorted_non_unique_field =
+        Field::new("unsorted_non_unique_field", DataType::Int32, false);
 
     let schema = Arc::new(Schema::new(vec![
         ts_field,
@@ -92,7 +92,7 @@ fn mock_data_running_test() -> Result<(SchemaRef, Vec<RecordBatch>)> {
         desc_field,
         equal_field,
         nonmonothonic_inc_field,
-        non_sorted_non_unique_field,
+        unsorted_non_unique_field,
     ]));
 
     let batch = RecordBatch::try_new(
@@ -2083,20 +2083,16 @@ FROM annotated_data";
 
     #[tokio::test]
     async fn show_physical_plan() -> Result<()> {
-        // let config = SessionConfig::new()
-        //     .set_u64("datafusion.execution.coalesce_target_batch_size", 10);
-        // let ctx = SessionContext::with_config(config);
-        // let (schema, batches) = mock_data_running_test()?;
-        // let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
-        // ctx.register_table("annotated_data", Arc::new(mem_table))?;
-        // let sql = "SELECT
-        //     ts,
-        //     SUM(inc_col) OVER(PARTITION BY non_sorted_non_unique_field ORDER BY desc_col DESC RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING),
-        //     SUM(inc_col) OVER(PARTITION BY non_sorted_non_unique_field ORDER BY desc_col DESC ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING),
-        //     SUM(inc_col) OVER(PARTITION BY non_sorted_non_unique_field ORDER BY desc_col RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING),
-        //     SUM(inc_col) OVER(PARTITION BY non_sorted_non_unique_field ORDER BY desc_col ROWS BETWEEN 10 PRECEDING AND 1 FOLLOWING)
-        //     FROM annotated_data
-        //     ORDER BY ts";
+        let config = SessionConfig::new()
+            // .with_repartition_windows(false)
+            .set_u64("datafusion.execution.coalesce_target_batch_size", 10);
+        let ctx = SessionContext::with_config(config);
+        let (schema, batches) = mock_data_running_test()?;
+        let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
+        ctx.register_table("annotated_data", Arc::new(mem_table))?;
+        let sql = "SELECT
+    SUM(inc_col) OVER(PARTITION BY unsorted_non_unique_field ORDER BY desc_col ASC ROWS BETWEEN 10 PRECEDING AND 5 FOLLOWING)
+FROM annotated_data";
 
         // let tmp_dir = TempDir::new()?;
         // let partition_count = 4;
@@ -2113,17 +2109,17 @@ FROM annotated_data";
         // ORDER BY c1, c2 \
         // LIMIT 5";
 
-        let ctx = SessionContext::new();
-        register_aggregate_csv(&ctx).await?;
-        let sql = "SELECT
-          c9,
-          LAG(c9, 2, 10101) OVER(ORDER BY c9) as lag1,
-          LAG(c9, 2, 10101) OVER(ORDER BY c9 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lag2,
-          LEAD(c9, 2, 10101) OVER(ORDER BY c9) as lead1,
-          LEAD(c9, 2, 10101) OVER(ORDER BY c9 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lead2
-          FROM aggregate_test_100
-          ORDER BY c9
-          LIMIT 5";
+        // let ctx = SessionContext::new();
+        // register_aggregate_csv(&ctx).await?;
+        // let sql = "SELECT
+        //   c9,
+        //   LAG(c9, 2, 10101) OVER(ORDER BY c9) as lag1,
+        //   LAG(c9, 2, 10101) OVER(ORDER BY c9 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lag2,
+        //   LEAD(c9, 2, 10101) OVER(ORDER BY c9) as lead1,
+        //   LEAD(c9, 2, 10101) OVER(ORDER BY c9 ROWS BETWEEN 10 PRECEDING and 1 FOLLOWING) as lead2
+        //   FROM aggregate_test_100
+        //   ORDER BY c9
+        //   LIMIT 5";
 
         let dataframe = ctx.sql(sql).await?;
         let df = dataframe.explain(false, false)?;
