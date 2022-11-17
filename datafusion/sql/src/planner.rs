@@ -55,7 +55,7 @@ use datafusion_expr::logical_plan::builder::project_with_alias;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::Expr::Alias;
 
-use sqlparser::ast::{TimezoneInfo, SetQuantifier};
+use sqlparser::ast::{TimezoneInfo, SetQuantifier, ArrayAgg};
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
@@ -2284,6 +2284,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(&subquery, schema, ctes),
 
+            SQLExpr::ArrayAgg(array_agg) => self.parse_array_agg(array_agg, schema, ctes),
+
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node in sqltorel: {:?}",
                 sql
@@ -2344,6 +2346,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 input_schema,
             )?),
         }))
+    }
+
+
+    fn parse_array_agg(
+        &self,
+        array_agg: ArrayAgg,
+        input_schema: &DFSchema,
+        ctes: &mut HashMap<String, LogicalPlan>,
+    ) -> Result<Expr> {
+        // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
+        let ArrayAgg { distinct, expr, order_by, limit, within_group } = array_agg;
+
+        // TODO: order_by, limit or within_group throw not supported
+
+        let args = vec![self.sql_expr_to_logical_expr(*expr, input_schema, ctes)?];
+        // next, aggregate built-ins
+        let fun  = AggregateFunction::ArrayAgg;
+
+        Ok(Expr::AggregateFunction {
+            fun,
+            distinct,
+            args,
+            filter: None,
+        })
     }
 
     fn function_args_to_expr(
