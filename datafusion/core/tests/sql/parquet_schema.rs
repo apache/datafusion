@@ -135,11 +135,9 @@ async fn merge_compatible_schemas() -> Result<()> {
         )
         .await
         .expect_err("should fail");
-    assert_eq!("Execution error: Schema merge failed due to different, but compatible, data types \
-    for field 'c' (Int16 vs Int32). \
-    Set 'datafusion.file_format.coerce_types=true' \
-    (or call with_coerce_types(true) on reader options) to enable merging this field",
-               err.to_string());
+    assert!(err
+        .to_string()
+        .contains("Schema merge failed due to different, but compatible, data types"));
 
     // with type coercion enabled
     ctx.register_parquet(
