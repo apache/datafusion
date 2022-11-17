@@ -158,7 +158,7 @@ impl FromStr for FileType {
             "AVRO" => Ok(FileType::AVRO),
             "PARQUET" => Ok(FileType::PARQUET),
             "CSV" => Ok(FileType::CSV),
-            "JSON" => Ok(FileType::JSON),
+            "JSON" | "NDJSON" => Ok(FileType::JSON),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unknown FileType: {}",
                 s
