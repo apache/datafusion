@@ -37,6 +37,7 @@ async fn main() -> Result<()> {
         file_extension: FileType::PARQUET.get_ext(),
         format: Arc::new(file_format),
         table_partition_cols: vec![],
+        table_partition_cols_types: vec![],
         collect_stat: true,
         target_partitions: 1,
         file_sort_order: None,
