@@ -3061,7 +3061,7 @@ fn ensure_any_column_reference_is_determined(
                     .ok()
             })
             .collect::<Vec<_>>();
-        Err(DataFusionError::Internal(format!(
+        Err(DataFusionError::Plan(format!(
             "reference \'{}\' is ambiguous, could be {};",
             column.name,
             maybe_field.join(","),
