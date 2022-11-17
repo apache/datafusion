@@ -522,6 +522,7 @@ impl TDigest {
 
         let value = self.centroids[pos].mean()
             + ((rank - t) / self.centroids[pos].weight() - 0.5) * delta;
+
         Self::clamp(value, min, max)
     }
 
@@ -683,7 +684,7 @@ mod tests {
         let mut t = TDigest::new(10);
 
         for v in vals {
-            t = t.merge_unsorted_f64(vec![v as f64]);
+            t = t.merge_unsorted_f64(vec![v]);
         }
 
         assert_error_bounds!(t, quantile = 0.5, want = 1.0);

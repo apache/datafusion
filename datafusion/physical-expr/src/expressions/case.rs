@@ -395,7 +395,7 @@ mod tests {
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
-    use datafusion_common::cast::as_int32_array;
+    use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::ScalarValue;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
@@ -478,10 +478,8 @@ mod tests {
             schema.as_ref(),
         )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("failed to downcast to Int32Array");
+        let result =
+            as_float64_array(&result).expect("failed to downcast to Float64Array");
 
         let expected = &Float64Array::from(vec![Some(25.0), None, None, Some(5.0)]);
 
@@ -549,10 +547,8 @@ mod tests {
             schema.as_ref(),
         )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("failed to downcast to Int32Array");
+        let result =
+            as_float64_array(&result).expect("failed to downcast to Float64Array");
 
         let expected = &Float64Array::from(vec![Some(25.0), None, None, Some(5.0)]);
 
@@ -629,10 +625,8 @@ mod tests {
             schema.as_ref(),
         )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("failed to downcast to Float64Array");
+        let result =
+            as_float64_array(&result).expect("failed to downcast to Float64Array");
 
         let expected =
             &Float64Array::from(vec![Some(123.3), Some(999.0), Some(999.0), Some(999.0)]);
@@ -663,10 +657,8 @@ mod tests {
             schema.as_ref(),
         )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("failed to downcast to Float64Array");
+        let result =
+            as_float64_array(&result).expect("failed to downcast to Float64Array");
 
         let expected =
             &Float64Array::from(vec![Some(1.77), None, None, None, None, Some(1.77)]);
@@ -693,10 +685,8 @@ mod tests {
             schema.as_ref(),
         )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("failed to downcast to Float64Array");
+        let result =
+            as_float64_array(&result).expect("failed to downcast to Float64Array");
 
         let expected =
             &Float64Array::from(vec![Some(1.77), None, None, None, None, Some(1.77)]);

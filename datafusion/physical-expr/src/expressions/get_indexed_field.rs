@@ -168,7 +168,7 @@ mod tests {
         Int64Array, Int64Builder, ListBuilder, StringBuilder, StructArray, StructBuilder,
     };
     use arrow::{array::StringArray, datatypes::Field};
-    use datafusion_common::cast::as_int64_array;
+    use datafusion_common::cast::{as_int64_array, as_string_array};
     use datafusion_common::Result;
 
     fn build_utf8_lists(list_of_lists: Vec<Vec<Option<&str>>>) -> GenericListArray<i32> {
@@ -200,10 +200,7 @@ mod tests {
         let key = ScalarValue::Int64(Some(index));
         let expr = Arc::new(GetIndexedFieldExpr::new(expr, key));
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("failed to downcast to StringArray");
+        let result = as_string_array(&result).expect("failed to downcast to StringArray");
         let expected = &StringArray::from(expected);
         assert_eq!(expected, result);
         Ok(())
@@ -368,12 +365,7 @@ mod tests {
             let result = get_nested_str_expr
                 .evaluate(&batch)?
                 .into_array(batch.num_rows());
-            let result = result
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap_or_else(|| {
-                    panic!("failed to downcast to StringArray : {:?}", result)
-                });
+            let result = as_string_array(&result)?;
             let expected = &StringArray::from(expected);
             assert_eq!(expected, result);
         }

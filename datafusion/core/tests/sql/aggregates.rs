@@ -18,6 +18,7 @@
 use super::*;
 use datafusion::scalar::ScalarValue;
 use datafusion::test_util::scan_empty;
+use datafusion_common::cast::as_float64_array;
 
 #[tokio::test]
 async fn csv_query_avg_multi_batch() -> Result<()> {
@@ -31,7 +32,7 @@ async fn csv_query_avg_multi_batch() -> Result<()> {
     let results = collect(plan, task_ctx).await.unwrap();
     let batch = &results[0];
     let column = batch.column(0);
-    let array = column.as_any().downcast_ref::<Float64Array>().unwrap();
+    let array = as_float64_array(column)?;
     let actual = array.value(0);
     let expected = 0.5089725;
     // Due to float number's accuracy, different batch size will lead to different
@@ -1318,6 +1319,38 @@ async fn csv_query_array_agg_with_overflow() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_array_agg_unsupported() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+
+    let results = plan_and_collect(
+        &ctx,
+        "SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100",
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(
+        results.to_string(),
+        "This feature is not implemented: ORDER BY not supported in ARRAY_AGG: c1"
+    );
+
+    let results = plan_and_collect(
+        &ctx,
+        "SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100",
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(
+        results.to_string(),
+        "This feature is not implemented: LIMIT not supported in ARRAY_AGG: 1"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_array_cube_agg_with_overflow() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
@@ -2034,11 +2067,7 @@ async fn simple_avg() -> Result<()> {
     assert_eq!(1, batch.num_columns());
     assert_eq!(1, batch.num_rows());
 
-    let values = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .expect("failed to cast version");
+    let values = as_float64_array(batch.column(0)).expect("failed to cast version");
     assert_eq!(values.len(), 1);
     // avg(1,2,3,4,5) = 3.0
     assert_eq!(values.value(0), 3.0_f64);
@@ -2069,11 +2098,7 @@ async fn simple_mean() -> Result<()> {
     assert_eq!(1, batch.num_columns());
     assert_eq!(1, batch.num_rows());
 
-    let values = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .expect("failed to cast version");
+    let values = as_float64_array(batch.column(0)).expect("failed to cast version");
     assert_eq!(values.len(), 1);
     // mean(1,2,3,4,5) = 3.0
     assert_eq!(values.value(0), 3.0_f64);

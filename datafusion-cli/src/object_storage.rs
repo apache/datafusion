@@ -145,7 +145,7 @@ mod tests {
         let res = provider.get_by_url(&url);
         let msg = match res {
             Err(e) => format!("{}", e),
-            Ok(_) => "".to_string()
+            Ok(_) => "".to_string(),
         };
         assert_eq!("".to_string(), msg); // Fail with error message
         env::remove_var("AWS_REGION");
