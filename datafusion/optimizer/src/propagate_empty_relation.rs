@@ -382,9 +382,7 @@ mod tests {
             .filter(Expr::Literal(ScalarValue::Boolean(Some(false))))?
             .build()?;
 
-        let plan = LogicalPlanBuilder::from(left)
-            .union(right)?
-            .build()?;
+        let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
         let expected = "Projection: a, b, c\
             \n  TableScan: test";

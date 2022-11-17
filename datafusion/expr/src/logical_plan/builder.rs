@@ -880,10 +880,7 @@ pub fn project_with_column_index_alias(
 }
 
 /// Union two logical plans with an optional alias.
-pub fn union(
-    left_plan: LogicalPlan,
-    right_plan: LogicalPlan,
-) -> Result<LogicalPlan> {
+pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
     let left_col_num = left_plan.schema().fields().len();
 
     // the 2 queries should have same number of columns

@@ -833,9 +833,8 @@ mod tests {
     use async_trait::async_trait;
     use datafusion_common::DFSchema;
     use datafusion_expr::{
-        and, col, in_list, in_subquery, lit,
-        logical_plan::{JoinType},
-        sum, Expr, LogicalPlanBuilder, Operator, TableSource, TableType,
+        and, col, in_list, in_subquery, lit, logical_plan::JoinType, sum, Expr,
+        LogicalPlanBuilder, Operator, TableSource, TableType,
     };
     use std::sync::Arc;
 
