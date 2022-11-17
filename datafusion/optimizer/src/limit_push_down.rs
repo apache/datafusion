@@ -28,8 +28,7 @@ use datafusion_expr::{
 };
 use std::sync::Arc;
 
-/// Optimization rule that tries pushes down LIMIT n
-/// where applicable to reduce the amount of scanned / processed data.
+/// Optimization rule that tries to push down LIMIT.
 #[derive(Default)]
 pub struct LimitPushDown {}
 
@@ -40,27 +39,7 @@ impl LimitPushDown {
     }
 }
 
-///
-/// When doing limit push down with "skip" and "fetch" during traversal,
-/// the "fetch" should be adjusted.
-/// "Ancestor" is pushed down the plan tree, so that the current node
-/// can adjust it's own "fetch".
-///
-/// If the current node is a Limit, its "fetch" is updated by:
-/// 1. extended_fetch = extended the "fetch" with ancestor's "skip".
-/// 2. min(extended_fetch, current node's fetch)
-///
-/// Current node's "skip" is never updated, it is
-/// just a hint for the child to extend its "fetch".
-///
-/// When building a new Limit in Union, the "fetch" is calculated
-/// by using ancestor's "fetch" and "skip".
-///
-/// When finally assign "limit" in TableScan, the "limit" is calculated
-/// by using ancestor's "fetch" and "skip".
-///
-// fn limit_push_down(
-fn pushdown_join(
+fn push_down_join(
     join: &Join,
     left_limit: Option<usize>,
     right_limit: Option<usize>,
@@ -93,6 +72,7 @@ fn pushdown_join(
     })
 }
 
+/// Push down Limit.
 impl OptimizerRule for LimitPushDown {
     fn optimize(
         &self,
@@ -108,6 +88,11 @@ impl OptimizerRule for LimitPushDown {
             let parent_skip = limit.skip;
             let parent_fetch = limit.fetch;
 
+            // Merge limit
+            // Parent range [child_skip + skip, child_skip + skip + fetch)
+            // Child range [child_skip, child_skip + child_fetch)
+            // Merge -> [child_skip + skip, min(child_skip + skip + fetch, child_skip + child_fetch) )
+            // Merge LimitPlan -> [child_skip + skip, min(fetch, child_fetch - skip) )
             let new_fetch = match child_limit.fetch {
                 Some(child_fetch) => {
                     let ancestor_fetch = parent_fetch.map(|f| f + parent_skip);
@@ -133,8 +118,6 @@ impl OptimizerRule for LimitPushDown {
         let skip = limit.skip;
 
         let plan = match &*limit.input {
-            // LogicalPlan::Limit(child_limit) => {
-            // }
             LogicalPlan::TableScan(scan) => {
                 let limit = fetch + skip;
                 let new_input = LogicalPlan::TableScan(TableScan {
@@ -147,6 +130,7 @@ impl OptimizerRule for LimitPushDown {
                 });
                 from_plan(plan, &plan.expressions(), &[new_input])?
             }
+
             LogicalPlan::Projection(projection) => {
                 let new_input = LogicalPlan::Limit(Limit {
                     skip,
@@ -161,6 +145,7 @@ impl OptimizerRule for LimitPushDown {
                     projection.alias.clone(),
                 )?)
             }
+
             LogicalPlan::Union(union) => {
                 let new_inputs = union
                     .inputs
@@ -204,15 +189,14 @@ impl OptimizerRule for LimitPushDown {
             LogicalPlan::Join(join) => {
                 let limit = fetch + skip;
                 let new_join = match join.join_type {
-                    JoinType::Left => pushdown_join(join, Some(limit), None),
-                    JoinType::Right => pushdown_join(join, None, Some(limit)),
-                    _ => pushdown_join(join, None, None),
+                    JoinType::Left => push_down_join(join, Some(limit), None),
+                    JoinType::Right => push_down_join(join, None, Some(limit)),
+                    _ => push_down_join(join, None, None),
                 };
                 from_plan(plan, &plan.expressions(), &[new_join])?
             }
 
             LogicalPlan::Sort(sort) => {
-                // Update Sort `fetch`, but simply recurse through children (sort should receive all input for sorting)
                 let sort_fetch = skip + fetch;
                 let new_input = LogicalPlan::Sort(Sort {
                     expr: sort.expr.clone(),
