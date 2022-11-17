@@ -586,13 +586,12 @@ mod tests {
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{
-        Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
-        StringArray, TimestampNanosecondArray,
+        Array, ArrayRef, BinaryArray, BooleanArray, StringArray, TimestampNanosecondArray,
     };
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
     use bytes::Bytes;
-    use datafusion_common::cast::as_int32_array;
+    use datafusion_common::cast::{as_float32_array, as_float64_array, as_int32_array};
     use datafusion_common::ScalarValue;
     use futures::stream::BoxStream;
     use futures::StreamExt;
@@ -1026,11 +1025,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Float32Array>()
-            .unwrap();
+        let array = as_float32_array(batches[0].column(0))?;
         let mut values: Vec<f32> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));
@@ -1056,11 +1051,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap();
+        let array = as_float64_array(batches[0].column(0))?;
         let mut values: Vec<f64> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));
