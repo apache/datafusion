@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 
 use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
 use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
@@ -59,7 +59,8 @@ pub struct CsvReadOptions<'a> {
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
-
+    /// Partition Columns Types
+    pub table_partition_cols_types: Vec<DataType>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
 }
@@ -80,6 +81,7 @@ impl<'a> CsvReadOptions<'a> {
             delimiter: b',',
             file_extension: DEFAULT_CSV_EXTENSION,
             table_partition_cols: vec![],
+            table_partition_cols_types: vec![],
             file_compression_type: FileCompressionType::UNCOMPRESSED,
         }
     }
@@ -122,6 +124,15 @@ impl<'a> CsvReadOptions<'a> {
         self
     }
 
+    /// Specify types of table_partition_cols
+    pub fn table_partition_cols_types(
+        mut self,
+        table_partition_cols_types: Vec<DataType>,
+    ) -> Self {
+        self.table_partition_cols_types = table_partition_cols_types;
+        self
+    }
+
     /// Configure number of max records to read for schema inference
     pub fn schema_infer_max_records(mut self, max_records: usize) -> Self {
         self.schema_infer_max_records = max_records;
@@ -151,8 +162,7 @@ impl<'a> CsvReadOptions<'a> {
             file_extension: self.file_extension.to_owned(),
             target_partitions,
             table_partition_cols: self.table_partition_cols.clone(),
-            // todo @doki23
-            table_partition_cols_types: vec![],
+            table_partition_cols_types: self.table_partition_cols_types.clone(),
             file_sort_order: None,
         }
     }
@@ -171,6 +181,8 @@ pub struct ParquetReadOptions<'a> {
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
+    /// Partition Columns Types
+    pub table_partition_cols_types: Vec<DataType>,
     /// Should DataFusion parquet reader use the predicate to prune data,
     /// overridden by value on execution::context::SessionConfig
     // TODO move this into ConfigOptions
@@ -189,6 +201,7 @@ impl<'a> Default for ParquetReadOptions<'a> {
         Self {
             file_extension: DEFAULT_PARQUET_EXTENSION,
             table_partition_cols: vec![],
+            table_partition_cols_types: vec![],
             parquet_pruning: format_default.enable_pruning(),
             skip_metadata: format_default.skip_metadata(),
         }
@@ -216,6 +229,15 @@ impl<'a> ParquetReadOptions<'a> {
         self
     }
 
+    /// Specify types of table_partition_cols
+    pub fn table_partition_cols_types(
+        mut self,
+        table_partition_cols_types: Vec<DataType>,
+    ) -> Self {
+        self.table_partition_cols_types = table_partition_cols_types;
+        self
+    }
+
     /// Helper to convert these user facing options to `ListingTable` options
     pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
         let file_format = ParquetFormat::default()
@@ -228,8 +250,7 @@ impl<'a> ParquetReadOptions<'a> {
             file_extension: self.file_extension.to_owned(),
             target_partitions,
             table_partition_cols: self.table_partition_cols.clone(),
-            // todo @doki23
-            table_partition_cols_types: vec![],
+            table_partition_cols_types: self.table_partition_cols_types.clone(),
             file_sort_order: None,
         }
     }
@@ -251,6 +272,8 @@ pub struct AvroReadOptions<'a> {
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
+    /// Partition Columns Types
+    pub table_partition_cols_types: Vec<DataType>,
 }
 
 impl<'a> Default for AvroReadOptions<'a> {
@@ -259,6 +282,7 @@ impl<'a> Default for AvroReadOptions<'a> {
             schema: None,
             file_extension: DEFAULT_AVRO_EXTENSION,
             table_partition_cols: vec![],
+            table_partition_cols_types: vec![],
         }
     }
 }
@@ -267,6 +291,15 @@ impl<'a> AvroReadOptions<'a> {
     /// Specify table_partition_cols for partition pruning
     pub fn table_partition_cols(mut self, table_partition_cols: Vec<String>) -> Self {
         self.table_partition_cols = table_partition_cols;
+        self
+    }
+
+    /// Specify types of table_partition_cols
+    pub fn table_partition_cols_types(
+        mut self,
+        table_partition_cols_types: Vec<DataType>,
+    ) -> Self {
+        self.table_partition_cols_types = table_partition_cols_types;
         self
     }
 
@@ -280,8 +313,7 @@ impl<'a> AvroReadOptions<'a> {
             file_extension: self.file_extension.to_owned(),
             target_partitions,
             table_partition_cols: self.table_partition_cols.clone(),
-            // todo @doki23
-            table_partition_cols_types: vec![],
+            table_partition_cols_types: self.table_partition_cols_types.clone(),
             file_sort_order: None,
         }
     }
@@ -297,16 +329,15 @@ impl<'a> AvroReadOptions<'a> {
 pub struct NdJsonReadOptions<'a> {
     /// The data source schema.
     pub schema: Option<SchemaRef>,
-
     /// Max number of rows to read from JSON files for schema inference if needed. Defaults to `DEFAULT_SCHEMA_INFER_MAX_RECORD`.
     pub schema_infer_max_records: usize,
-
     /// File extension; only files with this extension are selected for data input.
     /// Defaults to `FileType::JSON.get_ext().as_str()`.
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
-
+    /// Partition Columns Types
+    pub table_partition_cols_types: Vec<DataType>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
 }
@@ -318,6 +349,7 @@ impl<'a> Default for NdJsonReadOptions<'a> {
             schema_infer_max_records: DEFAULT_SCHEMA_INFER_MAX_RECORD,
             file_extension: DEFAULT_JSON_EXTENSION,
             table_partition_cols: vec![],
+            table_partition_cols_types: vec![],
             file_compression_type: FileCompressionType::UNCOMPRESSED,
         }
     }
@@ -327,6 +359,15 @@ impl<'a> NdJsonReadOptions<'a> {
     /// Specify table_partition_cols for partition pruning
     pub fn table_partition_cols(mut self, table_partition_cols: Vec<String>) -> Self {
         self.table_partition_cols = table_partition_cols;
+        self
+    }
+
+    /// Specify types of table_partition_cols
+    pub fn table_partition_cols_types(
+        mut self,
+        table_partition_cols_types: Vec<DataType>,
+    ) -> Self {
+        self.table_partition_cols_types = table_partition_cols_types;
         self
     }
 
@@ -355,8 +396,7 @@ impl<'a> NdJsonReadOptions<'a> {
             file_extension: self.file_extension.to_owned(),
             target_partitions,
             table_partition_cols: self.table_partition_cols.clone(),
-            // todo @doki23
-            table_partition_cols_types: vec![],
+            table_partition_cols_types: self.table_partition_cols_types.clone(),
             file_sort_order: None,
         }
     }

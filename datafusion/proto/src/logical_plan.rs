@@ -463,8 +463,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     file_extension: scan.file_extension.clone(),
                     format: file_format,
                     table_partition_cols: scan.table_partition_cols.clone(),
-                    // todo @doki23
-                    table_partition_cols_types: vec![],
+                    table_partition_cols_types: scan
+                        .table_partition_cols
+                        .iter()
+                        .map(|col| {
+                            schema.field_with_name(col).unwrap().data_type().clone()
+                        })
+                        .collect(),
                     collect_stat: scan.collect_stat,
                     target_partitions: scan.target_partitions as usize,
                     file_sort_order,
@@ -884,7 +889,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         FileFormatType::Avro(protobuf::AvroFormat {})
                     } else {
                         return Err(proto_error(format!(
-                            "Error converting file format, {:?} is invalid as a datafusion foramt.",
+                            "Error converting file format, {:?} is invalid as a datafusion format.",
                             listing_table.options().format
                         )));
                     };

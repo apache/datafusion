@@ -553,19 +553,28 @@ impl SessionContext {
             (true, Ok(_)) => self.return_empty_dataframe(),
             (_, Err(_)) => {
                 // TODO make schema in CreateExternalTable optional instead of empty
-                let provided_schema = if cmd.schema.fields().is_empty() {
-                    None
-                } else {
-                    Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
-                };
+                let (provided_schema, table_partition_cols_types) =
+                    if cmd.schema.fields().is_empty() {
+                        (None, vec![])
+                    } else {
+                        let schema: SchemaRef =
+                            Arc::new(cmd.schema.as_ref().to_owned().into());
+                        let partition_cols_types = cmd
+                            .table_partition_cols
+                            .iter()
+                            .map(|col| {
+                                schema.field_with_name(col).unwrap().data_type().clone()
+                            })
+                            .collect();
+                        (Some(schema), partition_cols_types)
+                    };
                 let options = ListingOptions {
                     format: file_format,
                     collect_stat: self.copied_config().collect_statistics,
                     file_extension: file_extension.to_owned(),
                     target_partitions: self.copied_config().target_partitions,
                     table_partition_cols: cmd.table_partition_cols.clone(),
-                    // todo @doki23
-                    table_partition_cols_types: vec![],
+                    table_partition_cols_types,
                     file_sort_order: None,
                 };
                 self.register_listing_table(
