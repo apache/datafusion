@@ -28,8 +28,9 @@ pub mod memory;
 pub mod object_store;
 pub mod view;
 
-use arrow::error::ArrowError;
+use arrow::datatypes::{DataType, Field};
 use futures::Stream;
+use std::collections::HashMap;
 
 pub use self::datasource::TableProvider;
 pub use self::default_table_source::{
@@ -43,8 +44,10 @@ use crate::error::Result;
 pub use crate::logical_expr::TableType;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
+use arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
 use futures::StreamExt;
+use itertools::Itertools;
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
 /// If the optional `limit` is provided, includes only sufficient files.
@@ -183,35 +186,58 @@ fn get_col_stats(
 pub(crate) fn try_merge_schemas(
     schemas: impl IntoIterator<Item = Schema>,
 ) -> Result<Schema> {
-    schemas
-        .into_iter()
-        .try_fold(Schema::empty(), |mut merged, schema| {
-            let Schema { metadata, fields } = schema;
-            for (key, value) in metadata.into_iter() {
-                // merge metadata
-                if let Some(old_val) = merged.metadata.get(&key) {
-                    if old_val != &value {
-                        return Err(DataFusionError::ArrowError(
-                            ArrowError::SchemaError(format!(
-                                "Fail to merge schema due to conflicting metadata. \
-                                         Key '{}' has different values '{}' and '{}'",
-                                key, old_val, value
-                            )),
-                        ));
+    let mut metadata = HashMap::new();
+    let mut fields: Vec<Field> = vec![];
+    for schema in schemas {
+        for (key, value) in &schema.metadata {
+            if let Some(old_val) = metadata.get(key) {
+                if old_val != value {
+                    return Err(DataFusionError::ArrowError(ArrowError::SchemaError(
+                        format!(
+                            "Fail to merge schema due to conflicting metadata. \
+                                     Key '{}' has different values '{}' and '{}'",
+                            key, old_val, value
+                        ),
+                    )));
+                }
+            }
+            metadata.insert(key.to_owned(), value.to_owned());
+        }
+        for field in &schema.fields {
+            if let Some((i, merge_field)) =
+                fields.iter().find_position(|f| f.name() == field.name())
+            {
+                if merge_field.data_type() != field.data_type() {
+                    if let Some(new_type) =
+                        get_wider_type(merge_field.data_type(), field.data_type())
+                            .or_else(|| {
+                                get_wider_type(field.data_type(), merge_field.data_type())
+                            })
+                    {
+                        if &new_type != merge_field.data_type() {
+                            fields[i] = merge_field.clone().with_data_type(new_type);
+                        }
                     }
                 }
-                merged.metadata.insert(key, value);
+            } else {
+                fields.push(field.clone());
             }
-            // merge fields
-            for field in fields.into_iter() {
-                let merged_field =
-                    merged.fields.iter_mut().find(|f| f.name() == field.name());
-                match merged_field {
-                    Some(merged_field) => merged_field.try_merge(&field)?,
-                    // found a new field, add to field list
-                    None => merged.fields.push(field),
-                }
-            }
-            Ok(merged)
-        })
+        }
+    }
+    Ok(Schema::new_with_metadata(fields, metadata))
+}
+
+fn get_wider_type(t1: &DataType, t2: &DataType) -> Option<DataType> {
+    use DataType::*;
+    match (t1, t2) {
+        (Null, _) => Some(t2.clone()),
+        (Int8, Int16 | Int32 | Int64) => Some(t2.clone()),
+        (Int16, Int32 | Int64) => Some(t2.clone()),
+        (Int32, Int64) => Some(t2.clone()),
+        (UInt8, UInt16 | UInt32 | UInt64) => Some(t2.clone()),
+        (UInt16, UInt32 | UInt64) => Some(t2.clone()),
+        (UInt32, UInt64) => Some(t2.clone()),
+        (Float32, Float64) => Some(t2.clone()),
+        _ => None,
+    }
 }

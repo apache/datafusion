@@ -70,6 +70,11 @@ async fn merge_schema() -> Result<()> {
     let actual_schema: Schema = df.schema().into();
     assert_eq!(expected_schema, actual_schema);
 
+    let batches = df.collect().await?;
+    for batch in batches {
+        assert_eq!(&expected_schema, batch.schema().as_ref())
+    }
+
     Ok(())
 }
 
