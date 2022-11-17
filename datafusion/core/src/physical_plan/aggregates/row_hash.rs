@@ -191,13 +191,22 @@ impl GroupedHashAggregateStreamV2 {
                                 batch,
                                 &mut this.aggr_state,
                                 &this.aggregate_expressions,
-                            )
-                            .await;
+                            );
 
                             timer.done();
 
+                            // allocate memory
+                            // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
+                            // overshooting a bit. Also this means we either store the whole record batch or not.
+                            let result = match result {
+                                Ok(allocated) => {
+                                    this.aggr_state.memory_consumer.alloc(allocated).await
+                                }
+                                Err(e) => Err(e),
+                            };
+
                             match result {
-                                Ok(_) => continue,
+                                Ok(()) => continue,
                                 Err(e) => Err(ArrowError::ExternalError(Box::new(e))),
                             }
                         }
@@ -260,9 +269,13 @@ impl RecordBatchStream for GroupedHashAggregateStreamV2 {
     }
 }
 
+/// Perform group-by aggregation for the given [`RecordBatch`].
+///
+/// If successfull, this returns the additional number of bytes that were allocated during this process.
+///
 /// TODO: Make this a member function of [`GroupedHashAggregateStreamV2`]
 #[allow(clippy::too_many_arguments)]
-async fn group_aggregate_batch(
+fn group_aggregate_batch(
     mode: &AggregateMode,
     random_state: &RandomState,
     grouping_set: &PhysicalGroupBy,
@@ -272,14 +285,12 @@ async fn group_aggregate_batch(
     batch: RecordBatch,
     aggr_state: &mut AggregationState,
     aggregate_expressions: &[Vec<Arc<dyn PhysicalExpr>>],
-) -> Result<()> {
+) -> Result<usize> {
     // evaluate the grouping expressions
     let grouping_by_values = evaluate_group_by(grouping_set, &batch)?;
 
     let AggregationState {
-        map,
-        group_states,
-        memory_consumer,
+        map, group_states, ..
     } = aggr_state;
     let mut allocated = 0usize;
 
@@ -356,11 +367,6 @@ async fn group_aggregate_batch(
                 }
             };
         }
-
-        // allocate memory
-        // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
-        // overshooting a bit. Also this means we either store the whole record batch or not.
-        memory_consumer.alloc(allocated).await?;
 
         // Collect all indices + offsets based on keys in this vec
         let mut batch_indices: UInt32Builder = UInt32Builder::with_capacity(0);
@@ -442,7 +448,7 @@ async fn group_aggregate_batch(
             })?;
     }
 
-    Ok(())
+    Ok(allocated)
 }
 
 /// The state that is built for each output group.
