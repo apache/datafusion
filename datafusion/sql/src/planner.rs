@@ -23,8 +23,8 @@ use std::sync::Arc;
 use std::{convert::TryInto, vec};
 
 use arrow::datatypes::*;
-use sqlparser::ast::ExactNumberInfo;
 use sqlparser::ast::TimezoneInfo;
+use sqlparser::ast::{ArrayAgg, ExactNumberInfo, SetQuantifier};
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
@@ -460,8 +460,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 op,
                 left,
                 right,
-                all,
+                set_quantifier,
             } => {
+                let all = match set_quantifier {
+                    SetQuantifier::All => true,
+                    SetQuantifier::Distinct | SetQuantifier::None => false,
+                };
+
                 let left_plan =
                     self.set_expr_to_plan(*left, None, ctes, outer_query_schema)?;
                 let right_plan =
@@ -2320,6 +2325,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(&subquery, schema, ctes),
 
+            SQLExpr::ArrayAgg(array_agg) => self.parse_array_agg(array_agg, schema, ctes),
+
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node in sqltorel: {:?}",
                 sql
@@ -2380,6 +2387,53 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 input_schema,
             )?),
         }))
+    }
+
+    fn parse_array_agg(
+        &self,
+        array_agg: ArrayAgg,
+        input_schema: &DFSchema,
+        ctes: &mut HashMap<String, LogicalPlan>,
+    ) -> Result<Expr> {
+        // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
+        let ArrayAgg {
+            distinct,
+            expr,
+            order_by,
+            limit,
+            within_group,
+        } = array_agg;
+
+        if let Some(order_by) = order_by {
+            return Err(DataFusionError::NotImplemented(format!(
+                "ORDER BY not supported in ARRAY_AGG: {}",
+                order_by
+            )));
+        }
+
+        if let Some(limit) = limit {
+            return Err(DataFusionError::NotImplemented(format!(
+                "LIMIT not supported in ARRAY_AGG: {}",
+                limit
+            )));
+        }
+
+        if within_group {
+            return Err(DataFusionError::NotImplemented(
+                "WITHIN GROUP not supported in ARRAY_AGG".to_string(),
+            ));
+        }
+
+        let args = vec![self.sql_expr_to_logical_expr(*expr, input_schema, ctes)?];
+        // next, aggregate built-ins
+        let fun = AggregateFunction::ArrayAgg;
+
+        Ok(Expr::AggregateFunction {
+            fun,
+            distinct,
+            args,
+            filter: None,
+        })
     }
 
     fn function_args_to_expr(
@@ -2532,6 +2586,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Value::SingleQuotedString(s) => s.to_string(),
                 Value::Number(_, _) | Value::Boolean(_) => v.to_string(),
                 Value::DoubleQuotedString(_)
+                | Value::UnQuotedString(_)
                 | Value::EscapedStringLiteral(_)
                 | Value::NationalStringLiteral(_)
                 | Value::HexStringLiteral(_)
@@ -2756,13 +2811,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
         match sql_type {
-            SQLDataType::Array(inner_sql_type) => {
+            SQLDataType::Array(Some(inner_sql_type)) => {
                 let data_type = self.convert_simple_data_type(inner_sql_type)?;
 
                 Ok(DataType::List(Box::new(Field::new(
                     "field", data_type, true,
                 ))))
             }
+            SQLDataType::Array(None) => Err(DataFusionError::NotImplemented(
+                "Arrays with unspecified type is not supported".to_string(),
+            )),
             other => self.convert_simple_data_type(other),
         }
     }
@@ -2786,7 +2844,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Varchar(_)
             | SQLDataType::Text
             | SQLDataType::String => Ok(DataType::Utf8),
-            SQLDataType::Timestamp(tz_info) => {
+            SQLDataType::Timestamp(None, tz_info) => {
                 let tz = if matches!(tz_info, TimezoneInfo::Tz)
                     || matches!(tz_info, TimezoneInfo::WithTimeZone)
                 {
@@ -2816,7 +2874,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(DataType::Timestamp(TimeUnit::Nanosecond, tz))
             }
             SQLDataType::Date => Ok(DataType::Date32),
-            SQLDataType::Time(tz_info) => {
+            SQLDataType::Time(None, tz_info) => {
                 if matches!(tz_info, TimezoneInfo::None)
                     || matches!(tz_info, TimezoneInfo::WithoutTimeZone)
                 {
@@ -2829,7 +2887,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     )))
                 }
             }
-            SQLDataType::Decimal(exact_number_info) => {
+            SQLDataType::Numeric(exact_number_info)
+            |SQLDataType::Decimal(exact_number_info) => {
                 let (precision, scale) = match *exact_number_info {
                     ExactNumberInfo::None => (None, None),
                     ExactNumberInfo::Precision(precision) => (Some(precision), None),
@@ -2848,10 +2907,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Binary(_)
             | SQLDataType::Varbinary(_)
             | SQLDataType::Blob(_)
-            | SQLDataType::Datetime
+            | SQLDataType::Datetime(_)
             | SQLDataType::Interval
             | SQLDataType::Regclass
-            | SQLDataType::Custom(_)
+            | SQLDataType::Custom(_, _)
             | SQLDataType::Array(_)
             | SQLDataType::Enum(_)
             | SQLDataType::Set(_)
@@ -2861,7 +2920,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharacterVarying(_)
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
-            | SQLDataType::CharLargeObject(_)
+                | SQLDataType::CharLargeObject(_)
+            // precision is not supported
+                | SQLDataType::Timestamp(Some(_), _)
+            // precision is not supported
+                | SQLDataType::Time(Some(_), _)
+                | SQLDataType::Dec(_)
             | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL type {:?}",
                 sql_type
