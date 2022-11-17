@@ -564,6 +564,8 @@ impl SessionContext {
                     file_extension: file_extension.to_owned(),
                     target_partitions: self.copied_config().target_partitions,
                     table_partition_cols: cmd.table_partition_cols.clone(),
+                    // todo @doki23
+                    table_partition_cols_types: vec![],
                     file_sort_order: None,
                 };
                 self.register_listing_table(

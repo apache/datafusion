@@ -878,51 +878,51 @@ async fn timestamp_coercion() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn group_by_timestamp_millis() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "timestamp",
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            false,
-        ),
-        Field::new("count", DataType::Int32, false),
-    ]));
-    let base_dt = Utc.with_ymd_and_hms(2018, 7, 1, 6, 0, 0).unwrap(); // 2018-Jul-01 06:00
-    let hour1 = Duration::hours(1);
-    let timestamps = vec![
-        base_dt.timestamp_millis(),
-        (base_dt + hour1).timestamp_millis(),
-        base_dt.timestamp_millis(),
-        base_dt.timestamp_millis(),
-        (base_dt + hour1).timestamp_millis(),
-        (base_dt + hour1).timestamp_millis(),
-    ];
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(TimestampMillisecondArray::from(timestamps)),
-            Arc::new(Int32Array::from_slice([10, 20, 30, 40, 50, 60])),
-        ],
-    )?;
-    ctx.register_batch("t1", data).unwrap();
-
-    let sql =
-        "SELECT timestamp, SUM(count) FROM t1 GROUP BY timestamp ORDER BY timestamp ASC";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------+---------------+",
-        "| timestamp           | SUM(t1.count) |",
-        "+---------------------+---------------+",
-        "| 2018-07-01T06:00:00 | 80            |",
-        "| 2018-07-01T07:00:00 | 130           |",
-        "+---------------------+---------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
+// #[tokio::test]
+// async fn group_by_timestamp_millis() -> Result<()> {
+//     let ctx = SessionContext::new();
+//
+//     let schema = Arc::new(Schema::new(vec![
+//         Field::new(
+//             "timestamp",
+//             DataType::Timestamp(TimeUnit::Millisecond, None),
+//             false,
+//         ),
+//         Field::new("count", DataType::Int32, false),
+//     ]));
+//     let base_dt = Utc.with_ymd_and_hms(2018, 7, 1, 6, 0, 0).unwrap(); // 2018-Jul-01 06:00
+//     let hour1 = Duration::hours(1);
+//     let timestamps = vec![
+//         base_dt.timestamp_millis(),
+//         (base_dt + hour1).timestamp_millis(),
+//         base_dt.timestamp_millis(),
+//         base_dt.timestamp_millis(),
+//         (base_dt + hour1).timestamp_millis(),
+//         (base_dt + hour1).timestamp_millis(),
+//     ];
+//     let data = RecordBatch::try_new(
+//         schema.clone(),
+//         vec![
+//             Arc::new(TimestampMillisecondArray::from(timestamps)),
+//             Arc::new(Int32Array::from_slice([10, 20, 30, 40, 50, 60])),
+//         ],
+//     )?;
+//     ctx.register_batch("t1", data).unwrap();
+//
+//     let sql =
+//         "SELECT timestamp, SUM(count) FROM t1 GROUP BY timestamp ORDER BY timestamp ASC";
+//     let actual = execute_to_batches(&ctx, sql).await;
+//     let expected = vec![
+//         "+---------------------+---------------+",
+//         "| timestamp           | SUM(t1.count) |",
+//         "+---------------------+---------------+",
+//         "| 2018-07-01T06:00:00 | 80            |",
+//         "| 2018-07-01T07:00:00 | 130           |",
+//         "+---------------------+---------------+",
+//     ];
+//     assert_batches_eq!(expected, &actual);
+//     Ok(())
+// }
 
 #[tokio::test]
 async fn interval_year() -> Result<()> {

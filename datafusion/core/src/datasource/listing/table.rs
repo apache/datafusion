@@ -21,7 +21,7 @@ use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use datafusion_physical_expr::PhysicalSortExpr;
@@ -41,14 +41,14 @@ use crate::datasource::{
 };
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::physical_plan;
+use crate::physical_plan::file_format::partition_type_wrap;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
     logical_expr::Expr,
     physical_plan::{
-        empty::EmptyExec,
-        file_format::{FileScanConfig, DEFAULT_PARTITION_COLUMN_DATATYPE},
-        project_schema, ExecutionPlan, Statistics,
+        empty::EmptyExec, file_format::FileScanConfig, project_schema, ExecutionPlan,
+        Statistics,
     },
 };
 
@@ -166,6 +166,7 @@ impl ListingTableConfig {
             file_extension,
             target_partitions: ctx.config.target_partitions,
             table_partition_cols: vec![],
+            table_partition_cols_types: vec![],
             file_sort_order: None,
         };
 
@@ -218,6 +219,8 @@ pub struct ListingOptions {
     /// Note that only `DEFAULT_PARTITION_COLUMN_DATATYPE` is currently
     /// supported for the column type.
     pub table_partition_cols: Vec<String>,
+    /// datatypes of partition columns
+    pub table_partition_cols_types: Vec<DataType>,
     /// Set true to try to guess statistics from the files.
     /// This can add a lot of overhead as it will usually require files
     /// to be opened and at least partially parsed.
@@ -249,6 +252,7 @@ impl ListingOptions {
             file_extension: String::new(),
             format,
             table_partition_cols: vec![],
+            table_partition_cols_types: vec![],
             collect_stat: true,
             target_partitions: 1,
             file_sort_order: None,
@@ -342,10 +346,25 @@ impl ListingTable {
 
         // Add the partition columns to the file schema
         let mut table_fields = file_schema.fields().clone();
-        for part in &options.table_partition_cols {
+        let table_partition_cols_types = if options.table_partition_cols_types.is_empty()
+        {
+            // The default partition column type is Utf8
+            options
+                .table_partition_cols
+                .iter()
+                .map(|_| DataType::Utf8)
+                .collect()
+        } else {
+            options.table_partition_cols_types.clone()
+        };
+        for (part_col_name, part_col_type) in options
+            .table_partition_cols
+            .iter()
+            .zip(table_partition_cols_types)
+        {
             table_fields.push(Field::new(
-                part,
-                DEFAULT_PARTITION_COLUMN_DATATYPE.clone(),
+                part_col_name,
+                partition_type_wrap(part_col_type),
                 false,
             ));
         }
@@ -450,6 +469,20 @@ impl TableProvider for ListingTable {
             return Ok(Arc::new(EmptyExec::new(false, projected_schema)));
         }
 
+        // extract types of partition columns
+        let table_partition_cols_types = self
+            .options
+            .table_partition_cols
+            .iter()
+            .map(|col_name| {
+                self.table_schema
+                    .field_with_name(col_name)
+                    .unwrap()
+                    .data_type()
+                    .clone()
+            })
+            .collect();
+
         // create the execution plan
         self.options
             .format
@@ -463,6 +496,7 @@ impl TableProvider for ListingTable {
                     limit,
                     output_ordering: self.try_create_output_ordering()?,
                     table_partition_cols: self.options.table_partition_cols.clone(),
+                    table_partition_cols_types,
                     config_options: ctx.config.config_options(),
                 },
                 filters,

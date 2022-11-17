@@ -70,6 +70,11 @@ lazy_static! {
     pub static ref DEFAULT_PARTITION_COLUMN_DATATYPE: DataType = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8));
 }
 
+/// convert logical type of partition column to physical type: Dictionary(UInt16, val_type)
+pub fn partition_type_wrap(val_type: DataType) -> DataType {
+    DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
+}
+
 /// The base configurations to provide when creating a physical plan for
 /// any given file format.
 #[derive(Debug, Clone)]
@@ -101,6 +106,8 @@ pub struct FileScanConfig {
     pub limit: Option<usize>,
     /// The partitioning column names
     pub table_partition_cols: Vec<String>,
+    /// The partitioning column types
+    pub table_partition_cols_types: Vec<DataType>,
     /// The order in which the data is sorted, if known.
     pub output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Configuration options passed to the physical plans
@@ -135,7 +142,7 @@ impl FileScanConfig {
                 let partition_idx = idx - self.file_schema.fields().len();
                 table_fields.push(Field::new(
                     &self.table_partition_cols[partition_idx],
-                    DEFAULT_PARTITION_COLUMN_DATATYPE.clone(),
+                    self.table_partition_cols_types[partition_idx].clone(),
                     false,
                 ));
                 // TODO provide accurate stat for partition column (#1186)
@@ -406,10 +413,7 @@ fn create_dict_array(
     };
 
     // create data type
-    let data_type =
-        DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val.get_datatype()));
-
-    debug_assert_eq!(data_type, *DEFAULT_PARTITION_COLUMN_DATATYPE);
+    let data_type = partition_type_wrap(val.get_datatype());
 
     // assemble pieces together
     let mut builder = ArrayData::builder(data_type)
@@ -540,6 +544,7 @@ mod tests {
             None,
             Statistics::default(),
             vec!["date".to_owned()],
+            vec![partition_type_wrap(DataType::Utf8)],
         );
 
         let (proj_schema, proj_statistics) = conf.project();
@@ -586,6 +591,7 @@ mod tests {
                 ..Default::default()
             },
             vec!["date".to_owned()],
+            vec![partition_type_wrap(DataType::Utf8)],
         );
 
         let (proj_schema, proj_statistics) = conf.project();
@@ -617,6 +623,11 @@ mod tests {
         );
         let partition_cols =
             vec!["year".to_owned(), "month".to_owned(), "day".to_owned()];
+        let partition_col_types = vec![
+            partition_type_wrap(DataType::Utf8),
+            partition_type_wrap(DataType::Utf8),
+            partition_type_wrap(DataType::Utf8),
+        ];
         // create a projected schema
         let conf = config_for_projection(
             file_batch.schema(),
@@ -630,6 +641,7 @@ mod tests {
             ]),
             Statistics::default(),
             partition_cols.clone(),
+            partition_col_types,
         );
         let (proj_schema, _) = conf.project();
         // created a projector for that projected schema
@@ -778,6 +790,7 @@ mod tests {
         projection: Option<Vec<usize>>,
         statistics: Statistics,
         table_partition_cols: Vec<String>,
+        table_partition_cols_types: Vec<DataType>,
     ) -> FileScanConfig {
         FileScanConfig {
             file_schema,
@@ -787,6 +800,7 @@ mod tests {
             projection,
             statistics,
             table_partition_cols,
+            table_partition_cols_types,
             config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
         }

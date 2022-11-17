@@ -148,6 +148,7 @@ impl TestParquetFile {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
+            table_partition_cols_types: vec![],
             config_options: config_options.into_shareable(),
             output_ordering: None,
         };

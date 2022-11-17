@@ -123,6 +123,7 @@ pub(crate) mod test_util {
                     projection,
                     limit,
                     table_partition_cols: vec![],
+                    table_partition_cols_types: vec![],
                     config_options: ConfigOptions::new().into_shareable(),
                     output_ordering: None,
                 },

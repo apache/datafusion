@@ -67,6 +67,8 @@ impl TableProviderFactory for ListingTableFactory {
             file_extension: file_extension.to_owned(),
             target_partitions: 1,
             table_partition_cols: vec![],
+            // todo @doki23
+            table_partition_cols_types: vec![],
             file_sort_order: None,
         };
 
