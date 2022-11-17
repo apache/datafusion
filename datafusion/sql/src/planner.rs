@@ -775,7 +775,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         join_filter,
                     )?;
 
-                    // Remove temporary projection columns.
+                    // Remove temporary projected columns if necessary.
                     if left_projected || right_projected {
                         let final_join_result = join_schema
                             .fields()
