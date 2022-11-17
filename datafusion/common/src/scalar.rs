@@ -2657,6 +2657,7 @@ mod tests {
     use arrow::compute::kernels;
     use arrow::datatypes::ArrowPrimitiveType;
 
+    use crate::cast::as_string_array;
     use crate::from_slice::FromSlice;
 
     use super::*;
@@ -3020,7 +3021,7 @@ mod tests {
 
         let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
         let array = as_dictionary_array::<Int32Type>(&array);
-        let values_array = as_string_array(array.values());
+        let values_array = as_string_array(array.values()).unwrap();
 
         let values = array
             .keys_iter()

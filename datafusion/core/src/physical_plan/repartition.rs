@@ -581,6 +581,7 @@ mod tests {
         array::{ArrayRef, StringArray},
         error::ArrowError,
     };
+    use datafusion_common::cast::as_string_array;
     use futures::FutureExt;
     use std::collections::HashSet;
 
@@ -962,10 +963,7 @@ mod tests {
             .iter()
             .flat_map(|batch| {
                 assert_eq!(batch.columns().len(), 1);
-                let string_array = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
+                let string_array = as_string_array(batch.column(0))
                     .expect("Unexpected type for repartitoned batch");
 
                 string_array

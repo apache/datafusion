@@ -68,7 +68,7 @@ use arrow::{
     util::pretty::pretty_format_batches,
 };
 use datafusion::{
-    common::cast::as_int64_array,
+    common::cast::{as_int64_array, as_string_array},
     common::DFSchemaRef,
     error::{DataFusionError, Result},
     execution::{
@@ -546,11 +546,8 @@ fn accumulate_batch(
     // Assuming the input columns are
     // column[0]: customer_id / UTF8
     // column[1]: revenue: Int64
-    let customer_id = input_batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("Column 0 is not customer_id");
+    let customer_id =
+        as_string_array(input_batch.column(0)).expect("Column 0 is not customer_id");
 
     let revenue = as_int64_array(input_batch.column(1)).unwrap();
 
