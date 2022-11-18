@@ -208,7 +208,7 @@ mod roundtrip_tests {
     async fn roundtrip_custom_tables() -> Result<(), DataFusionError> {
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
-        table_factories.insert("testtable".to_string(), Arc::new(TestTableFactory {}));
+        table_factories.insert("TESTTABLE".to_string(), Arc::new(TestTableFactory {}));
         let cfg = RuntimeConfig::new().with_table_factories(table_factories);
         let env = RuntimeEnv::new(cfg).unwrap();
         let ses = SessionConfig::new();

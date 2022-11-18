@@ -50,7 +50,7 @@ datafusion-common = { path = "../common", version = "14.0.0" }
 datafusion-expr = { path = "../expr", version = "14.0.0" }
 datafusion-row = { path = "../row", version = "14.0.0" }
 half = { version = "2.1", default-features = false }
-hashbrown = { version = "0.12", features = ["raw"] }
+hashbrown = { version = "0.13", features = ["raw"] }
 itertools = { version = "0.10", features = ["use_std"] }
 lazy_static = { version = "^1.4.0" }
 md-5 = { version = "^0.10.0", optional = true }
