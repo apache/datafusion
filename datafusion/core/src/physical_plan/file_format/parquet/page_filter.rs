@@ -409,10 +409,12 @@ macro_rules! get_min_max_values_for_page_index {
                     // int32 to decimal with the precision and scale
                     Some(DataType::Decimal128(precision, scale)) => {
                         let vec = &index.indexes;
-                        if let Ok(arr) = Decimal128Array::from_iter_values(
-                            vec.iter().map(|x| *x.$func().unwrap() as i128),
-                        )
-                        .with_precision_and_scale(*precision, *scale)
+                        let vec: Vec<Option<i128>> = vec
+                            .iter()
+                            .map(|x| x.min().and_then(|x| Some(*x as i128)))
+                            .collect();
+                        if let Ok(arr) = Decimal128Array::from(vec)
+                            .with_precision_and_scale(*precision, *scale)
                         {
                             return Some(Arc::new(arr));
                         } else {
@@ -432,10 +434,12 @@ macro_rules! get_min_max_values_for_page_index {
                     // int64 to decimal with the precision and scale
                     Some(DataType::Decimal128(precision, scale)) => {
                         let vec = &index.indexes;
-                        if let Ok(arr) = Decimal128Array::from_iter_values(
-                            vec.iter().map(|x| *x.$func().ok()).map(|v| v as i128),
-                        )
-                        .with_precision_and_scale(*precision, *scale)
+                        let vec: Vec<Option<i128>> = vec
+                            .iter()
+                            .map(|x| x.min().and_then(|x| Some(*x as i128)))
+                            .collect();
+                        if let Ok(arr) = Decimal128Array::from(vec)
+                            .with_precision_and_scale(*precision, *scale)
                         {
                             return Some(Arc::new(arr));
                         } else {
