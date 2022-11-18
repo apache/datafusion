@@ -999,6 +999,12 @@ pub enum JoinType {
     RightAnti,
 }
 
+impl JoinType {
+    pub fn is_outer(self) -> bool {
+        self == JoinType::Left || self == JoinType::Right || self == JoinType::Full
+    }
+}
+
 impl Display for JoinType {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let join_type = match self {
