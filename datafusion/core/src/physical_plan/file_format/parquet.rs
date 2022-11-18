@@ -306,10 +306,7 @@ impl ExecutionPlan for ParquetExec {
                 let pruning_predicate_string = self
                     .pruning_predicate
                     .as_ref()
-                    // TODO change this to be pruning_predicate rather than 'predicate'
-                    // to avoid confusion
-                    // https://github.com/apache/arrow-datafusion/issues/4020
-                    .map(|pre| format!(", predicate={}", pre.predicate_expr()))
+                    .map(|pre| format!(", pruning_predicate={}", pre.predicate_expr()))
                     .unwrap_or_default();
 
                 let output_ordering_string = self
@@ -665,6 +662,7 @@ mod tests {
     use crate::datasource::listing::{FileRange, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::options::CsvReadOptions;
+    use crate::physical_plan::displayable;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use crate::{
@@ -1524,6 +1522,36 @@ mod tests {
             "no eval time in metrics: {:#?}",
             metrics
         );
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_display() {
+        let c1: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("Foo"),
+            None,
+            Some("bar"),
+            Some("bar"),
+            Some("bar"),
+            Some("bar"),
+            Some("zzz"),
+        ]));
+
+        // batch1: c1(string)
+        let batch1 = create_batch(vec![("c1", c1.clone())]);
+
+        // on
+        let filter = col("c1").not_eq(lit("bar"));
+
+        let rt = round_trip(vec![batch1], None, None, Some(filter), true, false).await;
+
+        // convert to explain plan form
+        let display = displayable(rt.parquet_exec.as_ref()).indent().to_string();
+
+        assert_contains!(
+            &display,
+            "pruning_predicate=c1_min@0 != bar OR bar != c1_max@1"
+        );
+        assert_contains!(&display, "projection=[c1]");
     }
 
     /// returns the sum of all the metrics with the specified name
