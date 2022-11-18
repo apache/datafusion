@@ -544,6 +544,7 @@ impl ListingTable {
                 filters,
                 &self.options.file_extension,
                 &self.options.table_partition_cols,
+                &self.options.table_partition_cols_types,
             )
         }))
         .await?;

@@ -174,6 +174,7 @@ pub async fn pruned_partition_list<'a>(
     filters: &'a [Expr],
     file_extension: &'a str,
     table_partition_cols: &'a [String],
+    table_partition_cols_types: &'a [DataType],
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
     let list = table_path.list_all_files(store, file_extension);
 
@@ -201,7 +202,15 @@ pub async fn pruned_partition_list<'a>(
                 )
                 .map(|p| {
                     p.iter()
-                        .map(|&pn| ScalarValue::Utf8(Some(pn.to_owned())))
+                        .zip(table_partition_cols_types)
+                        .map(|(&pn, datatype)| {
+                            ScalarValue::try_from_string(pn.to_string(), datatype).expect(
+                                &format!(
+                                    "Failed to cast str {} to type {}",
+                                    pn, datatype
+                                ),
+                            )
+                        })
                         .collect()
                 });
 
@@ -430,6 +439,7 @@ mod tests {
             &[filter],
             ".parquet",
             &[String::from("mypartition")],
+            &[DataType::Utf8],
         )
         .await
         .expect("partition pruning failed")
@@ -453,6 +463,7 @@ mod tests {
             &[filter],
             ".parquet",
             &[String::from("mypartition")],
+            &[DataType::Utf8],
         )
         .await
         .expect("partition pruning failed")
@@ -500,6 +511,7 @@ mod tests {
             &[filter1, filter2, filter3],
             ".parquet",
             &[String::from("part1"), String::from("part2")],
+            &[DataType::Utf8, DataType::Utf8],
         )
         .await
         .expect("partition pruning failed")

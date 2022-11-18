@@ -17,6 +17,7 @@
 
 //! Test queries on partitioned datasets
 
+use arrow::datatypes::DataType;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
@@ -57,6 +58,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
             "year=2021/month=10/day=28/file.parquet",
         ],
         &["year", "month", "day"],
+        &[DataType::Int32, DataType::Utf8, DataType::Utf8],
         "mirror:///",
         "alltypes_plain.parquet",
     )
@@ -303,6 +305,7 @@ async fn parquet_multiple_partitions() -> Result<()> {
             "year=2021/month=10/day=28/file.parquet",
         ],
         &["year", "month", "day"],
+        &[DataType::Int32, DataType::Utf8, DataType::Utf8],
         "mirror:///",
         "alltypes_plain.parquet",
     )
@@ -345,6 +348,7 @@ async fn parquet_statistics() -> Result<()> {
             "year=2021/month=10/day=28/file.parquet",
         ],
         &["year", "month", "day"],
+        &[DataType::Int32, DataType::Utf8, DataType::Utf8],
         "mirror:///",
         // This is the only file we found in the test set with
         // actual stats. It has 1 column / 1 row.
@@ -405,6 +409,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
             "id=3/file.parquet",
         ],
         &["id"],
+        &[DataType::Int64],
         "mirror:///",
         "alltypes_plain.parquet",
     )
@@ -451,6 +456,7 @@ async fn register_partitioned_alltypes_parquet(
     ctx: &SessionContext,
     store_paths: &[&str],
     partition_cols: &[&str],
+    partition_cols_types: &[DataType],
     table_path: &str,
     source_file: &str,
 ) {
@@ -464,6 +470,7 @@ async fn register_partitioned_alltypes_parquet(
 
     let mut options = ListingOptions::new(Arc::new(ParquetFormat::default()));
     options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
+    options.table_partition_cols_types = partition_cols_types.to_vec();
     options.collect_stat = true;
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
