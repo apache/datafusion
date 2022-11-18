@@ -179,7 +179,7 @@ pub fn coerce_types(
                 result[1] = DataType::Float64;
             } else {
                 return Err(DataFusionError::Plan(format!(
-                    "The percentile argument for {:?} must be Float64, not {:?}.",
+                    "Could not coerce the percent argument for {:?} to Float64. Was  {:?}.",
                     agg_fun, input_types[1]
                 )));
             }
