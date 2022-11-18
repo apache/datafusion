@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::parquet::Unit::Page;
+use crate::parquet::{ContextWithParquet, Scenario};
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
@@ -22,8 +24,8 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionContext;
-use datafusion_common::Statistics;
+use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::{ScalarValue, Statistics};
 use datafusion_expr::{col, lit, Expr};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -142,6 +144,22 @@ async fn page_index_filter_one_col() {
 
     // should same with `month = 1`
     assert_eq!(batch.num_rows(), 645);
+
+    let session_ctx = SessionContext::new();
+    let task_ctx = session_ctx.task_ctx();
+
+    // 5.create filter date_string_col == 1;
+    let filter = col("date_string_col").eq(lit("01/01/09"));
+    let parquet_exec = get_parquet_exec(filter, session_ctx.clone()).await;
+    let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
+    let batch = results.next().await.unwrap().unwrap();
+
+    // there should only two pages match the filter
+    //                                  min                                        max
+    // page-20                        0  01/01/09                                  01/02/09
+    // page-21                        0  01/01/09                                  01/01/09
+    // each 7 rows
+    assert_eq!(batch.num_rows(), 14);
 }
 
 #[tokio::test]
@@ -203,4 +221,27 @@ async fn page_index_filter_multi_col() {
 
     let batch = results.next().await.unwrap().unwrap();
     assert_eq!(batch.num_rows(), 7300);
+}
+
+async fn test_prune(
+    case_data_type: Scenario,
+    sql: &str,
+    expected_errors: Option<usize>,
+    expected_row_pages_pruned: Option<usize>,
+    expected_results: usize,
+) {
+    let output = ContextWithParquet::new(case_data_type, Page)
+        .await
+        .query(sql)
+        .await;
+
+    println!("{}", output.description());
+    assert_eq!(output.predicate_evaluation_errors(), expected_errors);
+    assert_eq!(output.row_pages_pruned(), expected_row_pages_pruned);
+    assert_eq!(
+        output.result_rows,
+        expected_results,
+        "{}",
+        output.description()
+    );
 }
