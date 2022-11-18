@@ -55,7 +55,11 @@ use datafusion_expr::logical_plan::{
     Partitioning, PlanType, SetVariable, ToStringifiedPlan,
 };
 use datafusion_expr::logical_plan::{Filter, Subquery};
-use datafusion_expr::utils::{can_hash, check_all_column_from_schema, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, find_aggregate_exprs, find_column_exprs, find_window_exprs, COUNT_STAR_EXPANSION, expr_to_columns};
+use datafusion_expr::utils::{
+    can_hash, check_all_column_from_schema, expand_qualified_wildcard, expand_wildcard,
+    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_column_exprs,
+    find_window_exprs, COUNT_STAR_EXPANSION,
+};
 use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
     cast, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable,
