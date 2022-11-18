@@ -67,7 +67,7 @@ impl OptimizerRule for ReduceCrossJoin {
                 let mut possible_join_keys: Vec<(Column, Column)> = vec![];
                 let mut all_inputs: Vec<LogicalPlan> = vec![];
                 match &input {
-                    LogicalPlan::Join(join) if (join.join_type == JoinType::Inner)=> {
+                    LogicalPlan::Join(join) if (join.join_type == JoinType::Inner) => {
                         flatten_join_inputs(
                             &input,
                             &mut possible_join_keys,
