@@ -306,10 +306,7 @@ impl ExecutionPlan for ParquetExec {
                 let pruning_predicate_string = self
                     .pruning_predicate
                     .as_ref()
-                    // TODO change this to be pruning_predicate rather than 'predicate'
-                    // to avoid confusion
-                    // https://github.com/apache/arrow-datafusion/issues/4020
-                    .map(|pre| format!(", predicate={}", pre.predicate_expr()))
+                    .map(|pre| format!(", pruning_predicate={}", pre.predicate_expr()))
                     .unwrap_or_default();
 
                 let output_ordering_string = self
