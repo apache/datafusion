@@ -106,7 +106,7 @@ pub enum LogicalPlan {
     Extension(Extension),
     /// Remove duplicate rows from the input
     Distinct(Distinct),
-    /// Set a Varaible
+    /// Set a Variable
     SetVariable(SetVariable),
 }
 
@@ -254,7 +254,7 @@ impl LogicalPlan {
             LogicalPlan::Sort(Sort { expr, .. }) => expr.clone(),
             LogicalPlan::Extension(extension) => extension.node.expressions(),
             // plans without expressions
-            LogicalPlan::TableScan { .. }
+            LogicalPlan::TableScan(_)
             | LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
@@ -268,8 +268,8 @@ impl LogicalPlan {
             | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::CrossJoin(_)
-            | LogicalPlan::Analyze { .. }
-            | LogicalPlan::Explain { .. }
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Distinct(_) => {
                 vec![]
