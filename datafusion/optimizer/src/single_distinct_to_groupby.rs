@@ -196,7 +196,6 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         alias_expr,
                         Arc::new(outer_aggr),
                         schema.clone(),
-                        None,
                     )?))
                 } else {
                     utils::optimize_children(self, plan, _optimizer_config)

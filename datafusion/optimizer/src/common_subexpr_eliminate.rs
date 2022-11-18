@@ -114,12 +114,14 @@ impl OptimizerRule for CommonSubexprEliminate {
                     optimizer_config,
                 )?;
 
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    pop_expr(&mut new_expr)?,
-                    Arc::new(new_input),
-                    schema.clone(),
-                    alias.clone(),
-                )?))
+                Ok(LogicalPlan::Projection(
+                    Projection::try_new_with_schema_alias(
+                        pop_expr(&mut new_expr)?,
+                        Arc::new(new_input),
+                        schema.clone(),
+                        alias.clone(),
+                    )?,
+                ))
             }
             LogicalPlan::Filter(filter) => {
                 let input = filter.input();
@@ -328,7 +330,6 @@ fn build_project_plan(
         project_exprs,
         Arc::new(input),
         Arc::new(schema),
-        None,
     )?))
 }
 

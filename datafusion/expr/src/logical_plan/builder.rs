@@ -410,7 +410,6 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Projection(Projection::try_new(
             new_expr,
             Arc::new(sort_plan),
-            None,
         )?)))
     }
 
@@ -874,12 +873,12 @@ pub fn project_with_column_index_alias(
             x => x.alias(schema.field(i).name()),
         })
         .collect::<Vec<_>>();
-    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-        alias_expr, input, schema, alias,
-    )?))
+    Ok(LogicalPlan::Projection(
+        Projection::try_new_with_schema_alias(alias_expr, input, schema, alias)?,
+    ))
 }
 
-/// Union two logical plans with an optional alias.
+/// Union two logical plans.
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
     let left_col_num = left_plan.schema().fields().len();
 
@@ -986,12 +985,14 @@ pub fn project_with_alias(
         None => input_schema,
     };
 
-    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-        projected_expr,
-        Arc::new(plan.clone()),
-        DFSchemaRef::new(schema),
-        alias,
-    )?))
+    Ok(LogicalPlan::Projection(
+        Projection::try_new_with_schema_alias(
+            projected_expr,
+            Arc::new(plan.clone()),
+            DFSchemaRef::new(schema),
+            alias,
+        )?,
+    ))
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
