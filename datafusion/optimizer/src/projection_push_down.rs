@@ -610,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn redundunt_project() -> Result<()> {
+    fn redundant_project() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -641,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn noncontiguous_redundunt_projection() -> Result<()> {
+    fn noncontinuous_redundant_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -747,7 +747,7 @@ mod tests {
 
     #[test]
     fn join_schema_trim_using_join() -> Result<()> {
-        // shared join colums from using join should be pushed to both sides
+        // shared join columns from using join should be pushed to both sides
 
         let table_scan = test_table_scan()?;
 
