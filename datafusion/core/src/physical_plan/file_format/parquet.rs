@@ -982,7 +982,7 @@ mod tests {
         // batch2: c3(int8), c2(int64)
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2)]);
 
-        let filter = col("c2").eq(lit(2_i64));
+        let filter = col("c2").eq(lit(2_i64)).or(col("c2").eq(lit(1_i64)));
 
         // read/write them files:
         let rt =
@@ -991,13 +991,14 @@ mod tests {
             "+----+----+----+",
             "| c1 | c3 | c2 |",
             "+----+----+----+",
+            "|    | 10 | 1  |",
             "|    | 20 | 2  |",
             "+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
         let metrics = rt.parquet_exec.metrics().unwrap();
         // Note there are were 6 rows in total (across three batches)
-        assert_eq!(get_value(&metrics, "pushdown_rows_filtered"), 5);
+        assert_eq!(get_value(&metrics, "pushdown_rows_filtered"), 4);
     }
 
     #[tokio::test]

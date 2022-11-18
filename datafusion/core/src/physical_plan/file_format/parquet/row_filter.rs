@@ -219,7 +219,9 @@ impl<'a> ExprRewriter for FilterCandidateBuilder<'a> {
     fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
         if let Expr::Column(column) = expr {
             if let Ok(idx) = self.file_schema.index_of(&column.name) {
-                self.required_column_indices.push(idx);
+                if !self.required_column_indices.contains(&idx) {
+                    self.required_column_indices.push(idx);
+                }
 
                 if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                     self.non_primitive_columns = true;
