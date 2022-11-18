@@ -348,7 +348,7 @@ impl ExecutionPlan for AggregateExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let batch_size = context.session_config().batch_size();
-        let input = self.input.execute(partition, context)?;
+        let input = self.input.execute(partition, Arc::clone(&context))?;
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
@@ -369,6 +369,8 @@ impl ExecutionPlan for AggregateExec {
                 input,
                 baseline_metrics,
                 batch_size,
+                context,
+                partition,
             )?))
         } else {
             Ok(Box::pin(GroupedHashAggregateStream::new(
@@ -689,7 +691,8 @@ fn evaluate_group_by(
 
 #[cfg(test)]
 mod tests {
-    use crate::execution::context::TaskContext;
+    use crate::execution::context::{SessionConfig, TaskContext};
+    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::from_slice::FromSlice;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -700,7 +703,7 @@ mod tests {
     use crate::{assert_batches_sorted_eq, physical_plan::common};
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::error::Result as ArrowResult;
+    use arrow::error::{ArrowError, Result as ArrowResult};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_physical_expr::expressions::{lit, Count};
@@ -1079,6 +1082,63 @@ mod tests {
             Arc::new(TestYieldingExec { yield_first: true });
 
         check_grouping_sets(input).await
+    }
+
+    #[tokio::test]
+    async fn test_oom() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestYieldingExec { yield_first: true });
+        let input_schema = input.schema();
+
+        let session_ctx = SessionContext::with_config_rt(
+            SessionConfig::default(),
+            Arc::new(
+                RuntimeEnv::new(RuntimeConfig::default().with_memory_limit(1, 1.0))
+                    .unwrap(),
+            ),
+        );
+        let task_ctx = session_ctx.task_ctx();
+
+        let groups = PhysicalGroupBy {
+            expr: vec![(col("a", &input_schema)?, "a".to_string())],
+            null_expr: vec![],
+            groups: vec![vec![false]],
+        };
+
+        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
+            col("b", &input_schema)?,
+            "AVG(b)".to_string(),
+            DataType::Float64,
+        ))];
+
+        let partial_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups,
+            aggregates,
+            input,
+            input_schema.clone(),
+        )?);
+
+        let err = common::collect(partial_aggregate.execute(0, task_ctx.clone())?)
+            .await
+            .unwrap_err();
+
+        // error root cause traversal is a bit complicated, see #4172.
+        if let DataFusionError::ArrowError(ArrowError::ExternalError(err)) = err {
+            if let Some(err) = err.downcast_ref::<DataFusionError>() {
+                assert!(
+                    matches!(err, DataFusionError::ResourcesExhausted(_)),
+                    "Wrong inner error type: {}",
+                    err,
+                );
+            } else {
+                panic!("Wrong arrow error type: {err}")
+            }
+        } else {
+            panic!("Wrong outer error type: {err}")
+        }
+
+        Ok(())
     }
 
     #[tokio::test]
