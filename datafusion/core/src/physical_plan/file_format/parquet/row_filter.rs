@@ -21,6 +21,7 @@ use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
+use std::collections::BTreeSet;
 
 use datafusion_expr::Expr;
 use datafusion_optimizer::utils::split_conjunction_owned;
@@ -174,7 +175,7 @@ struct FilterCandidateBuilder<'a> {
     expr: Expr,
     file_schema: &'a Schema,
     table_schema: &'a Schema,
-    required_column_indices: Vec<usize>,
+    required_column_indices: BTreeSet<usize>,
     non_primitive_columns: bool,
     projected_columns: bool,
 }
@@ -185,7 +186,7 @@ impl<'a> FilterCandidateBuilder<'a> {
             expr,
             file_schema,
             table_schema,
-            required_column_indices: vec![],
+            required_column_indices: BTreeSet::default(),
             non_primitive_columns: false,
             projected_columns: false,
         }
@@ -209,7 +210,7 @@ impl<'a> FilterCandidateBuilder<'a> {
                 expr,
                 required_bytes,
                 can_use_index,
-                projection: self.required_column_indices,
+                projection: self.required_column_indices.into_iter().collect(),
             }))
         }
     }
@@ -219,9 +220,7 @@ impl<'a> ExprRewriter for FilterCandidateBuilder<'a> {
     fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
         if let Expr::Column(column) = expr {
             if let Ok(idx) = self.file_schema.index_of(&column.name) {
-                if !self.required_column_indices.contains(&idx) {
-                    self.required_column_indices.push(idx);
-                }
+                self.required_column_indices.insert(idx);
 
                 if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                     self.non_primitive_columns = true;
@@ -286,7 +285,10 @@ fn remap_projection(src: &[usize]) -> Vec<usize> {
 /// Calculate the total compressed size of all `Column's required for
 /// predicate `Expr`. This should represent the total amount of file IO
 /// required to evaluate the predicate.
-fn size_of_columns(columns: &[usize], metadata: &ParquetMetaData) -> Result<usize> {
+fn size_of_columns(
+    columns: &BTreeSet<usize>,
+    metadata: &ParquetMetaData,
+) -> Result<usize> {
     let mut total_size = 0;
     let row_groups = metadata.row_groups();
     for idx in columns {
@@ -301,7 +303,10 @@ fn size_of_columns(columns: &[usize], metadata: &ParquetMetaData) -> Result<usiz
 /// For a given set of `Column`s required for predicate `Expr` determine whether all
 /// columns are sorted. Sorted columns may be queried more efficiently in the presence of
 /// a PageIndex.
-fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<bool> {
+fn columns_sorted(
+    _columns: &BTreeSet<usize>,
+    _metadata: &ParquetMetaData,
+) -> Result<bool> {
     // TODO How do we know this?
     Ok(false)
 }
