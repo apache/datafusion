@@ -55,7 +55,7 @@ pub mod window_function;
 pub use accumulator::{Accumulator, AggregateState};
 pub use aggregate_function::AggregateFunction;
 pub use built_in_function::BuiltinScalarFunction;
-pub use columnar_value::{ColumnarValue, NullColumnarValue};
+pub use columnar_value::ColumnarValue;
 pub use expr::{
     Between, BinaryExpr, Case, Cast, Expr, GetIndexedField, GroupingSet, Like,
 };

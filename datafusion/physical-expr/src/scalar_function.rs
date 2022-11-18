@@ -37,7 +37,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::ColumnarValue;
-pub use datafusion_expr::NullColumnarValue;
 use datafusion_expr::ScalarFunctionImplementation;
 use std::any::Any;
 use std::fmt::Debug;
@@ -134,7 +133,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // indicating the batch size (as a convention)
         let inputs = match (self.args.len(), self.name.parse::<BuiltinScalarFunction>()) {
             (0, Ok(scalar_fun)) if scalar_fun.supports_zero_argument() => {
-                vec![NullColumnarValue::from(batch)]
+                vec![ColumnarValue::create_null_array(batch.num_rows())]
             }
             _ => self
                 .args
