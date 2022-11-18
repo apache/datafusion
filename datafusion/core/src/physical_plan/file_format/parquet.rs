@@ -1593,7 +1593,7 @@ mod tests {
         let pruning_predicate = &rt.parquet_exec.pruning_predicate;
         assert!(
             pruning_predicate.is_none(),
-            "Still had pruning  predicate: {:?}",
+            "Still had pruning predicate: {:?}",
             pruning_predicate
         )
     }
