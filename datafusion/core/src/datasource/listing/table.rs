@@ -216,8 +216,6 @@ pub struct ListingOptions {
     /// partitioning expected should be named "a" and "b":
     /// - If there is a third level of partitioning it will be ignored.
     /// - Files that don't follow this partitioning will be ignored.
-    /// Note that only `DEFAULT_PARTITION_COLUMN_DATATYPE` is currently
-    /// supported for the column type.
     pub table_partition_cols: Vec<String>,
     /// datatypes of partition columns
     pub table_partition_cols_types: Vec<DataType>,

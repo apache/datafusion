@@ -52,7 +52,6 @@ use crate::{
 };
 use arrow::array::{new_null_array, UInt16BufferBuilder};
 use arrow::record_batch::RecordBatchOptions;
-use lazy_static::lazy_static;
 use log::{debug, info};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -64,11 +63,6 @@ use std::{
 };
 
 use super::{ColumnStatistics, Statistics};
-
-lazy_static! {
-    /// The datatype used for all partitioning columns for now
-    pub static ref DEFAULT_PARTITION_COLUMN_DATATYPE: DataType = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8));
-}
 
 /// convert logical type of partition column to physical type: Dictionary(UInt16, val_type)
 pub fn partition_type_wrap(val_type: DataType) -> DataType {
