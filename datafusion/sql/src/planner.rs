@@ -55,14 +55,10 @@ use datafusion_expr::logical_plan::{
     Partitioning, PlanType, SetVariable, ToStringifiedPlan,
 };
 use datafusion_expr::logical_plan::{Filter, Subquery};
-use datafusion_expr::utils::{
-    can_hash, check_all_column_from_schema, expand_qualified_wildcard, expand_wildcard,
-    expr_as_column_expr, find_aggregate_exprs, find_column_exprs, find_window_exprs,
-    COUNT_STAR_EXPANSION,
-};
+use datafusion_expr::utils::{can_hash, check_all_column_from_schema, expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, find_aggregate_exprs, find_column_exprs, find_window_exprs, COUNT_STAR_EXPANSION, expr_to_columns};
 use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
-    and, cast, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable,
+    cast, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable,
     GetIndexedField, Operator, ScalarUDF, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
@@ -948,166 +944,52 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         outer_query_schema: Option<&DFSchema>,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
+        let cross_join_plan = if plans.len() == 1 {
+            plans[0].clone()
+        } else {
+            let mut left = plans[0].clone();
+            for right in plans.iter().skip(1) {
+                left = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+            }
+            left
+        };
         match selection {
             Some(predicate_expr) => {
-                // build join schema
                 let mut fields = vec![];
-                let mut metadata = std::collections::HashMap::new();
+                let mut metadata = HashMap::new();
                 for plan in &plans {
                     fields.extend_from_slice(plan.schema().fields());
                     metadata.extend(plan.schema().metadata().clone());
                 }
+
                 let mut join_schema = DFSchema::new_with_metadata(fields, metadata)?;
+                let mut all_schemas: Vec<DFSchemaRef> = vec![];
+                for plan in plans {
+                    for schema in plan.all_schemas() {
+                        all_schemas.push(schema.clone());
+                    }
+                }
                 if let Some(outer) = outer_query_schema {
+                    all_schemas.push(Arc::new(outer.clone()));
                     join_schema.merge(outer);
                 }
+                let x: Vec<&DFSchemaRef> = all_schemas.iter().collect();
 
                 let filter_expr = self.sql_to_rex(predicate_expr, &join_schema, ctes)?;
+                let mut using_columns = HashSet::new();
+                expr_to_columns(&filter_expr, &mut using_columns)?;
+                let filter_expr = normalize_col_with_schemas(
+                    filter_expr,
+                    x.as_slice(),
+                    &[using_columns],
+                )?;
 
-                // look for expressions of the form `<column> = <column>`
-                let mut possible_join_keys = vec![];
-                extract_possible_join_keys(&filter_expr, &mut possible_join_keys)?;
-
-                let mut all_join_keys = HashSet::new();
-
-                let orig_plans = plans.clone();
-                let mut plans = plans.into_iter();
-                let mut left = plans.next().unwrap(); // have at least one plan
-
-                // List of the plans that have not yet been joined
-                let mut remaining_plans: Vec<Option<LogicalPlan>> =
-                    plans.into_iter().map(Some).collect();
-
-                // Take from the list of remaining plans,
-                loop {
-                    let mut join_keys = vec![];
-
-                    // Search all remaining plans for the next to
-                    // join. Prefer the first one that has a join
-                    // predicate in the predicate lists
-                    let plan_with_idx =
-                        remaining_plans.iter().enumerate().find(|(_idx, plan)| {
-                            // skip plans that have been joined already
-                            let plan = if let Some(plan) = plan {
-                                plan
-                            } else {
-                                return false;
-                            };
-
-                            // can we find a match?
-                            let left_schema = left.schema();
-                            let right_schema = plan.schema();
-                            for (l, r) in &possible_join_keys {
-                                if left_schema.field_from_column(l).is_ok()
-                                    && right_schema.field_from_column(r).is_ok()
-                                    && can_hash(
-                                        left_schema
-                                            .field_from_column(l)
-                                            .unwrap() // the result must be OK
-                                            .data_type(),
-                                    )
-                                {
-                                    join_keys.push((l.clone(), r.clone()));
-                                } else if left_schema.field_from_column(r).is_ok()
-                                    && right_schema.field_from_column(l).is_ok()
-                                    && can_hash(
-                                        left_schema
-                                            .field_from_column(r)
-                                            .unwrap() // the result must be OK
-                                            .data_type(),
-                                    )
-                                {
-                                    join_keys.push((r.clone(), l.clone()));
-                                }
-                            }
-                            // stop if we found join keys
-                            !join_keys.is_empty()
-                        });
-
-                    // If we did not find join keys, either there are
-                    // no more plans, or we can't find any plans that
-                    // can be joined with predicates
-                    if join_keys.is_empty() {
-                        assert!(plan_with_idx.is_none());
-
-                        // pick the first non null plan to join
-                        let plan_with_idx = remaining_plans
-                            .iter()
-                            .enumerate()
-                            .find(|(_idx, plan)| plan.is_some());
-                        if let Some((idx, _)) = plan_with_idx {
-                            let plan = std::mem::take(&mut remaining_plans[idx]).unwrap();
-                            left = LogicalPlanBuilder::from(left)
-                                .cross_join(&plan)?
-                                .build()?;
-                        } else {
-                            // no more plans to join
-                            break;
-                        }
-                    } else {
-                        // have a plan
-                        let (idx, _) = plan_with_idx.expect("found plan node");
-                        let plan = std::mem::take(&mut remaining_plans[idx]).unwrap();
-
-                        let left_keys: Vec<Column> =
-                            join_keys.iter().map(|(l, _)| l.clone()).collect();
-                        let right_keys: Vec<Column> =
-                            join_keys.iter().map(|(_, r)| r.clone()).collect();
-                        let builder = LogicalPlanBuilder::from(left);
-                        left = builder
-                            .join(&plan, JoinType::Inner, (left_keys, right_keys), None)?
-                            .build()?;
-                    }
-
-                    all_join_keys.extend(join_keys);
-                }
-
-                // remove join expressions from filter
-                match remove_join_expressions(&filter_expr, &all_join_keys)? {
-                    Some(filter_expr) => {
-                        // this logic is adapted from [`LogicalPlanBuilder::filter`] to take
-                        // the query outer schema into account so that joins in subqueries
-                        // can reference outer query fields.
-                        let mut all_schemas: Vec<DFSchemaRef> = vec![];
-                        for plan in orig_plans {
-                            for schema in plan.all_schemas() {
-                                all_schemas.push(schema.clone());
-                            }
-                        }
-                        if let Some(outer_query_schema) = outer_query_schema {
-                            all_schemas.push(Arc::new(outer_query_schema.clone()));
-                        }
-                        let mut join_columns = HashSet::new();
-                        for (l, r) in &all_join_keys {
-                            join_columns.insert(l.clone());
-                            join_columns.insert(r.clone());
-                        }
-                        let x: Vec<&DFSchemaRef> = all_schemas.iter().collect();
-                        let filter_expr = normalize_col_with_schemas(
-                            filter_expr,
-                            x.as_slice(),
-                            &[join_columns],
-                        )?;
-                        Ok(LogicalPlan::Filter(Filter::try_new(
-                            filter_expr,
-                            Arc::new(left),
-                        )?))
-                    }
-                    _ => Ok(left),
-                }
+                Ok(LogicalPlan::Filter(Filter::try_new(
+                    filter_expr,
+                    Arc::new(cross_join_plan),
+                )?))
             }
-            None => {
-                if plans.len() == 1 {
-                    Ok(plans[0].clone())
-                } else {
-                    let mut left = plans[0].clone();
-                    for right in plans.iter().skip(1) {
-                        left =
-                            LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
-                    }
-                    Ok(left)
-                }
-            }
+            None => Ok(cross_join_plan),
         }
     }
 
@@ -2707,7 +2589,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 | Value::Null
                 | Value::Placeholder(_) => {
                     return Err(DataFusionError::Plan(format!(
-                        "Unspported Value {}",
+                        "Unsupported Value {}",
                         value[0]
                     )))
                 }
@@ -2718,14 +2600,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 UnaryOperator::Minus => format!("-{}", expr),
                 _ => {
                     return Err(DataFusionError::Plan(format!(
-                        "Unspported Value {}",
+                        "Unsupported Value {}",
                         value[0]
                     )))
                 }
             },
             _ => {
                 return Err(DataFusionError::Plan(format!(
-                    "Unspported Value {}",
+                    "Unsupported Value {}",
                     value[0]
                 )))
             }
@@ -3054,41 +2936,6 @@ pub fn object_name_to_qualifier(sql_table_name: &ObjectName) -> String {
         .join(" AND ")
 }
 
-/// Remove join expressions from a filter expression
-fn remove_join_expressions(
-    expr: &Expr,
-    join_columns: &HashSet<(Column, Column)>,
-) -> Result<Option<Expr>> {
-    match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
-            Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(l), Expr::Column(r)) => {
-                    if join_columns.contains(&(l.clone(), r.clone()))
-                        || join_columns.contains(&(r.clone(), l.clone()))
-                    {
-                        Ok(None)
-                    } else {
-                        Ok(Some(expr.clone()))
-                    }
-                }
-                _ => Ok(Some(expr.clone())),
-            },
-            Operator::And => {
-                let l = remove_join_expressions(left, join_columns)?;
-                let r = remove_join_expressions(right, join_columns)?;
-                match (l, r) {
-                    (Some(ll), Some(rr)) => Ok(Some(and(ll, rr))),
-                    (Some(ll), _) => Ok(Some(ll)),
-                    (_, Some(rr)) => Ok(Some(rr)),
-                    _ => Ok(None),
-                }
-            }
-            _ => Ok(Some(expr.clone())),
-        },
-        _ => Ok(Some(expr.clone())),
-    }
-}
-
 /// Extracts equijoin ON condition be a single Eq or multiple conjunctive Eqs
 /// Filters matching this pattern are added to `accum`
 /// Filters that don't match this pattern are added to `accum_filter`
@@ -3194,30 +3041,6 @@ fn extract_join_keys(
     }
 
     Ok(())
-}
-
-/// Extract join keys from a WHERE clause
-fn extract_possible_join_keys(
-    expr: &Expr,
-    accum: &mut Vec<(Column, Column)>,
-) -> Result<()> {
-    match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
-            Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(l), Expr::Column(r)) => {
-                    accum.push((l.clone(), r.clone()));
-                    Ok(())
-                }
-                _ => Ok(()),
-            },
-            Operator::And => {
-                extract_possible_join_keys(left, accum)?;
-                extract_possible_join_keys(right, accum)
-            }
-            _ => Ok(()),
-        },
-        _ => Ok(()),
-    }
 }
 
 /// Wrap projection for a plan, if the join keys contains normal expression.
@@ -5487,18 +5310,6 @@ mod tests {
     }
 
     #[test]
-    fn cross_join_to_inner_join() {
-        let sql = "select person.id from person, orders, lineitem where person.id = lineitem.l_item_id and orders.o_item_id = lineitem.l_description;";
-        let expected = "Projection: person.id\
-                                 \n  Inner Join: lineitem.l_description = orders.o_item_id\
-                                 \n    Inner Join: person.id = lineitem.l_item_id\
-                                 \n      TableScan: person\
-                                 \n      TableScan: lineitem\
-                                 \n    TableScan: orders";
-        quick_test(sql, expected);
-    }
-
-    #[test]
     fn cross_join_not_to_inner_join() {
         let sql = "select person.id from person, orders, lineitem where person.id = person.age;";
         let expected = "Projection: person.id\
@@ -5581,15 +5392,15 @@ mod tests {
             AND person.state = p.state)";
 
         let expected = "Projection: person.id\
-        \n  Filter: EXISTS (<subquery>)\
+        \n  Filter: person.id = p.id AND EXISTS (<subquery>)\
         \n    Subquery:\
         \n      Projection: person.first_name\
-        \n        Filter: person.last_name = p.last_name AND person.state = p.state\
-        \n          Inner Join: person.id = p2.id\
+        \n        Filter: person.id = p2.id AND person.last_name = p.last_name AND person.state = p.state\
+        \n          CrossJoin:\
         \n            TableScan: person\
         \n            SubqueryAlias: p2\
         \n              TableScan: person\
-        \n    Inner Join: person.id = p.id\
+        \n    CrossJoin:\
         \n      TableScan: person\
         \n      SubqueryAlias: p\
         \n        TableScan: person";
@@ -5675,8 +5486,8 @@ mod tests {
         \n    Subquery:\
         \n      Projection: COUNT(UInt8(1))\
         \n        Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-        \n          Filter: j2.j2_id = j1.j1_id\
-        \n            Inner Join: j1.j1_id = j3.j3_id\
+        \n          Filter: j2.j2_id = j1.j1_id AND j1.j1_id = j3.j3_id\
+        \n            CrossJoin:\
         \n              TableScan: j1\
         \n              TableScan: j3\
         \n    CrossJoin:\
@@ -6090,8 +5901,8 @@ mod tests {
     #[test]
     fn test_select_join_key_inner_join() {
         let sql = "SELECT  orders.customer_id * 2,  person.id + 10
-            FROM person 
-            INNER JOIN orders 
+            FROM person
+            INNER JOIN orders
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: orders.customer_id * Int64(2), person.id + Int64(10)\
@@ -6107,9 +5918,9 @@ mod tests {
     #[test]
     fn test_non_projetion_after_inner_join() {
         // There's no need to add projection for left and right, so does adding projection after join.
-        let sql = "SELECT  person.id, person.age 
-            FROM person 
-            INNER JOIN orders 
+        let sql = "SELECT  person.id, person.age
+            FROM person
+            INNER JOIN orders
             ON orders.customer_id = person.id";
 
         let expected = "Projection: person.id, person.age\
@@ -6122,9 +5933,9 @@ mod tests {
     #[test]
     fn test_duplicated_left_join_key_inner_join() {
         //  person.id * 2 happen twice in left side.
-        let sql = "SELECT person.id, person.age 
-            FROM person 
-            INNER JOIN orders 
+        let sql = "SELECT person.id, person.age
+            FROM person
+            INNER JOIN orders
             ON person.id * 2 = orders.customer_id + 10 and person.id * 2 = orders.order_id";
 
         let expected = "Projection: person.id, person.age\
@@ -6140,9 +5951,9 @@ mod tests {
     #[test]
     fn test_duplicated_right_join_key_inner_join() {
         //  orders.customer_id + 10 happen twice in right side.
-        let sql = "SELECT person.id, person.age 
-            FROM person 
-            INNER JOIN orders 
+        let sql = "SELECT person.id, person.age
+            FROM person
+            INNER JOIN orders
             ON person.id * 2 = orders.customer_id + 10 and person.id =  orders.customer_id + 10";
 
         let expected = "Projection: person.id, person.age\

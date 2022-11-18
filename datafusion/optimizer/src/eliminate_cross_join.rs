@@ -16,19 +16,19 @@
 // under the License.
 
 //! Optimizer rule to reduce cross join to inner join if join predicates are available in filters.
-use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, Result};
+use crate::{utils, OptimizerConfig, OptimizerRule};
+use datafusion_common::{Column, DFSchema, DataFusionError, Result};
 use datafusion_expr::{
     and,
     expr::BinaryExpr,
     logical_plan::{CrossJoin, Filter, Join, JoinType, LogicalPlan},
     or,
     utils::can_hash,
-    utils::from_plan,
+    Projection,
 };
 use datafusion_expr::{Expr, Operator};
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 //use std::collections::HashMap;
 use datafusion_expr::logical_plan::JoinConstraint;
@@ -44,24 +44,7 @@ impl ReduceCrossJoin {
     }
 }
 
-impl OptimizerRule for ReduceCrossJoin {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        let mut possible_join_keys: Vec<(Column, Column)> = vec![];
-        let mut all_join_keys = HashSet::new();
-
-        reduce_cross_join(self, plan, &mut possible_join_keys, &mut all_join_keys)
-    }
-
-    fn name(&self) -> &str {
-        "reduce_cross_join"
-    }
-}
-
-/// Attempt to reduce cross joins to inner joins.
+/// Attempt to reorder join tp reduce cross joins to inner joins.
 /// for queries:
 /// 'select ... from a, b where a.x = b.y and b.xx = 100;'
 /// 'select ... from a, b where (a.x = b.y and b.xx = 100) or (a.x = b.y and b.xx = 200);'
@@ -71,116 +54,199 @@ impl OptimizerRule for ReduceCrossJoin {
 /// join nodes appropriately
 /// This fix helps to improve the performance of TPCH Q19. issue#78
 ///
-fn reduce_cross_join(
-    _optimizer: &ReduceCrossJoin,
+impl OptimizerRule for ReduceCrossJoin {
+    fn optimize(
+        &self,
+        plan: &LogicalPlan,
+        _optimizer_config: &mut OptimizerConfig,
+    ) -> Result<LogicalPlan> {
+        match plan {
+            LogicalPlan::Filter(filter) => {
+                let input = (**filter.input()).clone();
+
+                let mut possible_join_keys: Vec<(Column, Column)> = vec![];
+                let mut all_inputs: Vec<LogicalPlan> = vec![];
+                match &input {
+                    LogicalPlan::Join(join) => {
+                        if join.join_type != JoinType::Inner {
+                            return utils::optimize_children(
+                                self,
+                                plan,
+                                _optimizer_config,
+                            );
+                        }
+                        flatten_join_inputs(
+                            &input,
+                            &mut possible_join_keys,
+                            &mut all_inputs,
+                        )?;
+                    }
+                    LogicalPlan::CrossJoin(_) => {
+                        flatten_join_inputs(
+                            &input,
+                            &mut possible_join_keys,
+                            &mut all_inputs,
+                        )?;
+                    }
+                    _ => {
+                        return utils::optimize_children(self, plan, _optimizer_config);
+                    }
+                }
+
+                let predicate = filter.predicate();
+                // join keys are handled locally
+                let mut all_join_keys: HashSet<(Column, Column)> = HashSet::new();
+
+                extract_possible_join_keys(predicate, &mut possible_join_keys);
+
+                let mut left = all_inputs.remove(0);
+                while !all_inputs.is_empty() {
+                    left = find_inner_join(
+                        &left,
+                        &mut all_inputs,
+                        &mut possible_join_keys,
+                        &mut all_join_keys,
+                    )?;
+                }
+
+                left = utils::optimize_children(self, &left, _optimizer_config)?;
+                if plan.schema() != left.schema() {
+                    left = LogicalPlan::Projection(Projection::new_from_schema(
+                        Arc::new(left.clone()),
+                        plan.schema().clone(),
+                        None,
+                    ));
+                }
+
+                // if there are no join keys then do nothing.
+                if all_join_keys.is_empty() {
+                    Ok(LogicalPlan::Filter(Filter::try_new(
+                        predicate.clone(),
+                        Arc::new(left),
+                    )?))
+                } else {
+                    // remove join expressions from filter
+                    match remove_join_expressions(predicate, &all_join_keys)? {
+                        Some(filter_expr) => Ok(LogicalPlan::Filter(Filter::try_new(
+                            filter_expr,
+                            Arc::new(left),
+                        )?)),
+                        _ => Ok(left),
+                    }
+                }
+            }
+
+            _ => utils::optimize_children(self, plan, _optimizer_config),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "reduce_cross_join"
+    }
+}
+
+fn flatten_join_inputs(
     plan: &LogicalPlan,
+    possible_join_keys: &mut Vec<(Column, Column)>,
+    all_inputs: &mut Vec<LogicalPlan>,
+) -> Result<()> {
+    let children = match plan {
+        LogicalPlan::Join(join) => {
+            for join_keys in join.on.iter() {
+                possible_join_keys.push(join_keys.clone());
+            }
+            let left = &*(join.left);
+            let right = &*(join.right);
+            Ok::<Vec<&LogicalPlan>, DataFusionError>(vec![left, right])
+        }
+        LogicalPlan::CrossJoin(join) => {
+            let left = &*(join.left);
+            let right = &*(join.right);
+            Ok::<Vec<&LogicalPlan>, DataFusionError>(vec![left, right])
+        }
+        _ => {
+            return Err(DataFusionError::Plan(
+                "flatten_join_inputs just can call join/cross_join".to_string(),
+            ));
+        }
+    }?;
+
+    for child in children.iter() {
+        match *child {
+            LogicalPlan::Join(left_join) => {
+                if left_join.join_type == JoinType::Inner {
+                    flatten_join_inputs(child, possible_join_keys, all_inputs)?;
+                } else {
+                    all_inputs.push((*child).clone());
+                }
+            }
+            LogicalPlan::CrossJoin(_) => {
+                flatten_join_inputs(child, possible_join_keys, all_inputs)?;
+            }
+            _ => all_inputs.push((*child).clone()),
+        }
+    }
+    Ok(())
+}
+
+fn find_inner_join(
+    left: &LogicalPlan,
+    rights: &mut Vec<LogicalPlan>,
     possible_join_keys: &mut Vec<(Column, Column)>,
     all_join_keys: &mut HashSet<(Column, Column)>,
 ) -> Result<LogicalPlan> {
-    match plan {
-        LogicalPlan::Filter(filter) => {
-            let input = filter.input();
-            let predicate = filter.predicate();
-            // join keys are handled locally
-            let mut new_possible_join_keys: Vec<(Column, Column)> = vec![];
-            let mut new_all_join_keys = HashSet::new();
+    for (i, right) in rights.iter().enumerate() {
+        let mut join_keys = vec![];
 
-            extract_possible_join_keys(predicate, &mut new_possible_join_keys);
-
-            let new_plan = reduce_cross_join(
-                _optimizer,
-                input,
-                &mut new_possible_join_keys,
-                &mut new_all_join_keys,
-            )?;
-
-            // if there are no join keys then do nothing.
-            if new_all_join_keys.is_empty() {
-                Ok(LogicalPlan::Filter(Filter::try_new(
-                    predicate.clone(),
-                    Arc::new(new_plan),
-                )?))
-            } else {
-                // remove join expressions from filter
-                match remove_join_expressions(predicate, &new_all_join_keys)? {
-                    Some(filter_expr) => Ok(LogicalPlan::Filter(Filter::try_new(
-                        filter_expr,
-                        Arc::new(new_plan),
-                    )?)),
-                    _ => Ok(new_plan),
-                }
+        for (l, r) in &mut *possible_join_keys {
+            if left.schema().field_from_column(l).is_ok()
+                && right.schema().field_from_column(r).is_ok()
+                && can_hash(left.schema().field_from_column(l).unwrap().data_type())
+            {
+                join_keys.push((l.clone(), r.clone()));
+            } else if left.schema().field_from_column(r).is_ok()
+                && right.schema().field_from_column(l).is_ok()
+                && can_hash(left.schema().field_from_column(r).unwrap().data_type())
+            {
+                join_keys.push((r.clone(), l.clone()));
             }
         }
-        LogicalPlan::CrossJoin(cross_join) => {
-            let left_plan = reduce_cross_join(
-                _optimizer,
-                &cross_join.left,
-                possible_join_keys,
-                all_join_keys,
-            )?;
-            let right_plan = reduce_cross_join(
-                _optimizer,
-                &cross_join.right,
-                possible_join_keys,
-                all_join_keys,
-            )?;
-            // can we find a match?
-            let left_schema = left_plan.schema();
-            let right_schema = right_plan.schema();
-            let mut join_keys = vec![];
 
-            for (l, r) in possible_join_keys {
-                if left_schema.field_from_column(l).is_ok()
-                    && right_schema.field_from_column(r).is_ok()
-                    && can_hash(left_schema.field_from_column(l).unwrap().data_type())
-                {
-                    join_keys.push((l.clone(), r.clone()));
-                } else if left_schema.field_from_column(r).is_ok()
-                    && right_schema.field_from_column(l).is_ok()
-                    && can_hash(left_schema.field_from_column(r).unwrap().data_type())
-                {
-                    join_keys.push((r.clone(), l.clone()));
-                }
-            }
-
-            // if there are no join keys then do nothing.
-            if join_keys.is_empty() {
-                Ok(LogicalPlan::CrossJoin(CrossJoin {
-                    left: Arc::new(left_plan),
-                    right: Arc::new(right_plan),
-                    schema: cross_join.schema.clone(),
-                }))
-            } else {
-                // Keep track of join keys being pushed to Join nodes
-                all_join_keys.extend(join_keys.clone());
-
-                Ok(LogicalPlan::Join(Join {
-                    left: Arc::new(left_plan),
-                    right: Arc::new(right_plan),
-                    join_type: JoinType::Inner,
-                    join_constraint: JoinConstraint::On,
-                    on: join_keys,
-                    filter: None,
-                    schema: cross_join.schema.clone(),
-                    null_equals_null: false,
-                }))
-            }
-        }
-        _ => {
-            let expr = plan.expressions();
-
-            // apply the optimization to all inputs of the plan
-            let inputs = plan.inputs();
-            let new_inputs = inputs
-                .iter()
-                .map(|plan| {
-                    reduce_cross_join(_optimizer, plan, possible_join_keys, all_join_keys)
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            from_plan(plan, &expr, &new_inputs)
+        if !join_keys.is_empty() {
+            all_join_keys.extend(join_keys.clone());
+            let right = rights.remove(i);
+            let join_schema = Arc::new(build_join_schema(left, &right)?);
+            return Ok(LogicalPlan::Join(Join {
+                left: Arc::new(left.clone()),
+                right: Arc::new(right),
+                join_type: JoinType::Inner,
+                join_constraint: JoinConstraint::On,
+                on: join_keys,
+                filter: None,
+                schema: join_schema,
+                null_equals_null: false,
+            }));
         }
     }
+    let right = rights.remove(0);
+    let join_schema = Arc::new(build_join_schema(left, &right)?);
+
+    Ok(LogicalPlan::CrossJoin(CrossJoin {
+        left: Arc::new(left.clone()),
+        right: Arc::new(right),
+        schema: join_schema,
+    }))
+}
+
+fn build_join_schema(left: &LogicalPlan, right: &LogicalPlan) -> Result<DFSchema> {
+    // build join schema
+    let mut fields = vec![];
+    let mut metadata = HashMap::new();
+    fields.extend(left.schema().fields().clone());
+    fields.extend(right.schema().fields().clone());
+    metadata.extend(left.schema().metadata().clone());
+    metadata.extend(right.schema().metadata().clone());
+    DFSchema::new_with_metadata(fields, metadata)
 }
 
 fn intersect(
@@ -470,6 +536,53 @@ mod tests {
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
             "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
         ];
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    /// ```txt
+    /// filter: a.id = b.id and a.id = c.id
+    ///   cross_join a (bc)
+    ///     cross_join b c
+    /// ```
+    /// Without reorder, it will be
+    /// ```txt
+    ///   inner_join a (bc) on a.id = b.id and a.id = c.id
+    ///     cross_join b c
+    /// ```
+    /// Reorder it to be
+    /// ```txt
+    ///   inner_join (ab)c and a.id = c.id
+    ///     inner_join a b on a.id = b.id
+    /// ```
+    fn reorder_join_to_reduce_cross_join_multi_tables() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let t3 = test_table_scan_with_name("t3")?;
+
+        // could reduce to inner join
+        let plan = LogicalPlanBuilder::from(t1)
+            .cross_join(&t2)?
+            .cross_join(&t3)?
+            .filter(binary_expr(
+                binary_expr(col("t3.a").eq(col("t1.a")), And, col("t3.c").lt(lit(15u32))),
+                And,
+                binary_expr(col("t3.a").eq(col("t2.a")), And, col("t3.b").lt(lit(15u32))),
+            ))?
+            .build()?;
+
+        let expected = vec![
+            "Filter: t3.c < UInt32(15) AND t3.b < UInt32(15) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "  Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c, t3.a, t3.b, t3.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "    Inner Join: t3.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "      Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+            "        TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]",
+            "      TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+        ];
+
         assert_optimized_plan_eq(&plan, expected);
 
         Ok(())
@@ -849,14 +962,14 @@ mod tests {
 
         let expected = vec![
             "Filter: (t4.c < UInt32(15) OR t4.c = UInt32(688)) AND (t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "  Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "    Filter: t2.c < UInt32(15) AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "      Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-            "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
-            "    Inner Join: t3.a = t4.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "  Inner Join: t3.a = t4.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "    Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "      Filter: t2.c < UInt32(15) AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "        Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "          TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+            "          TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
             "      TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]",
-            "      TableScan: t4 [a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t4 [a:UInt32, b:UInt32, c:UInt32]",
         ];
 
         assert_optimized_plan_eq(&plan, expected);
@@ -937,13 +1050,13 @@ mod tests {
 
         let expected = vec![
             "Filter: (t4.c < UInt32(15) OR t4.c = UInt32(688)) AND (t4.c < UInt32(15) OR t3.c = UInt32(688) OR t3.b = t4.b) AND t2.c < UInt32(15) AND t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "  Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "    Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "      TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-            "      TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
-            "    Inner Join: t3.a = t4.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "  Inner Join: t3.a = t4.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "    Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "      Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+            "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
             "      TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]",
-            "      TableScan: t4 [a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t4 [a:UInt32, b:UInt32, c:UInt32]",
         ];
 
         assert_optimized_plan_eq(&plan, expected);
