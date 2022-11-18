@@ -428,15 +428,15 @@ impl<'a> DFParser<'a> {
             false
         }
     }
+
     fn parse_has_file_compression_type(&mut self) -> bool {
         self.consume_token(&Token::make_keyword("COMPRESSION"))
             & self.consume_token(&Token::make_keyword("TYPE"))
     }
 
     fn parse_csv_has_header(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("WITH"))
-            & self.consume_token(&Token::make_keyword("HEADER"))
-            & self.consume_token(&Token::make_keyword("ROW"))
+        self.parser
+            .parse_keywords(&[Keyword::WITH, Keyword::HEADER, Keyword::ROW])
     }
 
     fn parse_has_delimiter(&mut self) -> bool {
@@ -454,8 +454,8 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_has_partition(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("PARTITIONED"))
-            & self.consume_token(&Token::make_keyword("BY"))
+        self.parser
+            .parse_keywords(&[Keyword::PARTITIONED, Keyword::BY])
     }
 }
 
@@ -714,6 +714,17 @@ mod tests {
         let sql =
             "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2, k3) LOCATION 'blahblah'";
         expect_parse_error(sql, "sql parser error: Expected literal string, found: )");
+
+        // Error case: `with header` is an invalid syntax
+        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'";
+        expect_parse_error(sql, "sql parser error: Expected LOCATION, found: WITH");
+
+        // Error case: `with header` is an invalid syntax
+        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'";
+        expect_parse_error(
+            sql,
+            "sql parser error: Expected LOCATION, found: PARTITIONED",
+        );
 
         Ok(())
     }
