@@ -3039,10 +3039,8 @@ fn ensure_any_column_reference_is_determined(
         });
 
     let duplicated_column_set = column_count_map
-        .iter()
-        .filter(|(_, count)| **count > 1usize)
-        .map(|(column, _)| column)
-        .cloned()
+        .into_iter()
+        .filter_map(|(column, count)| if count > 1 { Some(column) } else { None })
         .collect::<HashSet<String>>();
 
     // check if there is ambiguous column.
