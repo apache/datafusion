@@ -214,7 +214,6 @@ impl ExecutionPlan for WindowAggExec {
             is_exact: input_stat.is_exact,
             num_rows: input_stat.num_rows,
             column_statistics: Some(column_statistics),
-            // TODO stats: knowing the type of the new columns we can guess the output size
             total_byte_size: None,
         }
     }

@@ -97,19 +97,28 @@ impl ParquetExec {
         let predicate_creation_errors =
             MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
 
-        let pruning_predicate = predicate.and_then(|predicate_expr| {
-            match PruningPredicate::try_new(
-                predicate_expr,
-                base_config.file_schema.clone(),
-            ) {
-                Ok(pruning_predicate) => Some(pruning_predicate),
-                Err(e) => {
-                    debug!("Could not create pruning predicate for: {}", e);
-                    predicate_creation_errors.add(1);
-                    None
+        let pruning_predicate = predicate
+            .and_then(|predicate_expr| {
+                match PruningPredicate::try_new(
+                    predicate_expr,
+                    base_config.file_schema.clone(),
+                ) {
+                    Ok(pruning_predicate) => Some(pruning_predicate),
+                    Err(e) => {
+                        debug!("Could not create pruning predicate for: {}", e);
+                        predicate_creation_errors.add(1);
+                        None
+                    }
                 }
-            }
-        });
+            })
+            .and_then(|pruning_predicate| {
+                // If the pruning predicate can't prune anything, don't try
+                if pruning_predicate.allways_true() {
+                    None
+                } else {
+                    Some(pruning_predicate)
+                }
+            });
 
         let (projected_schema, projected_statistics) = base_config.project();
 
@@ -306,10 +315,7 @@ impl ExecutionPlan for ParquetExec {
                 let pruning_predicate_string = self
                     .pruning_predicate
                     .as_ref()
-                    // TODO change this to be pruning_predicate rather than 'predicate'
-                    // to avoid confusion
-                    // https://github.com/apache/arrow-datafusion/issues/4020
-                    .map(|pre| format!(", predicate={}", pre.predicate_expr()))
+                    .map(|pre| format!(", pruning_predicate={}", pre.predicate_expr()))
                     .unwrap_or_default();
 
                 let output_ordering_string = self
@@ -665,6 +671,7 @@ mod tests {
     use crate::datasource::listing::{FileRange, PartitionedFile};
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::options::CsvReadOptions;
+    use crate::physical_plan::displayable;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use crate::{
@@ -682,7 +689,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use datafusion_common::assert_contains;
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{col, lit};
+    use datafusion_expr::{col, lit, when};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
@@ -982,7 +989,7 @@ mod tests {
         // batch2: c3(int8), c2(int64)
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2)]);
 
-        let filter = col("c2").eq(lit(2_i64));
+        let filter = col("c2").eq(lit(2_i64)).or(col("c2").eq(lit(1_i64)));
 
         // read/write them files:
         let rt =
@@ -991,13 +998,14 @@ mod tests {
             "+----+----+----+",
             "| c1 | c3 | c2 |",
             "+----+----+----+",
+            "|    | 10 | 1  |",
             "|    | 20 | 2  |",
             "+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
         let metrics = rt.parquet_exec.metrics().unwrap();
         // Note there are were 6 rows in total (across three batches)
-        assert_eq!(get_value(&metrics, "pushdown_rows_filtered"), 5);
+        assert_eq!(get_value(&metrics, "pushdown_rows_filtered"), 4);
     }
 
     #[tokio::test]
@@ -1524,6 +1532,71 @@ mod tests {
             "no eval time in metrics: {:#?}",
             metrics
         );
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_display() {
+        let c1: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("Foo"),
+            None,
+            Some("bar"),
+            Some("bar"),
+            Some("bar"),
+            Some("bar"),
+            Some("zzz"),
+        ]));
+
+        // batch1: c1(string)
+        let batch1 = create_batch(vec![("c1", c1.clone())]);
+
+        // on
+        let filter = col("c1").not_eq(lit("bar"));
+
+        let rt = round_trip(vec![batch1], None, None, Some(filter), true, false).await;
+
+        // should have a pruning predicate
+        let pruning_predicate = &rt.parquet_exec.pruning_predicate;
+        assert!(pruning_predicate.is_some());
+
+        // convert to explain plan form
+        let display = displayable(rt.parquet_exec.as_ref()).indent().to_string();
+
+        assert_contains!(
+            &display,
+            "pruning_predicate=c1_min@0 != bar OR bar != c1_max@1"
+        );
+        assert_contains!(&display, "projection=[c1]");
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_skip_empty_pruning() {
+        let c1: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("Foo"),
+            None,
+            Some("bar"),
+            Some("bar"),
+            Some("bar"),
+            Some("bar"),
+            Some("zzz"),
+        ]));
+
+        // batch1: c1(string)
+        let batch1 = create_batch(vec![("c1", c1.clone())]);
+
+        // filter is too complicated for pruning
+        let filter = when(col("c1").not_eq(lit("bar")), lit(true))
+            .otherwise(lit(false))
+            .unwrap();
+
+        let rt = round_trip(vec![batch1], None, None, Some(filter), true, false).await;
+
+        // Should not contain a pruning predicate
+        let pruning_predicate = &rt.parquet_exec.pruning_predicate;
+        assert!(
+            pruning_predicate.is_none(),
+            "Still had pruning predicate: {:?}",
+            pruning_predicate
+        )
     }
 
     /// returns the sum of all the metrics with the specified name

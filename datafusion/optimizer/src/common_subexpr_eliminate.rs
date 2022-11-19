@@ -114,12 +114,14 @@ impl OptimizerRule for CommonSubexprEliminate {
                     optimizer_config,
                 )?;
 
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    pop_expr(&mut new_expr)?,
-                    Arc::new(new_input),
-                    schema.clone(),
-                    alias.clone(),
-                )?))
+                Ok(LogicalPlan::Projection(
+                    Projection::try_new_with_schema_alias(
+                        pop_expr(&mut new_expr)?,
+                        Arc::new(new_input),
+                        schema.clone(),
+                        alias.clone(),
+                    )?,
+                ))
             }
             LogicalPlan::Filter(filter) => {
                 let input = filter.input();
@@ -221,19 +223,19 @@ impl OptimizerRule for CommonSubexprEliminate {
                     fetch: *fetch,
                 }))
             }
-            LogicalPlan::Join { .. }
+            LogicalPlan::Join(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Union(_)
-            | LogicalPlan::TableScan { .. }
+            | LogicalPlan::TableScan(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
             | LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::Explain { .. }
-            | LogicalPlan::Analyze { .. }
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
             | LogicalPlan::CreateMemoryTable(_)
             | LogicalPlan::CreateView(_)
             | LogicalPlan::CreateCatalogSchema(_)
@@ -242,7 +244,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::DropView(_)
             | LogicalPlan::SetVariable(_)
             | LogicalPlan::Distinct(_)
-            | LogicalPlan::Extension { .. } => {
+            | LogicalPlan::Extension(_) => {
                 // apply the optimization to all inputs of the plan
                 utils::optimize_children(self, plan, optimizer_config)
             }
@@ -328,7 +330,6 @@ fn build_project_plan(
         project_exprs,
         Arc::new(input),
         Arc::new(schema),
-        None,
     )?))
 }
 
