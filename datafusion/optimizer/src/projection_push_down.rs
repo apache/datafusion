@@ -192,12 +192,16 @@ fn optimize_plan(
                 Ok(new_input)
             } else {
                 let metadata = new_input.schema().metadata().clone();
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    new_expr,
-                    Arc::new(new_input),
-                    DFSchemaRef::new(DFSchema::new_with_metadata(new_fields, metadata)?),
-                    alias.clone(),
-                )?))
+                Ok(LogicalPlan::Projection(
+                    Projection::try_new_with_schema_alias(
+                        new_expr,
+                        Arc::new(new_input),
+                        DFSchemaRef::new(DFSchema::new_with_metadata(
+                            new_fields, metadata,
+                        )?),
+                        alias.clone(),
+                    )?,
+                ))
             }
         }
         LogicalPlan::Join(Join {
@@ -836,11 +840,8 @@ mod tests {
         // that the Column references are unqualified (e.g. their
         // relation is `None`). PlanBuilder resolves the expressions
         let expr = vec![col("a"), col("b")];
-        let plan = LogicalPlan::Projection(Projection::try_new(
-            expr,
-            Arc::new(table_scan),
-            None,
-        )?);
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(expr, Arc::new(table_scan))?);
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 
