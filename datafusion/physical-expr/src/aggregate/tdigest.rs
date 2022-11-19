@@ -231,7 +231,6 @@ impl TDigest {
     }
 
     pub(crate) fn merge_sorted_f64(&self, sorted_values: &[f64]) -> TDigest {
-        dbg!(&sorted_values);
         #[cfg(debug_assertions)]
         debug_assert!(is_sorted(sorted_values), "unsorted input to TDigest");
 
