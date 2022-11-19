@@ -230,13 +230,17 @@ mod test {
         max,
     };
 
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = LimitPushDown::new();
-        let optimized_plan = rule
+    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
+        let optimized_plan = LimitPushDown::new()
             .optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
+
         let formatted_plan = format!("{:?}", optimized_plan);
+
         assert_eq!(formatted_plan, expected);
+        assert_eq!(optimized_plan.schema(), plan.schema());
+
+        Ok(())
     }
 
     #[test]
@@ -254,9 +258,7 @@ mod test {
         \n  Limit: skip=0, fetch=1000\
         \n    TableScan: test, fetch=1000";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -274,9 +276,7 @@ mod test {
         let expected = "Limit: skip=0, fetch=10\
         \n  TableScan: test, fetch=10";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -293,9 +293,7 @@ mod test {
         \n  Aggregate: groupBy=[[test.a]], aggr=[[MAX(test.b)]]\
         \n    TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -315,9 +313,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -334,9 +330,7 @@ mod test {
         \n  Sort: test.a, fetch=10\
         \n    TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -353,9 +347,7 @@ mod test {
         \n  Sort: test.a, fetch=15\
         \n    TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -374,9 +366,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -391,8 +381,7 @@ mod test {
         let expected = "Limit: skip=10, fetch=None\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -410,9 +399,7 @@ mod test {
         \n  Limit: skip=10, fetch=1000\
         \n    TableScan: test, fetch=1010";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -429,9 +416,7 @@ mod test {
         \n  Limit: skip=10, fetch=1000\
         \n    TableScan: test, fetch=1010";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -448,9 +433,7 @@ mod test {
         \n  Limit: skip=10, fetch=1000\
         \n    TableScan: test, fetch=1010";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -466,9 +449,7 @@ mod test {
         let expected = "Limit: skip=10, fetch=10\
         \n  TableScan: test, fetch=20";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -485,9 +466,7 @@ mod test {
         \n  Aggregate: groupBy=[[test.a]], aggr=[[MAX(test.b)]]\
         \n    TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -507,9 +486,7 @@ mod test {
         \n    Limit: skip=0, fetch=1010\
         \n      TableScan: test, fetch=1010";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -533,9 +510,7 @@ mod test {
         \n    TableScan: test\
         \n    TableScan: test2";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -559,9 +534,7 @@ mod test {
         \n    TableScan: test\
         \n    TableScan: test2";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -590,9 +563,7 @@ mod test {
         \n    Projection: test2.a\
         \n      TableScan: test2";
 
-        assert_optimized_plan_eq(&outer_query, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&outer_query, expected)
     }
 
     #[test]
@@ -621,9 +592,7 @@ mod test {
         \n    Projection: test2.a\
         \n      TableScan: test2";
 
-        assert_optimized_plan_eq(&outer_query, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&outer_query, expected)
     }
 
     #[test]
@@ -648,9 +617,7 @@ mod test {
         \n      TableScan: test, fetch=1000\
         \n    TableScan: test2";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -675,9 +642,7 @@ mod test {
         \n      TableScan: test, fetch=1010\
         \n    TableScan: test2";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -702,9 +667,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test2, fetch=1000";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -729,9 +692,7 @@ mod test {
         \n    Limit: skip=0, fetch=1010\
         \n      TableScan: test2, fetch=1010";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -751,9 +712,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test2, fetch=1000";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -773,8 +732,6 @@ mod test {
         \n    Limit: skip=0, fetch=2000\
         \n      TableScan: test2, fetch=2000";
 
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_optimized_plan_eq(&plan, expected)
     }
 }
