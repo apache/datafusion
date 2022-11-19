@@ -376,8 +376,6 @@ macro_rules! binary_string_array_op {
 macro_rules! binary_primitive_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
-            // TODO support decimal type
-            // which is not the primitive type
             DataType::Decimal128(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
             DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
@@ -2384,24 +2382,89 @@ mod tests {
         )
         .unwrap();
 
-        // compare decimal array with other array type
+        let value: i128 = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[Some(value), None, Some(value - 1), Some(value + 1)],
+            10,
+            0,
+        )) as ArrayRef;
+
+        // comparison array op for decimal array
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, true),
+            Field::new("a", DataType::Decimal128(10, 0), true),
             Field::new("b", DataType::Decimal128(10, 0), true),
         ]));
-
-        let value: i64 = 123;
-
-        let decimal_array = Arc::new(create_decimal_array(
+        let right_decimal_array = Arc::new(create_decimal_array(
             &[
-                Some(value as i128),
-                None,
-                Some((value - 1) as i128),
-                Some((value + 1) as i128),
+                Some(value - 1),
+                Some(value),
+                Some(value + 1),
+                Some(value + 1),
             ],
             10,
             0,
         )) as ArrayRef;
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::Eq,
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::NotEq,
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::Lt,
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::LtEq,
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::Gt,
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::GtEq,
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        // compare decimal array with other array type
+        let value: i64 = 123;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Decimal128(10, 0), true),
+        ]));
 
         let int64_array = Arc::new(Int64Array::from(vec![
             Some(value),
