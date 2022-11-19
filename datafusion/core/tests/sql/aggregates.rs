@@ -2373,3 +2373,24 @@ async fn array_agg_one() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn test_approx_percentile_cont_decimal_support() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT c1, approx_percentile_cont(c2, cast(0.85 as decimal(10,2))) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----+-----+",
+        "| c1 | apc |",
+        "+----+-----+",
+        "| a  | 4   |",
+        "| b  | 5   |",
+        "| c  | 4   |",
+        "| d  | 4   |",
+        "| e  | 4   |",
+        "+----+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
