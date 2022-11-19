@@ -116,7 +116,7 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
         }
         _ => {
             return Err(DataFusionError::SQL(ParserError(format!(
-                "Unsuported index key expression: {:?}",
+                "Unsupported index key expression: {:?}",
                 key
             ))));
         }
@@ -946,7 +946,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Some(predicate_expr) => {
                 // build join schema
                 let mut fields = vec![];
-                let mut metadata = std::collections::HashMap::new();
+                let mut metadata = HashMap::new();
                 for plan in &plans {
                     fields.extend_from_slice(plan.schema().fields());
                     metadata.extend(plan.schema().metadata().clone());
@@ -2628,7 +2628,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 | Value::Null
                 | Value::Placeholder(_) => {
                     return Err(DataFusionError::Plan(format!(
-                        "Unspported Value {}",
+                        "Unsupported Value {}",
                         value[0]
                     )))
                 }
@@ -2639,14 +2639,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 UnaryOperator::Minus => format!("-{}", expr),
                 _ => {
                     return Err(DataFusionError::Plan(format!(
-                        "Unspported Value {}",
+                        "Unsupported Value {}",
                         value[0]
                     )))
                 }
             },
             _ => {
                 return Err(DataFusionError::Plan(format!(
-                    "Unspported Value {}",
+                    "Unsupported Value {}",
                     value[0]
                 )))
             }

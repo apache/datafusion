@@ -556,9 +556,7 @@ fn shift_right_required(
 /// The Bottom-Up approach will be useful in future if we plan to support storage partition-wised Joins.
 /// In that case, the datasources/tables might be pre-partitioned and we can't adjust the key ordering of the datasources
 /// and then can't apply the Top-Down reordering process.
-fn reorder_join_keys_to_inputs(
-    plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
-) -> Arc<dyn crate::physical_plan::ExecutionPlan> {
+fn reorder_join_keys_to_inputs(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     let plan_any = plan.as_any();
     if let Some(HashJoinExec {
         left,
@@ -833,9 +831,9 @@ fn new_join_conditions(
 }
 
 fn ensure_distribution_and_ordering(
-    plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
+    plan: Arc<dyn ExecutionPlan>,
     target_partitions: usize,
-) -> Arc<dyn crate::physical_plan::ExecutionPlan> {
+) -> Arc<dyn ExecutionPlan> {
     if plan.children().is_empty() {
         return plan;
     }
@@ -1104,8 +1102,7 @@ mod tests {
             .enumerate()
             .map(|(index, (_col, name))| {
                 (
-                    Arc::new(expressions::Column::new(name, index))
-                        as Arc<dyn PhysicalExpr>,
+                    Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>,
                     name.clone(),
                 )
             })
