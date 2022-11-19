@@ -172,16 +172,13 @@ impl ExecutionPlan for FilterExec {
     /// predicate's selectivity value can be determined for the incoming data.
     fn statistics(&self) -> Statistics {
         let input_stats = self.input.statistics();
-        let mut analysis_ctx =
+        let starter_ctx =
             AnalysisContext::from_statistics(self.input.schema().as_ref(), &input_stats);
 
-        let predicate_selectivity = self
-            .predicate
-            .boundaries(&mut analysis_ctx)
-            .and_then(|bounds| bounds.selectivity);
+        let analysis_ctx = self.predicate.analyze(starter_ctx);
 
-        match predicate_selectivity {
-            Some(selectivity) => {
+        match analysis_ctx.boundaries {
+            Some(boundaries) => {
                 // Build back the column level statistics from the boundaries inside the
                 // analysis context. It is possible that these are going to be different
                 // than the input statistics, especially when a comparison is made inside
@@ -200,14 +197,19 @@ impl ExecutionPlan for FilterExec {
                     .collect();
 
                 Statistics {
-                    num_rows: input_stats
-                        .num_rows
-                        .map(|num_rows| (num_rows as f64 * selectivity).ceil() as usize),
+                    num_rows: input_stats.num_rows.zip(boundaries.selectivity).map(
+                        |(num_rows, selectivity)| {
+                            (num_rows as f64 * selectivity).ceil() as usize
+                        },
+                    ),
+                    total_byte_size: input_stats
+                        .total_byte_size
+                        .zip(boundaries.selectivity)
+                        .map(|(num_rows, selectivity)| {
+                            (num_rows as f64 * selectivity).ceil() as usize
+                        }),
                     column_statistics: Some(column_statistics),
-                    total_byte_size: input_stats.total_byte_size.map(|total_byte_size| {
-                        (total_byte_size as f64 * selectivity).ceil() as usize
-                    }),
-                    ..Default::default(),
+                    ..Default::default()
                 }
             }
             None => Statistics::default(),

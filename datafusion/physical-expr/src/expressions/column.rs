@@ -26,7 +26,7 @@ use arrow::{
 };
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
+use crate::{AnalysisContext, PhysicalExpr};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
@@ -104,9 +104,10 @@ impl PhysicalExpr for Column {
     }
 
     /// Return the boundaries of this column, if known.
-    fn boundaries(&self, context: &mut AnalysisContext) -> Option<ExprBoundaries> {
+    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
         assert!(self.index < context.column_boundaries.len());
-        context.column_boundaries[self.index].clone()
+        let col_bounds = context.column_boundaries[self.index].clone();
+        context.with_boundaries(col_bounds)
     }
 }
 
@@ -290,7 +291,7 @@ mod test {
     #[test]
     fn stats_bounds_analysis() -> Result<()> {
         let (schema, statistics) = get_test_table_stats();
-        let mut context = AnalysisContext::from_statistics(&schema, &statistics);
+        let context = AnalysisContext::from_statistics(&schema, &statistics);
 
         let cases = [
             // (name, index, expected boundaries)
@@ -317,8 +318,8 @@ mod test {
 
         for (name, index, expected) in cases {
             let col = Column::new(name, index);
-            let boundaries = col.boundaries(&mut context);
-            assert_eq!(boundaries, expected);
+            let test_ctx = col.analyze(context.clone());
+            assert_eq!(test_ctx.boundaries, expected);
         }
 
         Ok(())
