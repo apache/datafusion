@@ -719,7 +719,7 @@ mod tests {
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'";
         expect_parse_error(sql, "sql parser error: Expected LOCATION, found: WITH");
 
-        // Error case: `with header` is an invalid syntax
+        // Error case: `partitioned` is an invalid syntax
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'";
         expect_parse_error(
             sql,
