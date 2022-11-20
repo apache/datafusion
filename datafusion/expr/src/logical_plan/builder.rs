@@ -980,19 +980,26 @@ pub fn project_with_alias(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),
     )?;
-    let schema = match alias {
-        Some(ref alias) => input_schema.replace_qualifier(alias.as_str()),
-        None => input_schema,
-    };
 
-    Ok(LogicalPlan::Projection(
-        Projection::try_new_with_schema_alias(
-            projected_expr,
-            Arc::new(plan.clone()),
-            DFSchemaRef::new(schema),
-            alias,
-        )?,
-    ))
+    let projection = LogicalPlan::Projection(Projection::try_new_with_schema(
+        projected_expr,
+        Arc::new(plan.clone()),
+        DFSchemaRef::new(input_schema),
+    )?);
+    match alias {
+        Some(alias) => Ok(with_alias(projection, alias)),
+        None => Ok(projection),
+    }
+}
+
+pub fn with_alias(plan: LogicalPlan, alias: String) -> LogicalPlan {
+    let plan_schema = &**plan.schema();
+    let schema = (plan_schema.clone()).replace_qualifier(alias.as_str());
+    LogicalPlan::SubqueryAlias(SubqueryAlias {
+        input: Arc::new(plan),
+        alias,
+        schema: Arc::new(schema),
+    })
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.

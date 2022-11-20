@@ -45,7 +45,7 @@ use datafusion_common::{
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::builder::project_with_alias;
+use datafusion_expr::logical_plan::builder::{project_with_alias, with_alias};
 use datafusion_expr::logical_plan::Join as HashJoin;
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
@@ -857,11 +857,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 (
                     match (cte, self.schema_provider.get_table_provider(table_ref)) {
                         (Some(cte_plan), _) => match table_alias {
-                            Some(cte_alias) => project_with_alias(
-                                cte_plan.clone(),
-                                vec![Expr::Wildcard],
-                                Some(cte_alias),
-                            ),
+                            Some(cte_alias) => {
+                                Ok(with_alias(cte_plan.clone(), cte_alias))
+                            }
                             _ => Ok(cte_plan.clone()),
                         },
                         (_, Ok(provider)) => {
@@ -888,18 +886,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     ctes,
                     outer_query_schema,
                 )?;
-                (
-                    project_with_alias(
-                        logical_plan.clone(),
-                        logical_plan
-                            .schema()
-                            .fields()
-                            .iter()
-                            .map(|field| col(field.name())),
-                        normalized_alias,
-                    )?,
-                    alias,
-                )
+
+                let plan = match normalized_alias {
+                    Some(alias) => with_alias(logical_plan.clone(), alias),
+                    _ => logical_plan.clone(),
+                };
+                (plan, alias)
             }
             TableFactor::NestedJoin {
                 table_with_joins,
