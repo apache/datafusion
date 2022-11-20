@@ -32,14 +32,9 @@ macro_rules! make_dyn_comp_op {
             /// wrapper over arrow compute kernel that maps Error types and
             /// patches missing support in arrow
             pub(crate) fn [<$OP _dyn>] (left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
-                match (left.data_type(), right.data_type()) {
-                    // By default call the arrow kernel
-                    _ => {
-                    arrow::compute::kernels::comparison::[<$OP _dyn>](left, right)
+                arrow::compute::kernels::comparison::[<$OP _dyn>](left, right)
                             .map_err(|e| e.into())
-                    }
-                }
-                .map(|a| Arc::new(a) as ArrayRef)
+                            .map(|a| Arc::new(a) as ArrayRef)
             }
         }
     };
