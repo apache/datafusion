@@ -1342,10 +1342,10 @@ mod tests {
         \n  Limit: skip=0, fetch=1\
         \n    Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST, fetch=1\
         \n      Inner Join: t1.c1 = t2.c1\
-        \n        Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3, alias=t1\
+        \n        SubqueryAlias: t1\
         \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
         \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]\
-        \n        Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3, alias=t2\
+        \n        SubqueryAlias: t2\
         \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
         \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]",
                    format!("{:?}", df_renamed.to_logical_plan()?)
@@ -1388,7 +1388,7 @@ mod tests {
         let plan = df.explain(false, false)?.collect().await?;
         // Filters all the way to Parquet
         let formatted = pretty::pretty_format_batches(&plan).unwrap().to_string();
-        assert!(formatted.contains("predicate=id_min@0 <= 1 AND 1 <= id_max@1"));
+        assert!(formatted.contains("FilterExec: id@0 = 1"));
 
         Ok(())
     }

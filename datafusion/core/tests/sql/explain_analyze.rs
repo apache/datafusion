@@ -663,7 +663,7 @@ order by
     \n          Filter: lineitem.l_returnflag = Utf8(\"R\")\
     \n            TableScan: lineitem projection=[l_orderkey, l_extendedprice, l_discount, l_returnflag], partial_filters=[lineitem.l_returnflag = Utf8(\"R\")]\
     \n        TableScan: nation projection=[n_nationkey, n_name]";
-    assert_eq!(expected, format!("{:?}", plan.unwrap()),);
+    assert_eq!(expected, format!("{:?}", plan.unwrap()));
 
     Ok(())
 }
@@ -738,15 +738,13 @@ async fn test_physical_plan_display_indent_multi_children() {
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 9000)",
         "          ProjectionExec: expr=[c1@0 as c1]",
-        "            ProjectionExec: expr=[c1@0 as c1]",
-        "              RepartitionExec: partitioning=RoundRobinBatch(9000)",
-        "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1]",
+        "            RepartitionExec: partitioning=RoundRobinBatch(9000)",
+        "              CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1]",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 9000)",
-        "          ProjectionExec: expr=[c2@0 as c2]",
-        "            ProjectionExec: expr=[c1@0 as c2]",
-        "              RepartitionExec: partitioning=RoundRobinBatch(9000)",
-        "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c2]",
+        "          ProjectionExec: expr=[c1@0 as c2]",
+        "            RepartitionExec: partitioning=RoundRobinBatch(9000)",
+        "              CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c2]",
     ];
 
     let normalizer = ExplainNormalizer::new();
@@ -782,15 +780,15 @@ async fn csv_explain() {
             "logical_plan",
             "Projection: aggregate_test_100.c1\
              \n  Filter: aggregate_test_100.c2 > Int8(10)\
-             \n    TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]"
+             \n    TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]",
         ],
         vec!["physical_plan",
-             "ProjectionExec: expr=[c1@0 as c1]\
+            "ProjectionExec: expr=[c1@0 as c1]\
               \n  CoalesceBatchesExec: target_batch_size=4096\
               \n    FilterExec: c2@1 > 10\
               \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
               \n        CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c2]\
-              \n"
+              \n",
         ]];
     assert_eq!(expected, actual);
 
@@ -885,7 +883,9 @@ async fn explain_logical_plan_only() {
             "logical_plan",
             "Projection: COUNT(UInt8(1))\
             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-            \n    Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))",
+            \n    SubqueryAlias: t\
+            \n      SubqueryAlias: t\
+            \n        Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))",
         ]];
     assert_eq!(expected, actual);
 }
