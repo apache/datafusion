@@ -22,12 +22,12 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        as_dictionary_array, as_string_array, ArrayData, ArrayRef, BooleanArray,
-        Date32Array, Date64Array, Decimal128Array, DictionaryArray, LargeStringArray,
-        PrimitiveArray, Time32MillisecondArray, Time32SecondArray,
-        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampSecondArray, UInt32BufferBuilder,
-        UInt32Builder, UInt64BufferBuilder, UInt64Builder,
+        as_dictionary_array, ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array,
+        Decimal128Array, DictionaryArray, LargeStringArray, PrimitiveArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
+        UInt64Builder,
     },
     compute,
     datatypes::{
@@ -42,7 +42,7 @@ use std::{time::Instant, vec};
 
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
-use arrow::array::{as_boolean_array, new_null_array, Array};
+use arrow::array::{new_null_array, Array};
 use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
@@ -53,6 +53,8 @@ use arrow::array::{
     StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
     UInt8Array,
 };
+
+use datafusion_common::cast::{as_boolean_array, as_string_array};
 
 use hashbrown::raw::RawTable;
 
@@ -1027,7 +1029,7 @@ fn apply_join_filter(
                 .expression()
                 .evaluate(&intermediate_batch)?
                 .into_array(intermediate_batch.num_rows());
-            let mask = as_boolean_array(&filter_result);
+            let mask = as_boolean_array(&filter_result)?;
 
             let left_filtered = PrimitiveArray::<UInt64Type>::from(
                 compute::filter(&left_indices, mask)?.data().clone(),
@@ -1050,7 +1052,7 @@ fn apply_join_filter(
                 .expression()
                 .evaluate_selection(&intermediate_batch, &has_match)?
                 .into_array(intermediate_batch.num_rows());
-            let mask = as_boolean_array(&filter_result);
+            let mask = as_boolean_array(&filter_result)?;
 
             let mut left_rebuilt = UInt64Builder::with_capacity(0);
             let mut right_rebuilt = UInt32Builder::with_capacity(0);
@@ -1123,9 +1125,12 @@ macro_rules! equal_rows_elem_with_string_dict {
                     .to_usize()
                     .expect("Can not convert index to usize in dictionary");
 
-                (as_string_array(left_array.values()), Some(values_index))
+                (
+                    as_string_array(left_array.values()).unwrap(),
+                    Some(values_index),
+                )
             } else {
-                (as_string_array(left_array.values()), None)
+                (as_string_array(left_array.values()).unwrap(), None)
             }
         };
         let (right_values, right_values_index) = {
@@ -1136,9 +1141,12 @@ macro_rules! equal_rows_elem_with_string_dict {
                     .to_usize()
                     .expect("Can not convert index to usize in dictionary");
 
-                (as_string_array(right_array.values()), Some(values_index))
+                (
+                    as_string_array(right_array.values()).unwrap(),
+                    Some(values_index),
+                )
             } else {
-                (as_string_array(right_array.values()), None)
+                (as_string_array(right_array.values()).unwrap(), None)
             }
         };
 

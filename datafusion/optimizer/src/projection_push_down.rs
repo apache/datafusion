@@ -112,9 +112,9 @@ fn get_projected_schema(
 
     // create the projected schema
     let projected_fields: Vec<DFField> = match table_name {
-        Some(qualifer) => projection
+        Some(qualifier) => projection
             .iter()
-            .map(|i| DFField::from_qualified(qualifer, schema.fields()[*i].clone()))
+            .map(|i| DFField::from_qualified(qualifier, schema.fields()[*i].clone()))
             .collect(),
         None => projection
             .iter()
@@ -192,12 +192,16 @@ fn optimize_plan(
                 Ok(new_input)
             } else {
                 let metadata = new_input.schema().metadata().clone();
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    new_expr,
-                    Arc::new(new_input),
-                    DFSchemaRef::new(DFSchema::new_with_metadata(new_fields, metadata)?),
-                    alias.clone(),
-                )?))
+                Ok(LogicalPlan::Projection(
+                    Projection::try_new_with_schema_alias(
+                        new_expr,
+                        Arc::new(new_input),
+                        DFSchemaRef::new(DFSchema::new_with_metadata(
+                            new_fields, metadata,
+                        )?),
+                        alias.clone(),
+                    )?,
+                ))
             }
         }
         LogicalPlan::Join(Join {
@@ -392,11 +396,7 @@ fn optimize_plan(
                 schema: a.schema.clone(),
             }))
         }
-        LogicalPlan::Union(Union {
-            inputs,
-            schema,
-            alias,
-        }) => {
+        LogicalPlan::Union(Union { inputs, schema }) => {
             // UNION inputs will reference the same column with different identifiers, so we need
             // to populate new_required_columns by unqualified column name based on required fields
             // from the resulting UNION output
@@ -438,7 +438,6 @@ fn optimize_plan(
             Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs.iter().cloned().map(Arc::new).collect(),
                 schema: Arc::new(new_schema),
-                alias: alias.clone(),
             }))
         }
         LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
@@ -615,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn redundunt_project() -> Result<()> {
+    fn redundant_project() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -646,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn noncontiguous_redundunt_projection() -> Result<()> {
+    fn noncontinuous_redundant_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -752,7 +751,7 @@ mod tests {
 
     #[test]
     fn join_schema_trim_using_join() -> Result<()> {
-        // shared join colums from using join should be pushed to both sides
+        // shared join columns from using join should be pushed to both sides
 
         let table_scan = test_table_scan()?;
 
@@ -841,11 +840,8 @@ mod tests {
         // that the Column references are unqualified (e.g. their
         // relation is `None`). PlanBuilder resolves the expressions
         let expr = vec![col("a"), col("b")];
-        let plan = LogicalPlan::Projection(Projection::try_new(
-            expr,
-            Arc::new(table_scan),
-            None,
-        )?);
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(expr, Arc::new(table_scan))?);
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 

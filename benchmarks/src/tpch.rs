@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, Float64Array, StringArray};
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use std::fs;
@@ -25,7 +25,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use datafusion::common::cast::{
-    as_date32_array, as_decimal128_array, as_int32_array, as_int64_array,
+    as_date32_array, as_decimal128_array, as_float64_array, as_int32_array,
+    as_int64_array, as_string_array,
 };
 use datafusion::common::ScalarValue;
 use datafusion::logical_expr::Cast;
@@ -432,7 +433,7 @@ fn col_to_scalar(column: &ArrayRef, row_index: usize) -> ScalarValue {
             ScalarValue::Int64(Some(array.value(row_index)))
         }
         DataType::Float64 => {
-            let array = column.as_any().downcast_ref::<Float64Array>().unwrap();
+            let array = as_float64_array(column).unwrap();
             ScalarValue::Float64(Some(array.value(row_index)))
         }
         DataType::Decimal128(p, s) => {
@@ -444,7 +445,7 @@ fn col_to_scalar(column: &ArrayRef, row_index: usize) -> ScalarValue {
             ScalarValue::Date32(Some(array.value(row_index)))
         }
         DataType::Utf8 => {
-            let array = column.as_any().downcast_ref::<StringArray>().unwrap();
+            let array = as_string_array(column).unwrap();
             ScalarValue::Utf8(Some(array.value(row_index).to_string()))
         }
         other => panic!("unexpected data type in benchmark: {}", other),

@@ -40,6 +40,7 @@ use datafusion::{
     physical_plan::ColumnarValue,
 };
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
+use datafusion_common::cast::as_float64_array;
 use datafusion_common::{assert_contains, assert_not_contains};
 use datafusion_expr::Volatility;
 use object_store::path::Path;
@@ -153,11 +154,7 @@ fn create_ctx() -> SessionContext {
 fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arg = &args[0];
     if let ColumnarValue::Array(v) = arg {
-        let input = v
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("cast failed");
-
+        let input = as_float64_array(v).expect("cast failed");
         let array: Float64Array = input.iter().map(|v| v.map(|x| x.sqrt())).collect();
         Ok(ColumnarValue::Array(Arc::new(array)))
     } else {

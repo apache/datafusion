@@ -410,13 +410,12 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Projection(Projection::try_new(
             new_expr,
             Arc::new(sort_plan),
-            None,
         )?)))
     }
 
     /// Apply a union, preserving duplicate rows
     pub fn union(&self, plan: LogicalPlan) -> Result<Self> {
-        Ok(Self::from(union_with_alias(self.plan.clone(), plan, None)?))
+        Ok(Self::from(union(self.plan.clone(), plan)?))
     }
 
     /// Apply a union, removing duplicate rows
@@ -433,7 +432,7 @@ impl LogicalPlanBuilder {
         };
 
         Ok(Self::from(LogicalPlan::Distinct(Distinct {
-            input: Arc::new(union_with_alias(left_plan, right_plan, None)?),
+            input: Arc::new(union(left_plan, right_plan)?),
         })))
     }
 
@@ -874,17 +873,13 @@ pub fn project_with_column_index_alias(
             x => x.alias(schema.field(i).name()),
         })
         .collect::<Vec<_>>();
-    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-        alias_expr, input, schema, alias,
-    )?))
+    Ok(LogicalPlan::Projection(
+        Projection::try_new_with_schema_alias(alias_expr, input, schema, alias)?,
+    ))
 }
 
-/// Union two logical plans with an optional alias.
-pub fn union_with_alias(
-    left_plan: LogicalPlan,
-    right_plan: LogicalPlan,
-    alias: Option<String>,
-) -> Result<LogicalPlan> {
+/// Union two logical plans.
+pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
     let left_col_num = left_plan.schema().fields().len();
 
     // the 2 queries should have same number of columns
@@ -915,7 +910,7 @@ pub fn union_with_alias(
                     })?;
 
             Ok(DFField::new(
-                alias.as_deref(),
+                None,
                 left_field.name(),
                 data_type,
                 nullable,
@@ -950,15 +945,9 @@ pub fn union_with_alias(
         return Err(DataFusionError::Plan("Empty UNION".to_string()));
     }
 
-    let union_schema = Arc::new(match alias {
-        Some(ref alias) => union_schema.replace_qualifier(alias.as_str()),
-        None => union_schema.strip_qualifiers(),
-    });
-
     Ok(LogicalPlan::Union(Union {
         inputs,
-        schema: union_schema,
-        alias,
+        schema: Arc::new(union_schema),
     }))
 }
 
@@ -996,12 +985,14 @@ pub fn project_with_alias(
         None => input_schema,
     };
 
-    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-        projected_expr,
-        Arc::new(plan.clone()),
-        DFSchemaRef::new(schema),
-        alias,
-    )?))
+    Ok(LogicalPlan::Projection(
+        Projection::try_new_with_schema_alias(
+            projected_expr,
+            Arc::new(plan.clone()),
+            DFSchemaRef::new(schema),
+            alias,
+        )?,
+    ))
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.

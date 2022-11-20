@@ -64,7 +64,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "SortExec: [c1@0 ASC NULLS LAST]",
+        "SortExec: [c1@1 ASC NULLS LAST]",
         "metrics=[output_rows=5, elapsed_compute="
     );
     assert_metrics!(
@@ -138,7 +138,7 @@ async fn explain_analyze_baseline_metrics() {
             if !expected_to_have_metrics(plan) {
                 return Ok(true);
             }
-            let metrics = plan.metrics().unwrap().aggregate_by_partition();
+            let metrics = plan.metrics().unwrap().aggregate_by_name();
 
             assert!(
                 metrics.output_rows().unwrap() > 0,
@@ -746,7 +746,7 @@ async fn test_physical_plan_display_indent_multi_children() {
         "          ProjectionExec: expr=[c2@0 as c2]",
         "            ProjectionExec: expr=[c1@0 as c2]",
         "              RepartitionExec: partitioning=RoundRobinBatch(9000)",
-        "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1]",
+        "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c2]",
     ];
 
     let normalizer = ExplainNormalizer::new();
@@ -824,6 +824,39 @@ async fn csv_explain_analyze() {
 
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
+async fn parquet_explain_analyze() {
+    let ctx = SessionContext::new();
+    register_alltypes_parquet(&ctx).await;
+
+    let sql = "EXPLAIN ANALYZE select id, float_col, timestamp_col from alltypes_plain where timestamp_col > to_timestamp('2009-02-01T00:00:00'); ";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
+
+    // should contain aggregated stats
+    assert_contains!(&formatted, "output_rows=8");
+    assert_contains!(&formatted, "row_groups_pruned=0");
+}
+
+#[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
+async fn parquet_explain_analyze_verbose() {
+    let ctx = SessionContext::new();
+    register_alltypes_parquet(&ctx).await;
+
+    let sql = "EXPLAIN ANALYZE VERBOSE select id, float_col, timestamp_col from alltypes_plain where timestamp_col > to_timestamp('2009-02-01T00:00:00'); ";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
+
+    // should contain the raw per file stats (with the label)
+    assert_contains!(&formatted, "row_groups_pruned{partition=0");
+}
+
+#[tokio::test]
+#[cfg_attr(tarpaulin, ignore)]
 async fn csv_explain_analyze_verbose() {
     // This test uses the execute function to run an actual plan under EXPLAIN VERBOSE ANALYZE
     let ctx = SessionContext::new();
@@ -849,7 +882,7 @@ async fn explain_logical_plan_only() {
 
     let expected = vec![
         vec![
-            "logical_plan", 
+            "logical_plan",
             "Projection: COUNT(UInt8(1))\
             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
             \n    Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))",

@@ -231,7 +231,6 @@ impl TDigest {
     }
 
     pub(crate) fn merge_sorted_f64(&self, sorted_values: &[f64]) -> TDigest {
-        dbg!(&sorted_values);
         #[cfg(debug_assertions)]
         debug_assert!(is_sorted(sorted_values), "unsorted input to TDigest");
 
@@ -523,6 +522,7 @@ impl TDigest {
 
         let value = self.centroids[pos].mean()
             + ((rank - t) / self.centroids[pos].weight() - 0.5) * delta;
+
         Self::clamp(value, min, max)
     }
 
@@ -684,7 +684,7 @@ mod tests {
         let mut t = TDigest::new(10);
 
         for v in vals {
-            t = t.merge_unsorted_f64(vec![v as f64]);
+            t = t.merge_unsorted_f64(vec![v]);
         }
 
         assert_error_bounds!(t, quantile = 0.5, want = 1.0);

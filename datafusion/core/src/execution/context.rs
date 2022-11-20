@@ -22,13 +22,7 @@ use crate::{
         information_schema::CatalogWithInformationSchema,
     },
     datasource::listing::{ListingOptions, ListingTable},
-    datasource::{
-        file_format::{
-            avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
-            FileFormat,
-        },
-        MemTable, ViewTable,
-    },
+    datasource::{MemTable, ViewTable},
     logical_expr::{PlanType, ToStringifiedPlan},
     optimizer::optimizer::Optimizer,
     physical_optimizer::{
@@ -79,7 +73,6 @@ use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
     OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
-use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_optimizer::enforcement::BasicEnforcement;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
@@ -252,12 +245,9 @@ impl SessionContext {
     pub async fn sql(&self, sql: &str) -> Result<Arc<DataFrame>> {
         let plan = self.create_logical_plan(sql)?;
         match plan {
-            LogicalPlan::CreateExternalTable(cmd) => match cmd.file_type.as_str() {
-                "PARQUET" | "CSV" | "JSON" | "AVRO" => {
-                    self.create_listing_table(&cmd).await
-                }
-                _ => self.create_custom_table(&cmd).await,
-            },
+            LogicalPlan::CreateExternalTable(cmd) => {
+                self.create_external_table(&cmd).await
+            }
 
             LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 name,
@@ -490,12 +480,33 @@ impl SessionContext {
         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
     }
 
-    async fn create_custom_table(
+    async fn create_external_table(
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<DataFrame>> {
+        let table_provider: Arc<dyn TableProvider> =
+            self.create_custom_table(cmd).await?;
+
+        let table = self.table(cmd.name.as_str());
+        match (cmd.if_not_exists, table) {
+            (true, Ok(_)) => self.return_empty_dataframe(),
+            (_, Err(_)) => {
+                self.register_table(cmd.name.as_str(), table_provider)?;
+                self.return_empty_dataframe()
+            }
+            (false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                "Table '{:?}' already exists",
+                cmd.name
+            ))),
+        }
+    }
+
+    async fn create_custom_table(
+        &self,
+        cmd: &CreateExternalTable,
+    ) -> Result<Arc<dyn TableProvider>> {
         let state = self.state.read().clone();
-        let file_type = cmd.file_type.to_lowercase();
+        let file_type = cmd.file_type.to_uppercase();
         let factory = &state
             .runtime_env
             .table_factories
@@ -507,79 +518,7 @@ impl SessionContext {
                 ))
             })?;
         let table = (*factory).create(&state, cmd).await?;
-        self.register_table(cmd.name.as_str(), table)?;
-        let plan = LogicalPlanBuilder::empty(false).build()?;
-        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
-    }
-
-    async fn create_listing_table(
-        &self,
-        cmd: &CreateExternalTable,
-    ) -> Result<Arc<DataFrame>> {
-        let file_compression_type =
-            match FileCompressionType::from_str(cmd.file_compression_type.as_str()) {
-                Ok(t) => t,
-                Err(_) => Err(DataFusionError::Execution(
-                    "Only known FileCompressionTypes can be ListingTables!".to_string(),
-                ))?,
-            };
-
-        let file_type = match FileType::from_str(cmd.file_type.as_str()) {
-            Ok(t) => t,
-            Err(_) => Err(DataFusionError::Execution(
-                "Only known FileTypes can be ListingTables!".to_string(),
-            ))?,
-        };
-
-        let file_extension =
-            file_type.get_ext_with_compression(file_compression_type.to_owned())?;
-
-        let file_format: Arc<dyn FileFormat> = match file_type {
-            FileType::CSV => Arc::new(
-                CsvFormat::default()
-                    .with_has_header(cmd.has_header)
-                    .with_delimiter(cmd.delimiter as u8)
-                    .with_file_compression_type(file_compression_type),
-            ),
-            FileType::PARQUET => Arc::new(ParquetFormat::default()),
-            FileType::AVRO => Arc::new(AvroFormat::default()),
-            FileType::JSON => Arc::new(
-                JsonFormat::default().with_file_compression_type(file_compression_type),
-            ),
-        };
-
-        let table = self.table(cmd.name.as_str());
-        match (cmd.if_not_exists, table) {
-            (true, Ok(_)) => self.return_empty_dataframe(),
-            (_, Err(_)) => {
-                // TODO make schema in CreateExternalTable optional instead of empty
-                let provided_schema = if cmd.schema.fields().is_empty() {
-                    None
-                } else {
-                    Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
-                };
-                let options = ListingOptions {
-                    format: file_format,
-                    collect_stat: self.copied_config().collect_statistics,
-                    file_extension: file_extension.to_owned(),
-                    target_partitions: self.copied_config().target_partitions,
-                    table_partition_cols: cmd.table_partition_cols.clone(),
-                };
-                self.register_listing_table(
-                    cmd.name.as_str(),
-                    cmd.location.clone(),
-                    options,
-                    provided_schema,
-                    cmd.definition.clone(),
-                )
-                .await?;
-                self.return_empty_dataframe()
-            }
-            (false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                "Table '{:?}' already exists",
-                cmd.name
-            ))),
-        }
+        Ok(table)
     }
 
     fn find_and_deregister<'a>(
@@ -807,7 +746,7 @@ impl SessionContext {
         table_path: impl AsRef<str>,
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
-        sql: Option<String>,
+        sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
         let resolved_schema = match provided_schema {
@@ -817,7 +756,7 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config)?.with_definition(sql);
+        let table = ListingTable::try_new(config)?.with_definition(sql_definition);
         self.register_table(name, Arc::new(table))?;
         Ok(())
     }
@@ -1626,6 +1565,15 @@ impl SessionState {
         }
         let url = url.to_string();
         let format = format.to_string();
+
+        let has_header = config
+            .config_options
+            .read()
+            .get("datafusion.catalog.has_header");
+        let has_header: bool = has_header
+            .map(|x| FromStr::from_str(&x.to_string()).unwrap_or_default())
+            .unwrap_or_default();
+
         let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
         let authority = match url.host_str() {
             Some(host) => format!("{}://{}", url.scheme(), host),
@@ -1643,7 +1591,14 @@ impl SessionState {
             Some(factory) => factory,
             _ => return,
         };
-        let schema = ListingSchemaProvider::new(authority, path, factory.clone(), store);
+        let schema = ListingSchemaProvider::new(
+            authority,
+            path,
+            factory.clone(),
+            store,
+            format,
+            has_header,
+        );
         let _ = default_catalog
             .register_schema("default", Arc::new(schema))
             .expect("Failed to register default schema");
@@ -2034,8 +1989,6 @@ impl FunctionRegistry for TaskContext {
 mod tests {
     use super::*;
     use crate::assert_batches_eq;
-    use crate::datasource::datasource::TableProviderFactory;
-    use crate::datasource::listing_table_factory::ListingTableFactory;
     use crate::execution::context::QueryPlanner;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::expressions::AvgAccumulator;
@@ -2296,15 +2249,12 @@ mod tests {
         let path = path.join("tests/tpch-csv");
         let url = format!("file://{}", path.display());
 
-        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
-            HashMap::new();
-        let factory = Arc::new(ListingTableFactory::new(FileType::CSV));
-        table_factories.insert("test".to_string(), factory);
-        let rt_cfg = RuntimeConfig::new().with_table_factories(table_factories);
+        let rt_cfg = RuntimeConfig::new();
         let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())
-            .set_str("datafusion.catalog.type", "test");
+            .set_str("datafusion.catalog.type", "CSV")
+            .set_str("datafusion.catalog.has_header", "true");
         let session_state = SessionState::with_config_rt(cfg, runtime);
         let ctx = SessionContext::with_state(session_state);
         ctx.refresh_catalogs().await?;

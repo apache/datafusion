@@ -366,14 +366,14 @@ pub fn from_plan(
     inputs: &[LogicalPlan],
 ) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Projection(Projection { schema, alias, .. }) => {
-            Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+        LogicalPlan::Projection(Projection { schema, alias, .. }) => Ok(
+            LogicalPlan::Projection(Projection::try_new_with_schema_alias(
                 expr.to_vec(),
                 Arc::new(inputs[0].clone()),
                 schema.clone(),
                 alias.clone(),
-            )?))
-        }
+            )?),
+        ),
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),
             values: expr
@@ -546,13 +546,10 @@ pub fn from_plan(
         LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),
         })),
-        LogicalPlan::Union(Union { schema, alias, .. }) => {
-            Ok(LogicalPlan::Union(Union {
-                inputs: inputs.iter().cloned().map(Arc::new).collect(),
-                schema: schema.clone(),
-                alias: alias.clone(),
-            }))
-        }
+        LogicalPlan::Union(Union { schema, .. }) => Ok(LogicalPlan::Union(Union {
+            inputs: inputs.iter().cloned().map(Arc::new).collect(),
+            schema: schema.clone(),
+        })),
         LogicalPlan::Distinct(Distinct { .. }) => Ok(LogicalPlan::Distinct(Distinct {
             input: Arc::new(inputs[0].clone()),
         })),
@@ -772,6 +769,18 @@ pub fn can_hash(data_type: &DataType) -> bool {
         }
         _ => false,
     }
+}
+
+/// Check whether all columns are from the schema.
+pub fn check_all_column_from_schema(
+    columns: &HashSet<Column>,
+    schema: DFSchemaRef,
+) -> Result<bool> {
+    let result = columns
+        .iter()
+        .all(|column| schema.index_of_column(column).is_ok());
+
+    Ok(result)
 }
 
 #[cfg(test)]

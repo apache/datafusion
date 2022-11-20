@@ -20,9 +20,11 @@
 use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
+use arrow::compute::SortOptions;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use dashmap::DashMap;
+use datafusion_physical_expr::PhysicalSortExpr;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -38,6 +40,7 @@ use crate::datasource::{
     TableProvider, TableType,
 };
 use crate::logical_expr::TableProviderFilterPushDown;
+use crate::physical_plan;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
@@ -54,6 +57,7 @@ use super::PartitionedFile;
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
 /// Configuration for creating a 'ListingTable'
+#[derive(Debug, Clone)]
 pub struct ListingTableConfig {
     /// Paths on the `ObjectStore` for creating `ListingTable`.
     /// They should share the same schema and object store.
@@ -156,13 +160,9 @@ impl ListingTableConfig {
         let (format, file_extension) =
             ListingTableConfig::infer_format(file.location.as_ref())?;
 
-        let listing_options = ListingOptions {
-            format,
-            collect_stat: true,
-            file_extension,
-            target_partitions: ctx.config.target_partitions,
-            table_partition_cols: vec![],
-        };
+        let listing_options = ListingOptions::new(format)
+            .with_file_extension(file_extension)
+            .with_target_partitions(ctx.config.target_partitions);
 
         Ok(Self {
             table_paths: self.table_paths,
@@ -198,7 +198,7 @@ impl ListingTableConfig {
 }
 
 /// Options for creating a `ListingTable`
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ListingOptions {
     /// A suffix on which files should be filtered (leave empty to
     /// keep all files on the path)
@@ -220,6 +220,16 @@ pub struct ListingOptions {
     /// Group files to avoid that the number of partitions exceeds
     /// this limit
     pub target_partitions: usize,
+    /// Optional pre-known sort order. Must be `SortExpr`s.
+    ///
+    /// DataFusion may take advantage of this ordering to omit sorts
+    /// or use more efficient algorithms. Currently sortedness must be
+    /// provided if it is known by some external mechanism, but may in
+    /// the future be automatically determined, for example using
+    /// parquet metadata.
+    ///
+    /// See <https://github.com/apache/arrow-datafusion/issues/4177>
+    pub file_sort_order: Option<Vec<Expr>>,
 }
 
 impl ListingOptions {
@@ -236,7 +246,99 @@ impl ListingOptions {
             table_partition_cols: vec![],
             collect_stat: true,
             target_partitions: 1,
+            file_sort_order: None,
         }
+    }
+
+    /// Set file extension on [`ListingOptions`] and returns self.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    ///
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_file_extension(".parquet");
+    ///
+    /// assert_eq!(listing_options.file_extension, ".parquet");
+    /// ```
+    pub fn with_file_extension(mut self, file_extension: impl Into<String>) -> Self {
+        self.file_extension = file_extension.into();
+        self
+    }
+
+    /// Set table partition column names on [`ListingOptions`] and returns self.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    ///
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_table_partition_cols(vec!["col_a".to_string(), "col_b".to_string()]);
+    ///
+    /// assert_eq!(listing_options.table_partition_cols, vec!["col_a", "col_b"]);
+    /// ```
+    pub fn with_table_partition_cols(
+        mut self,
+        table_partition_cols: Vec<String>,
+    ) -> Self {
+        self.table_partition_cols = table_partition_cols;
+        self
+    }
+
+    /// Set stat collection on [`ListingOptions`] and returns self.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    ///
+    /// // Enable stat collection
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_collect_stat(true);
+    ///
+    /// assert_eq!(listing_options.collect_stat, true);
+    /// ```
+    pub fn with_collect_stat(mut self, collect_stat: bool) -> Self {
+        self.collect_stat = collect_stat;
+        self
+    }
+
+    /// Set number of target partitions on [`ListingOptions`] and returns self.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    ///
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_target_partitions(8);
+    ///
+    /// assert_eq!(listing_options.target_partitions, 8);
+    /// ```
+    pub fn with_target_partitions(mut self, target_partitions: usize) -> Self {
+        self.target_partitions = target_partitions;
+        self
+    }
+
+    /// Set file sort order on [`ListingOptions`] and returns self.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use datafusion::prelude::{Expr, col};
+    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    ///
+    ///
+    ///  // Tell datafusion that the files are sorted by column "a"
+    ///  let file_sort_order = Some(vec![
+    ///    col("a").sort(true, true)
+    ///  ]);
+    ///
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_file_sort_order(file_sort_order.clone());
+    ///
+    /// assert_eq!(listing_options.file_sort_order, file_sort_order);
+    /// ```
+    pub fn with_file_sort_order(mut self, file_sort_order: Option<Vec<Expr>>) -> Self {
+        self.file_sort_order = file_sort_order;
+        self
     }
 
     /// Infer the schema of the files at the given path on the provided object store.
@@ -361,6 +463,46 @@ impl ListingTable {
     pub fn options(&self) -> &ListingOptions {
         &self.options
     }
+
+    /// If file_sort_order is specified, creates the appropriate physical expressions
+    fn try_create_output_ordering(&self) -> Result<Option<Vec<PhysicalSortExpr>>> {
+        let file_sort_order =
+            if let Some(file_sort_order) = self.options.file_sort_order.as_ref() {
+                file_sort_order
+            } else {
+                return Ok(None);
+            };
+
+        // convert each expr to a physical sort expr
+        let sort_exprs = file_sort_order
+            .iter()
+            .map(|expr| {
+                if let Expr::Sort { expr, asc, nulls_first } = expr {
+                    if let Expr::Column(col) = expr.as_ref() {
+                        let expr = physical_plan::expressions::col(&col.name, self.table_schema.as_ref())?;
+                        Ok(PhysicalSortExpr {
+                            expr,
+                            options: SortOptions {
+                                descending: !asc,
+                                nulls_first: *nulls_first,
+                            },
+                        })
+                    }
+                    else {
+                        Err(DataFusionError::Plan(
+                            format!("Only support single column references in output_ordering, got {:?}", expr)
+                        ))
+                    }
+                } else {
+                    Err(DataFusionError::Plan(
+                        format!("Expected Expr::Sort in output_ordering, but got {:?}", expr)
+                    ))
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Some(sort_exprs))
+    }
 }
 
 #[async_trait]
@@ -405,6 +547,7 @@ impl TableProvider for ListingTable {
                     statistics,
                     projection: projection.clone(),
                     limit,
+                    output_ordering: self.try_create_output_ordering()?,
                     table_partition_cols: self.options.table_partition_cols.clone(),
                     config_options: ctx.config.config_options(),
                 },
@@ -507,6 +650,7 @@ mod tests {
     };
     use arrow::datatypes::DataType;
     use chrono::DateTime;
+    use datafusion_common::assert_contains;
 
     use super::*;
 
@@ -555,18 +699,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_try_create_output_ordering() {
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let schema = options.infer_schema(&state, &table_path).await.unwrap();
+
+        use physical_plan::expressions::col as physical_col;
+        use std::ops::Add;
+
+        // (file_sort_order, expected_result)
+        let cases = vec![
+            (None, Ok(None)),
+            // empty list
+            (Some(vec![]), Ok(Some(vec![]))),
+            // not a sort expr
+            (
+                Some(vec![col("string_col")]),
+                Err("Expected Expr::Sort in output_ordering, but got string_col"),
+            ),
+            // sort expr, but non column
+            (
+                Some(vec![
+                    col("int_col").add(lit(1)).sort(true, true),
+                ]),
+                Err("Only support single column references in output_ordering, got int_col + Int32(1)"),
+            ),
+            // ok with one column
+            (
+                Some(vec![col("string_col").sort(true, false)]),
+                Ok(Some(vec![PhysicalSortExpr {
+                    expr: physical_col("string_col", &schema).unwrap(),
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    },
+                }]))
+
+            ),
+            // ok with two columns, different options
+            (
+                Some(vec![
+                    col("string_col").sort(true, false),
+                    col("int_col").sort(false, true),
+                ]),
+                Ok(Some(vec![
+                    PhysicalSortExpr {
+                        expr: physical_col("string_col", &schema).unwrap(),
+                        options: SortOptions {
+                            descending: false,
+                            nulls_first: false,
+                        },
+                    },
+                    PhysicalSortExpr {
+                        expr: physical_col("int_col", &schema).unwrap(),
+                        options: SortOptions {
+                            descending: true,
+                            nulls_first: true,
+                        },
+                    },
+                ]))
+
+            ),
+
+        ];
+
+        for (file_sort_order, expected_result) in cases {
+            let options = options.clone().with_file_sort_order(file_sort_order);
+
+            let config = ListingTableConfig::new(table_path.clone())
+                .with_listing_options(options)
+                .with_schema(schema.clone());
+
+            let table =
+                ListingTable::try_new(config.clone()).expect("Creating the table");
+            let ordering_result = table.try_create_output_ordering();
+
+            match (expected_result, ordering_result) {
+                (Ok(expected), Ok(result)) => {
+                    assert_eq!(expected, result);
+                }
+                (Err(expected), Err(result)) => {
+                    // can't compare the DataFusionError directly
+                    let result = result.to_string();
+                    let expected = expected.to_string();
+                    assert_contains!(result.to_string(), expected);
+                }
+                (expected_result, ordering_result) => {
+                    panic!(
+                        "expected: {:#?}\n\nactual:{:#?}",
+                        expected_result, ordering_result
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn read_empty_table() -> Result<()> {
         let ctx = SessionContext::new();
         let path = String::from("table/p1=v1/file.avro");
         register_test_store(&ctx, &[(&path, 100)]);
 
-        let opt = ListingOptions {
-            file_extension: FileType::AVRO.get_ext(),
-            format: Arc::new(AvroFormat {}),
-            table_partition_cols: vec![String::from("p1")],
-            target_partitions: 4,
-            collect_stat: true,
-        };
+        let opt = ListingOptions::new(Arc::new(AvroFormat {}))
+            .with_file_extension(FileType::AVRO.get_ext())
+            .with_table_partition_cols(vec![String::from("p1")])
+            .with_target_partitions(4);
 
         let table_path = ListingTableUrl::parse("test:///table/").unwrap();
         let file_schema =
@@ -762,13 +1004,9 @@ mod tests {
 
         let format = AvroFormat {};
 
-        let opt = ListingOptions {
-            file_extension: "".to_owned(),
-            format: Arc::new(format),
-            table_partition_cols: vec![],
-            target_partitions,
-            collect_stat: true,
-        };
+        let opt = ListingOptions::new(Arc::new(format))
+            .with_file_extension("")
+            .with_target_partitions(target_partitions);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
@@ -799,13 +1037,9 @@ mod tests {
 
         let format = AvroFormat {};
 
-        let opt = ListingOptions {
-            file_extension: "".to_owned(),
-            format: Arc::new(format),
-            table_partition_cols: vec![],
-            target_partitions,
-            collect_stat: true,
-        };
+        let opt = ListingOptions::new(Arc::new(format))
+            .with_file_extension("")
+            .with_target_partitions(target_partitions);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 

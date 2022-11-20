@@ -20,10 +20,7 @@
 
 use std::sync::Arc;
 
-use super::kernels_arrow::*;
 use arrow::array::*;
-use arrow::datatypes::DataType;
-use datafusion_common::cast::as_decimal128_array;
 use datafusion_common::Result;
 
 /// create a `dyn_op` wrapper function for the specified operation
@@ -35,20 +32,9 @@ macro_rules! make_dyn_comp_op {
             /// wrapper over arrow compute kernel that maps Error types and
             /// patches missing support in arrow
             pub(crate) fn [<$OP _dyn>] (left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
-                match (left.data_type(), right.data_type()) {
-                    // Call `op_decimal` (e.g. `eq_decimal) until
-                    // arrow has native support
-                    // https://github.com/apache/arrow-rs/issues/1200
-                    (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => {
-                        [<$OP _decimal>](as_decimal128_array(left).unwrap(), as_decimal128_array(right).unwrap())
-                    },
-                    // By default call the arrow kernel
-                    _ => {
-                    arrow::compute::kernels::comparison::[<$OP _dyn>](left, right)
+                arrow::compute::kernels::comparison::[<$OP _dyn>](left, right)
                             .map_err(|e| e.into())
-                    }
-                }
-                .map(|a| Arc::new(a) as ArrayRef)
+                            .map(|a| Arc::new(a) as ArrayRef)
             }
         }
     };

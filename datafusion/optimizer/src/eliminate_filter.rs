@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn fliter_false() {
+    fn filter_false() {
         let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(false)));
 
         let table_scan = test_table_scan().unwrap();
@@ -105,7 +105,7 @@ mod tests {
     }
 
     #[test]
-    fn fliter_false_nested() {
+    fn filter_false_nested() {
         let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(false)));
 
         let table_scan = test_table_scan().unwrap();
@@ -133,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn fliter_true() {
+    fn filter_true() {
         let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(true)));
 
         let table_scan = test_table_scan().unwrap();
@@ -151,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn fliter_true_nested() {
+    fn filter_true_nested() {
         let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(true)));
 
         let table_scan = test_table_scan().unwrap();
@@ -180,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn fliter_from_subquery() {
+    fn filter_from_subquery() {
         // SELECT a FROM (SELECT a FROM test WHERE FALSE) WHERE TRUE
 
         let false_filter = lit(false);

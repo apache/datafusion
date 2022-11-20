@@ -1579,7 +1579,7 @@ async fn test_cast_to_time_with_time_zone_should_not_work() -> Result<()> {
 
     assert_eq!(
         results.to_string(),
-        "This feature is not implemented: Unsupported SQL type Time(WithTimeZone)"
+        "This feature is not implemented: Unsupported SQL type Time(None, WithTimeZone)"
     );
 
     Ok(())
@@ -1612,7 +1612,7 @@ async fn test_cast_to_timetz_should_not_work() -> Result<()> {
 
     assert_eq!(
         results.to_string(),
-        "This feature is not implemented: Unsupported SQL type Time(Tz)"
+        "This feature is not implemented: Unsupported SQL type Time(None, Tz)"
     );
     Ok(())
 }

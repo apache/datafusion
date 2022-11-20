@@ -22,12 +22,14 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use ahash::RandomState;
-use futures::{
-    ready,
-    stream::{Stream, StreamExt},
-};
+use async_trait::async_trait;
+use futures::stream::BoxStream;
+use futures::stream::{Stream, StreamExt};
 
 use crate::error::Result;
+use crate::execution::context::TaskContext;
+use crate::execution::memory_manager::ConsumerType;
+use crate::execution::{MemoryConsumer, MemoryConsumerId, MemoryManager};
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, group_schema, AccumulatorItemV2, AggregateMode,
     PhysicalGroupBy,
@@ -45,13 +47,13 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
 };
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
 use datafusion_row::reader::{read_row, RowReader};
 use datafusion_row::writer::{write_row, RowWriter};
 use datafusion_row::{MutableRecordBatch, RowType};
-use hashbrown::raw::RawTable;
+use hashbrown::raw::{Bucket, RawTable};
 
 /// Grouping aggregate with row-format aggregation states inside.
 ///
@@ -70,6 +72,16 @@ use hashbrown::raw::RawTable;
 /// [Compact]: datafusion_row::layout::RowType::Compact
 /// [WordAligned]: datafusion_row::layout::RowType::WordAligned
 pub(crate) struct GroupedHashAggregateStreamV2 {
+    stream: BoxStream<'static, ArrowResult<RecordBatch>>,
+    schema: SchemaRef,
+}
+
+/// Actual implementation of [`GroupedHashAggregateStreamV2`].
+///
+/// This is wrapped into yet another struct because we need to interact with the async memory management subsystem
+/// during poll. To have as little code "weirdness" as possible, we chose to just use [`BoxStream`] together with
+/// [`futures::stream::unfold`]. The latter requires a state object, which is [`GroupedHashAggregateStreamV2Inner`].
+struct GroupedHashAggregateStreamV2Inner {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     mode: AggregateMode,
@@ -102,6 +114,7 @@ fn aggr_state_schema(aggr_expr: &[Arc<dyn AggregateExpr>]) -> Result<SchemaRef> 
 
 impl GroupedHashAggregateStreamV2 {
     /// Create a new GroupedRowHashAggregateStream
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         mode: AggregateMode,
         schema: SchemaRef,
@@ -110,6 +123,8 @@ impl GroupedHashAggregateStreamV2 {
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         batch_size: usize,
+        context: Arc<TaskContext>,
+        partition: usize,
     ) -> Result<Self> {
         let timer = baseline_metrics.elapsed_compute().timer();
 
@@ -125,10 +140,24 @@ impl GroupedHashAggregateStreamV2 {
         let aggr_schema = aggr_state_schema(&aggr_expr)?;
 
         let aggr_layout = Arc::new(RowLayout::new(&aggr_schema, RowType::WordAligned));
+
+        let aggr_state = AggregationState {
+            memory_consumer: AggregationStateMemoryConsumer {
+                id: MemoryConsumerId::new(partition),
+                memory_manager: Arc::clone(&context.runtime_env().memory_manager),
+                used: 0,
+            },
+            map: RawTable::with_capacity(0),
+            group_states: Vec::with_capacity(0),
+        };
+        context
+            .runtime_env()
+            .register_requester(aggr_state.memory_consumer.id());
+
         timer.done();
 
-        Ok(Self {
-            schema,
+        let inner = GroupedHashAggregateStreamV2Inner {
+            schema: Arc::clone(&schema),
             mode,
             input,
             group_by,
@@ -138,11 +167,87 @@ impl GroupedHashAggregateStreamV2 {
             aggr_layout,
             baseline_metrics,
             aggregate_expressions,
-            aggr_state: Default::default(),
+            aggr_state,
             random_state: Default::default(),
             batch_size,
             row_group_skip_position: 0,
-        })
+        };
+
+        let stream = futures::stream::unfold(inner, |mut this| async move {
+            let elapsed_compute = this.baseline_metrics.elapsed_compute();
+
+            loop {
+                let result: ArrowResult<Option<RecordBatch>> =
+                    match this.input.next().await {
+                        Some(Ok(batch)) => {
+                            let timer = elapsed_compute.timer();
+                            let result = group_aggregate_batch(
+                                &this.mode,
+                                &this.random_state,
+                                &this.group_by,
+                                &mut this.accumulators,
+                                &this.group_schema,
+                                this.aggr_layout.clone(),
+                                batch,
+                                &mut this.aggr_state,
+                                &this.aggregate_expressions,
+                            );
+
+                            timer.done();
+
+                            // allocate memory
+                            // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
+                            // overshooting a bit. Also this means we either store the whole record batch or not.
+                            let result = match result {
+                                Ok(allocated) => {
+                                    this.aggr_state.memory_consumer.alloc(allocated).await
+                                }
+                                Err(e) => Err(e),
+                            };
+
+                            match result {
+                                Ok(()) => continue,
+                                Err(e) => Err(ArrowError::ExternalError(Box::new(e))),
+                            }
+                        }
+                        Some(Err(e)) => Err(e),
+                        None => {
+                            let timer = this.baseline_metrics.elapsed_compute().timer();
+                            let result = create_batch_from_map(
+                                &this.mode,
+                                &this.group_schema,
+                                &this.aggr_schema,
+                                this.batch_size,
+                                this.row_group_skip_position,
+                                &mut this.aggr_state,
+                                &mut this.accumulators,
+                                &this.schema,
+                            );
+
+                            timer.done();
+                            result
+                        }
+                    };
+
+                this.row_group_skip_position += this.batch_size;
+                match result {
+                    Ok(Some(result)) => {
+                        return Some((
+                            Ok(result.record_output(&this.baseline_metrics)),
+                            this,
+                        ));
+                    }
+                    Ok(None) => return None,
+                    Err(error) => return Some((Err(error), this)),
+                }
+            }
+        });
+
+        // seems like some consumers call this stream even after it returned `None`, so let's fuse the stream.
+        let stream = stream.fuse();
+        let stream = Box::pin(stream);
+
+        Ok(Self { schema, stream })
     }
 }
 
@@ -154,63 +259,7 @@ impl Stream for GroupedHashAggregateStreamV2 {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let this = &mut *self;
-
-        let elapsed_compute = this.baseline_metrics.elapsed_compute();
-
-        loop {
-            let result: ArrowResult<Option<RecordBatch>> =
-                match ready!(this.input.poll_next_unpin(cx)) {
-                    Some(Ok(batch)) => {
-                        let timer = elapsed_compute.timer();
-                        let result = group_aggregate_batch(
-                            &this.mode,
-                            &this.random_state,
-                            &this.group_by,
-                            &mut this.accumulators,
-                            &this.group_schema,
-                            this.aggr_layout.clone(),
-                            batch,
-                            &mut this.aggr_state,
-                            &this.aggregate_expressions,
-                        );
-
-                        timer.done();
-
-                        match result {
-                            Ok(_) => continue,
-                            Err(e) => Err(ArrowError::ExternalError(Box::new(e))),
-                        }
-                    }
-                    Some(Err(e)) => Err(e),
-                    None => {
-                        let timer = this.baseline_metrics.elapsed_compute().timer();
-                        let result = create_batch_from_map(
-                            &this.mode,
-                            &this.group_schema,
-                            &this.aggr_schema,
-                            this.batch_size,
-                            this.row_group_skip_position,
-                            &mut this.aggr_state,
-                            &mut this.accumulators,
-                            &this.schema,
-                        );
-
-                        timer.done();
-                        result
-                    }
-                };
-
-            this.row_group_skip_position += this.batch_size;
-            match result {
-                Ok(Some(result)) => {
-                    return Poll::Ready(Some(Ok(
-                        result.record_output(&this.baseline_metrics)
-                    )))
-                }
-                Ok(None) => return Poll::Ready(None),
-                Err(error) => return Poll::Ready(Some(Err(error))),
-            }
-        }
+        this.stream.poll_next_unpin(cx)
     }
 }
 
@@ -220,6 +269,10 @@ impl RecordBatchStream for GroupedHashAggregateStreamV2 {
     }
 }
 
+/// Perform group-by aggregation for the given [`RecordBatch`].
+///
+/// If successfull, this returns the additional number of bytes that were allocated during this process.
+///
 /// TODO: Make this a member function of [`GroupedHashAggregateStreamV2`]
 #[allow(clippy::too_many_arguments)]
 fn group_aggregate_batch(
@@ -232,9 +285,14 @@ fn group_aggregate_batch(
     batch: RecordBatch,
     aggr_state: &mut AggregationState,
     aggregate_expressions: &[Vec<Arc<dyn PhysicalExpr>>],
-) -> Result<()> {
+) -> Result<usize> {
     // evaluate the grouping expressions
     let grouping_by_values = evaluate_group_by(grouping_set, &batch)?;
+
+    let AggregationState {
+        map, group_states, ..
+    } = aggr_state;
+    let mut allocated = 0usize;
 
     for group_values in grouping_by_values {
         let group_rows: Vec<Vec<u8>> = create_group_rows(group_values, group_schema);
@@ -256,8 +314,6 @@ fn group_aggregate_batch(
         create_row_hashes(&group_rows, random_state, &mut batch_hashes)?;
 
         for (row, hash) in batch_hashes.into_iter().enumerate() {
-            let AggregationState { map, group_states } = aggr_state;
-
             let entry = map.get_mut(hash, |(_hash, group_idx)| {
                 // verify that a group that we are inserting with hash is
                 // actually the same key value as the group in
@@ -270,11 +326,15 @@ fn group_aggregate_batch(
                 // Existing entry for this group value
                 Some((_hash, group_idx)) => {
                     let group_state = &mut group_states[*group_idx];
+
                     // 1.3
                     if group_state.indices.is_empty() {
                         groups_with_rows.push(*group_idx);
                     };
-                    group_state.indices.push(row as u32); // remember this row
+
+                    group_state
+                        .indices
+                        .push_accounted(row as u32, &mut allocated); // remember this row
                 }
                 //  1.2 Need to create new entry
                 None => {
@@ -285,11 +345,25 @@ fn group_aggregate_batch(
                         indices: vec![row as u32], // 1.3
                     };
                     let group_idx = group_states.len();
-                    group_states.push(group_state);
-                    groups_with_rows.push(group_idx);
+
+                    // NOTE: do NOT include the `RowGroupState` struct size in here because this is captured by
+                    // `group_states` (see allocation down below)
+                    allocated += (std::mem::size_of::<u8>()
+                        * group_state.group_by_values.capacity())
+                        + (std::mem::size_of::<u8>()
+                            * group_state.aggregation_buffer.capacity())
+                        + (std::mem::size_of::<u32>() * group_state.indices.capacity());
 
                     // for hasher function, use precomputed hash value
-                    map.insert(hash, (hash, group_idx), |(hash, _group_idx)| *hash);
+                    map.insert_accounted(
+                        (hash, group_idx),
+                        |(hash, _group_index)| *hash,
+                        &mut allocated,
+                    );
+
+                    group_states.push_accounted(group_state, &mut allocated);
+
+                    groups_with_rows.push(group_idx);
                 }
             };
         }
@@ -299,7 +373,7 @@ fn group_aggregate_batch(
         let mut offsets = vec![0];
         let mut offset_so_far = 0;
         for group_idx in groups_with_rows.iter() {
-            let indices = &aggr_state.group_states[*group_idx].indices;
+            let indices = &group_states[*group_idx].indices;
             batch_indices.append_slice(indices);
             offset_so_far += indices.len();
             offsets.push(offset_so_far);
@@ -334,7 +408,7 @@ fn group_aggregate_batch(
             .iter()
             .zip(offsets.windows(2))
             .try_for_each(|(group_idx, offsets)| {
-                let group_state = &mut aggr_state.group_states[*group_idx];
+                let group_state = &mut group_states[*group_idx];
                 // 2.2
                 accumulators
                     .iter_mut()
@@ -374,7 +448,7 @@ fn group_aggregate_batch(
             })?;
     }
 
-    Ok(())
+    Ok(allocated)
 }
 
 /// The state that is built for each output group.
@@ -392,8 +466,9 @@ struct RowGroupState {
 }
 
 /// The state of all the groups
-#[derive(Default)]
 struct AggregationState {
+    memory_consumer: AggregationStateMemoryConsumer,
+
     /// Logically maps group values to an index in `group_states`
     ///
     /// Uses the raw API of hashbrown to avoid actually storing the
@@ -415,6 +490,130 @@ impl std::fmt::Debug for AggregationState {
             .field("map", &map_string)
             .field("group_states", &self.group_states)
             .finish()
+    }
+}
+
+/// Accounting data structure for memory usage.
+struct AggregationStateMemoryConsumer {
+    /// Consumer ID.
+    id: MemoryConsumerId,
+
+    /// Linked memory manager.
+    memory_manager: Arc<MemoryManager>,
+
+    /// Currently used size in bytes.
+    used: usize,
+}
+
+#[async_trait]
+impl MemoryConsumer for AggregationStateMemoryConsumer {
+    fn name(&self) -> String {
+        "AggregationState".to_owned()
+    }
+
+    fn id(&self) -> &crate::execution::MemoryConsumerId {
+        &self.id
+    }
+
+    fn memory_manager(&self) -> Arc<MemoryManager> {
+        Arc::clone(&self.memory_manager)
+    }
+
+    fn type_(&self) -> &ConsumerType {
+        &ConsumerType::Tracking
+    }
+
+    async fn spill(&self) -> Result<usize> {
+        Err(DataFusionError::ResourcesExhausted(
+            "Cannot spill AggregationState".to_owned(),
+        ))
+    }
+
+    fn mem_used(&self) -> usize {
+        self.used
+    }
+}
+
+impl AggregationStateMemoryConsumer {
+    async fn alloc(&mut self, bytes: usize) -> Result<()> {
+        self.try_grow(bytes).await?;
+        self.used = self.used.checked_add(bytes).expect("overflow");
+        Ok(())
+    }
+}
+
+impl Drop for AggregationStateMemoryConsumer {
+    fn drop(&mut self) {
+        self.memory_manager
+            .drop_consumer(self.id(), self.mem_used());
+    }
+}
+
+trait VecAllocExt {
+    type T;
+
+    fn push_accounted(&mut self, x: Self::T, accounting: &mut usize);
+}
+
+impl<T> VecAllocExt for Vec<T> {
+    type T = T;
+
+    fn push_accounted(&mut self, x: Self::T, accounting: &mut usize) {
+        if self.capacity() == self.len() {
+            // allocate more
+
+            // growth factor: 2, but at least 2 elements
+            let bump_elements = (self.capacity() * 2).max(2);
+            let bump_size = std::mem::size_of::<u32>() * bump_elements;
+            self.reserve(bump_elements);
+            *accounting = (*accounting).checked_add(bump_size).expect("overflow");
+        }
+
+        self.push(x);
+    }
+}
+
+trait RawTableAllocExt {
+    type T;
+
+    fn insert_accounted(
+        &mut self,
+        x: Self::T,
+        hasher: impl Fn(&Self::T) -> u64,
+        accounting: &mut usize,
+    ) -> Bucket<Self::T>;
+}
+
+impl<T> RawTableAllocExt for RawTable<T> {
+    type T = T;
+
+    fn insert_accounted(
+        &mut self,
+        x: Self::T,
+        hasher: impl Fn(&Self::T) -> u64,
+        accounting: &mut usize,
+    ) -> Bucket<Self::T> {
+        let hash = hasher(&x);
+
+        match self.try_insert_no_grow(hash, x) {
+            Ok(bucket) => bucket,
+            Err(x) => {
+                // need to request more memory
+
+                let bump_elements = (self.capacity() * 2).max(16);
+                let bump_size = bump_elements * std::mem::size_of::<T>();
+                *accounting = (*accounting).checked_add(bump_size).expect("overflow");
+
+                self.reserve(bump_elements, hasher);
+
+                // still need to insert the element since first try failed
+                // Note: cannot use `.expect` here because `T` may not implement `Debug`
+                match self.try_insert_no_grow(hash, x) {
+                    Ok(bucket) => bucket,
+                    Err(_) => panic!("just grew the container"),
+                }
+            }
+        }
     }
 }
 
@@ -479,8 +678,17 @@ fn create_batch_from_map(
                     results[i].push(acc.evaluate(&state_accessor).unwrap());
                 }
             }
-            for scalars in results {
-                columns.push(ScalarValue::iter_to_array(scalars)?);
+            // We skip over the first `columns.len()` elements.
+            //
+            // This shouldn't panic if the `output_schema` has enough fields.
+            let remaining_field_iterator = output_schema.fields()[columns.len()..].iter();
+
+            for (scalars, field) in results.into_iter().zip(remaining_field_iterator) {
+                if !scalars.is_empty() {
+                    columns.push(ScalarValue::iter_to_array(scalars)?);
+                } else {
+                    columns.push(arrow::array::new_empty_array(field.data_type()))
+                }
             }
         }
     }

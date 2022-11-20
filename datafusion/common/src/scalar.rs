@@ -1641,10 +1641,14 @@ impl ScalarValue {
         let mut valid = BooleanBufferBuilder::new(0);
         let mut flat_len = 0i32;
         for scalar in scalars {
-            if let ScalarValue::List(values, _) = scalar {
+            if let ScalarValue::List(values, field) = scalar {
                 match values {
                     Some(values) => {
-                        let element_array = ScalarValue::iter_to_array(values)?;
+                        let element_array = if !values.is_empty() {
+                            ScalarValue::iter_to_array(values)?
+                        } else {
+                            arrow::array::new_empty_array(field.data_type())
+                        };
 
                         // Add new offset index
                         flat_len += element_array.len() as i32;
@@ -2761,6 +2765,7 @@ mod tests {
     use arrow::compute::kernels;
     use arrow::datatypes::ArrowPrimitiveType;
 
+    use crate::cast::{as_string_array, as_uint32_array, as_uint64_array};
     use crate::from_slice::FromSlice;
 
     use super::*;
@@ -2895,35 +2900,37 @@ mod tests {
     }
 
     #[test]
-    fn scalar_value_to_array_u64() {
+    fn scalar_value_to_array_u64() -> Result<()> {
         let value = ScalarValue::UInt64(Some(13u64));
         let array = value.to_array();
-        let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+        let array = as_uint64_array(&array)?;
         assert_eq!(array.len(), 1);
         assert!(!array.is_null(0));
         assert_eq!(array.value(0), 13);
 
         let value = ScalarValue::UInt64(None);
         let array = value.to_array();
-        let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+        let array = as_uint64_array(&array)?;
         assert_eq!(array.len(), 1);
         assert!(array.is_null(0));
+        Ok(())
     }
 
     #[test]
-    fn scalar_value_to_array_u32() {
+    fn scalar_value_to_array_u32() -> Result<()> {
         let value = ScalarValue::UInt32(Some(13u32));
         let array = value.to_array();
-        let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+        let array = as_uint32_array(&array)?;
         assert_eq!(array.len(), 1);
         assert!(!array.is_null(0));
         assert_eq!(array.value(0), 13);
 
         let value = ScalarValue::UInt32(None);
         let array = value.to_array();
-        let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+        let array = as_uint32_array(&array)?;
         assert_eq!(array.len(), 1);
         assert!(array.is_null(0));
+        Ok(())
     }
 
     #[test]
@@ -2941,7 +2948,7 @@ mod tests {
     }
 
     #[test]
-    fn scalar_list_to_array() {
+    fn scalar_list_to_array() -> Result<()> {
         let list_array_ref = ScalarValue::List(
             Some(vec![
                 ScalarValue::UInt64(Some(100)),
@@ -2957,14 +2964,12 @@ mod tests {
         assert_eq!(list_array.values().len(), 3);
 
         let prim_array_ref = list_array.value(0);
-        let prim_array = prim_array_ref
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
+        let prim_array = as_uint64_array(&prim_array_ref)?;
         assert_eq!(prim_array.len(), 3);
         assert_eq!(prim_array.value(0), 100);
         assert!(prim_array.is_null(1));
         assert_eq!(prim_array.value(2), 101);
+        Ok(())
     }
 
     /// Creates array directly and via ScalarValue and ensures they are the same
@@ -3124,7 +3129,7 @@ mod tests {
 
         let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
         let array = as_dictionary_array::<Int32Type>(&array);
-        let values_array = as_string_array(array.values());
+        let values_array = as_string_array(array.values()).unwrap();
 
         let values = array
             .keys_iter()

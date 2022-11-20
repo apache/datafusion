@@ -572,7 +572,7 @@ mod tests {
                 Some(15000),
                 Some(25000),
                 Some(30000),
-                Some(11234),
+                Some(11235),
                 Some(55000),
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS

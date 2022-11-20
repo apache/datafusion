@@ -145,13 +145,10 @@ impl<'a> CsvReadOptions<'a> {
             .with_schema_infer_max_rec(Some(self.schema_infer_max_records))
             .with_file_compression_type(self.file_compression_type.to_owned());
 
-        ListingOptions {
-            format: Arc::new(file_format),
-            collect_stat: false,
-            file_extension: self.file_extension.to_owned(),
-            target_partitions,
-            table_partition_cols: self.table_partition_cols.clone(),
-        }
+        ListingOptions::new(Arc::new(file_format))
+            .with_file_extension(self.file_extension)
+            .with_target_partitions(target_partitions)
+            .with_table_partition_cols(self.table_partition_cols.clone())
     }
 }
 
@@ -219,13 +216,10 @@ impl<'a> ParquetReadOptions<'a> {
             .with_enable_pruning(self.parquet_pruning)
             .with_skip_metadata(self.skip_metadata);
 
-        ListingOptions {
-            format: Arc::new(file_format),
-            collect_stat: true,
-            file_extension: self.file_extension.to_owned(),
-            target_partitions,
-            table_partition_cols: self.table_partition_cols.clone(),
-        }
+        ListingOptions::new(Arc::new(file_format))
+            .with_file_extension(self.file_extension)
+            .with_target_partitions(target_partitions)
+            .with_table_partition_cols(self.table_partition_cols.clone())
     }
 }
 
@@ -268,13 +262,10 @@ impl<'a> AvroReadOptions<'a> {
     pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
         let file_format = AvroFormat::default();
 
-        ListingOptions {
-            format: Arc::new(file_format),
-            collect_stat: false,
-            file_extension: self.file_extension.to_owned(),
-            target_partitions,
-            table_partition_cols: self.table_partition_cols.clone(),
-        }
+        ListingOptions::new(Arc::new(file_format))
+            .with_file_extension(self.file_extension)
+            .with_target_partitions(target_partitions)
+            .with_table_partition_cols(self.table_partition_cols.clone())
     }
 }
 
@@ -340,12 +331,10 @@ impl<'a> NdJsonReadOptions<'a> {
     pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
         let file_format = JsonFormat::default()
             .with_file_compression_type(self.file_compression_type.to_owned());
-        ListingOptions {
-            format: Arc::new(file_format),
-            collect_stat: false,
-            file_extension: self.file_extension.to_owned(),
-            target_partitions,
-            table_partition_cols: self.table_partition_cols.clone(),
-        }
+
+        ListingOptions::new(Arc::new(file_format))
+            .with_file_extension(self.file_extension)
+            .with_target_partitions(target_partitions)
+            .with_table_partition_cols(self.table_partition_cols.clone())
     }
 }
