@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use arrow::array::new_empty_array;
 use arrow::{
     array::{
         Array, ArrayBuilder, ArrayRef, Date64Array, Date64Builder, StringArray,
@@ -203,13 +204,12 @@ pub async fn pruned_partition_list<'a>(
                 .map(|p| {
                     p.iter()
                         .zip(table_partition_cols_types)
-                        .map(|(&pn, datatype)| {
-                            ScalarValue::try_from_string(pn.to_string(), datatype).expect(
-                                &format!(
+                        .map(|(&part_value, datatype)| {
+                            ScalarValue::try_from_string(part_value.to_string(), datatype)
+                                .expect(&format!(
                                     "Failed to cast str {} to type {}",
-                                    pn, datatype
-                                ),
-                            )
+                                    part_value, datatype
+                                ))
                         })
                         .collect()
                 });
@@ -225,8 +225,14 @@ pub async fn pruned_partition_list<'a>(
     } else {
         // parse the partition values and serde them as a RecordBatch to filter them
         let metas: Vec<_> = list.try_collect().await?;
-        let batch = paths_to_batch(table_partition_cols, table_path, &metas)?;
+        let batch = paths_to_batch(
+            table_partition_cols,
+            table_partition_cols_types,
+            table_path,
+            &metas,
+        )?;
         let mem_table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+        debug!("get mem_table: {:?}", mem_table);
 
         // Filter the partitions using a local datafusion context
         // TODO having the external context would allow us to resolve `Volatility::Stable`
@@ -252,15 +258,16 @@ pub async fn pruned_partition_list<'a>(
 /// Note: For the last modified date, this looses precisions higher than millisecond.
 fn paths_to_batch(
     table_partition_cols: &[String],
+    table_partition_cols_types: &[DataType],
     table_path: &ListingTableUrl,
     metas: &[ObjectMeta],
 ) -> Result<RecordBatch> {
     let mut key_builder = StringBuilder::with_capacity(metas.len(), 1024);
     let mut length_builder = UInt64Builder::with_capacity(metas.len());
     let mut modified_builder = Date64Builder::with_capacity(metas.len());
-    let mut partition_builders = table_partition_cols
+    let mut partition_scalar_values = table_partition_cols
         .iter()
-        .map(|_| StringBuilder::with_capacity(metas.len(), 1024))
+        .map(|_| Vec::new())
         .collect::<Vec<_>>();
     for file_meta in metas {
         if let Some(partition_values) = parse_partitions_for_path(
@@ -272,7 +279,11 @@ fn paths_to_batch(
             length_builder.append_value(file_meta.size as u64);
             modified_builder.append_value(file_meta.last_modified.timestamp_millis());
             for (i, part_val) in partition_values.iter().enumerate() {
-                partition_builders[i].append_value(part_val);
+                let scalar_val = ScalarValue::try_from_string(
+                    part_val.to_string(),
+                    &table_partition_cols_types[i],
+                )?;
+                partition_scalar_values[i].push(scalar_val);
             }
         } else {
             debug!("No partitioning for path {}", file_meta.location);
@@ -285,8 +296,13 @@ fn paths_to_batch(
         ArrayBuilder::finish(&mut length_builder),
         ArrayBuilder::finish(&mut modified_builder),
     ];
-    for mut partition_builder in partition_builders {
-        col_arrays.push(ArrayBuilder::finish(&mut partition_builder));
+    for (i, part_scalar_val) in partition_scalar_values.into_iter().enumerate() {
+        if part_scalar_val.is_empty() {
+            col_arrays.push(new_empty_array(&table_partition_cols_types[i]));
+        } else {
+            let partition_val_array = ScalarValue::iter_to_array(part_scalar_val)?;
+            col_arrays.push(partition_val_array);
+        }
     }
 
     // put the schema together
@@ -295,8 +311,12 @@ fn paths_to_batch(
         Field::new(FILE_SIZE_COLUMN_NAME, DataType::UInt64, false),
         Field::new(FILE_MODIFIED_COLUMN_NAME, DataType::Date64, true),
     ];
-    for pn in table_partition_cols {
-        fields.push(Field::new(pn, DataType::Utf8, false));
+    for (i, pn) in table_partition_cols.iter().enumerate() {
+        fields.push(Field::new(
+            pn,
+            table_partition_cols_types[i].to_owned(),
+            false,
+        ));
     }
 
     let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), col_arrays)?;
@@ -380,9 +400,10 @@ fn parse_partitions_for_path<'a>(
 
 #[cfg(test)]
 mod tests {
+    use futures::StreamExt;
+
     use crate::logical_expr::{case, col, lit};
     use crate::test::object_store::make_test_store;
-    use futures::StreamExt;
 
     use super::*;
 
@@ -631,7 +652,7 @@ mod tests {
         ];
 
         let table_path = ListingTableUrl::parse("file:///mybucket/tablepath").unwrap();
-        let batches = paths_to_batch(&[], &table_path, &files)
+        let batches = paths_to_batch(&[], &[], &table_path, &files)
             .expect("Serialization of file list to batch failed");
 
         let parsed_files = batches_to_paths(&[batches]).unwrap();
@@ -663,6 +684,7 @@ mod tests {
 
         let batches = paths_to_batch(
             &[String::from("part1")],
+            &[DataType::Utf8],
             &ListingTableUrl::parse("file:///mybucket/tablepath").unwrap(),
             &files,
         )

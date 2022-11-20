@@ -198,6 +198,7 @@ async fn csv_filter_with_file_col() -> Result<()> {
             "mytable/date=2021-10-28/file.csv",
         ],
         &["date"],
+        &[DataType::Utf8],
         "mirror:///mytable/",
     );
 
@@ -234,6 +235,7 @@ async fn csv_projection_on_partition() -> Result<()> {
             "mytable/date=2021-10-28/file.csv",
         ],
         &["date"],
+        &[DataType::Date32],
         "mirror:///mytable/",
     );
 
@@ -271,6 +273,7 @@ async fn csv_grouping_by_partition() -> Result<()> {
             "mytable/date=2021-10-28/file.csv",
         ],
         &["date"],
+        &[DataType::Date32],
         "mirror:///mytable/",
     );
 
@@ -428,6 +431,7 @@ fn register_partitioned_aggregate_csv(
     ctx: &SessionContext,
     store_paths: &[&str],
     partition_cols: &[&str],
+    partition_cols_types: &[DataType],
     table_path: &str,
 ) {
     let testdata = arrow_test_data();
@@ -441,6 +445,7 @@ fn register_partitioned_aggregate_csv(
 
     let mut options = ListingOptions::new(Arc::new(CsvFormat::default()));
     options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
+    options.table_partition_cols_types = partition_cols_types.to_vec();
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
     let config = ListingTableConfig::new(table_path)
