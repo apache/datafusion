@@ -523,13 +523,13 @@ fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 /// as Time32 can only be used to Second and Millisecond accuracy, while Time64
 /// is exclusively used to Microsecond and Nanosecond accuracy
 fn is_time_with_valid_unit(datatype: DataType) -> bool {
-    match datatype {
+    matches!(
+        datatype,
         DataType::Time32(TimeUnit::Second)
-        | DataType::Time32(TimeUnit::Millisecond)
-        | DataType::Time64(TimeUnit::Microsecond)
-        | DataType::Time64(TimeUnit::Nanosecond) => true,
-        _ => false,
-    }
+            | DataType::Time32(TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond)
+            | DataType::Time64(TimeUnit::Nanosecond)
+    )
 }
 
 /// Coercion rules for Temporal columns: the type that both lhs and rhs can be
