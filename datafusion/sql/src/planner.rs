@@ -888,8 +888,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )?;
 
                 let plan = match normalized_alias {
-                    Some(alias) => with_alias(logical_plan.clone(), alias),
-                    _ => logical_plan.clone(),
+                    Some(alias) => with_alias(logical_plan, alias),
+                    _ => logical_plan,
                 };
                 (plan, alias)
             }
