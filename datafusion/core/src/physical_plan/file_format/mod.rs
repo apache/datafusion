@@ -98,10 +98,8 @@ pub struct FileScanConfig {
     /// The maximum number of records to read from this plan. If None,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
-    /// The partitioning column names
-    pub table_partition_cols: Vec<String>,
-    /// The partitioning column types
-    pub table_partition_cols_types: Vec<DataType>,
+    /// The partitioning columns
+    pub table_partition_cols: Vec<(String, DataType)>,
     /// The order in which the data is sorted, if known.
     pub output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Configuration options passed to the physical plans
@@ -135,8 +133,8 @@ impl FileScanConfig {
             } else {
                 let partition_idx = idx - self.file_schema.fields().len();
                 table_fields.push(Field::new(
-                    &self.table_partition_cols[partition_idx],
-                    self.table_partition_cols_types[partition_idx].clone(),
+                    &self.table_partition_cols[partition_idx].0,
+                    self.table_partition_cols[partition_idx].1.to_owned(),
                     false,
                 ));
                 // TODO provide accurate stat for partition column (#1186)
@@ -537,8 +535,7 @@ mod tests {
             Arc::clone(&file_schema),
             None,
             Statistics::default(),
-            vec!["date".to_owned()],
-            vec![partition_type_wrap(DataType::Utf8)],
+            vec![("date".to_owned(), partition_type_wrap(DataType::Utf8))],
         );
 
         let (proj_schema, proj_statistics) = conf.project();
@@ -584,8 +581,7 @@ mod tests {
                 ),
                 ..Default::default()
             },
-            vec!["date".to_owned()],
-            vec![partition_type_wrap(DataType::Utf8)],
+            vec![("date".to_owned(), partition_type_wrap(DataType::Utf8))],
         );
 
         let (proj_schema, proj_statistics) = conf.project();
@@ -615,12 +611,10 @@ mod tests {
             ("b", &vec![-2, -1, 0]),
             ("c", &vec![10, 11, 12]),
         );
-        let partition_cols =
-            vec!["year".to_owned(), "month".to_owned(), "day".to_owned()];
-        let partition_col_types = vec![
-            partition_type_wrap(DataType::Utf8),
-            partition_type_wrap(DataType::Utf8),
-            partition_type_wrap(DataType::Utf8),
+        let partition_cols = vec![
+            ("year".to_owned(), partition_type_wrap(DataType::Utf8)),
+            ("month".to_owned(), partition_type_wrap(DataType::Utf8)),
+            ("day".to_owned(), partition_type_wrap(DataType::Utf8)),
         ];
         // create a projected schema
         let conf = config_for_projection(
@@ -635,11 +629,16 @@ mod tests {
             ]),
             Statistics::default(),
             partition_cols.clone(),
-            partition_col_types,
         );
         let (proj_schema, _) = conf.project();
         // created a projector for that projected schema
-        let mut proj = PartitionColumnProjector::new(proj_schema, &partition_cols);
+        let mut proj = PartitionColumnProjector::new(
+            proj_schema,
+            &partition_cols
+                .iter()
+                .map(|x| x.0.clone())
+                .collect::<Vec<_>>(),
+        );
 
         // project first batch
         let projected_batch = proj
@@ -783,8 +782,7 @@ mod tests {
         file_schema: SchemaRef,
         projection: Option<Vec<usize>>,
         statistics: Statistics,
-        table_partition_cols: Vec<String>,
-        table_partition_cols_types: Vec<DataType>,
+        table_partition_cols: Vec<(String, DataType)>,
     ) -> FileScanConfig {
         FileScanConfig {
             file_schema,
@@ -794,7 +792,6 @@ mod tests {
             projection,
             statistics,
             table_partition_cols,
-            table_partition_cols_types,
             config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
         }

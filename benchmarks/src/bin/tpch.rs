@@ -397,7 +397,6 @@ async fn get_table(
         target_partitions,
         collect_stat: ctx.config.collect_statistics,
         table_partition_cols: vec![],
-        table_partition_cols_types: vec![],
         file_sort_order: None,
     };
 

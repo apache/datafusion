@@ -270,7 +270,6 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                table_partition_cols_types: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
             },

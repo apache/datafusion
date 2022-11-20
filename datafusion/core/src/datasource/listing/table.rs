@@ -166,7 +166,6 @@ impl ListingTableConfig {
             file_extension,
             target_partitions: ctx.config.target_partitions,
             table_partition_cols: vec![],
-            table_partition_cols_types: vec![],
             file_sort_order: None,
         };
 
@@ -216,9 +215,7 @@ pub struct ListingOptions {
     /// partitioning expected should be named "a" and "b":
     /// - If there is a third level of partitioning it will be ignored.
     /// - Files that don't follow this partitioning will be ignored.
-    pub table_partition_cols: Vec<String>,
-    /// datatypes of partition columns
-    pub table_partition_cols_types: Vec<DataType>,
+    pub table_partition_cols: Vec<(String, DataType)>,
     /// Set true to try to guess statistics from the files.
     /// This can add a lot of overhead as it will usually require files
     /// to be opened and at least partially parsed.
@@ -250,7 +247,6 @@ impl ListingOptions {
             file_extension: String::new(),
             format,
             table_partition_cols: vec![],
-            table_partition_cols_types: vec![],
             collect_stat: true,
             target_partitions: 1,
             file_sort_order: None,
@@ -344,25 +340,10 @@ impl ListingTable {
 
         // Add the partition columns to the file schema
         let mut table_fields = file_schema.fields().clone();
-        let table_partition_cols_types = if options.table_partition_cols_types.is_empty()
-        {
-            // The default partition column type is Utf8
-            options
-                .table_partition_cols
-                .iter()
-                .map(|_| DataType::Utf8)
-                .collect()
-        } else {
-            options.table_partition_cols_types.clone()
-        };
-        for (part_col_name, part_col_type) in options
-            .table_partition_cols
-            .iter()
-            .zip(table_partition_cols_types)
-        {
+        for (part_col_name, part_col_type) in &options.table_partition_cols {
             table_fields.push(Field::new(
                 part_col_name,
-                partition_type_wrap(part_col_type),
+                partition_type_wrap(part_col_type.clone()),
                 false,
             ));
         }
@@ -468,16 +449,19 @@ impl TableProvider for ListingTable {
         }
 
         // extract types of partition columns
-        let table_partition_cols_types = self
+        let table_partition_cols = self
             .options
             .table_partition_cols
             .iter()
-            .map(|col_name| {
-                self.table_schema
-                    .field_with_name(col_name)
-                    .unwrap()
-                    .data_type()
-                    .clone()
+            .map(|col| {
+                (
+                    col.0.to_owned(),
+                    self.table_schema
+                        .field_with_name(&*col.0)
+                        .unwrap()
+                        .data_type()
+                        .clone(),
+                )
             })
             .collect();
 
@@ -493,8 +477,7 @@ impl TableProvider for ListingTable {
                     projection: projection.clone(),
                     limit,
                     output_ordering: self.try_create_output_ordering()?,
-                    table_partition_cols: self.options.table_partition_cols.clone(),
-                    table_partition_cols_types,
+                    table_partition_cols,
                     config_options: ctx.config.config_options(),
                 },
                 filters,
@@ -506,7 +489,15 @@ impl TableProvider for ListingTable {
         &self,
         filter: &Expr,
     ) -> Result<TableProviderFilterPushDown> {
-        if expr_applicable_for_cols(&self.options.table_partition_cols, filter) {
+        if expr_applicable_for_cols(
+            &self
+                .options
+                .table_partition_cols
+                .iter()
+                .map(|x| x.0.clone())
+                .collect::<Vec<_>>(),
+            filter,
+        ) {
             // if filter can be handled by partiton pruning, it is exact
             Ok(TableProviderFilterPushDown::Exact)
         } else {
@@ -542,7 +533,6 @@ impl ListingTable {
                 filters,
                 &self.options.file_extension,
                 &self.options.table_partition_cols,
-                &self.options.table_partition_cols_types,
             )
         }))
         .await?;
@@ -757,8 +747,10 @@ mod tests {
         let opt = ListingOptions {
             file_extension: FileType::AVRO.get_ext(),
             format: Arc::new(AvroFormat {}),
-            table_partition_cols: vec![String::from("p1")],
-            table_partition_cols_types: vec![partition_type_wrap(DataType::Utf8)],
+            table_partition_cols: vec![(
+                String::from("p1"),
+                partition_type_wrap(DataType::Utf8),
+            )],
             target_partitions: 4,
             collect_stat: true,
             file_sort_order: None,
@@ -962,7 +954,6 @@ mod tests {
             file_extension: "".to_owned(),
             format: Arc::new(format),
             table_partition_cols: vec![],
-            table_partition_cols_types: vec![],
             target_partitions,
             collect_stat: true,
             file_sort_order: None,
@@ -1001,7 +992,6 @@ mod tests {
             file_extension: "".to_owned(),
             format: Arc::new(format),
             table_partition_cols: vec![],
-            table_partition_cols_types: vec![],
             target_partitions,
             collect_stat: true,
             file_sort_order: None,

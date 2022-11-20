@@ -235,7 +235,6 @@ mod tests {
             projection: Some(vec![0, 1, 2]),
             limit: None,
             table_partition_cols: vec![],
-            table_partition_cols_types: vec![],
             config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
         });
@@ -307,7 +306,6 @@ mod tests {
             projection,
             limit: None,
             table_partition_cols: vec![],
-            table_partition_cols_types: vec![],
             config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
         });
@@ -377,8 +375,10 @@ mod tests {
             file_schema,
             statistics: Statistics::default(),
             limit: None,
-            table_partition_cols: vec!["date".to_owned()],
-            table_partition_cols_types: vec![partition_type_wrap(DataType::Utf8)],
+            table_partition_cols: vec![(
+                "date".to_owned(),
+                partition_type_wrap(DataType::Utf8),
+            )],
             config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
         });

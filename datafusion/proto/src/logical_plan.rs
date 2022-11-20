@@ -462,12 +462,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let options = ListingOptions {
                     file_extension: scan.file_extension.clone(),
                     format: file_format,
-                    table_partition_cols: scan.table_partition_cols.clone(),
-                    table_partition_cols_types: scan
+                    table_partition_cols: scan
                         .table_partition_cols
                         .iter()
                         .map(|col| {
-                            schema.field_with_name(col).unwrap().data_type().clone()
+                            (
+                                col.clone(),
+                                schema.field_with_name(col).unwrap().data_type().clone(),
+                            )
                         })
                         .collect(),
                     collect_stat: scan.collect_stat,
@@ -914,6 +916,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 file_extension: options.file_extension.clone(),
                                 table_partition_cols: options
                                     .table_partition_cols
+                                    .iter()
+                                    .map(|x| x.0.clone())
+                                    .collect::<Vec<_>>()
                                     .clone(),
                                 paths: listing_table
                                     .table_paths()

@@ -57,8 +57,11 @@ async fn parquet_distinct_partition_col() -> Result<()> {
             "year=2021/month=10/day=09/file.parquet",
             "year=2021/month=10/day=28/file.parquet",
         ],
-        &["year", "month", "day"],
-        &[DataType::Int32, DataType::Utf8, DataType::Utf8],
+        &[
+            ("year", DataType::Int32),
+            ("month", DataType::Utf8),
+            ("day", DataType::Utf8),
+        ],
         "mirror:///",
         "alltypes_plain.parquet",
     )
@@ -197,8 +200,7 @@ async fn csv_filter_with_file_col() -> Result<()> {
             "mytable/date=2021-10-27/file.csv",
             "mytable/date=2021-10-28/file.csv",
         ],
-        &["date"],
-        &[DataType::Utf8],
+        &[("date", DataType::Utf8)],
         "mirror:///mytable/",
     );
 
@@ -234,8 +236,7 @@ async fn csv_projection_on_partition() -> Result<()> {
             "mytable/date=2021-10-27/file.csv",
             "mytable/date=2021-10-28/file.csv",
         ],
-        &["date"],
-        &[DataType::Date32],
+        &[("date", DataType::Date32)],
         "mirror:///mytable/",
     );
 
@@ -272,8 +273,7 @@ async fn csv_grouping_by_partition() -> Result<()> {
             "mytable/date=2021-10-27/file.csv",
             "mytable/date=2021-10-28/file.csv",
         ],
-        &["date"],
-        &[DataType::Date32],
+        &[("date", DataType::Date32)],
         "mirror:///mytable/",
     );
 
@@ -307,8 +307,11 @@ async fn parquet_multiple_partitions() -> Result<()> {
             "year=2021/month=10/day=09/file.parquet",
             "year=2021/month=10/day=28/file.parquet",
         ],
-        &["year", "month", "day"],
-        &[DataType::Int32, DataType::Utf8, DataType::Utf8],
+        &[
+            ("year", DataType::Int32),
+            ("month", DataType::Utf8),
+            ("day", DataType::Utf8),
+        ],
         "mirror:///",
         "alltypes_plain.parquet",
     )
@@ -350,8 +353,11 @@ async fn parquet_statistics() -> Result<()> {
             "year=2021/month=10/day=09/file.parquet",
             "year=2021/month=10/day=28/file.parquet",
         ],
-        &["year", "month", "day"],
-        &[DataType::Int32, DataType::Utf8, DataType::Utf8],
+        &[
+            ("year", DataType::Int32),
+            ("month", DataType::Utf8),
+            ("day", DataType::Utf8),
+        ],
         "mirror:///",
         // This is the only file we found in the test set with
         // actual stats. It has 1 column / 1 row.
@@ -411,8 +417,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
             "id=2/file.parquet",
             "id=3/file.parquet",
         ],
-        &["id"],
-        &[DataType::Int64],
+        &[("id", DataType::Int64)],
         "mirror:///",
         "alltypes_plain.parquet",
     )
@@ -430,8 +435,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
 fn register_partitioned_aggregate_csv(
     ctx: &SessionContext,
     store_paths: &[&str],
-    partition_cols: &[&str],
-    partition_cols_types: &[DataType],
+    partition_cols: &[(&str, DataType)],
     table_path: &str,
 ) {
     let testdata = arrow_test_data();
@@ -444,8 +448,10 @@ fn register_partitioned_aggregate_csv(
     );
 
     let mut options = ListingOptions::new(Arc::new(CsvFormat::default()));
-    options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
-    options.table_partition_cols_types = partition_cols_types.to_vec();
+    options.table_partition_cols = partition_cols
+        .iter()
+        .map(|x| (x.0.to_owned(), x.1.clone()))
+        .collect::<Vec<_>>();
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
     let config = ListingTableConfig::new(table_path)
@@ -460,8 +466,7 @@ fn register_partitioned_aggregate_csv(
 async fn register_partitioned_alltypes_parquet(
     ctx: &SessionContext,
     store_paths: &[&str],
-    partition_cols: &[&str],
-    partition_cols_types: &[DataType],
+    partition_cols: &[(&str, DataType)],
     table_path: &str,
     source_file: &str,
 ) {
@@ -474,8 +479,10 @@ async fn register_partitioned_alltypes_parquet(
     );
 
     let mut options = ListingOptions::new(Arc::new(ParquetFormat::default()));
-    options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
-    options.table_partition_cols_types = partition_cols_types.to_vec();
+    options.table_partition_cols = partition_cols
+        .iter()
+        .map(|x| (x.0.to_owned(), x.1.clone()))
+        .collect::<Vec<_>>();
     options.collect_stat = true;
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();

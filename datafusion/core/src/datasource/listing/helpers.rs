@@ -174,8 +174,7 @@ pub async fn pruned_partition_list<'a>(
     table_path: &'a ListingTableUrl,
     filters: &'a [Expr],
     file_extension: &'a str,
-    table_partition_cols: &'a [String],
-    table_partition_cols_types: &'a [DataType],
+    table_partition_cols: &'a [(String, DataType)],
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
     let list = table_path.list_all_files(store, file_extension);
 
@@ -186,7 +185,15 @@ pub async fn pruned_partition_list<'a>(
 
     let applicable_filters: Vec<_> = filters
         .iter()
-        .filter(|f| expr_applicable_for_cols(table_partition_cols, f))
+        .filter(|f| {
+            expr_applicable_for_cols(
+                &table_partition_cols
+                    .iter()
+                    .map(|x| x.0.clone())
+                    .collect::<Vec<_>>(),
+                f,
+            )
+        })
         .collect();
 
     if applicable_filters.is_empty() {
@@ -199,17 +206,23 @@ pub async fn pruned_partition_list<'a>(
                 let parsed_path = parse_partitions_for_path(
                     table_path,
                     &object_meta.location,
-                    table_partition_cols,
+                    &table_partition_cols
+                        .iter()
+                        .map(|x| x.0.clone())
+                        .collect::<Vec<_>>(),
                 )
                 .map(|p| {
                     p.iter()
-                        .zip(table_partition_cols_types)
-                        .map(|(&part_value, datatype)| {
-                            ScalarValue::try_from_string(part_value.to_string(), datatype)
-                                .expect(&format!(
-                                    "Failed to cast str {} to type {}",
-                                    part_value, datatype
-                                ))
+                        .zip(table_partition_cols)
+                        .map(|(&part_value, part_column)| {
+                            ScalarValue::try_from_string(
+                                part_value.to_string(),
+                                &part_column.1,
+                            )
+                            .expect(&format!(
+                                "Failed to cast str {} to type {}",
+                                part_value, part_column.1
+                            ))
                         })
                         .collect()
                 });
@@ -225,12 +238,7 @@ pub async fn pruned_partition_list<'a>(
     } else {
         // parse the partition values and serde them as a RecordBatch to filter them
         let metas: Vec<_> = list.try_collect().await?;
-        let batch = paths_to_batch(
-            table_partition_cols,
-            table_partition_cols_types,
-            table_path,
-            &metas,
-        )?;
+        let batch = paths_to_batch(table_partition_cols, table_path, &metas)?;
         let mem_table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
         debug!("get mem_table: {:?}", mem_table);
 
@@ -257,8 +265,7 @@ pub async fn pruned_partition_list<'a>(
 ///
 /// Note: For the last modified date, this looses precisions higher than millisecond.
 fn paths_to_batch(
-    table_partition_cols: &[String],
-    table_partition_cols_types: &[DataType],
+    table_partition_cols: &[(String, DataType)],
     table_path: &ListingTableUrl,
     metas: &[ObjectMeta],
 ) -> Result<RecordBatch> {
@@ -273,7 +280,10 @@ fn paths_to_batch(
         if let Some(partition_values) = parse_partitions_for_path(
             table_path,
             &file_meta.location,
-            table_partition_cols,
+            &table_partition_cols
+                .iter()
+                .map(|x| x.0.clone())
+                .collect::<Vec<_>>(),
         ) {
             key_builder.append_value(file_meta.location.as_ref());
             length_builder.append_value(file_meta.size as u64);
@@ -281,7 +291,7 @@ fn paths_to_batch(
             for (i, part_val) in partition_values.iter().enumerate() {
                 let scalar_val = ScalarValue::try_from_string(
                     part_val.to_string(),
-                    &table_partition_cols_types[i],
+                    &table_partition_cols[i].1,
                 )?;
                 partition_scalar_values[i].push(scalar_val);
             }
@@ -298,7 +308,7 @@ fn paths_to_batch(
     ];
     for (i, part_scalar_val) in partition_scalar_values.into_iter().enumerate() {
         if part_scalar_val.is_empty() {
-            col_arrays.push(new_empty_array(&table_partition_cols_types[i]));
+            col_arrays.push(new_empty_array(&table_partition_cols[i].1));
         } else {
             let partition_val_array = ScalarValue::iter_to_array(part_scalar_val)?;
             col_arrays.push(partition_val_array);
@@ -311,12 +321,8 @@ fn paths_to_batch(
         Field::new(FILE_SIZE_COLUMN_NAME, DataType::UInt64, false),
         Field::new(FILE_MODIFIED_COLUMN_NAME, DataType::Date64, true),
     ];
-    for (i, pn) in table_partition_cols.iter().enumerate() {
-        fields.push(Field::new(
-            pn,
-            table_partition_cols_types[i].to_owned(),
-            false,
-        ));
+    for part_col in table_partition_cols {
+        fields.push(Field::new(&*part_col.0, part_col.1.to_owned(), false));
     }
 
     let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), col_arrays)?;
@@ -459,8 +465,7 @@ mod tests {
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter],
             ".parquet",
-            &[String::from("mypartition")],
-            &[DataType::Utf8],
+            &[(String::from("mypartition"), DataType::Utf8)],
         )
         .await
         .expect("partition pruning failed")
@@ -483,8 +488,7 @@ mod tests {
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter],
             ".parquet",
-            &[String::from("mypartition")],
-            &[DataType::Utf8],
+            &[(String::from("mypartition"), DataType::Utf8)],
         )
         .await
         .expect("partition pruning failed")
@@ -531,8 +535,10 @@ mod tests {
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter1, filter2, filter3],
             ".parquet",
-            &[String::from("part1"), String::from("part2")],
-            &[DataType::Utf8, DataType::Utf8],
+            &[
+                (String::from("part1"), DataType::Utf8),
+                (String::from("part2"), DataType::Utf8),
+            ],
         )
         .await
         .expect("partition pruning failed")
@@ -652,7 +658,7 @@ mod tests {
         ];
 
         let table_path = ListingTableUrl::parse("file:///mybucket/tablepath").unwrap();
-        let batches = paths_to_batch(&[], &[], &table_path, &files)
+        let batches = paths_to_batch(&[], &table_path, &files)
             .expect("Serialization of file list to batch failed");
 
         let parsed_files = batches_to_paths(&[batches]).unwrap();
@@ -683,8 +689,7 @@ mod tests {
         ];
 
         let batches = paths_to_batch(
-            &[String::from("part1")],
-            &[DataType::Utf8],
+            &[(String::from("part1"), DataType::Utf8)],
             &ListingTableUrl::parse("file:///mybucket/tablepath").unwrap(),
             &files,
         )
