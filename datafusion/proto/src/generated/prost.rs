@@ -851,6 +851,36 @@ pub struct ScalarListValue {
     pub values: ::prost::alloc::vec::Vec<ScalarValue>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarTime32Value {
+    #[prost(oneof = "scalar_time32_value::Value", tags = "1, 2")]
+    pub value: ::core::option::Option<scalar_time32_value::Value>,
+}
+/// Nested message and enum types in `ScalarTime32Value`.
+pub mod scalar_time32_value {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Value {
+        #[prost(int32, tag = "1")]
+        Time32SecondValue(i32),
+        #[prost(int32, tag = "2")]
+        Time32MillisecondValue(i32),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScalarTime64Value {
+    #[prost(oneof = "scalar_time64_value::Value", tags = "1, 2")]
+    pub value: ::core::option::Option<scalar_time64_value::Value>,
+}
+/// Nested message and enum types in `ScalarTime64Value`.
+pub mod scalar_time64_value {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Value {
+        #[prost(int64, tag = "1")]
+        Time64MicrosecondValue(i64),
+        #[prost(int64, tag = "2")]
+        Time64NanosecondValue(i64),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarTimestampValue {
     #[prost(string, tag = "5")]
     pub timezone: ::prost::alloc::string::String,
@@ -908,7 +938,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 20, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34"
+        tags = "33, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 20, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -949,6 +979,8 @@ pub mod scalar_value {
         /// Literal Date32 value always has a unit of day
         #[prost(int32, tag = "14")]
         Date32Value(i32),
+        #[prost(message, tag = "15")]
+        Time32Value(super::ScalarTime32Value),
         /// WAS: ScalarType null_list_value = 18;
         #[prost(message, tag = "17")]
         ListValue(super::ScalarListValue),
@@ -968,8 +1000,8 @@ pub mod scalar_value {
         BinaryValue(::prost::alloc::vec::Vec<u8>),
         #[prost(bytes, tag = "29")]
         LargeBinaryValue(::prost::alloc::vec::Vec<u8>),
-        #[prost(int64, tag = "30")]
-        Time64Value(i64),
+        #[prost(message, tag = "30")]
+        Time64Value(super::ScalarTime64Value),
         #[prost(message, tag = "31")]
         IntervalMonthDayNano(super::IntervalMonthDayNanoValue),
         #[prost(message, tag = "32")]

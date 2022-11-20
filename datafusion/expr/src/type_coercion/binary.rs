@@ -20,7 +20,9 @@
 use crate::type_coercion::is_numeric;
 use crate::Operator;
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE};
+use arrow::datatypes::{
+    DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+};
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 
@@ -517,11 +519,23 @@ fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
         .or_else(|| null_coercion(lhs_type, rhs_type))
 }
 
+/// Checks if the TimeUnit associated with a Time32 or Time64 type is consistent,
+/// as Time32 can only be used to Second and Millisecond accuracy, while Time64
+/// is exclusively used to Microsecond and Nanosecond accuracy
+fn is_time_with_valid_unit(datatype: DataType) -> bool {
+    matches!(
+        datatype,
+        DataType::Time32(TimeUnit::Second)
+            | DataType::Time32(TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond)
+            | DataType::Time64(TimeUnit::Nanosecond)
+    )
+}
+
 /// Coercion rules for Temporal columns: the type that both lhs and rhs can be
 /// casted to for the purpose of a date computation
 fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    use arrow::datatypes::TimeUnit;
     match (lhs_type, rhs_type) {
         (Date64, Date32) => Some(Date64),
         (Date32, Date64) => Some(Date64),
@@ -529,6 +543,22 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         (Date32, Utf8) => Some(Date32),
         (Utf8, Date64) => Some(Date64),
         (Date64, Utf8) => Some(Date64),
+        (Utf8, Time32(unit)) => match is_time_with_valid_unit(Time32(unit.clone())) {
+            false => None,
+            true => Some(Time32(unit.clone())),
+        },
+        (Time32(unit), Utf8) => match is_time_with_valid_unit(Time32(unit.clone())) {
+            false => None,
+            true => Some(Time32(unit.clone())),
+        },
+        (Utf8, Time64(unit)) => match is_time_with_valid_unit(Time64(unit.clone())) {
+            false => None,
+            true => Some(Time64(unit.clone())),
+        },
+        (Time64(unit), Utf8) => match is_time_with_valid_unit(Time64(unit.clone())) {
+            false => None,
+            true => Some(Time64(unit.clone())),
+        },
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
                 // can't cast across timezones
@@ -829,6 +859,30 @@ mod tests {
             DataType::Date64,
             Operator::Lt,
             DataType::Date64
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Time32(TimeUnit::Second),
+            Operator::Eq,
+            DataType::Time32(TimeUnit::Second)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Time32(TimeUnit::Millisecond),
+            Operator::Eq,
+            DataType::Time32(TimeUnit::Millisecond)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Time64(TimeUnit::Microsecond),
+            Operator::Eq,
+            DataType::Time64(TimeUnit::Microsecond)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Time64(TimeUnit::Nanosecond),
+            Operator::Eq,
+            DataType::Time64(TimeUnit::Nanosecond)
         );
         test_coercion_binary_rule!(
             DataType::Utf8,

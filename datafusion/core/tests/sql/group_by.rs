@@ -486,6 +486,186 @@ async fn csv_group_by_date() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_group_by_time32second() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("time", DataType::Time32(TimeUnit::Second), false),
+        Field::new("cnt", DataType::Int32, false),
+    ]));
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Time32SecondArray::from(vec![
+                Some(5_000),
+                Some(5_000),
+                Some(5_500),
+                Some(5_500),
+                Some(5_900),
+                Some(5_900),
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(1),
+                Some(3),
+            ])),
+        ],
+    )?;
+
+    ctx.register_batch("times", data)?;
+    let sql = "SELECT SUM(cnt) FROM times GROUP BY time";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------+",
+        "| SUM(times.cnt) |",
+        "+----------------+",
+        "| 2              |",
+        "| 3              |",
+        "| 4              |",
+        "+----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_group_by_time32millisecond() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("time", DataType::Time32(TimeUnit::Millisecond), false),
+        Field::new("cnt", DataType::Int32, false),
+    ]));
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Time32MillisecondArray::from(vec![
+                Some(5_000_000),
+                Some(5_000_000),
+                Some(5_500_000),
+                Some(5_500_000),
+                Some(5_900_000),
+                Some(5_900_000),
+            ])),
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(1),
+                Some(3),
+            ])),
+        ],
+    )?;
+
+    ctx.register_batch("times", data)?;
+    let sql = "SELECT SUM(cnt) FROM times GROUP BY time";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------+",
+        "| SUM(times.cnt) |",
+        "+----------------+",
+        "| 2              |",
+        "| 3              |",
+        "| 4              |",
+        "+----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_group_by_time64microsecond() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("time", DataType::Time64(TimeUnit::Microsecond), false),
+        Field::new("cnt", DataType::Int64, false),
+    ]));
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Time64MicrosecondArray::from(vec![
+                Some(5_000_000_000),
+                Some(5_000_000_000),
+                Some(5_500_000_000),
+                Some(5_500_000_000),
+                Some(5_900_000_000),
+                Some(5_900_000_000),
+            ])),
+            Arc::new(Int64Array::from(vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(1),
+                Some(3),
+            ])),
+        ],
+    )?;
+
+    ctx.register_batch("times", data)?;
+    let sql = "SELECT SUM(cnt) FROM times GROUP BY time";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------+",
+        "| SUM(times.cnt) |",
+        "+----------------+",
+        "| 2              |",
+        "| 3              |",
+        "| 4              |",
+        "+----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_group_by_time64nanosecond() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("time", DataType::Time64(TimeUnit::Nanosecond), false),
+        Field::new("cnt", DataType::Int64, false),
+    ]));
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Time64NanosecondArray::from(vec![
+                Some(5_000_000_000_000),
+                Some(5_000_000_000_000),
+                Some(5_500_000_000_000),
+                Some(5_500_000_000_000),
+                Some(5_900_000_000_000),
+                Some(5_900_000_000_000),
+            ])),
+            Arc::new(Int64Array::from(vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(1),
+                Some(3),
+            ])),
+        ],
+    )?;
+
+    ctx.register_batch("times", data)?;
+    let sql = "SELECT SUM(cnt) FROM times GROUP BY time";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------+",
+        "| SUM(times.cnt) |",
+        "+----------------+",
+        "| 2              |",
+        "| 3              |",
+        "| 4              |",
+        "+----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn group_by_date_trunc() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let ctx = SessionContext::new();
