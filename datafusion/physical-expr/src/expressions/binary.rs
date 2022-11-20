@@ -75,7 +75,7 @@ use arrow::record_batch::RecordBatch;
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
-use datafusion_common::cast::as_decimal128_array;
+use datafusion_common::cast::{as_boolean_array, as_decimal128_array};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::binary_operator_data_type;
@@ -472,14 +472,8 @@ macro_rules! binary_array_op {
 /// Invoke a boolean kernel on a pair of arrays
 macro_rules! boolean_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("boolean_op failed to downcast array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("boolean_op failed to downcast array");
+        let ll = as_boolean_array($LEFT).expect("boolean_op failed to downcast array");
+        let rr = as_boolean_array($RIGHT).expect("boolean_op failed to downcast array");
         Ok(Arc::new($OP(&ll, &rr)?))
     }};
 }
@@ -1003,7 +997,7 @@ impl BinaryExpr {
             Operator::Modulo => binary_primitive_array_op!(left, right, modulus),
             Operator::And => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op!(left, right, and_kleene)
+                    boolean_op!(&left, &right, and_kleene)
                 } else {
                     Err(DataFusionError::Internal(format!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -1015,7 +1009,7 @@ impl BinaryExpr {
             }
             Operator::Or => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op!(left, right, or_kleene)
+                    boolean_op!(&left, &right, or_kleene)
                 } else {
                     Err(DataFusionError::Internal(format!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -1110,10 +1104,8 @@ mod tests {
         assert_eq!(result.len(), 5);
 
         let expected = vec![false, false, true, true, true];
-        let result = result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("failed to downcast to BooleanArray");
+        let result =
+            as_boolean_array(&result).expect("failed to downcast to BooleanArray");
         for (i, &expected_item) in expected.iter().enumerate().take(5) {
             assert_eq!(result.value(i), expected_item);
         }
@@ -1156,10 +1148,8 @@ mod tests {
         assert_eq!(result.len(), 5);
 
         let expected = vec![true, true, false, true, false];
-        let result = result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("failed to downcast to BooleanArray");
+        let result =
+            as_boolean_array(&result).expect("failed to downcast to BooleanArray");
         for (i, &expected_item) in expected.iter().enumerate().take(5) {
             assert_eq!(result.value(i), expected_item);
         }
