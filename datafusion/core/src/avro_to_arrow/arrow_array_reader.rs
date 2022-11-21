@@ -975,7 +975,7 @@ mod test {
     use crate::arrow::array::Array;
     use crate::arrow::datatypes::{Field, TimeUnit};
     use crate::avro_to_arrow::{Reader, ReaderBuilder};
-    use arrow::array::{ListArray, TimestampMicrosecondArray};
+    use arrow::array::TimestampMicrosecondArray;
     use arrow::datatypes::DataType;
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_list_array};
     use std::fs::File;
