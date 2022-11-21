@@ -93,14 +93,17 @@ impl OptimizerRule for LimitPushDown {
             // Child range [child_skip, child_skip + child_fetch)
             // Merge -> [child_skip + skip, min(child_skip + skip + fetch, child_skip + child_fetch) )
             // Merge LimitPlan -> [child_skip + skip, min(fetch, child_fetch - skip) )
-            let new_fetch = match child_limit.fetch {
-                Some(child_fetch) => {
-                    let ancestor_fetch = parent_fetch.map(|f| f + parent_skip);
-                    let new_current_fetch = ancestor_fetch
-                        .map_or(child_fetch, |x| std::cmp::min(x, child_fetch));
-                    Some(new_current_fetch)
-                }
-                None => parent_fetch.map(|f| f + parent_skip),
+            let new_fetch = match parent_fetch {
+                Some(fetch) => match child_limit.fetch {
+                    Some(child_fetch) => Some(std::cmp::min(
+                        fetch,
+                        fetch_minus_skip(child_fetch, parent_skip),
+                    )),
+                    None => Some(fetch),
+                },
+                _ => child_limit
+                    .fetch
+                    .map(|child_fetch| fetch_minus_skip(child_fetch, parent_skip)),
             };
 
             let plan = LogicalPlan::Limit(Limit {
@@ -215,6 +218,14 @@ impl OptimizerRule for LimitPushDown {
 
     fn name(&self) -> &str {
         "limit_push_down"
+    }
+}
+
+fn fetch_minus_skip(fetch: usize, skip: usize) -> usize {
+    if skip > fetch {
+        0
+    } else {
+        fetch - skip
     }
 }
 
@@ -413,8 +424,8 @@ mod test {
             .build()?;
 
         let expected = "Projection: test.a\
-        \n  Limit: skip=10, fetch=1000\
-        \n    TableScan: test, fetch=1010";
+        \n  Limit: skip=10, fetch=990\
+        \n    TableScan: test, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected)
     }
@@ -731,6 +742,36 @@ mod test {
         \n      TableScan: test, fetch=2000\
         \n    Limit: skip=0, fetch=2000\
         \n      TableScan: test2, fetch=2000";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn merge_limit_result_empty() -> Result<()> {
+        let scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(scan)
+            .limit(0, Some(1000))?
+            .limit(1000, None)?
+            .build()?;
+
+        let expected = "Limit: skip=1000, fetch=0\
+        \n  TableScan: test, fetch=1000";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn skip_great_than_fetch() -> Result<()> {
+        let scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(scan)
+            .limit(0, Some(1))?
+            .limit(1000, None)?
+            .build()?;
+
+        let expected = "Limit: skip=1000, fetch=0\
+        \n  TableScan: test, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected)
     }
