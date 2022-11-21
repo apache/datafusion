@@ -29,6 +29,7 @@ use crate::datasource::listing::{
 };
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
+use arrow::datatypes::{DataType, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 use datafusion_expr::CreateExternalTable;
@@ -88,17 +89,45 @@ impl TableProviderFactory for ListingTableFactory {
             ),
         };
 
-        let provided_schema = if cmd.schema.fields().is_empty() {
-            None
+        let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
+            (
+                None,
+                cmd.table_partition_cols
+                    .iter()
+                    .zip((0..cmd.table_partition_cols.len()).map(|_| DataType::Utf8))
+                    .map(|x| (x.0.clone(), x.1))
+                    .collect::<Vec<_>>(),
+            )
         } else {
-            Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
+            let schema: SchemaRef = Arc::new(cmd.schema.as_ref().to_owned().into());
+            let table_partition_cols = cmd
+                .table_partition_cols
+                .iter()
+                .map(|col| {
+                    (
+                        col.clone(),
+                        schema.field_with_name(col).unwrap().data_type().clone(),
+                    )
+                })
+                .collect();
+            // exclude partition columns to support creating partitioned external table
+            // with a specified column definition like
+            // `create external table a(c0 int, c1 int) stored as csv partitioned by (c1)...`
+            let mut project_idx = Vec::new();
+            for i in 0..schema.fields().len() {
+                if !cmd.table_partition_cols.contains(schema.field(i).name()) {
+                    project_idx.push(i);
+                }
+            }
+            let schema = Arc::new(schema.project(&project_idx)?);
+            (Some(schema), table_partition_cols)
         };
 
         let options = ListingOptions::new(file_format)
             .with_collect_stat(state.config.collect_statistics)
             .with_file_extension(file_extension)
             .with_target_partitions(state.config.target_partitions)
-            .with_table_partition_cols(cmd.table_partition_cols.clone())
+            .with_table_partition_cols(table_partition_cols)
             .with_file_sort_order(None);
 
         let table_path = ListingTableUrl::parse(&cmd.location)?;

@@ -222,10 +222,12 @@ pub async fn pruned_partition_list<'a>(
                                 part_value.to_string(),
                                 &part_column.1,
                             )
-                            .expect(&format!(
-                                "Failed to cast str {} to type {}",
-                                part_value, part_column.1
-                            ))
+                            .unwrap_or_else(|_| {
+                                panic!(
+                                    "Failed to cast str {} to type {}",
+                                    part_value, part_column.1
+                                )
+                            })
                         })
                         .collect()
                 });
@@ -325,7 +327,7 @@ fn paths_to_batch(
         Field::new(FILE_MODIFIED_COLUMN_NAME, DataType::Date64, true),
     ];
     for part_col in table_partition_cols {
-        fields.push(Field::new(&*part_col.0, part_col.1.to_owned(), false));
+        fields.push(Field::new(&part_col.0, part_col.1.to_owned(), false));
     }
 
     let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), col_arrays)?;

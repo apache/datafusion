@@ -461,16 +461,21 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let options = ListingOptions::new(file_format)
                     .with_file_extension(scan.file_extension.clone())
-                    .with_table_partition_cols(scan
-                        .table_partition_cols
-                        .iter()
-                        .map(|col| {
-                            (
-                                col.clone(),
-                                schema.field_with_name(col).unwrap().data_type().clone(),
-                            )
-                        })
-                        .collect())
+                    .with_table_partition_cols(
+                        scan.table_partition_cols
+                            .iter()
+                            .map(|col| {
+                                (
+                                    col.clone(),
+                                    schema
+                                        .field_with_name(col)
+                                        .unwrap()
+                                        .data_type()
+                                        .clone(),
+                                )
+                            })
+                            .collect(),
+                    )
                     .with_collect_stat(scan.collect_stat)
                     .with_target_partitions(scan.target_partitions as usize)
                     .with_file_sort_order(file_sort_order);
@@ -912,8 +917,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .table_partition_cols
                                     .iter()
                                     .map(|x| x.0.clone())
-                                    .collect::<Vec<_>>()
-                                    .clone(),
+                                    .collect::<Vec<_>>(),
                                 paths: listing_table
                                     .table_paths()
                                     .iter()

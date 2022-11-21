@@ -268,16 +268,19 @@ impl ListingOptions {
     ///
     /// ```
     /// use std::sync::Arc;
+    /// use arrow::datatypes::DataType;
     /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_table_partition_cols(vec!["col_a".to_string(), "col_b".to_string()]);
+    ///     .with_table_partition_cols(vec![("col_a".to_string(), DataType::Utf8),
+    ///         ("col_b".to_string(), DataType::Utf8)]);
     ///
-    /// assert_eq!(listing_options.table_partition_cols, vec!["col_a", "col_b"]);
+    /// assert_eq!(listing_options.table_partition_cols, vec![("col_a".to_string(), DataType::Utf8),
+    ///     ("col_b".to_string(), DataType::Utf8)]);
     /// ```
     pub fn with_table_partition_cols(
         mut self,
-        table_partition_cols: Vec<String>,
+        table_partition_cols: Vec<(String, DataType)>,
     ) -> Self {
         self.table_partition_cols = table_partition_cols;
         self
@@ -543,7 +546,7 @@ impl TableProvider for ListingTable {
                 (
                     col.0.to_owned(),
                     self.table_schema
-                        .field_with_name(&*col.0)
+                        .field_with_name(&col.0)
                         .unwrap()
                         .data_type()
                         .clone(),
@@ -830,7 +833,10 @@ mod tests {
 
         let opt = ListingOptions::new(Arc::new(AvroFormat {}))
             .with_file_extension(FileType::AVRO.get_ext())
-            .with_table_partition_cols(vec![(String::from("p1"), partition_type_wrap(DataType::Utf8))])
+            .with_table_partition_cols(vec![(
+                String::from("p1"),
+                partition_type_wrap(DataType::Utf8),
+            )])
             .with_target_partitions(4);
 
         let table_path = ListingTableUrl::parse("test:///table/").unwrap();
