@@ -21,14 +21,12 @@
 use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
-use arrow::array::{new_null_array, ArrayRef};
-use arrow::compute::kernels::window::shift;
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use std::any::Any;
-use std::iter;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -142,7 +140,7 @@ pub(crate) struct NthValueEvaluator {
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
-    fn include_rank(&self) -> bool {
+    fn uses_window_frame(&self) -> bool {
         true
     }
 
@@ -150,45 +148,19 @@ impl PartitionEvaluator for NthValueEvaluator {
         unreachable!("first, last, and nth_value evaluation must be called with evaluate_partition_with_rank")
     }
 
-    fn evaluate_partition_with_rank(
-        &self,
-        partition: Range<usize>,
-        ranks_in_partition: &[Range<usize>],
-    ) -> Result<ArrayRef> {
+    fn evaluate_inside_range(&self, range: Range<usize>) -> Result<ScalarValue> {
         let arr = &self.values[0];
-        let num_rows = partition.end - partition.start;
+        let n_range = range.end - range.start;
         match self.kind {
-            NthValueKind::First => {
-                let value = ScalarValue::try_from_array(arr, partition.start)?;
-                Ok(value.to_array_of_size(num_rows))
-            }
-            NthValueKind::Last => {
-                // because the default window frame is between unbounded preceding and current
-                // row with peer evaluation, hence the last rows expands until the end of the peers
-                let values = ranks_in_partition
-                    .iter()
-                    .map(|range| {
-                        let len = range.end - range.start;
-                        let value = ScalarValue::try_from_array(arr, range.end - 1)?;
-                        Ok(iter::repeat(value).take(len))
-                    })
-                    .collect::<Result<Vec<_>>>()?
-                    .into_iter()
-                    .flatten();
-                ScalarValue::iter_to_array(values)
-            }
+            NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
+            NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
             NthValueKind::Nth(n) => {
+                // We are certain that n > 0.
                 let index = (n as usize) - 1;
-                if index >= num_rows {
-                    Ok(new_null_array(arr.data_type(), num_rows))
+                if index >= n_range {
+                    ScalarValue::try_from(arr.data_type())
                 } else {
-                    let value =
-                        ScalarValue::try_from_array(arr, partition.start + index)?;
-                    let arr = value.to_array_of_size(num_rows);
-                    // because the default window frame is between unbounded preceding and current
-                    // row, hence the shift because for values with indices < index they should be
-                    // null. This changes when window frames other than default is implemented
-                    shift(arr.as_ref(), index as i64).map_err(DataFusionError::ArrowError)
+                    ScalarValue::try_from_array(arr, range.start + index)
                 }
             }
         }
@@ -201,6 +173,7 @@ mod tests {
     use crate::expressions::Column;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::cast::as_int32_array;
     use datafusion_common::Result;
 
     fn test_i32_result(expr: NthValue, expected: Int32Array) -> Result<()> {
@@ -208,11 +181,21 @@ mod tests {
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
-        let result = expr
-            .create_evaluator(&batch)?
-            .evaluate_with_rank(vec![0..8], vec![0..8])?;
-        assert_eq!(1, result.len());
-        let result = result[0].as_any().downcast_ref::<Int32Array>().unwrap();
+        let mut ranges: Vec<Range<usize>> = vec![];
+        for i in 0..8 {
+            ranges.push(Range {
+                start: 0,
+                end: i + 1,
+            })
+        }
+        let evaluator = expr.create_evaluator(&batch)?;
+        let result = ranges
+            .into_iter()
+            .map(|range| evaluator.evaluate_inside_range(range))
+            .into_iter()
+            .collect::<Result<Vec<ScalarValue>>>()?;
+        let result = ScalarValue::iter_to_array(result.into_iter())?;
+        let result = as_int32_array(&result)?;
         assert_eq!(expected, *result);
         Ok(())
     }
@@ -235,7 +218,19 @@ mod tests {
             Arc::new(Column::new("arr", 0)),
             DataType::Int32,
         );
-        test_i32_result(last_value, Int32Array::from_iter_values(vec![8; 8]))?;
+        test_i32_result(
+            last_value,
+            Int32Array::from(vec![
+                Some(1),
+                Some(-2),
+                Some(3),
+                Some(-4),
+                Some(5),
+                Some(-6),
+                Some(7),
+                Some(8),
+            ]),
+        )?;
         Ok(())
     }
 

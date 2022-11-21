@@ -18,14 +18,14 @@
 /// In this example we will declare a single-type, single return type UDAF that computes the geometric mean.
 /// The geometric mean is described here: https://en.wikipedia.org/wiki/Geometric_mean
 use datafusion::arrow::{
-    array::ArrayRef, array::Float32Array, array::Float64Array, datatypes::DataType,
-    record_batch::RecordBatch,
+    array::ArrayRef, array::Float32Array, datatypes::DataType, record_batch::RecordBatch,
 };
-
 use datafusion::from_slice::FromSlice;
 use datafusion::logical_expr::AggregateState;
-use datafusion::{error::Result, logical_plan::create_udaf, physical_plan::Accumulator};
+use datafusion::{error::Result, physical_plan::Accumulator};
 use datafusion::{logical_expr::Volatility, prelude::*, scalar::ScalarValue};
+use datafusion_common::cast::as_float64_array;
+use datafusion_expr::create_udaf;
 use std::sync::Arc;
 
 // create local session context with an in-memory table
@@ -38,11 +38,11 @@ fn create_context() -> Result<SessionContext> {
     // define data in two partitions
     let batch1 = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[2.0, 4.0, 8.0]))],
+        vec![Arc::new(Float32Array::from_slice([2.0, 4.0, 8.0]))],
     )?;
     let batch2 = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Float32Array::from_slice(&[64.0]))],
+        vec![Arc::new(Float32Array::from_slice([64.0]))],
     )?;
 
     // declare a new context. In spark API, this corresponds to a new spark SQLsession
@@ -187,11 +187,7 @@ async fn main() -> Result<()> {
     let results = df.collect().await?;
 
     // downcast the array to the expected type
-    let result = results[0]
-        .column(0)
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .unwrap();
+    let result = as_float64_array(results[0].column(0))?;
 
     // verify that the calculation is correct
     assert!((result.value(0) - 8.0).abs() < f64::EPSILON);

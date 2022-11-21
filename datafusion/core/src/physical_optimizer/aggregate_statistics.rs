@@ -258,14 +258,15 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use arrow::array::{Int32Array, Int64Array};
+    use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::cast::as_int64_array;
     use datafusion_physical_expr::expressions::cast;
     use datafusion_physical_expr::PhysicalExpr;
 
     use crate::error::Result;
-    use crate::logical_plan::Operator;
+    use crate::logical_expr::Operator;
     use crate::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
@@ -337,12 +338,7 @@ mod tests {
         // note that nullabiolity differs
 
         assert_eq!(
-            batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .unwrap()
-                .values(),
+            as_int64_array(batch.column(0)).unwrap().values(),
             &[agg.expected_count()]
         );
     }

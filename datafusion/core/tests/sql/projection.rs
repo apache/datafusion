@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::logical_plan::{provider_as_source, LogicalPlanBuilder, UNNAMED_TABLE};
+use datafusion::datasource::provider_as_source;
 use datafusion::test_util::scan_empty;
-use datafusion_expr::when;
+use datafusion_expr::{when, LogicalPlanBuilder, UNNAMED_TABLE};
 use tempfile::TempDir;
 
 use super::*;
@@ -275,9 +275,9 @@ async fn projection_on_memory_scan() -> Result<()> {
     let partitions = vec![vec![RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
-            Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
-            Arc::new(Int32Array::from_slice(&[3, 12, 12, 120])),
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice([2, 12, 12, 120])),
+            Arc::new(Int32Array::from_slice([3, 12, 12, 120])),
         ],
     )?]];
 

@@ -65,7 +65,7 @@ impl BuiltInWindowFunctionExpr for RowNumber {
         &self,
         _batch: &RecordBatch,
     ) -> Result<Box<dyn PartitionEvaluator>> {
-        Ok(Box::new(NumRowsEvaluator::default()))
+        Ok(Box::<NumRowsEvaluator>::default())
     }
 }
 
@@ -86,7 +86,7 @@ mod tests {
     use super::*;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
-    use datafusion_common::Result;
+    use datafusion_common::{cast::as_uint64_array, Result};
 
     #[test]
     fn row_number_all_null() -> Result<()> {
@@ -98,7 +98,7 @@ mod tests {
         let row_number = RowNumber::new("row_number".to_owned());
         let result = row_number.create_evaluator(&batch)?.evaluate(vec![0..8])?;
         assert_eq!(1, result.len());
-        let result = result[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let result = as_uint64_array(&result[0])?;
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
         Ok(())
@@ -114,7 +114,7 @@ mod tests {
         let row_number = RowNumber::new("row_number".to_owned());
         let result = row_number.create_evaluator(&batch)?.evaluate(vec![0..8])?;
         assert_eq!(1, result.len());
-        let result = result[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let result = as_uint64_array(&result[0])?;
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
         Ok(())

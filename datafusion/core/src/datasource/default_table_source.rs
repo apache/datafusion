@@ -60,6 +60,10 @@ impl TableSource for DefaultTableSource {
     ) -> datafusion_common::Result<TableProviderFilterPushDown> {
         self.table_provider.supports_filter_pushdown(filter)
     }
+
+    fn get_logical_plan(&self) -> Option<&datafusion_expr::LogicalPlan> {
+        self.table_provider.get_logical_plan()
+    }
 }
 
 /// Wrap TableProvider in TableSource

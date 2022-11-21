@@ -17,9 +17,9 @@
 
 //! Functions for creating logical expressions
 
-use crate::expr::GroupingSet;
+use crate::expr::{BinaryExpr, Cast, GroupingSet};
 use crate::{
-    aggregate_function, built_in_function, conditional_expressions::CaseBuilder, lit,
+    aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
     BuiltinScalarFunction, Expr, LogicalPlan, Operator, ReturnTypeFunction,
     ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
@@ -33,31 +33,27 @@ pub fn col(ident: &str) -> Expr {
     Expr::Column(ident.into())
 }
 
-/// Return a new expression l <op> r
-pub fn binary_expr(l: Expr, op: Operator, r: Expr) -> Expr {
-    Expr::BinaryExpr {
-        left: Box::new(l),
-        op,
-        right: Box::new(r),
-    }
+/// Return a new expression left <op> right
+pub fn binary_expr(left: Expr, op: Operator, right: Expr) -> Expr {
+    Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
 }
 
 /// Return a new expression with a logical AND
 pub fn and(left: Expr, right: Expr) -> Expr {
-    Expr::BinaryExpr {
-        left: Box::new(left),
-        op: Operator::And,
-        right: Box::new(right),
-    }
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::And,
+        Box::new(right),
+    ))
 }
 
 /// Return a new expression with a logical OR
 pub fn or(left: Expr, right: Expr) -> Expr {
-    Expr::BinaryExpr {
-        left: Box::new(left),
-        op: Operator::Or,
-        right: Box::new(right),
-    }
+    Expr::BinaryExpr(BinaryExpr::new(
+        Box::new(left),
+        Operator::Or,
+        Box::new(right),
+    ))
 }
 
 /// Create an expression to represent the min() aggregate function
@@ -138,11 +134,11 @@ pub fn concat(args: &[Expr]) -> Expr {
 }
 
 /// Concatenates all but the first argument, with separators.
-/// The first argument is used as the separator string, and should not be NULL.
-/// Other NULL arguments are ignored.
-pub fn concat_ws(sep: impl Into<String>, values: &[Expr]) -> Expr {
-    let mut args = vec![lit(sep.into())];
-    args.extend_from_slice(values);
+/// The first argument is used as the separator.
+/// NULL arguments in `values` are ignored.
+pub fn concat_ws(sep: Expr, values: Vec<Expr>) -> Expr {
+    let mut args = values;
+    args.insert(0, sep);
     Expr::ScalarFunction {
         fun: built_in_function::BuiltinScalarFunction::ConcatWithSeparator,
         args,
@@ -263,10 +259,7 @@ pub fn rollup(exprs: Vec<Expr>) -> Expr {
 
 /// Create a cast expression
 pub fn cast(expr: Expr, data_type: DataType) -> Expr {
-    Expr::Cast {
-        expr: Box::new(expr),
-        data_type,
-    }
+    Expr::Cast(Cast::new(Box::new(expr), data_type))
 }
 
 /// Create a try cast expression
@@ -373,8 +366,8 @@ unary_scalar_expr!(Round, round, "round to nearest integer");
 unary_scalar_expr!(Trunc, trunc, "truncate toward zero");
 unary_scalar_expr!(Abs, abs, "absolute value");
 unary_scalar_expr!(Signum, signum, "sign of the argument (-1, 0, +1) ");
-unary_scalar_expr!(Exp, exp, "base 2 logarithm");
-unary_scalar_expr!(Log2, log2, "base 10 logarithm");
+unary_scalar_expr!(Exp, exp, "exponential");
+unary_scalar_expr!(Log2, log2, "base 2 logarithm");
 unary_scalar_expr!(Log10, log10, "base 10 logarithm");
 unary_scalar_expr!(Ln, ln, "natural logarithm");
 scalar_expr!(NullIf, nullif, arg_1, arg_2);
@@ -407,6 +400,7 @@ scalar_expr!(SplitPart, split_part, expr, delimiter, index);
 scalar_expr!(StartsWith, starts_with, string, characters);
 scalar_expr!(Strpos, strpos, string, substring);
 scalar_expr!(Substr, substr, string, position);
+scalar_expr!(Substr, substring, string, position, count);
 scalar_expr!(ToHex, to_hex, string);
 scalar_expr!(Translate, translate, string, from, to);
 scalar_expr!(Trim, trim, string);
@@ -444,7 +438,7 @@ pub fn array(args: Vec<Expr>) -> Expr {
 /// which is not NULL
 pub fn coalesce(args: Vec<Expr>) -> Expr {
     Expr::ScalarFunction {
-        fun: built_in_function::BuiltinScalarFunction::Coalesce,
+        fun: BuiltinScalarFunction::Coalesce,
         args,
     }
 }
@@ -458,6 +452,30 @@ pub fn now() -> Expr {
     }
 }
 
+/// Returns current UTC date as a [`DataType::Date32`] value
+pub fn current_date() -> Expr {
+    Expr::ScalarFunction {
+        fun: BuiltinScalarFunction::CurrentDate,
+        args: vec![],
+    }
+}
+
+/// Returns uuid v4 as a string value
+pub fn uuid() -> Expr {
+    Expr::ScalarFunction {
+        fun: BuiltinScalarFunction::Uuid,
+        args: vec![],
+    }
+}
+
+/// Returns current UTC time as a [`DataType::Time64`] value
+pub fn current_time() -> Expr {
+    Expr::ScalarFunction {
+        fun: BuiltinScalarFunction::CurrentTime,
+        args: vec![],
+    }
+}
+
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
     CaseBuilder::new(Some(Box::new(expr)), vec![], vec![], None)
@@ -466,60 +484,6 @@ pub fn case(expr: Expr) -> CaseBuilder {
 /// Create a CASE WHEN statement with boolean WHEN expressions and no base expression.
 pub fn when(when: Expr, then: Expr) -> CaseBuilder {
     CaseBuilder::new(None, vec![when], vec![then], None)
-}
-
-/// Combines an array of filter expressions into a single filter expression
-/// consisting of the input filter expressions joined with logical AND.
-/// Returns None if the filters array is empty.
-pub fn combine_filters(filters: &[Expr]) -> Option<Expr> {
-    if filters.is_empty() {
-        return None;
-    }
-    let combined_filter = filters
-        .iter()
-        .skip(1)
-        .fold(filters[0].clone(), |acc, filter| and(acc, filter.clone()));
-    Some(combined_filter)
-}
-
-/// Take combined filter (multiple boolean expressions ANDed together)
-/// and break down into distinct filters. This should be the inverse of
-/// `combine_filters`
-pub fn uncombine_filter(filter: Expr) -> Vec<Expr> {
-    match filter {
-        Expr::BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        } => {
-            let mut exprs = uncombine_filter(*left);
-            exprs.extend(uncombine_filter(*right));
-            exprs
-        }
-        expr => {
-            vec![expr]
-        }
-    }
-}
-
-/// Combines an array of filter expressions into a single filter expression
-/// consisting of the input filter expressions joined with logical OR.
-/// Returns None if the filters array is empty.
-pub fn combine_filters_disjunctive(filters: &[Expr]) -> Option<Expr> {
-    if filters.is_empty() {
-        return None;
-    }
-
-    filters.iter().cloned().reduce(or)
-}
-
-/// Recursively un-alias an expressions
-#[inline]
-pub fn unalias(expr: Expr) -> Expr {
-    match expr {
-        Expr::Alias(sub_expr, _) => unalias(*sub_expr),
-        _ => expr,
-    }
 }
 
 /// Creates a new UDF with a specific signature and specific return type.
@@ -582,7 +546,7 @@ pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use arrow::datatypes::{Field, Schema};
+    use crate::lit;
 
     #[test]
     fn filter_is_null_and_is_not_null() {
@@ -714,6 +678,7 @@ mod test {
         test_scalar_expr!(StartsWith, starts_with, string, characters);
         test_scalar_expr!(Strpos, strpos, string, substring);
         test_scalar_expr!(Substr, substr, string, position);
+        test_scalar_expr!(Substr, substring, string, position, count);
         test_scalar_expr!(ToHex, to_hex, string);
         test_scalar_expr!(Translate, translate, string, from, to);
         test_scalar_expr!(Trim, trim, string);
@@ -728,6 +693,17 @@ mod test {
     }
 
     #[test]
+    fn uuid_function_definitions() {
+        if let Expr::ScalarFunction { fun, args } = uuid() {
+            let name = built_in_function::BuiltinScalarFunction::Uuid;
+            assert_eq!(name, fun);
+            assert_eq!(0, args.len());
+        } else {
+            unreachable!();
+        }
+    }
+
+    #[test]
     fn digest_function_definitions() {
         if let Expr::ScalarFunction { fun, args } = digest(col("tableA.a"), lit("md5")) {
             let name = BuiltinScalarFunction::Digest;
@@ -736,80 +712,5 @@ mod test {
         } else {
             unreachable!();
         }
-    }
-
-    #[test]
-    fn combine_zero_filters() {
-        let result = combine_filters(&[]);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn combine_one_filter() {
-        let filter = binary_expr(col("c1"), Operator::Lt, lit(1));
-        let result = combine_filters(&[filter.clone()]);
-        assert_eq!(result, Some(filter));
-    }
-
-    #[test]
-    fn combine_multiple_filters() {
-        let filter1 = binary_expr(col("c1"), Operator::Lt, lit(1));
-        let filter2 = binary_expr(col("c2"), Operator::Lt, lit(2));
-        let filter3 = binary_expr(col("c3"), Operator::Lt, lit(3));
-        let result =
-            combine_filters(&[filter1.clone(), filter2.clone(), filter3.clone()]);
-        assert_eq!(result, Some(and(and(filter1, filter2), filter3)));
-    }
-
-    fn assert_predicates(actual: Vec<Expr>, expected: Vec<Expr>) {
-        assert_eq!(
-            actual.len(),
-            expected.len(),
-            "Predicates are not equal, found {} predicates but expected {}",
-            actual.len(),
-            expected.len()
-        );
-
-        for expr in expected.into_iter() {
-            assert!(
-                actual.contains(&expr),
-                "Predicates are not equal, predicate {:?} not found in {:?}",
-                expr,
-                actual
-            );
-        }
-    }
-
-    #[test]
-    fn test_uncombine_filter() {
-        let _schema = Schema::new(vec![
-            Field::new("a", DataType::Utf8, true),
-            Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Utf8, true),
-        ]);
-
-        let expr = col("a").eq(lit("s"));
-        let actual = uncombine_filter(expr);
-
-        assert_predicates(actual, vec![col("a").eq(lit("s"))]);
-    }
-
-    #[test]
-    fn test_uncombine_filter_recursively() {
-        let _schema = Schema::new(vec![
-            Field::new("a", DataType::Utf8, true),
-            Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Utf8, true),
-        ]);
-
-        let expr = and(col("a"), col("b"));
-        let actual = uncombine_filter(expr);
-
-        assert_predicates(actual, vec![col("a"), col("b")]);
-
-        let expr = col("a").and(col("b")).or(col("c"));
-        let actual = uncombine_filter(expr.clone());
-
-        assert_predicates(actual, vec![expr]);
     }
 }

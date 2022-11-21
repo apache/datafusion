@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregate::tdigest::TryIntoOrderedF64;
+use crate::aggregate::tdigest::TryIntoF64;
 use crate::aggregate::tdigest::{TDigest, DEFAULT_MAX_SIZE};
 use crate::expressions::{format_state_name, Literal};
 use crate::{AggregateExpr, PhysicalExpr};
@@ -30,7 +30,6 @@ use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_expr::{Accumulator, AggregateState};
-use ordered_float::OrderedFloat;
 use std::{any::Any, iter, sync::Arc};
 
 /// APPROX_PERCENTILE_CONT aggregate expression
@@ -129,7 +128,7 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
         .value();
     let percentile = match lit {
         ScalarValue::Float32(Some(q)) => *q as f64,
-        ScalarValue::Float64(Some(q)) => *q as f64,
+        ScalarValue::Float64(Some(q)) => *q,
         got => return Err(DataFusionError::NotImplemented(format!(
             "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
             got.get_datatype()
@@ -267,9 +266,7 @@ impl ApproxPercentileAccumulator {
         self.digest = TDigest::merge_digests(digests);
     }
 
-    pub(crate) fn convert_to_ordered_float(
-        values: &ArrayRef,
-    ) -> Result<Vec<OrderedFloat<f64>>> {
+    pub(crate) fn convert_to_float(values: &ArrayRef) -> Result<Vec<f64>> {
         match values.data_type() {
             DataType::Float64 => {
                 let array = downcast_value!(values, Float64Array);
@@ -371,8 +368,7 @@ impl Accumulator for ApproxPercentileAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let sorted_values = &arrow::compute::sort(values, None)?;
-        let sorted_values =
-            ApproxPercentileAccumulator::convert_to_ordered_float(sorted_values)?;
+        let sorted_values = ApproxPercentileAccumulator::convert_to_float(sorted_values)?;
         self.digest = self.digest.merge_sorted_f64(&sorted_values);
         Ok(())
     }
@@ -392,7 +388,7 @@ impl Accumulator for ApproxPercentileAccumulator {
             DataType::UInt32 => ScalarValue::UInt32(Some(q as u32)),
             DataType::UInt64 => ScalarValue::UInt64(Some(q as u64)),
             DataType::Float32 => ScalarValue::Float32(Some(q as f32)),
-            DataType::Float64 => ScalarValue::Float64(Some(q as f64)),
+            DataType::Float64 => ScalarValue::Float64(Some(q)),
             v => unreachable!("unexpected return type {:?}", v),
         })
     }

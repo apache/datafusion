@@ -22,7 +22,8 @@
 //! Regex expressions
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, GenericStringArray, OffsetSizeTrait,
+    new_null_array, Array, ArrayData, ArrayRef, BufferBuilder, GenericStringArray,
+    OffsetSizeTrait,
 };
 use arrow::compute;
 use datafusion_common::{DataFusionError, Result};
@@ -33,7 +34,7 @@ use regex::Regex;
 use std::any::type_name;
 use std::sync::Arc;
 
-use crate::functions::make_scalar_function;
+use crate::functions::{make_scalar_function, make_scalar_function_with_hints, Hint};
 
 /// Get the first argument from the given string array.
 ///
@@ -76,7 +77,13 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let values = downcast_string_array_arg!(args[0], "string", T);
             let regex = downcast_string_array_arg!(args[1], "pattern", T);
             let flags = Some(downcast_string_array_arg!(args[2], "flags", T));
-            compute::regexp_match(values, regex,  flags).map_err(DataFusionError::ArrowError)
+
+            match flags {
+                Some(f) if f.iter().any(|s| s == Some("g")) => {
+                    Err(DataFusionError::Plan("regexp_match() does not support the \"global\" option".to_owned()))
+                },
+                _ => compute::regexp_match(values, regex, flags).map_err(DataFusionError::ArrowError),
+            }
         }
         other => Err(DataFusionError::Internal(format!(
             "regexp_match was called with {} arguments. It requires at least 2 and at most 3.",
@@ -254,13 +261,38 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     // with rust ones.
     let replacement = regex_replace_posix_groups(replacement);
 
-    let result = string_array
-        .iter()
-        .map(|string| {
-            string.map(|string| re.replacen(string, limit, replacement.as_str()))
-        })
-        .collect::<GenericStringArray<T>>();
-    Ok(Arc::new(result) as ArrayRef)
+    // We are going to create the underlying string buffer from its parts
+    // to be able to re-use the existing null buffer for sparse arrays.
+    let mut vals = BufferBuilder::<u8>::new({
+        let offsets = string_array.value_offsets();
+        (offsets[string_array.len()] - offsets[0])
+            .to_usize()
+            .unwrap()
+    });
+    let mut new_offsets = BufferBuilder::<T>::new(string_array.len() + 1);
+    new_offsets.append(T::zero());
+
+    string_array.iter().for_each(|val| {
+        if let Some(val) = val {
+            let result = re.replacen(val, limit, replacement.as_str());
+            vals.append_slice(result.as_bytes());
+        }
+        new_offsets.append(T::from_usize(vals.len()).unwrap());
+    });
+
+    let data = ArrayData::try_new(
+        GenericStringArray::<T>::DATA_TYPE,
+        string_array.len(),
+        string_array
+            .data_ref()
+            .null_buffer()
+            .map(|b| b.bit_slice(string_array.offset(), string_array.len())),
+        0,
+        vec![new_offsets.finish(), vals.finish()],
+        vec![],
+    )?;
+    let result_array = GenericStringArray::<T>::from(data);
+    Ok(Arc::new(result_array) as ArrayRef)
 }
 
 /// Determine which implementation of the regexp_replace to use based
@@ -300,16 +332,15 @@ pub fn specialize_regexp_replace<T: OffsetSizeTrait>(
         // we will create many regexes and it is best to use the implementation
         // that caches it. If there are no flags, we can simply ignore it here,
         // and let the specialized function handle it.
-        (_, true, true, true) => {
-            // We still don't know the scalarity of source, so we need the adapter
-            // even if it will do some extra work for the pattern and the flags.
-            //
-            // TODO: maybe we need a way of telling the adapter on which arguments
-            // it can skip filling (so that we won't create N - 1 redundant cols).
-            Ok(make_scalar_function(
-                _regexp_replace_static_pattern_replace::<T>,
-            ))
-        }
+        (_, true, true, true) => Ok(make_scalar_function_with_hints(
+            _regexp_replace_static_pattern_replace::<T>,
+            vec![
+                Hint::Pad,
+                Hint::AcceptsSingular,
+                Hint::AcceptsSingular,
+                Hint::AcceptsSingular,
+            ],
+        )),
 
         // If there are no specialized implementations, we'll fall back to the
         // generic implementation.
@@ -370,6 +401,19 @@ mod tests {
                 .unwrap();
 
         assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_unsupported_global_flag_regexp_match() {
+        let values = StringArray::from(vec!["abc"]);
+        let patterns = StringArray::from(vec!["^(a)"]);
+        let flags = StringArray::from(vec!["g"]);
+
+        let re_err =
+            regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
+                .expect_err("unsupported flag should have failed");
+
+        assert_eq!(re_err.to_string(), "Error during planning: regexp_match() does not support the \"global\" option");
     }
 
     #[test]
@@ -513,5 +557,68 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_static_pattern_regexp_replace_with_null_buffers() {
+        let values = StringArray::from(vec![
+            Some("a"),
+            None,
+            Some("b"),
+            None,
+            Some("a"),
+            None,
+            None,
+            Some("c"),
+        ]);
+        let patterns = StringArray::from(vec!["a"; 1]);
+        let replacements = StringArray::from(vec!["foo"; 1]);
+        let expected = StringArray::from(vec![
+            Some("foo"),
+            None,
+            Some("b"),
+            None,
+            Some("foo"),
+            None,
+            None,
+            Some("c"),
+        ]);
+
+        let re = _regexp_replace_static_pattern_replace::<i32>(&[
+            Arc::new(values),
+            Arc::new(patterns),
+            Arc::new(replacements),
+        ])
+        .unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+        assert_eq!(re.null_count(), 4);
+    }
+
+    #[test]
+    fn test_static_pattern_regexp_replace_with_sliced_null_buffer() {
+        let values = StringArray::from(vec![
+            Some("a"),
+            None,
+            Some("b"),
+            None,
+            Some("a"),
+            None,
+            None,
+            Some("c"),
+        ]);
+        let values = values.slice(2, 5);
+        let patterns = StringArray::from(vec!["a"; 1]);
+        let replacements = StringArray::from(vec!["foo"; 1]);
+        let expected = StringArray::from(vec![Some("b"), None, Some("foo"), None, None]);
+
+        let re = _regexp_replace_static_pattern_replace::<i32>(&[
+            Arc::new(values),
+            Arc::new(patterns),
+            Arc::new(replacements),
+        ])
+        .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+        assert_eq!(re.null_count(), 3);
     }
 }

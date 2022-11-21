@@ -17,7 +17,7 @@
 
 //! Expression rewriter
 
-use crate::expr::GroupingSet;
+use crate::expr::{Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet, Like};
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
 use crate::{Expr, ExprSchemable, LogicalPlan};
@@ -83,7 +83,7 @@ impl ExprRewritable for Expr {
     /// ```text
     /// pre_visit(BinaryExpr(GT))
     /// pre_visit(Column("foo"))
-    /// mutatate(Column("foo"))
+    /// mutate(Column("foo"))
     /// pre_visit(Column("bar"))
     /// mutate(Column("bar"))
     /// mutate(BinaryExpr(GT))
@@ -123,44 +123,46 @@ impl ExprRewritable for Expr {
             Expr::ScalarSubquery(_) => self.clone(),
             Expr::ScalarVariable(ty, names) => Expr::ScalarVariable(ty, names),
             Expr::Literal(value) => Expr::Literal(value),
-            Expr::BinaryExpr { left, op, right } => Expr::BinaryExpr {
-                left: rewrite_boxed(left, rewriter)?,
-                op,
-                right: rewrite_boxed(right, rewriter)?,
-            },
-            Expr::Like {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                Expr::BinaryExpr(BinaryExpr::new(
+                    rewrite_boxed(left, rewriter)?,
+                    op,
+                    rewrite_boxed(right, rewriter)?,
+                ))
+            }
+            Expr::Like(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => Expr::Like {
+            }) => Expr::Like(Like::new(
                 negated,
-                expr: rewrite_boxed(expr, rewriter)?,
-                pattern: rewrite_boxed(pattern, rewriter)?,
+                rewrite_boxed(expr, rewriter)?,
+                rewrite_boxed(pattern, rewriter)?,
                 escape_char,
-            },
-            Expr::ILike {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => Expr::ILike {
-                negated,
-                expr: rewrite_boxed(expr, rewriter)?,
-                pattern: rewrite_boxed(pattern, rewriter)?,
-                escape_char,
-            },
-            Expr::SimilarTo {
+            )),
+            Expr::ILike(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => Expr::SimilarTo {
+            }) => Expr::ILike(Like::new(
                 negated,
-                expr: rewrite_boxed(expr, rewriter)?,
-                pattern: rewrite_boxed(pattern, rewriter)?,
+                rewrite_boxed(expr, rewriter)?,
+                rewrite_boxed(pattern, rewriter)?,
                 escape_char,
-            },
+            )),
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => Expr::SimilarTo(Like::new(
+                negated,
+                rewrite_boxed(expr, rewriter)?,
+                rewrite_boxed(pattern, rewriter)?,
+                escape_char,
+            )),
             Expr::Not(expr) => Expr::Not(rewrite_boxed(expr, rewriter)?),
             Expr::IsNotNull(expr) => Expr::IsNotNull(rewrite_boxed(expr, rewriter)?),
             Expr::IsNull(expr) => Expr::IsNull(rewrite_boxed(expr, rewriter)?),
@@ -173,24 +175,21 @@ impl ExprRewritable for Expr {
                 Expr::IsNotUnknown(rewrite_boxed(expr, rewriter)?)
             }
             Expr::Negative(expr) => Expr::Negative(rewrite_boxed(expr, rewriter)?),
-            Expr::Between {
+            Expr::Between(Between {
                 expr,
+                negated,
                 low,
                 high,
+            }) => Expr::Between(Between::new(
+                rewrite_boxed(expr, rewriter)?,
                 negated,
-            } => Expr::Between {
-                expr: rewrite_boxed(expr, rewriter)?,
-                low: rewrite_boxed(low, rewriter)?,
-                high: rewrite_boxed(high, rewriter)?,
-                negated,
-            },
-            Expr::Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            } => {
-                let expr = rewrite_option_box(expr, rewriter)?;
-                let when_then_expr = when_then_expr
+                rewrite_boxed(low, rewriter)?,
+                rewrite_boxed(high, rewriter)?,
+            )),
+            Expr::Case(case) => {
+                let expr = rewrite_option_box(case.expr, rewriter)?;
+                let when_then_expr = case
+                    .when_then_expr
                     .into_iter()
                     .map(|(when, then)| {
                         Ok((
@@ -200,18 +199,13 @@ impl ExprRewritable for Expr {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let else_expr = rewrite_option_box(else_expr, rewriter)?;
+                let else_expr = rewrite_option_box(case.else_expr, rewriter)?;
 
-                Expr::Case {
-                    expr,
-                    when_then_expr,
-                    else_expr,
-                }
+                Expr::Case(Case::new(expr, when_then_expr, else_expr))
             }
-            Expr::Cast { expr, data_type } => Expr::Cast {
-                expr: rewrite_boxed(expr, rewriter)?,
-                data_type,
-            },
+            Expr::Cast(Cast { expr, data_type }) => {
+                Expr::Cast(Cast::new(rewrite_boxed(expr, rewriter)?, data_type))
+            }
             Expr::TryCast { expr, data_type } => Expr::TryCast {
                 expr: rewrite_boxed(expr, rewriter)?,
                 data_type,
@@ -291,10 +285,12 @@ impl ExprRewritable for Expr {
             Expr::QualifiedWildcard { qualifier } => {
                 Expr::QualifiedWildcard { qualifier }
             }
-            Expr::GetIndexedField { expr, key } => Expr::GetIndexedField {
-                expr: rewrite_boxed(expr, rewriter)?,
-                key,
-            },
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+                Expr::GetIndexedField(GetIndexedField::new(
+                    rewrite_boxed(expr, rewriter)?,
+                    key,
+                ))
+            }
         };
 
         // now rewrite this expression itself
@@ -569,6 +565,7 @@ mod test {
     struct RecordingRewriter {
         v: Vec<String>,
     }
+
     impl ExprRewriter for RecordingRewriter {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             self.v.push(format!("Mutated {:?}", expr));
@@ -589,13 +586,14 @@ mod test {
         let rewritten = col("state").eq(lit("foo")).rewrite(&mut rewriter).unwrap();
         assert_eq!(rewritten, col("state").eq(lit("bar")));
 
-        // doesn't wrewrite
+        // doesn't rewrite
         let rewritten = col("state").eq(lit("baz")).rewrite(&mut rewriter).unwrap();
         assert_eq!(rewritten, col("state").eq(lit("baz")));
     }
 
     /// rewrites all "foo" string literals to "bar"
     struct FooBarRewriter {}
+
     impl ExprRewriter for FooBarRewriter {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             match expr {
@@ -675,7 +673,7 @@ mod test {
             .to_string();
         assert_eq!(
             error,
-            "Schema error: No field named 'b'. Valid fields are 'tableA.a'."
+            "Schema error: No field named 'b'. Valid fields are 'tableA'.'a'."
         );
     }
 

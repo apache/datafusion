@@ -18,6 +18,7 @@
 //! Line delimited JSON format abstractions
 
 use std::any::Any;
+
 use std::io::BufReader;
 use std::sync::Arc;
 
@@ -26,13 +27,16 @@ use arrow::datatypes::SchemaRef;
 use arrow::json::reader::infer_json_schema_from_iterator;
 use arrow::json::reader::ValueIter;
 use async_trait::async_trait;
+use bytes::Buf;
+
 use object_store::{GetResult, ObjectMeta, ObjectStore};
 
 use super::FileFormat;
 use super::FileScanConfig;
+use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::error::Result;
-use crate::logical_plan::Expr;
+use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::NdJsonExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
@@ -43,12 +47,14 @@ pub const DEFAULT_JSON_EXTENSION: &str = ".json";
 #[derive(Debug)]
 pub struct JsonFormat {
     schema_infer_max_rec: Option<usize>,
+    file_compression_type: FileCompressionType,
 }
 
 impl Default for JsonFormat {
     fn default() -> Self {
         Self {
             schema_infer_max_rec: Some(DEFAULT_SCHEMA_INFER_MAX_RECORD),
+            file_compression_type: FileCompressionType::UNCOMPRESSED,
         }
     }
 }
@@ -58,6 +64,16 @@ impl JsonFormat {
     /// - defaults to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
     pub fn with_schema_infer_max_rec(mut self, max_rec: Option<usize>) -> Self {
         self.schema_infer_max_rec = max_rec;
+        self
+    }
+
+    /// Set a `FileCompressionType` of JSON
+    /// - defaults to `FileCompressionType::UNCOMPRESSED`
+    pub fn with_file_compression_type(
+        mut self,
+        file_compression_type: FileCompressionType,
+    ) -> Self {
+        self.file_compression_type = file_compression_type;
         self
     }
 }
@@ -75,6 +91,7 @@ impl FileFormat for JsonFormat {
     ) -> Result<SchemaRef> {
         let mut schemas = Vec::new();
         let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
+        let file_compression_type = self.file_compression_type.to_owned();
         for object in objects {
             let mut take_while = || {
                 let should_take = records_to_read > 0;
@@ -86,13 +103,15 @@ impl FileFormat for JsonFormat {
 
             let schema = match store.get(&object.location).await? {
                 GetResult::File(file, _) => {
-                    let mut reader = BufReader::new(file);
+                    let decoder = file_compression_type.convert_read(file);
+                    let mut reader = BufReader::new(decoder);
                     let iter = ValueIter::new(&mut reader, None);
                     infer_json_schema_from_iterator(iter.take_while(|_| take_while()))?
                 }
                 r @ GetResult::Stream(_) => {
                     let data = r.bytes().await?;
-                    let mut reader = BufReader::new(data.as_ref());
+                    let decoder = file_compression_type.convert_read(data.reader());
+                    let mut reader = BufReader::new(decoder);
                     let iter = ValueIter::new(&mut reader, None);
                     infer_json_schema_from_iterator(iter.take_while(|_| take_while()))?
                 }
@@ -122,7 +141,7 @@ impl FileFormat for JsonFormat {
         conf: FileScanConfig,
         _filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = NdJsonExec::new(conf);
+        let exec = NdJsonExec::new(conf, self.file_compression_type.to_owned());
         Ok(Arc::new(exec))
     }
 }
@@ -130,7 +149,7 @@ impl FileFormat for JsonFormat {
 #[cfg(test)]
 mod tests {
     use super::super::test_util::scan_format;
-    use arrow::array::Int64Array;
+    use datafusion_common::cast::as_int64_array;
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
 
@@ -209,11 +228,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(12, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
+        let array = as_int64_array(batches[0].column(0))?;
         let mut values: Vec<i64> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));

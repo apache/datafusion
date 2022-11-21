@@ -497,7 +497,7 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    let input = Int64Array::from_slice(&[1, 2, 3, 4]);
+    let input = Int64Array::from_slice([1, 2, 3, 4]);
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
     ctx.register_batch("test", batch)?;
 
@@ -910,6 +910,182 @@ async fn query_on_string_dictionary() -> Result<()> {
 }
 
 #[tokio::test]
+async fn filter_with_time32second() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("time", DataType::Time32(TimeUnit::Second), false),
+        Field::new("value", DataType::Int64, false),
+    ]));
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Time32SecondArray::from(vec![
+                Some(5_000),
+                Some(5_000),
+                Some(5_500),
+                Some(5_500),
+                Some(5_900),
+                Some(5_900),
+            ])),
+            Arc::new(Int64Array::from(vec![
+                Some(2505),
+                Some(2436),
+                Some(2384),
+                Some(1815),
+                Some(2330),
+                Some(2065),
+            ])),
+        ],
+    )?;
+
+    ctx.register_batch("temporal", data)?;
+    let sql = "SELECT value FROM temporal WHERE time = '01:23:20'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| value |",
+        "+-------+",
+        "| 2436  |",
+        "| 2505  |",
+        "+-------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn filter_with_time32millisecond() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("time", DataType::Time32(TimeUnit::Millisecond), false),
+        Field::new("value", DataType::Int64, false),
+    ]));
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Time32MillisecondArray::from(vec![
+                Some(5_000_000),
+                Some(5_000_000),
+                Some(5_500_000),
+                Some(5_500_000),
+                Some(5_900_000),
+                Some(5_900_000),
+            ])),
+            Arc::new(Int64Array::from(vec![
+                Some(2505),
+                Some(2436),
+                Some(2384),
+                Some(1815),
+                Some(2330),
+                Some(2065),
+            ])),
+        ],
+    )?;
+
+    ctx.register_batch("temporal", data)?;
+    let sql = "SELECT value FROM temporal WHERE time = '01:23:20'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| value |",
+        "+-------+",
+        "| 2436  |",
+        "| 2505  |",
+        "+-------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn filter_with_time64microsecond() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("time", DataType::Time64(TimeUnit::Microsecond), false),
+        Field::new("value", DataType::Int64, false),
+    ]));
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Time64MicrosecondArray::from(vec![
+                Some(5_000_000_000),
+                Some(5_000_000_000),
+                Some(5_500_000_000),
+                Some(5_500_000_000),
+                Some(5_900_000_000),
+                Some(5_900_000_000),
+            ])),
+            Arc::new(Int64Array::from(vec![
+                Some(2505),
+                Some(2436),
+                Some(2384),
+                Some(1815),
+                Some(2330),
+                Some(2065),
+            ])),
+        ],
+    )?;
+
+    ctx.register_batch("temporal", data)?;
+    let sql = "SELECT value FROM temporal WHERE time = '01:23:20'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| value |",
+        "+-------+",
+        "| 2436  |",
+        "| 2505  |",
+        "+-------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn filter_with_time64nanosecond() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("time", DataType::Time64(TimeUnit::Nanosecond), false),
+        Field::new("value", DataType::Int64, false),
+    ]));
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Time64NanosecondArray::from(vec![
+                Some(5_000_000_000_000),
+                Some(5_000_000_000_000),
+                Some(5_500_000_000_000),
+                Some(5_500_000_000_000),
+                Some(5_900_000_000_000),
+                Some(5_900_000_000_000),
+            ])),
+            Arc::new(Int64Array::from(vec![
+                Some(2505),
+                Some(2436),
+                Some(2384),
+                Some(1815),
+                Some(2330),
+                Some(2065),
+            ])),
+        ],
+    )?;
+
+    ctx.register_batch("temporal", data)?;
+    let sql = "SELECT value FROM temporal WHERE time = '01:23:20'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| value |",
+        "+-------+",
+        "| 2436  |",
+        "| 2505  |",
+        "+-------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_cte_with_alias() -> Result<()> {
     let ctx = SessionContext::new();
     let schema = Schema::new(vec![
@@ -1211,14 +1387,19 @@ async fn boolean_literal() -> Result<()> {
 
 #[tokio::test]
 async fn unprojected_filter() {
-    let ctx = SessionContext::new();
+    let config = SessionConfig::new();
+    let ctx = SessionContext::with_config(config);
     let df = ctx.read_table(table_with_sequence(1, 3).unwrap()).unwrap();
 
     let df = df
-        .select(vec![col("i") + col("i")])
-        .unwrap()
         .filter(col("i").gt(lit(2)))
+        .unwrap()
+        .select(vec![col("i") + col("i")])
         .unwrap();
+
+    let plan = df.to_logical_plan().unwrap();
+    println!("{}", plan.display_indent());
+
     let results = df.collect().await.unwrap();
 
     let expected = vec![

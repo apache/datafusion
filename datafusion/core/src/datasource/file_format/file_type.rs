@@ -1,0 +1,331 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! File type abstraction
+
+use crate::error::{DataFusionError, Result};
+use std::io::Error;
+
+use async_compression::tokio::bufread::{
+    BzDecoder as AsyncBzDecoder, GzipDecoder as AsyncGzDecoder,
+};
+use bzip2::read::BzDecoder;
+
+use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
+use crate::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
+use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
+use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use bytes::Bytes;
+use flate2::read::GzDecoder;
+use futures::{Stream, TryStreamExt};
+use std::str::FromStr;
+use tokio_util::io::{ReaderStream, StreamReader};
+
+/// Define each `FileType`/`FileCompressionType`'s extension
+pub trait GetExt {
+    /// File extension getter
+    fn get_ext(&self) -> String;
+}
+
+/// Readable file compression type
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileCompressionType {
+    /// Gzip-ed file
+    GZIP,
+    /// Bzip2-ed file
+    BZIP2,
+    /// Uncompressed file
+    UNCOMPRESSED,
+}
+
+impl GetExt for FileCompressionType {
+    fn get_ext(&self) -> String {
+        match self {
+            FileCompressionType::GZIP => ".gz".to_owned(),
+            FileCompressionType::BZIP2 => ".bz2".to_owned(),
+            FileCompressionType::UNCOMPRESSED => "".to_owned(),
+        }
+    }
+}
+
+impl FromStr for FileCompressionType {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let s = s.to_uppercase();
+        match s.as_str() {
+            "GZIP" | "GZ" => Ok(FileCompressionType::GZIP),
+            "BZIP2" | "BZ2" => Ok(FileCompressionType::BZIP2),
+            "" => Ok(FileCompressionType::UNCOMPRESSED),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unknown FileCompressionType: {}",
+                s
+            ))),
+        }
+    }
+}
+
+/// `FileCompressionType` implementation
+impl FileCompressionType {
+    /// Given a `Stream`, create a `Stream` which data are decompressed with `FileCompressionType`.
+    pub fn convert_stream<T: Stream<Item = Result<Bytes>> + Unpin + Send + 'static>(
+        &self,
+        s: T,
+    ) -> Box<dyn Stream<Item = Result<Bytes>> + Send + Unpin> {
+        let err_converter = |e: Error| match e
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<DataFusionError>())
+        {
+            Some(_) => {
+                *(e.into_inner()
+                    .unwrap()
+                    .downcast::<DataFusionError>()
+                    .unwrap())
+            }
+            None => Into::<DataFusionError>::into(e),
+        };
+
+        match self {
+            FileCompressionType::GZIP => Box::new(
+                ReaderStream::new(AsyncGzDecoder::new(StreamReader::new(s)))
+                    .map_err(err_converter),
+            ),
+            FileCompressionType::BZIP2 => Box::new(
+                ReaderStream::new(AsyncBzDecoder::new(StreamReader::new(s)))
+                    .map_err(err_converter),
+            ),
+            FileCompressionType::UNCOMPRESSED => Box::new(s),
+        }
+    }
+
+    /// Given a `Read`, create a `Read` which data are decompressed with `FileCompressionType`.
+    pub fn convert_read<T: std::io::Read + Send + 'static>(
+        &self,
+        r: T,
+    ) -> Box<dyn std::io::Read + Send> {
+        match self {
+            FileCompressionType::GZIP => Box::new(GzDecoder::new(r)),
+            FileCompressionType::BZIP2 => Box::new(BzDecoder::new(r)),
+            FileCompressionType::UNCOMPRESSED => Box::new(r),
+        }
+    }
+}
+
+/// Readable file type
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileType {
+    /// Apache Avro file
+    AVRO,
+    /// Apache Parquet file
+    PARQUET,
+    /// CSV file
+    CSV,
+    /// JSON file
+    JSON,
+}
+
+impl GetExt for FileType {
+    fn get_ext(&self) -> String {
+        match self {
+            FileType::AVRO => DEFAULT_AVRO_EXTENSION.to_owned(),
+            FileType::PARQUET => DEFAULT_PARQUET_EXTENSION.to_owned(),
+            FileType::CSV => DEFAULT_CSV_EXTENSION.to_owned(),
+            FileType::JSON => DEFAULT_JSON_EXTENSION.to_owned(),
+        }
+    }
+}
+
+impl FromStr for FileType {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let s = s.to_uppercase();
+        match s.as_str() {
+            "AVRO" => Ok(FileType::AVRO),
+            "PARQUET" => Ok(FileType::PARQUET),
+            "CSV" => Ok(FileType::CSV),
+            "JSON" | "NDJSON" => Ok(FileType::JSON),
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Unknown FileType: {}",
+                s
+            ))),
+        }
+    }
+}
+
+impl FileType {
+    /// Given a `FileCompressionType`, return the `FileType`'s extension with compression suffix
+    pub fn get_ext_with_compression(&self, c: FileCompressionType) -> Result<String> {
+        let ext = self.get_ext();
+
+        match self {
+            FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
+            FileType::PARQUET | FileType::AVRO => match c {
+                FileCompressionType::UNCOMPRESSED => Ok(ext),
+                _ => Err(DataFusionError::Internal(
+                    "FileCompressionType can be specified for CSV/JSON FileType.".into(),
+                )),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
+    use crate::error::DataFusionError;
+    use std::str::FromStr;
+
+    #[test]
+    fn get_ext_with_compression() {
+        let file_type = FileType::CSV;
+        assert_eq!(
+            file_type
+                .get_ext_with_compression(FileCompressionType::UNCOMPRESSED)
+                .unwrap(),
+            ".csv"
+        );
+        assert_eq!(
+            file_type
+                .get_ext_with_compression(FileCompressionType::GZIP)
+                .unwrap(),
+            ".csv.gz"
+        );
+        assert_eq!(
+            file_type
+                .get_ext_with_compression(FileCompressionType::BZIP2)
+                .unwrap(),
+            ".csv.bz2"
+        );
+
+        let file_type = FileType::JSON;
+        assert_eq!(
+            file_type
+                .get_ext_with_compression(FileCompressionType::UNCOMPRESSED)
+                .unwrap(),
+            ".json"
+        );
+        assert_eq!(
+            file_type
+                .get_ext_with_compression(FileCompressionType::GZIP)
+                .unwrap(),
+            ".json.gz"
+        );
+        assert_eq!(
+            file_type
+                .get_ext_with_compression(FileCompressionType::BZIP2)
+                .unwrap(),
+            ".json.bz2"
+        );
+
+        let file_type = FileType::AVRO;
+        assert_eq!(
+            file_type
+                .get_ext_with_compression(FileCompressionType::UNCOMPRESSED)
+                .unwrap(),
+            ".avro"
+        );
+        assert!(matches!(
+            file_type.get_ext_with_compression(FileCompressionType::GZIP),
+            Err(DataFusionError::Internal(_))
+        ));
+        assert!(matches!(
+            file_type.get_ext_with_compression(FileCompressionType::BZIP2),
+            Err(DataFusionError::Internal(_))
+        ));
+
+        let file_type = FileType::PARQUET;
+        assert_eq!(
+            file_type
+                .get_ext_with_compression(FileCompressionType::UNCOMPRESSED)
+                .unwrap(),
+            ".parquet"
+        );
+        assert!(matches!(
+            file_type.get_ext_with_compression(FileCompressionType::GZIP),
+            Err(DataFusionError::Internal(_))
+        ));
+        assert!(matches!(
+            file_type.get_ext_with_compression(FileCompressionType::BZIP2),
+            Err(DataFusionError::Internal(_))
+        ));
+    }
+
+    #[test]
+    fn from_str() {
+        assert_eq!(FileType::from_str("csv").unwrap(), FileType::CSV);
+        assert_eq!(FileType::from_str("CSV").unwrap(), FileType::CSV);
+
+        assert_eq!(FileType::from_str("json").unwrap(), FileType::JSON);
+        assert_eq!(FileType::from_str("JSON").unwrap(), FileType::JSON);
+
+        assert_eq!(FileType::from_str("avro").unwrap(), FileType::AVRO);
+        assert_eq!(FileType::from_str("AVRO").unwrap(), FileType::AVRO);
+
+        assert_eq!(FileType::from_str("parquet").unwrap(), FileType::PARQUET);
+        assert_eq!(FileType::from_str("PARQUET").unwrap(), FileType::PARQUET);
+
+        assert!(matches!(
+            FileType::from_str("Unknown"),
+            Err(DataFusionError::NotImplemented(_))
+        ));
+
+        assert_eq!(
+            FileCompressionType::from_str("gz").unwrap(),
+            FileCompressionType::GZIP
+        );
+        assert_eq!(
+            FileCompressionType::from_str("GZ").unwrap(),
+            FileCompressionType::GZIP
+        );
+        assert_eq!(
+            FileCompressionType::from_str("gzip").unwrap(),
+            FileCompressionType::GZIP
+        );
+        assert_eq!(
+            FileCompressionType::from_str("GZIP").unwrap(),
+            FileCompressionType::GZIP
+        );
+
+        assert_eq!(
+            FileCompressionType::from_str("bz2").unwrap(),
+            FileCompressionType::BZIP2
+        );
+        assert_eq!(
+            FileCompressionType::from_str("BZ2").unwrap(),
+            FileCompressionType::BZIP2
+        );
+        assert_eq!(
+            FileCompressionType::from_str("bzip2").unwrap(),
+            FileCompressionType::BZIP2
+        );
+        assert_eq!(
+            FileCompressionType::from_str("BZIP2").unwrap(),
+            FileCompressionType::BZIP2
+        );
+
+        assert_eq!(
+            FileCompressionType::from_str("").unwrap(),
+            FileCompressionType::UNCOMPRESSED
+        );
+
+        assert!(matches!(
+            FileCompressionType::from_str("Unknown"),
+            Err(DataFusionError::NotImplemented(_))
+        ));
+    }
+}

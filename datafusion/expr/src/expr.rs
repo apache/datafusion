@@ -21,6 +21,7 @@ use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
+use crate::utils::expr_to_columns;
 use crate::window_frame;
 use crate::window_function;
 use crate::AggregateUDF;
@@ -30,8 +31,9 @@ use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::{plan_err, Column};
 use datafusion_common::{DataFusionError, ScalarValue};
+use std::collections::HashSet;
 use std::fmt;
-use std::fmt::Write;
+use std::fmt::{Display, Formatter, Write};
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::Not;
 use std::sync::Arc;
@@ -60,10 +62,10 @@ use std::sync::Arc;
 /// let expr = col("c1") + col("c2");
 ///
 /// assert!(matches!(expr, Expr::BinaryExpr { ..} ));
-/// if let Expr::BinaryExpr { left, right, op } = expr {
-///   assert_eq!(*left, col("c1"));
-///   assert_eq!(*right, col("c2"));
-///   assert_eq!(op, Operator::Plus);
+/// if let Expr::BinaryExpr(binary_expr) = expr {
+///   assert_eq!(*binary_expr.left, col("c1"));
+///   assert_eq!(*binary_expr.right, col("c2"));
+///   assert_eq!(binary_expr.op, Operator::Plus);
 /// }
 /// ```
 ///
@@ -74,11 +76,11 @@ use std::sync::Arc;
 /// let expr = col("c1").eq(lit(42_i32));
 ///
 /// assert!(matches!(expr, Expr::BinaryExpr { .. } ));
-/// if let Expr::BinaryExpr { left, right, op } = expr {
-///   assert_eq!(*left, col("c1"));
+/// if let Expr::BinaryExpr(binary_expr) = expr {
+///   assert_eq!(*binary_expr.left, col("c1"));
 ///   let scalar = ScalarValue::Int32(Some(42));
-///   assert_eq!(*right, Expr::Literal(scalar));
-///   assert_eq!(op, Operator::Eq);
+///   assert_eq!(*binary_expr.right, Expr::Literal(scalar));
+///   assert_eq!(binary_expr.op, Operator::Eq);
 /// }
 /// ```
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -92,35 +94,13 @@ pub enum Expr {
     /// A constant value.
     Literal(ScalarValue),
     /// A binary expression such as "age > 21"
-    BinaryExpr {
-        /// Left-hand side of the expression
-        left: Box<Expr>,
-        /// The comparison operator
-        op: Operator,
-        /// Right-hand side of the expression
-        right: Box<Expr>,
-    },
+    BinaryExpr(BinaryExpr),
     /// LIKE expression
-    Like {
-        negated: bool,
-        expr: Box<Expr>,
-        pattern: Box<Expr>,
-        escape_char: Option<char>,
-    },
+    Like(Like),
     /// Case-insensitive LIKE expression
-    ILike {
-        negated: bool,
-        expr: Box<Expr>,
-        pattern: Box<Expr>,
-        escape_char: Option<char>,
-    },
+    ILike(Like),
     /// LIKE expression that uses regular expressions
-    SimilarTo {
-        negated: bool,
-        expr: Box<Expr>,
-        pattern: Box<Expr>,
-        escape_char: Option<char>,
-    },
+    SimilarTo(Like),
     /// Negation of an expression. The expression's type must be a boolean to make sense.
     Not(Box<Expr>),
     /// Whether an expression is not Null. This expression is never null.
@@ -142,23 +122,9 @@ pub enum Expr {
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
     /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
-    GetIndexedField {
-        /// the expression to take the field from
-        expr: Box<Expr>,
-        /// The name of the field to take
-        key: ScalarValue,
-    },
+    GetIndexedField(GetIndexedField),
     /// Whether an expression is between a given range.
-    Between {
-        /// The value to compare
-        expr: Box<Expr>,
-        /// Whether the expression is negated
-        negated: bool,
-        /// The low end of the range
-        low: Box<Expr>,
-        /// The high end of the range
-        high: Box<Expr>,
-    },
+    Between(Between),
     /// The CASE expression is similar to a series of nested if/else and there are two forms that
     /// can be used. The first form consists of a series of boolean "when" expressions with
     /// corresponding "then" expressions, and an optional "else" expression.
@@ -176,22 +142,10 @@ pub enum Expr {
     ///     [WHEN ...]
     ///     [ELSE result]
     /// END
-    Case {
-        /// Optional base expression that can be compared to literal values in the "when" expressions
-        expr: Option<Box<Expr>>,
-        /// One or more when/then expressions
-        when_then_expr: Vec<(Box<Expr>, Box<Expr>)>,
-        /// Optional "else" expression
-        else_expr: Option<Box<Expr>>,
-    },
+    Case(Case),
     /// Casts the expression to a given type and will return a runtime error if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
-    Cast {
-        /// The expression being cast
-        expr: Box<Expr>,
-        /// The `DataType` the expression will yield
-        data_type: DataType,
-    },
+    Cast(Cast),
     /// Casts the expression to a given type and will return a null value if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
     TryCast {
@@ -292,6 +246,185 @@ pub enum Expr {
     GroupingSet(GroupingSet),
 }
 
+/// Binary expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct BinaryExpr {
+    /// Left-hand side of the expression
+    pub left: Box<Expr>,
+    /// The comparison operator
+    pub op: Operator,
+    /// Right-hand side of the expression
+    pub right: Box<Expr>,
+}
+
+impl BinaryExpr {
+    /// Create a new binary expression
+    pub fn new(left: Box<Expr>, op: Operator, right: Box<Expr>) -> Self {
+        Self { left, op, right }
+    }
+
+    /// Get the operator precedence
+    /// use https://www.postgresql.org/docs/7.0/operators.htm#AEN2026 as a reference
+    pub fn precedence(&self) -> u8 {
+        match self.op {
+            Operator::Or => 5,
+            Operator::And => 10,
+            Operator::Like | Operator::NotLike => 19,
+            Operator::NotEq
+            | Operator::Eq
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::Gt
+            | Operator::GtEq => 20,
+            Operator::Plus | Operator::Minus => 30,
+            Operator::Multiply | Operator::Divide | Operator::Modulo => 40,
+            _ => 0,
+        }
+    }
+}
+
+impl Display for BinaryExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // Put parentheses around child binary expressions so that we can see the difference
+        // between `(a OR b) AND c` and `a OR (b AND c)`. We only insert parentheses when needed,
+        // based on operator precedence. For example, `(a AND b) OR c` and `a AND b OR c` are
+        // equivalent and the parentheses are not necessary.
+
+        fn write_child(
+            f: &mut Formatter<'_>,
+            expr: &Expr,
+            precedence: u8,
+        ) -> fmt::Result {
+            match expr {
+                Expr::BinaryExpr(child) => {
+                    let p = child.precedence();
+                    if p == 0 || p < precedence {
+                        write!(f, "({})", child)?;
+                    } else {
+                        write!(f, "{}", child)?;
+                    }
+                }
+                _ => write!(f, "{}", expr)?,
+            }
+            Ok(())
+        }
+
+        let precedence = self.precedence();
+        write_child(f, self.left.as_ref(), precedence)?;
+        write!(f, " {} ", self.op)?;
+        write_child(f, self.right.as_ref(), precedence)
+    }
+}
+
+/// CASE expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Case {
+    /// Optional base expression that can be compared to literal values in the "when" expressions
+    pub expr: Option<Box<Expr>>,
+    /// One or more when/then expressions
+    pub when_then_expr: Vec<(Box<Expr>, Box<Expr>)>,
+    /// Optional "else" expression
+    pub else_expr: Option<Box<Expr>>,
+}
+
+impl Case {
+    /// Create a new Case expression
+    pub fn new(
+        expr: Option<Box<Expr>>,
+        when_then_expr: Vec<(Box<Expr>, Box<Expr>)>,
+        else_expr: Option<Box<Expr>>,
+    ) -> Self {
+        Self {
+            expr,
+            when_then_expr,
+            else_expr,
+        }
+    }
+}
+
+/// LIKE expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Like {
+    pub negated: bool,
+    pub expr: Box<Expr>,
+    pub pattern: Box<Expr>,
+    pub escape_char: Option<char>,
+}
+
+impl Like {
+    /// Create a new Like expression
+    pub fn new(
+        negated: bool,
+        expr: Box<Expr>,
+        pattern: Box<Expr>,
+        escape_char: Option<char>,
+    ) -> Self {
+        Self {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        }
+    }
+}
+
+/// BETWEEN expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Between {
+    /// The value to compare
+    pub expr: Box<Expr>,
+    /// Whether the expression is negated
+    pub negated: bool,
+    /// The low end of the range
+    pub low: Box<Expr>,
+    /// The high end of the range
+    pub high: Box<Expr>,
+}
+
+impl Between {
+    /// Create a new Between expression
+    pub fn new(expr: Box<Expr>, negated: bool, low: Box<Expr>, high: Box<Expr>) -> Self {
+        Self {
+            expr,
+            negated,
+            low,
+            high,
+        }
+    }
+}
+
+/// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct GetIndexedField {
+    /// the expression to take the field from
+    pub expr: Box<Expr>,
+    /// The name of the field to take
+    pub key: ScalarValue,
+}
+
+impl GetIndexedField {
+    /// Create a new GetIndexedField expression
+    pub fn new(expr: Box<Expr>, key: ScalarValue) -> Self {
+        Self { expr, key }
+    }
+}
+
+/// Cast expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Cast {
+    /// The expression being cast
+    pub expr: Box<Expr>,
+    /// The `DataType` the expression will yield
+    pub data_type: DataType,
+}
+
+impl Cast {
+    /// Create a new Cast expression
+    pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
+        Self { expr, data_type }
+    }
+}
+
 /// Grouping sets
 /// See https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS
 /// for Postgres definition.
@@ -348,8 +481,15 @@ impl PartialOrd for Expr {
 impl Expr {
     /// Returns the name of this expression as it should appear in a schema. This name
     /// will not include any CAST expressions.
-    pub fn name(&self) -> Result<String> {
+    pub fn display_name(&self) -> Result<String> {
         create_name(self)
+    }
+
+    /// Returns the name of this expression as it should appear in a schema. This name
+    /// will not include any CAST expressions.
+    #[deprecated(since = "14.0.0", note = "please use `display_name` instead")]
+    pub fn name(&self) -> Result<String> {
+        self.display_name()
     }
 
     /// Returns a full and complete string representation of this expression.
@@ -463,8 +603,16 @@ impl Expr {
     }
 
     /// Return `self AS name` alias expression
-    pub fn alias(self, name: &str) -> Expr {
-        Expr::Alias(Box::new(self), name.to_owned())
+    pub fn alias(self, name: impl Into<String>) -> Expr {
+        Expr::Alias(Box::new(self), name.into())
+    }
+
+    /// Remove an alias from an expression if one exists.
+    pub fn unalias(self) -> Expr {
+        match self {
+            Expr::Alias(expr, _) => expr.as_ref().clone(),
+            _ => self,
+        }
     }
 
     /// Return `self IN <list>` if `negated` is false, otherwise
@@ -539,6 +687,14 @@ impl Expr {
             _ => plan_err!(format!("Could not coerce '{}' into Column!", self)),
         }
     }
+
+    /// Return all referenced columns of this expression.
+    pub fn to_columns(&self) -> Result<HashSet<Column>> {
+        let mut using_columns = HashSet::new();
+        expr_to_columns(self, &mut using_columns)?;
+
+        Ok(using_columns)
+    }
 }
 
 impl Not for Expr {
@@ -546,39 +702,24 @@ impl Not for Expr {
 
     fn not(self) -> Self::Output {
         match self {
-            Expr::Like {
+            Expr::Like(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => Expr::Like {
-                negated: !negated,
-                expr,
-                pattern,
-                escape_char,
-            },
-            Expr::ILike {
+            }) => Expr::Like(Like::new(!negated, expr, pattern, escape_char)),
+            Expr::ILike(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => Expr::ILike {
-                negated: !negated,
-                expr,
-                pattern,
-                escape_char,
-            },
-            Expr::SimilarTo {
+            }) => Expr::ILike(Like::new(!negated, expr, pattern, escape_char)),
+            Expr::SimilarTo(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => Expr::SimilarTo {
-                negated: !negated,
-                expr,
-                pattern,
-                escape_char,
-            },
+            }) => Expr::SimilarTo(Like::new(!negated, expr, pattern, escape_char)),
             _ => Expr::Not(Box::new(self)),
         }
     }
@@ -601,25 +742,20 @@ impl fmt::Debug for Expr {
             Expr::Column(c) => write!(f, "{}", c),
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{:?}", v),
-            Expr::Case {
-                expr,
-                when_then_expr,
-                else_expr,
-                ..
-            } => {
+            Expr::Case(case) => {
                 write!(f, "CASE ")?;
-                if let Some(e) = expr {
+                if let Some(e) = &case.expr {
                     write!(f, "{:?} ", e)?;
                 }
-                for (w, t) in when_then_expr {
+                for (w, t) in &case.when_then_expr {
                     write!(f, "WHEN {:?} THEN {:?} ", w, t)?;
                 }
-                if let Some(e) = else_expr {
+                if let Some(e) = &case.else_expr {
                     write!(f, "ELSE {:?} ", e)?;
                 }
                 write!(f, "END")
             }
-            Expr::Cast { expr, data_type } => {
+            Expr::Cast(Cast { expr, data_type }) => {
                 write!(f, "CAST({:?} AS {:?})", expr, data_type)
             }
             Expr::TryCast { expr, data_type } => {
@@ -654,9 +790,7 @@ impl fmt::Debug for Expr {
                 negated: false,
             } => write!(f, "{:?} IN ({:?})", expr, subquery),
             Expr::ScalarSubquery(subquery) => write!(f, "({:?})", subquery),
-            Expr::BinaryExpr { left, op, right } => {
-                write!(f, "{:?} {} {:?}", left, op, right)
-            }
+            Expr::BinaryExpr(expr) => write!(f, "{}", expr),
             Expr::Sort {
                 expr,
                 asc,
@@ -729,24 +863,24 @@ impl fmt::Debug for Expr {
                 }
                 Ok(())
             }
-            Expr::Between {
+            Expr::Between(Between {
                 expr,
                 negated,
                 low,
                 high,
-            } => {
+            }) => {
                 if *negated {
                     write!(f, "{:?} NOT BETWEEN {:?} AND {:?}", expr, low, high)
                 } else {
                     write!(f, "{:?} BETWEEN {:?} AND {:?}", expr, low, high)
                 }
             }
-            Expr::Like {
+            Expr::Like(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => {
+            }) => {
                 write!(f, "{:?}", expr)?;
                 if *negated {
                     write!(f, " NOT")?;
@@ -757,12 +891,12 @@ impl fmt::Debug for Expr {
                     write!(f, " LIKE {:?}", pattern)
                 }
             }
-            Expr::ILike {
+            Expr::ILike(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => {
+            }) => {
                 write!(f, "{:?}", expr)?;
                 if *negated {
                     write!(f, " NOT")?;
@@ -773,12 +907,12 @@ impl fmt::Debug for Expr {
                     write!(f, " ILIKE {:?}", pattern)
                 }
             }
-            Expr::SimilarTo {
+            Expr::SimilarTo(Like {
                 negated,
                 expr,
                 pattern,
                 escape_char,
-            } => {
+            }) => {
                 write!(f, "{:?}", expr)?;
                 if *negated {
                     write!(f, " NOT")?;
@@ -802,7 +936,7 @@ impl fmt::Debug for Expr {
             }
             Expr::Wildcard => write!(f, "*"),
             Expr::QualifiedWildcard { qualifier } => write!(f, "{}.*", qualifier),
-            Expr::GetIndexedField { ref expr, key } => {
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
                 write!(f, "({:?})[{}]", expr, key)
             }
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
@@ -891,17 +1025,17 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::Column(c) => Ok(c.flat_name()),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{:?}", value)),
-        Expr::BinaryExpr { left, op, right } => {
-            let left = create_name(left)?;
-            let right = create_name(right)?;
-            Ok(format!("{} {} {}", left, op, right))
+        Expr::BinaryExpr(binary_expr) => {
+            let left = create_name(binary_expr.left.as_ref())?;
+            let right = create_name(binary_expr.right.as_ref())?;
+            Ok(format!("{} {} {}", left, binary_expr.op, right))
         }
-        Expr::Like {
+        Expr::Like(Like {
             negated,
             expr,
             pattern,
             escape_char,
-        } => {
+        }) => {
             let s = format!(
                 "{} {} {} {}",
                 expr,
@@ -915,12 +1049,12 @@ fn create_name(e: &Expr) -> Result<String> {
             );
             Ok(s)
         }
-        Expr::ILike {
+        Expr::ILike(Like {
             negated,
             expr,
             pattern,
             escape_char,
-        } => {
+        }) => {
             let s = format!(
                 "{} {} {} {}",
                 expr,
@@ -934,12 +1068,12 @@ fn create_name(e: &Expr) -> Result<String> {
             );
             Ok(s)
         }
-        Expr::SimilarTo {
+        Expr::SimilarTo(Like {
             negated,
             expr,
             pattern,
             escape_char,
-        } => {
+        }) => {
             let s = format!(
                 "{} {} {} {}",
                 expr,
@@ -957,29 +1091,25 @@ fn create_name(e: &Expr) -> Result<String> {
             );
             Ok(s)
         }
-        Expr::Case {
-            expr,
-            when_then_expr,
-            else_expr,
-        } => {
+        Expr::Case(case) => {
             let mut name = "CASE ".to_string();
-            if let Some(e) = expr {
+            if let Some(e) = &case.expr {
                 let e = create_name(e)?;
                 let _ = write!(name, "{} ", e);
             }
-            for (w, t) in when_then_expr {
+            for (w, t) in &case.when_then_expr {
                 let when = create_name(w)?;
                 let then = create_name(t)?;
                 let _ = write!(name, "WHEN {} THEN {} ", when, then);
             }
-            if let Some(e) = else_expr {
+            if let Some(e) = &case.else_expr {
                 let e = create_name(e)?;
                 let _ = write!(name, "ELSE {} ", e);
             }
             name += "END";
             Ok(name)
         }
-        Expr::Cast { expr, .. } => {
+        Expr::Cast(Cast { expr, .. }) => {
             // CAST does not change the expression name
             create_name(expr)
         }
@@ -1034,7 +1164,7 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::ScalarSubquery(subquery) => {
             Ok(subquery.subquery.schema().field(0).name().clone())
         }
-        Expr::GetIndexedField { expr, key } => {
+        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
             let expr = create_name(expr)?;
             Ok(format!("{}[{}]", expr, key))
         }
@@ -1115,12 +1245,12 @@ fn create_name(e: &Expr) -> Result<String> {
                 Ok(format!("{} IN ({:?})", expr, list))
             }
         }
-        Expr::Between {
+        Expr::Between(Between {
             expr,
             negated,
             low,
             high,
-        } => {
+        }) => {
             let expr = create_name(expr)?;
             let low = create_name(low)?;
             let high = create_name(high)?;
@@ -1153,9 +1283,11 @@ fn create_names(exprs: &[Expr]) -> Result<String> {
 
 #[cfg(test)]
 mod test {
+    use crate::expr::Cast;
     use crate::expr_fn::col;
     use crate::{case, lit, Expr};
     use arrow::datatypes::DataType;
+    use datafusion_common::Column;
     use datafusion_common::{Result, ScalarValue};
 
     #[test]
@@ -1168,23 +1300,23 @@ mod test {
         assert_eq!(expected, expr.canonical_name());
         assert_eq!(expected, format!("{}", expr));
         assert_eq!(expected, format!("{:?}", expr));
-        assert_eq!(expected, expr.name()?);
+        assert_eq!(expected, expr.display_name()?);
         Ok(())
     }
 
     #[test]
     fn format_cast() -> Result<()> {
-        let expr = Expr::Cast {
+        let expr = Expr::Cast(Cast {
             expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)))),
             data_type: DataType::Utf8,
-        };
+        });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";
         assert_eq!(expected_canonical, expr.canonical_name());
         assert_eq!(expected_canonical, format!("{}", expr));
         assert_eq!(expected_canonical, format!("{:?}", expr));
         // note that CAST intentionally has a name that is different from its `Display`
         // representation. CAST does not change the name of expressions.
-        assert_eq!("Float32(1.23)", expr.name()?);
+        assert_eq!("Float32(1.23)", expr.display_name()?);
         Ok(())
     }
 
@@ -1205,5 +1337,27 @@ mod test {
         assert!(exp2 > exp1);
         assert!(exp2 > exp3);
         assert!(exp3 < exp2);
+    }
+
+    #[test]
+    fn test_collect_expr() -> Result<()> {
+        // single column
+        {
+            let expr = &Expr::Cast(Cast::new(Box::new(col("a")), DataType::Float64));
+            let columns = expr.to_columns()?;
+            assert_eq!(1, columns.len());
+            assert!(columns.contains(&Column::from_name("a")));
+        }
+
+        // multiple columns
+        {
+            let expr = col("a") + col("b") + lit(1);
+            let columns = expr.to_columns()?;
+            assert_eq!(2, columns.len());
+            assert!(columns.contains(&Column::from_name("a")));
+            assert!(columns.contains(&Column::from_name("b")));
+        }
+
+        Ok(())
     }
 }

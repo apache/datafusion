@@ -19,7 +19,6 @@ name: Dev
 on: [push, pull_request]
 
 jobs:
-
   rat:
     name: Release Audit Tool (RAT)
     runs-on: ubuntu-latest
@@ -47,7 +46,7 @@ jobs:
           # and commit the changes
           #
           # ignore subproject CHANGELOG.md because they are machine generated
-          npx prettier@2.3.2 --write \
+          npx prettier@2.7.1 --write \
             '{datafusion,datafusion-cli,datafusion-examples,dev,docs}/**/*.md' \
             '!datafusion/CHANGELOG.md' \
             README.md \

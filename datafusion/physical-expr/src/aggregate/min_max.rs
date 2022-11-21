@@ -28,6 +28,7 @@ use arrow::{
     array::{
         ArrayRef, Date32Array, Date64Array, Float32Array, Float64Array, Int16Array,
         Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
         Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
         UInt64Array, UInt8Array,
@@ -177,17 +178,17 @@ macro_rules! typed_min_max_batch_decimal128 {
                 for i in 1..array.len() {
                     result = result.$OP(array.value(i));
                 }
-                ScalarValue::Decimal128(Some(result.as_i128()), *$PRECISION, *$SCALE)
+                ScalarValue::Decimal128(Some(result), *$PRECISION, *$SCALE)
             } else {
                 let mut result = 0_i128;
                 let mut has_value = false;
                 for i in 0..array.len() {
                     if !has_value && array.is_valid(i) {
                         has_value = true;
-                        result = array.value(i).as_i128();
+                        result = array.value(i);
                     }
                     if array.is_valid(i) {
-                        result = result.$OP(array.value(i).as_i128());
+                        result = result.$OP(array.value(i));
                     }
                 }
                 ScalarValue::Decimal128(Some(result), *$PRECISION, *$SCALE)
@@ -251,8 +252,32 @@ macro_rules! min_max_batch {
             ),
             DataType::Date32 => typed_min_max_batch!($VALUES, Date32Array, Date32, $OP),
             DataType::Date64 => typed_min_max_batch!($VALUES, Date64Array, Date64, $OP),
+            DataType::Time32(TimeUnit::Second) => {
+                typed_min_max_batch!($VALUES, Time32SecondArray, Time32Second, $OP)
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    Time32MillisecondArray,
+                    Time32Millisecond,
+                    $OP
+                )
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    Time64MicrosecondArray,
+                    Time64Microsecond,
+                    $OP
+                )
+            }
             DataType::Time64(TimeUnit::Nanosecond) => {
-                typed_min_max_batch!($VALUES, Time64NanosecondArray, Time64, $OP)
+                typed_min_max_batch!(
+                    $VALUES,
+                    Time64NanosecondArray,
+                    Time64Nanosecond,
+                    $OP
+                )
             }
             other => {
                 // This should have been handled before
@@ -417,10 +442,28 @@ macro_rules! min_max {
                 typed_min_max!(lhs, rhs, Date64, $OP)
             }
             (
-                ScalarValue::Time64(lhs),
-                ScalarValue::Time64(rhs),
+                ScalarValue::Time32Second(lhs),
+                ScalarValue::Time32Second(rhs),
             ) => {
-                typed_min_max!(lhs, rhs, Time64, $OP)
+                typed_min_max!(lhs, rhs, Time32Second, $OP)
+            }
+            (
+                ScalarValue::Time32Millisecond(lhs),
+                ScalarValue::Time32Millisecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, Time32Millisecond, $OP)
+            }
+            (
+                ScalarValue::Time64Microsecond(lhs),
+                ScalarValue::Time64Microsecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, Time64Microsecond, $OP)
+            }
+            (
+                ScalarValue::Time64Nanosecond(lhs),
+                ScalarValue::Time64Nanosecond(rhs),
+            ) => {
+                typed_min_max!(lhs, rhs, Time64Nanosecond, $OP)
             }
             e => {
                 return Err(DataFusionError::Internal(format!(
@@ -1073,24 +1116,90 @@ mod tests {
     }
 
     #[test]
-    fn min_time64() -> Result<()> {
-        let a: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1, 2, 3, 4, 5]));
+    fn min_time32second() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time32SecondArray::from(vec![1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
-            DataType::Time64(TimeUnit::Nanosecond),
-            Max,
-            ScalarValue::Time64(Some(5))
+            DataType::Time32(TimeUnit::Second),
+            Min,
+            ScalarValue::Time32Second(Some(1))
         )
     }
 
     #[test]
-    fn max_time64() -> Result<()> {
+    fn max_time32second() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time32SecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time32(TimeUnit::Second),
+            Max,
+            ScalarValue::Time32Second(Some(5))
+        )
+    }
+
+    #[test]
+    fn min_time32millisecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time32(TimeUnit::Millisecond),
+            Min,
+            ScalarValue::Time32Millisecond(Some(1))
+        )
+    }
+
+    #[test]
+    fn max_time32millisecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time32(TimeUnit::Millisecond),
+            Max,
+            ScalarValue::Time32Millisecond(Some(5))
+        )
+    }
+
+    #[test]
+    fn min_time64microsecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time64MicrosecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time64(TimeUnit::Microsecond),
+            Min,
+            ScalarValue::Time64Microsecond(Some(1))
+        )
+    }
+
+    #[test]
+    fn max_time64microsecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time64MicrosecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time64(TimeUnit::Microsecond),
+            Max,
+            ScalarValue::Time64Microsecond(Some(5))
+        )
+    }
+
+    #[test]
+    fn min_time64nanosecond() -> Result<()> {
+        let a: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Time64(TimeUnit::Nanosecond),
+            Min,
+            ScalarValue::Time64Nanosecond(Some(1))
+        )
+    }
+
+    #[test]
+    fn max_time64nanosecond() -> Result<()> {
         let a: ArrayRef = Arc::new(Time64NanosecondArray::from(vec![1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Time64(TimeUnit::Nanosecond),
             Max,
-            ScalarValue::Time64(Some(5))
+            ScalarValue::Time64Nanosecond(Some(5))
         )
     }
 }

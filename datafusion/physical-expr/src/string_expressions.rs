@@ -28,11 +28,13 @@ use arrow::{
     },
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
 };
-use datafusion_common::ScalarValue;
+use datafusion_common::{cast::as_string_array, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::any::type_name;
+use std::iter;
 use std::sync::Arc;
+use uuid::Uuid;
 
 macro_rules! downcast_string_arg {
     ($ARG:expr, $NAME:expr, $T:ident) => {{
@@ -292,7 +294,7 @@ pub fn concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                         }
                         ColumnarValue::Array(v) => {
                             if v.is_valid(index) {
-                                let v = v.as_any().downcast_ref::<StringArray>().unwrap();
+                                let v = as_string_array(v).unwrap();
                                 owned_string.push_str(v.value(index));
                             }
                         }
@@ -585,4 +587,21 @@ where
 /// upper('tom') = 'TOM'
 pub fn upper(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     handle(args, |string| string.to_ascii_uppercase(), "upper")
+}
+
+/// Prints random (v4) uuid values per row
+/// uuid() = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'
+pub fn uuid(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let len: usize = match &args[0] {
+        ColumnarValue::Array(array) => array.len(),
+        _ => {
+            return Err(DataFusionError::Internal(
+                "Expect uuid function to take no param".to_string(),
+            ))
+        }
+    };
+
+    let values = iter::repeat_with(|| Uuid::new_v4().to_string()).take(len);
+    let array = GenericStringArray::<i32>::from_iter_values(values);
+    Ok(ColumnarValue::Array(Arc::new(array)))
 }

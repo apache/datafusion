@@ -46,11 +46,12 @@ use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_physical_expr::EquivalenceProperties;
 use futures::lock::Mutex;
 use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, error};
 use std::any::Any;
-use std::cmp::min;
+use std::cmp::{min, Ordering};
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
@@ -124,20 +125,27 @@ impl ExternalSorter {
             // calls to `timer.done()` below.
             let _timer = tracking_metrics.elapsed_compute().timer();
             let partial = sort_batch(input, self.schema.clone(), &self.expr, self.fetch)?;
-            // The resulting batch might be smaller than the input batch if there
-            // is an propagated limit.
 
-            if self.fetch.is_some() {
-                let new_size = batch_byte_size(&partial.sorted_batch);
-                let size_delta = size.checked_sub(new_size).ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "The size of the sorted batch is larger than the size of the input batch: {} > {}",
-                        new_size,
-                        size
-                    ))
-                })?;
-                self.shrink(size_delta);
-                self.metrics.mem_used().sub(size_delta);
+            // The resulting batch might be smaller (or larger, see #3747) than the input
+            // batch due to either a propagated limit or the re-construction of arrays. So
+            // for being reliable, we need to reflect the memory usage of the partial batch.
+            let new_size = batch_byte_size(&partial.sorted_batch);
+            match new_size.cmp(&size) {
+                Ordering::Greater => {
+                    // We don't have to call try_grow here, since we have already used the
+                    // memory (so spilling right here wouldn't help at all for the current
+                    // operation). But we still have to record it so that other requesters
+                    // would know about this unexpected increase in memory consuption.
+                    let new_size_delta = new_size - size;
+                    self.grow(new_size_delta);
+                    self.metrics.mem_used().add(new_size_delta);
+                }
+                Ordering::Less => {
+                    let size_delta = size - new_size;
+                    self.shrink(size_delta);
+                    self.metrics.mem_used().sub(size_delta);
+                }
+                Ordering::Equal => {}
             }
             in_mem_batches.push(partial);
         }
@@ -645,7 +653,7 @@ fn write_sorted(
 }
 
 fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: &Path) -> Result<()> {
-    let file = BufReader::new(File::open(&path)?);
+    let file = BufReader::new(File::open(path)?);
     let reader = FileReader::try_new(file, None)?;
     for batch in reader {
         sender
@@ -736,21 +744,18 @@ impl ExecutionPlan for SortExec {
         }
     }
 
-    fn required_child_distribution(&self) -> Distribution {
+    fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.preserve_partitioning {
-            Distribution::UnspecifiedDistribution
+            vec![Distribution::UnspecifiedDistribution]
         } else {
-            Distribution::SinglePartition
+            // global sort
+            // TODO support RangePartition and OrderedDistribution
+            vec![Distribution::SinglePartition]
         }
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
-    }
-
-    fn relies_on_input_order(&self) -> bool {
-        // this operator resorts everything
-        false
     }
 
     fn benefits_from_input_partitioning(&self) -> bool {
@@ -759,6 +764,10 @@ impl ExecutionPlan for SortExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         Some(&self.expr)
+    }
+
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(
@@ -942,6 +951,7 @@ mod tests {
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
+    use datafusion_common::cast::as_string_array;
     use futures::FutureExt;
     use std::collections::{BTreeMap, HashMap};
 
@@ -981,7 +991,7 @@ mod tests {
 
         let columns = result[0].columns();
 
-        let c1 = as_string_array(&columns[0]);
+        let c1 = as_string_array(&columns[0])?;
         assert_eq!(c1.value(0), "a");
         assert_eq!(c1.value(c1.len() - 1), "e");
 
@@ -1053,7 +1063,7 @@ mod tests {
 
         let columns = result[0].columns();
 
-        let c1 = as_string_array(&columns[0]);
+        let c1 = as_string_array(&columns[0])?;
         assert_eq!(c1.value(0), "a");
         assert_eq!(c1.value(c1.len() - 1), "e");
 

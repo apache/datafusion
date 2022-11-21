@@ -22,17 +22,8 @@ use crate::{
         information_schema::CatalogWithInformationSchema,
     },
     datasource::listing::{ListingOptions, ListingTable},
-    datasource::{
-        file_format::{
-            avro::{AvroFormat, DEFAULT_AVRO_EXTENSION},
-            csv::{CsvFormat, DEFAULT_CSV_EXTENSION},
-            json::{JsonFormat, DEFAULT_JSON_EXTENSION},
-            parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
-            FileFormat,
-        },
-        MemTable, ViewTable,
-    },
-    logical_plan::{PlanType, ToStringifiedPlan},
+    datasource::{MemTable, ViewTable},
+    logical_expr::{PlanType, ToStringifiedPlan},
     optimizer::optimizer::Optimizer,
     physical_optimizer::{
         aggregate_statistics::AggregateStatistics,
@@ -42,6 +33,7 @@ use crate::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
@@ -61,28 +53,28 @@ use crate::catalog::{
     schema::{MemorySchemaProvider, SchemaProvider},
 };
 use crate::dataframe::DataFrame;
-use crate::datasource::listing::{ListingTableConfig, ListingTableUrl};
-use crate::datasource::TableProvider;
+use crate::datasource::{
+    listing::{ListingTableConfig, ListingTableUrl},
+    provider_as_source, TableProvider,
+};
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::{
-    provider_as_source, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-    CreateMemoryTable, CreateView, DropTable, FunctionRegistry, LogicalPlan,
-    LogicalPlanBuilder, UNNAMED_TABLE,
+use crate::logical_expr::{
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
+    CreateView, DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder,
+    SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
 use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
-use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
-    OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_SKIP_FAILED_RULES,
+    OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
-use crate::datasource::datasource::TableProviderFactory;
-use crate::execution::runtime_env::RuntimeEnv;
-use crate::logical_plan::plan::Explain;
+use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
+use crate::physical_optimizer::enforcement::BasicEnforcement;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
@@ -93,13 +85,15 @@ use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion_common::ScalarValue;
-use datafusion_expr::logical_plan::DropView;
-use datafusion_expr::{TableSource, TableType};
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
 };
 use parquet::file::properties::WriterProperties;
+use url::Url;
+
+use crate::catalog::listing_schema::ListingSchemaProvider;
+use crate::datasource::object_store::ObjectStoreUrl;
 use uuid::Uuid;
 
 use super::options::{
@@ -160,8 +154,6 @@ pub struct SessionContext {
     pub session_start_time: DateTime<Utc>,
     /// Shared session state for the session
     pub state: Arc<RwLock<SessionState>>,
-    /// Dynamic table providers
-    pub table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
 }
 
 impl Default for SessionContext {
@@ -174,6 +166,26 @@ impl SessionContext {
     /// Creates a new execution context using a default session configuration.
     pub fn new() -> Self {
         Self::with_config(SessionConfig::new())
+    }
+
+    /// Finds any ListSchemaProviders and instructs them to reload tables from "disk"
+    pub async fn refresh_catalogs(&self) -> Result<()> {
+        let cat_names = self.catalog_names().clone();
+        for cat_name in cat_names.iter() {
+            let cat = self.catalog(cat_name.as_str()).ok_or_else(|| {
+                DataFusionError::Internal("Catalog not found!".to_string())
+            })?;
+            for schema_name in cat.schema_names() {
+                let schema = cat.schema(schema_name.as_str()).ok_or_else(|| {
+                    DataFusionError::Internal("Schema not found!".to_string())
+                })?;
+                let lister = schema.as_any().downcast_ref::<ListingSchemaProvider>();
+                if let Some(lister) = lister {
+                    lister.refresh(&self.state()).await?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Creates a new session context using the provided session configuration.
@@ -189,7 +201,6 @@ impl SessionContext {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
             state: Arc::new(RwLock::new(state)),
-            table_factories: HashMap::default(),
         }
     }
 
@@ -199,17 +210,7 @@ impl SessionContext {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
             state: Arc::new(RwLock::new(state)),
-            table_factories: HashMap::default(),
         }
-    }
-
-    /// Register a `TableProviderFactory` for a given `file_type` identifier
-    pub fn register_table_factory(
-        &mut self,
-        file_type: &str,
-        factory: Arc<dyn TableProviderFactory>,
-    ) {
-        self.table_factories.insert(file_type.to_string(), factory);
     }
 
     /// Registers the [`RecordBatch`] as the specified table name
@@ -244,12 +245,9 @@ impl SessionContext {
     pub async fn sql(&self, sql: &str) -> Result<Arc<DataFrame>> {
         let plan = self.create_logical_plan(sql)?;
         match plan {
-            LogicalPlan::CreateExternalTable(cmd) => match cmd.file_type.as_str() {
-                "PARQUET" | "CSV" | "JSON" | "AVRO" => {
-                    self.create_listing_table(&cmd).await
-                }
-                _ => self.create_custom_table(&cmd).await,
-            },
+            LogicalPlan::CreateExternalTable(cmd) => {
+                self.create_external_table(&cmd).await
+            }
 
             LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                 name,
@@ -356,6 +354,60 @@ impl SessionContext {
                     ))),
                 }
             }
+
+            LogicalPlan::SetVariable(SetVariable {
+                variable, value, ..
+            }) => {
+                let config_options = &self.state.write().config.config_options;
+
+                let old_value =
+                    config_options.read().get(&variable).ok_or_else(|| {
+                        DataFusionError::Execution(format!(
+                            "Can not SET variable: Unknown Variable {}",
+                            variable
+                        ))
+                    })?;
+
+                match old_value {
+                    ScalarValue::Boolean(_) => {
+                        let new_value = value.parse::<bool>().map_err(|_| {
+                            DataFusionError::Execution(format!(
+                                "Failed to parse {} as bool",
+                                value,
+                            ))
+                        })?;
+                        config_options.write().set_bool(&variable, new_value);
+                    }
+
+                    ScalarValue::UInt64(_) => {
+                        let new_value = value.parse::<u64>().map_err(|_| {
+                            DataFusionError::Execution(format!(
+                                "Failed to parse {} as u64",
+                                value,
+                            ))
+                        })?;
+                        config_options.write().set_u64(&variable, new_value);
+                    }
+
+                    ScalarValue::Utf8(_) => {
+                        let new_value = value.parse::<String>().map_err(|_| {
+                            DataFusionError::Execution(format!(
+                                "Failed to parse {} as String",
+                                value,
+                            ))
+                        })?;
+                        config_options.write().set_string(&variable, new_value);
+                    }
+
+                    _ => {
+                        return Err(DataFusionError::Execution(
+                            "Unsupported Scalar Value Type".to_string(),
+                        ))
+                    }
+                }
+                self.return_empty_dataframe()
+            }
+
             LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
                 schema_name,
                 if_not_exists,
@@ -428,76 +480,18 @@ impl SessionContext {
         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
     }
 
-    async fn create_custom_table(
+    async fn create_external_table(
         &self,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<DataFrame>> {
-        let factory = &self.table_factories.get(&cmd.file_type).ok_or_else(|| {
-            DataFusionError::Execution(format!(
-                "Unable to find factory for {}",
-                cmd.file_type
-            ))
-        })?;
-        let table = (*factory).create(cmd.name.as_str(), cmd.location.as_str());
-        self.register_table(cmd.name.as_str(), table)?;
-        let plan = LogicalPlanBuilder::empty(false).build()?;
-        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
-    }
+        let table_provider: Arc<dyn TableProvider> =
+            self.create_custom_table(cmd).await?;
 
-    async fn create_listing_table(
-        &self,
-        cmd: &CreateExternalTable,
-    ) -> Result<Arc<DataFrame>> {
-        let (file_format, file_extension) = match cmd.file_type.as_str() {
-            "CSV" => (
-                Arc::new(
-                    CsvFormat::default()
-                        .with_has_header(cmd.has_header)
-                        .with_delimiter(cmd.delimiter as u8),
-                ) as Arc<dyn FileFormat>,
-                DEFAULT_CSV_EXTENSION,
-            ),
-            "PARQUET" => (
-                Arc::new(ParquetFormat::default()) as Arc<dyn FileFormat>,
-                DEFAULT_PARQUET_EXTENSION,
-            ),
-            "AVRO" => (
-                Arc::new(AvroFormat::default()) as Arc<dyn FileFormat>,
-                DEFAULT_AVRO_EXTENSION,
-            ),
-            "JSON" => (
-                Arc::new(JsonFormat::default()) as Arc<dyn FileFormat>,
-                DEFAULT_JSON_EXTENSION,
-            ),
-            _ => Err(DataFusionError::Execution(
-                "Only known FileTypes can be ListingTables!".to_string(),
-            ))?,
-        };
         let table = self.table(cmd.name.as_str());
         match (cmd.if_not_exists, table) {
             (true, Ok(_)) => self.return_empty_dataframe(),
             (_, Err(_)) => {
-                // TODO make schema in CreateExternalTable optional instead of empty
-                let provided_schema = if cmd.schema.fields().is_empty() {
-                    None
-                } else {
-                    Some(Arc::new(cmd.schema.as_ref().to_owned().into()))
-                };
-                let options = ListingOptions {
-                    format: file_format,
-                    collect_stat: false,
-                    file_extension: file_extension.to_owned(),
-                    target_partitions: self.copied_config().target_partitions,
-                    table_partition_cols: cmd.table_partition_cols.clone(),
-                };
-                self.register_listing_table(
-                    cmd.name.as_str(),
-                    cmd.location.clone(),
-                    options,
-                    provided_schema,
-                    cmd.definition.clone(),
-                )
-                .await?;
+                self.register_table(cmd.name.as_str(), table_provider)?;
                 self.return_empty_dataframe()
             }
             (false, Ok(_)) => Err(DataFusionError::Execution(format!(
@@ -505,6 +499,26 @@ impl SessionContext {
                 cmd.name
             ))),
         }
+    }
+
+    async fn create_custom_table(
+        &self,
+        cmd: &CreateExternalTable,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let state = self.state.read().clone();
+        let file_type = cmd.file_type.to_uppercase();
+        let factory = &state
+            .runtime_env
+            .table_factories
+            .get(file_type.as_str())
+            .ok_or_else(|| {
+                DataFusionError::Execution(format!(
+                    "Unable to find factory for {}",
+                    cmd.file_type
+                ))
+            })?;
+        let table = (*factory).create(&state, cmd).await?;
+        Ok(table)
     }
 
     fn find_and_deregister<'a>(
@@ -732,7 +746,7 @@ impl SessionContext {
         table_path: impl AsRef<str>,
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
-        sql: Option<String>,
+        sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
         let resolved_schema = match provided_schema {
@@ -742,7 +756,7 @@ impl SessionContext {
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config)?.with_definition(sql);
+        let table = ListingTable::try_new(config)?.with_definition(sql_definition);
         self.register_table(name, Arc::new(table))?;
         Ok(())
     }
@@ -860,6 +874,11 @@ impl SessionContext {
         };
 
         state.catalog_list.register_catalog(name, catalog)
+    }
+
+    /// Retrieves the list of available catalog names.
+    pub fn catalog_names(&self) -> Vec<String> {
+        self.state.read().catalog_list.catalog_names()
     }
 
     /// Retrieves a [`CatalogProvider`] instance by name
@@ -1086,6 +1105,8 @@ pub const REPARTITION_AGGREGATIONS: &str = "repartition_aggregations";
 pub const REPARTITION_WINDOWS: &str = "repartition_windows";
 /// Session Configuration entry name for 'PARQUET_PRUNING'
 pub const PARQUET_PRUNING: &str = "parquet_pruning";
+/// Session Configuration entry name for 'COLLECT_STATISTICS'
+pub const COLLECT_STATISTICS: &str = "collect_statistics";
 
 /// Map that holds opaque objects indexed by their type.
 ///
@@ -1143,6 +1164,10 @@ pub struct SessionConfig {
     pub repartition_windows: bool,
     /// Should DataFusion parquet reader using the predicate to prune data
     pub parquet_pruning: bool,
+    /// Should DataFusion collect statistics after listing files
+    pub collect_statistics: bool,
+    /// Should DataFusion optimizer run a top down process to reorder the join keys
+    pub top_down_join_key_reordering: bool,
     /// Configuration options
     pub config_options: Arc<RwLock<ConfigOptions>>,
     /// Opaque extensions.
@@ -1161,6 +1186,8 @@ impl Default for SessionConfig {
             repartition_aggregations: true,
             repartition_windows: true,
             parquet_pruning: true,
+            collect_statistics: false,
+            top_down_join_key_reordering: true,
             config_options: Arc::new(RwLock::new(ConfigOptions::new())),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
@@ -1180,7 +1207,7 @@ impl SessionConfig {
     /// Create an execution config with config options read from the environment
     pub fn from_env() -> Self {
         Self {
-            config_options: Arc::new(RwLock::new(ConfigOptions::from_env())),
+            config_options: ConfigOptions::from_env().into_shareable(),
             ..Default::default()
         }
     }
@@ -1199,6 +1226,11 @@ impl SessionConfig {
     /// Set a generic `u64` configuration option
     pub fn set_u64(self, key: &str, value: u64) -> Self {
         self.set(key, ScalarValue::UInt64(Some(value)))
+    }
+
+    /// Set a generic `str` configuration option
+    pub fn set_str(self, key: &str, value: &str) -> Self {
+        self.set(key, ScalarValue::Utf8(Some(value.to_string())))
     }
 
     /// Customize batch size
@@ -1263,6 +1295,12 @@ impl SessionConfig {
         self
     }
 
+    /// Enables or disables the collection of statistics after listing files
+    pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
+        self.collect_statistics = enabled;
+        self
+    }
+
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
         self.config_options
@@ -1306,7 +1344,19 @@ impl SessionConfig {
             PARQUET_PRUNING.to_owned(),
             format!("{}", self.parquet_pruning),
         );
+        map.insert(
+            COLLECT_STATISTICS.to_owned(),
+            format!("{}", self.collect_statistics),
+        );
+
         map
+    }
+
+    /// Return a handle to the shared configuration options.
+    ///
+    /// [`config_options`]: SessionContext::config_option
+    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
+        self.config_options.clone()
     }
 
     /// Add extensions.
@@ -1433,6 +1483,8 @@ impl SessionState {
                 )
                 .expect("memory catalog provider can register schema");
 
+            Self::register_default_schema(&config, &runtime, &default_catalog);
+
             let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema {
                 Arc::new(CatalogWithInformationSchema::new(
                     Arc::downgrade(&catalog_list),
@@ -1458,6 +1510,7 @@ impl SessionState {
             Arc::new(AggregateStatistics::new()),
             Arc::new(HashBuildProbeOrder::new()),
         ];
+        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
         if config
             .config_options
             .read()
@@ -1475,7 +1528,9 @@ impl SessionState {
             )));
         }
         physical_optimizers.push(Arc::new(Repartition::new()));
-        physical_optimizers.push(Arc::new(AddCoalescePartitionsExec::new()));
+        // Repartition rule could introduce additional RepartitionExec with RoundRobin partitioning.
+        // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
+        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
 
         SessionState {
             session_id,
@@ -1489,6 +1544,64 @@ impl SessionState {
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
         }
+    }
+
+    fn register_default_schema(
+        config: &SessionConfig,
+        runtime: &Arc<RuntimeEnv>,
+        default_catalog: &MemoryCatalogProvider,
+    ) {
+        let url = config
+            .config_options
+            .read()
+            .get("datafusion.catalog.location");
+        let format = config.config_options.read().get("datafusion.catalog.type");
+        let (url, format) = match (url, format) {
+            (Some(url), Some(format)) => (url, format),
+            _ => return,
+        };
+        if url.is_null() || format.is_null() {
+            return;
+        }
+        let url = url.to_string();
+        let format = format.to_string();
+
+        let has_header = config
+            .config_options
+            .read()
+            .get("datafusion.catalog.has_header");
+        let has_header: bool = has_header
+            .map(|x| FromStr::from_str(&x.to_string()).unwrap_or_default())
+            .unwrap_or_default();
+
+        let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
+        let authority = match url.host_str() {
+            Some(host) => format!("{}://{}", url.scheme(), host),
+            None => format!("{}://", url.scheme()),
+        };
+        let path = &url.as_str()[authority.len()..];
+        let path = object_store::path::Path::parse(path).expect("Can't parse path");
+        let store = ObjectStoreUrl::parse(authority.as_str())
+            .expect("Invalid default catalog url");
+        let store = match runtime.object_store(store) {
+            Ok(store) => store,
+            _ => return,
+        };
+        let factory = match runtime.table_factories.get(format.as_str()) {
+            Some(factory) => factory,
+            _ => return,
+        };
+        let schema = ListingSchemaProvider::new(
+            authority,
+            path,
+            factory.clone(),
+            store,
+            format,
+            has_header,
+        );
+        let _ = default_catalog
+            .register_schema("default", Arc::new(schema))
+            .expect("Failed to register default schema");
     }
 
     fn resolve_table_ref<'a>(
@@ -1577,6 +1690,13 @@ impl SessionState {
                     .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
                     .unwrap_or_default(),
             )
+            .with_max_passes(
+                self.config
+                    .config_options
+                    .read()
+                    .get_u64(OPT_OPTIMIZER_MAX_PASSES)
+                    .unwrap_or_default() as u8,
+            )
             .with_query_execution_start_time(
                 self.execution_props.query_execution_start_time,
             );
@@ -1625,7 +1745,7 @@ impl ContextProvider for SessionState {
             Ok(schema) => {
                 let provider = schema.table(resolved_ref.table).ok_or_else(|| {
                     DataFusionError::Plan(format!(
-                        "'{}.{}.{}' not found",
+                        "table '{}.{}.{}' not found",
                         resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
                     ))
                 })?;
@@ -1658,6 +1778,10 @@ impl ContextProvider for SessionState {
             .var_providers
             .as_ref()
             .and_then(|provider| provider.get(&provider_type)?.get_type(variable_names))
+    }
+
+    fn get_config_option(&self, variable: &str) -> Option<ScalarValue> {
+        self.config.config_options.read().get(variable)
     }
 }
 
@@ -1765,6 +1889,9 @@ impl TaskContext {
                         .with_parquet_pruning(
                             props.get(PARQUET_PRUNING).unwrap().parse().unwrap(),
                         )
+                        .with_collect_statistics(
+                            props.get(COLLECT_STATISTICS).unwrap().parse().unwrap(),
+                        )
                 }
             }
             TaskProperties::SessionConfig(session_config) => session_config.clone(),
@@ -1861,25 +1988,24 @@ impl FunctionRegistry for TaskContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
+    use crate::execution::runtime_env::RuntimeConfig;
+    use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
     use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
-    use crate::{
-        assert_batches_eq,
-        logical_plan::{create_udf, Expr},
-    };
-    use crate::{logical_plan::create_udaf, physical_plan::expressions::AvgAccumulator};
     use arrow::array::ArrayRef;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
-    use datafusion_expr::Volatility;
+    use datafusion_expr::{create_udaf, create_udf, Expr, Volatility};
     use datafusion_physical_expr::functions::make_scalar_function;
     use std::fs::File;
+    use std::path::PathBuf;
     use std::sync::Weak;
     use std::thread::{self, JoinHandle};
-    use std::{io::prelude::*, sync::Mutex};
+    use std::{env, io::prelude::*, sync::Mutex};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -2114,6 +2240,41 @@ mod tests {
         for thread in threads {
             thread.join().expect("Failed to join thread")?;
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn with_listing_schema_provider() -> Result<()> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let path = path.join("tests/tpch-csv");
+        let url = format!("file://{}", path.display());
+
+        let rt_cfg = RuntimeConfig::new();
+        let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
+        let cfg = SessionConfig::new()
+            .set_str("datafusion.catalog.location", url.as_str())
+            .set_str("datafusion.catalog.type", "CSV")
+            .set_str("datafusion.catalog.has_header", "true");
+        let session_state = SessionState::with_config_rt(cfg, runtime);
+        let ctx = SessionContext::with_state(session_state);
+        ctx.refresh_catalogs().await?;
+
+        let result =
+            plan_and_collect(&ctx, "select c_name from default.customer limit 3;")
+                .await?;
+
+        let actual = arrow::util::pretty::pretty_format_batches(&result)
+            .unwrap()
+            .to_string();
+        let expected = r#"+--------------------+
+| c_name             |
++--------------------+
+| Customer#000000002 |
+| Customer#000000003 |
+| Customer#000000004 |
++--------------------+"#;
+        assert_eq!(actual, expected);
+
         Ok(())
     }
 
@@ -2391,7 +2552,7 @@ mod tests {
         fn create_physical_expr(
             &self,
             _expr: &Expr,
-            _input_dfschema: &crate::logical_plan::DFSchema,
+            _input_dfschema: &crate::common::DFSchema,
             _input_schema: &Schema,
             _session_state: &SessionState,
         ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {
@@ -2439,7 +2600,7 @@ mod tests {
         // generate a partitioned file
         for partition in 0..partition_count {
             let filename = format!("partition-{}.{}", partition, file_extension);
-            let file_path = tmp_dir.path().join(&filename);
+            let file_path = tmp_dir.path().join(filename);
             let mut file = File::create(file_path)?;
 
             // generate some data

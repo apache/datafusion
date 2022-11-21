@@ -49,6 +49,7 @@ use crate::physical_plan::{
     Distribution, ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use datafusion_physical_expr::EquivalenceProperties;
 
 /// Sort preserving merge execution plan
 ///
@@ -123,16 +124,20 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::UnspecifiedDistribution
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::UnspecifiedDistribution]
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        true
+    fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
+        vec![Some(&self.expr)]
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         Some(&self.expr)
+    }
+
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        self.input.equivalence_properties()
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -351,7 +356,7 @@ impl SortPreservingMergeStream {
                 Ok(SortField::new_with_options(data_type, expr.options))
             })
             .collect::<Result<Vec<_>>>()?;
-        let row_converter = RowConverter::new(sort_fields);
+        let row_converter = RowConverter::new(sort_fields)?;
 
         Ok(Self {
             schema,
@@ -644,7 +649,7 @@ mod tests {
     async fn test_merge_interleave() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
             Some("c"),
@@ -655,7 +660,7 @@ mod tests {
         let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[10, 20, 70, 90, 30]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([10, 20, 70, 90, 30]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("b"),
             Some("d"),
@@ -672,16 +677,16 @@ mod tests {
                 "+----+---+-------------------------------+",
                 "| a  | b | c                             |",
                 "+----+---+-------------------------------+",
-                "| 1  | a | 1970-01-01 00:00:00.000000008 |",
-                "| 10 | b | 1970-01-01 00:00:00.000000004 |",
-                "| 2  | c | 1970-01-01 00:00:00.000000007 |",
-                "| 20 | d | 1970-01-01 00:00:00.000000006 |",
-                "| 7  | e | 1970-01-01 00:00:00.000000006 |",
-                "| 70 | f | 1970-01-01 00:00:00.000000002 |",
-                "| 9  | g | 1970-01-01 00:00:00.000000005 |",
-                "| 90 | h | 1970-01-01 00:00:00.000000002 |",
-                "| 30 | j | 1970-01-01 00:00:00.000000006 |", // input b2 before b1
-                "| 3  | j | 1970-01-01 00:00:00.000000008 |",
+                "| 1  | a | 1970-01-01T00:00:00.000000008 |",
+                "| 10 | b | 1970-01-01T00:00:00.000000004 |",
+                "| 2  | c | 1970-01-01T00:00:00.000000007 |",
+                "| 20 | d | 1970-01-01T00:00:00.000000006 |",
+                "| 7  | e | 1970-01-01T00:00:00.000000006 |",
+                "| 70 | f | 1970-01-01T00:00:00.000000002 |",
+                "| 9  | g | 1970-01-01T00:00:00.000000005 |",
+                "| 90 | h | 1970-01-01T00:00:00.000000002 |",
+                "| 30 | j | 1970-01-01T00:00:00.000000006 |", // input b2 before b1
+                "| 3  | j | 1970-01-01T00:00:00.000000008 |",
                 "+----+---+-------------------------------+",
             ],
             task_ctx,
@@ -693,7 +698,7 @@ mod tests {
     async fn test_merge_some_overlap() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
             Some("b"),
@@ -704,7 +709,7 @@ mod tests {
         let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[70, 90, 30, 100, 110]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([70, 90, 30, 100, 110]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("c"),
             Some("d"),
@@ -721,16 +726,16 @@ mod tests {
                 "+-----+---+-------------------------------+",
                 "| a   | b | c                             |",
                 "+-----+---+-------------------------------+",
-                "| 1   | a | 1970-01-01 00:00:00.000000008 |",
-                "| 2   | b | 1970-01-01 00:00:00.000000007 |",
-                "| 70  | c | 1970-01-01 00:00:00.000000004 |",
-                "| 7   | c | 1970-01-01 00:00:00.000000006 |",
-                "| 9   | d | 1970-01-01 00:00:00.000000005 |",
-                "| 90  | d | 1970-01-01 00:00:00.000000006 |",
-                "| 30  | e | 1970-01-01 00:00:00.000000002 |",
-                "| 3   | e | 1970-01-01 00:00:00.000000008 |",
-                "| 100 | f | 1970-01-01 00:00:00.000000002 |",
-                "| 110 | g | 1970-01-01 00:00:00.000000006 |",
+                "| 1   | a | 1970-01-01T00:00:00.000000008 |",
+                "| 2   | b | 1970-01-01T00:00:00.000000007 |",
+                "| 70  | c | 1970-01-01T00:00:00.000000004 |",
+                "| 7   | c | 1970-01-01T00:00:00.000000006 |",
+                "| 9   | d | 1970-01-01T00:00:00.000000005 |",
+                "| 90  | d | 1970-01-01T00:00:00.000000006 |",
+                "| 30  | e | 1970-01-01T00:00:00.000000002 |",
+                "| 3   | e | 1970-01-01T00:00:00.000000008 |",
+                "| 100 | f | 1970-01-01T00:00:00.000000002 |",
+                "| 110 | g | 1970-01-01T00:00:00.000000006 |",
                 "+-----+---+-------------------------------+",
             ],
             task_ctx,
@@ -742,7 +747,7 @@ mod tests {
     async fn test_merge_no_overlap() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
             Some("b"),
@@ -753,7 +758,7 @@ mod tests {
         let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[10, 20, 70, 90, 30]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([10, 20, 70, 90, 30]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("f"),
             Some("g"),
@@ -770,16 +775,16 @@ mod tests {
                 "+----+---+-------------------------------+",
                 "| a  | b | c                             |",
                 "+----+---+-------------------------------+",
-                "| 1  | a | 1970-01-01 00:00:00.000000008 |",
-                "| 2  | b | 1970-01-01 00:00:00.000000007 |",
-                "| 7  | c | 1970-01-01 00:00:00.000000006 |",
-                "| 9  | d | 1970-01-01 00:00:00.000000005 |",
-                "| 3  | e | 1970-01-01 00:00:00.000000008 |",
-                "| 10 | f | 1970-01-01 00:00:00.000000004 |",
-                "| 20 | g | 1970-01-01 00:00:00.000000006 |",
-                "| 70 | h | 1970-01-01 00:00:00.000000002 |",
-                "| 90 | i | 1970-01-01 00:00:00.000000002 |",
-                "| 30 | j | 1970-01-01 00:00:00.000000006 |",
+                "| 1  | a | 1970-01-01T00:00:00.000000008 |",
+                "| 2  | b | 1970-01-01T00:00:00.000000007 |",
+                "| 7  | c | 1970-01-01T00:00:00.000000006 |",
+                "| 9  | d | 1970-01-01T00:00:00.000000005 |",
+                "| 3  | e | 1970-01-01T00:00:00.000000008 |",
+                "| 10 | f | 1970-01-01T00:00:00.000000004 |",
+                "| 20 | g | 1970-01-01T00:00:00.000000006 |",
+                "| 70 | h | 1970-01-01T00:00:00.000000002 |",
+                "| 90 | i | 1970-01-01T00:00:00.000000002 |",
+                "| 30 | j | 1970-01-01T00:00:00.000000006 |",
                 "+----+---+-------------------------------+",
             ],
             task_ctx,
@@ -791,7 +796,7 @@ mod tests {
     async fn test_merge_three_partitions() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("a"),
             Some("b"),
@@ -802,7 +807,7 @@ mod tests {
         let c: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[10, 20, 70, 90, 30]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([10, 20, 70, 90, 30]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("e"),
             Some("g"),
@@ -814,7 +819,7 @@ mod tests {
             Arc::new(TimestampNanosecondArray::from(vec![40, 60, 20, 20, 60]));
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[100, 200, 700, 900, 300]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([100, 200, 700, 900, 300]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             Some("f"),
             Some("g"),
@@ -831,21 +836,21 @@ mod tests {
                 "+-----+---+-------------------------------+",
                 "| a   | b | c                             |",
                 "+-----+---+-------------------------------+",
-                "| 1   | a | 1970-01-01 00:00:00.000000008 |",
-                "| 2   | b | 1970-01-01 00:00:00.000000007 |",
-                "| 7   | c | 1970-01-01 00:00:00.000000006 |",
-                "| 9   | d | 1970-01-01 00:00:00.000000005 |",
-                "| 10  | e | 1970-01-01 00:00:00.000000040 |",
-                "| 100 | f | 1970-01-01 00:00:00.000000004 |",
-                "| 3   | f | 1970-01-01 00:00:00.000000008 |",
-                "| 200 | g | 1970-01-01 00:00:00.000000006 |",
-                "| 20  | g | 1970-01-01 00:00:00.000000060 |",
-                "| 700 | h | 1970-01-01 00:00:00.000000002 |",
-                "| 70  | h | 1970-01-01 00:00:00.000000020 |",
-                "| 900 | i | 1970-01-01 00:00:00.000000002 |",
-                "| 90  | i | 1970-01-01 00:00:00.000000020 |",
-                "| 300 | j | 1970-01-01 00:00:00.000000006 |",
-                "| 30  | j | 1970-01-01 00:00:00.000000060 |",
+                "| 1   | a | 1970-01-01T00:00:00.000000008 |",
+                "| 2   | b | 1970-01-01T00:00:00.000000007 |",
+                "| 7   | c | 1970-01-01T00:00:00.000000006 |",
+                "| 9   | d | 1970-01-01T00:00:00.000000005 |",
+                "| 10  | e | 1970-01-01T00:00:00.000000040 |",
+                "| 100 | f | 1970-01-01T00:00:00.000000004 |",
+                "| 3   | f | 1970-01-01T00:00:00.000000008 |",
+                "| 200 | g | 1970-01-01T00:00:00.000000006 |",
+                "| 20  | g | 1970-01-01T00:00:00.000000060 |",
+                "| 700 | h | 1970-01-01T00:00:00.000000002 |",
+                "| 70  | h | 1970-01-01T00:00:00.000000020 |",
+                "| 900 | i | 1970-01-01T00:00:00.000000002 |",
+                "| 90  | i | 1970-01-01T00:00:00.000000020 |",
+                "| 300 | j | 1970-01-01T00:00:00.000000006 |",
+                "| 30  | j | 1970-01-01T00:00:00.000000060 |",
                 "+-----+---+-------------------------------+",
             ],
             task_ctx,
@@ -1093,7 +1098,7 @@ mod tests {
     async fn test_nulls() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 7, 9, 3]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             None,
             Some("a"),
@@ -1110,7 +1115,7 @@ mod tests {
         ]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2, 3, 4, 5]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![
             None,
             Some("b"),
@@ -1155,16 +1160,16 @@ mod tests {
                 "+---+---+-------------------------------+",
                 "| a | b | c                             |",
                 "+---+---+-------------------------------+",
-                "| 1 |   | 1970-01-01 00:00:00.000000008 |",
-                "| 1 |   | 1970-01-01 00:00:00.000000008 |",
+                "| 1 |   | 1970-01-01T00:00:00.000000008 |",
+                "| 1 |   | 1970-01-01T00:00:00.000000008 |",
                 "| 2 | a |                               |",
-                "| 7 | b | 1970-01-01 00:00:00.000000006 |",
+                "| 7 | b | 1970-01-01T00:00:00.000000006 |",
                 "| 2 | b |                               |",
                 "| 9 | d |                               |",
-                "| 3 | e | 1970-01-01 00:00:00.000000004 |",
-                "| 3 | g | 1970-01-01 00:00:00.000000005 |",
+                "| 3 | e | 1970-01-01T00:00:00.000000004 |",
+                "| 3 | g | 1970-01-01T00:00:00.000000005 |",
                 "| 4 | h |                               |",
-                "| 5 | i | 1970-01-01 00:00:00.000000004 |",
+                "| 5 | i | 1970-01-01T00:00:00.000000004 |",
                 "+---+---+-------------------------------+",
             ],
             collected.as_slice()
@@ -1240,11 +1245,11 @@ mod tests {
     async fn test_merge_metrics() {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([1, 2]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"), Some("c")]));
         let b1 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
 
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[10, 20]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice([10, 20]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("b"), Some("d")]));
         let b2 = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
 

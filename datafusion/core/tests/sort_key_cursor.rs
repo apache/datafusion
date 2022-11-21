@@ -26,7 +26,7 @@ use datafusion::physical_plan::sorts::{RowIndex, SortKeyCursor};
 
 #[test]
 fn test_single_column() {
-    let mut converter = RowConverter::new(vec![SortField::new(DataType::Int64)]);
+    let mut converter = RowConverter::new(vec![SortField::new(DataType::Int64)]).unwrap();
     let batch1 = int64_batch(vec![Some(1), Some(2), Some(5), Some(6)]);
     let batch2 = int64_batch(vec![Some(3), Some(4), Some(8), Some(9)]);
 
@@ -56,7 +56,7 @@ fn test_single_column() {
 
 #[test]
 fn test_stable_compare() {
-    let mut converter = RowConverter::new(vec![SortField::new(DataType::Int64)]);
+    let mut converter = RowConverter::new(vec![SortField::new(DataType::Int64)]).unwrap();
     // Validate ties are broken by the lower stream idx to ensure stable sort
     let batch1 = int64_batch(vec![Some(3), Some(4)]);
     let batch2 = int64_batch(vec![Some(3)]);

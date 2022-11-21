@@ -221,10 +221,6 @@ pub mod dataframe;
 pub mod datasource;
 pub mod error;
 pub mod execution;
-#[deprecated]
-// logical_plan module just contains re-exports and will be removed in a future release
-// https://github.com/apache/arrow-datafusion/issues/2683
-pub mod logical_plan;
 pub mod physical_optimizer;
 pub mod physical_plan;
 pub mod prelude;

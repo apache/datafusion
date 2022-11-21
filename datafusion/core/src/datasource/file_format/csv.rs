@@ -18,19 +18,24 @@
 //! CSV format abstractions
 
 use std::any::Any;
+
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
+use bytes::Buf;
+
 use datafusion_common::DataFusionError;
+
 use futures::TryFutureExt;
 use object_store::{ObjectMeta, ObjectStore};
 
 use super::FileFormat;
+use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::error::Result;
-use crate::logical_plan::Expr;
+use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
@@ -43,6 +48,7 @@ pub struct CsvFormat {
     has_header: bool,
     delimiter: u8,
     schema_infer_max_rec: Option<usize>,
+    file_compression_type: FileCompressionType,
 }
 
 impl Default for CsvFormat {
@@ -51,6 +57,7 @@ impl Default for CsvFormat {
             schema_infer_max_rec: Some(DEFAULT_SCHEMA_INFER_MAX_RECORD),
             has_header: true,
             delimiter: b',',
+            file_compression_type: FileCompressionType::UNCOMPRESSED,
         }
     }
 }
@@ -82,6 +89,16 @@ impl CsvFormat {
         self
     }
 
+    /// Set a `FileCompressionType` of CSV
+    /// - defaults to `FileCompressionType::UNCOMPRESSED`
+    pub fn with_file_compression_type(
+        mut self,
+        file_compression_type: FileCompressionType,
+    ) -> Self {
+        self.file_compression_type = file_compression_type;
+        self
+    }
+
     /// The delimiter character.
     pub fn delimiter(&self) -> u8 {
         self.delimiter
@@ -110,8 +127,9 @@ impl FileFormat for CsvFormat {
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
+            let decoder = self.file_compression_type.convert_read(data.reader());
             let (schema, records_read) = arrow::csv::reader::infer_reader_schema(
-                &mut data.as_ref(),
+                decoder,
                 self.delimiter,
                 Some(records_to_read),
                 self.has_header,
@@ -144,19 +162,23 @@ impl FileFormat for CsvFormat {
         conf: FileScanConfig,
         _filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = CsvExec::new(conf, self.has_header, self.delimiter);
+        let exec = CsvExec::new(
+            conf,
+            self.has_header,
+            self.delimiter,
+            self.file_compression_type.to_owned(),
+        );
         Ok(Arc::new(exec))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::StringArray;
-
     use super::super::test_util::scan_format;
     use super::*;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
+    use datafusion_common::cast::as_string_array;
     use futures::StreamExt;
 
     #[tokio::test]
@@ -247,11 +269,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(100, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+        let array = as_string_array(batches[0].column(0))?;
         let mut values: Vec<&str> = vec![];
         for i in 0..5 {
             values.push(array.value(i));

@@ -44,13 +44,13 @@ fn create_test_table() -> Result<Arc<DataFrame>> {
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from_slice(&[
+            Arc::new(StringArray::from_slice([
                 "abcDEF",
                 "abc123",
                 "CBAdef",
                 "123AbcDef",
             ])),
-            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
         ],
     )?;
 
@@ -389,15 +389,10 @@ async fn test_fn_md5() -> Result<()> {
     Ok(())
 }
 
-// TODO: tobyhede - Issue #1429
-//       https://github.com/apache/arrow-datafusion/issues/1429
-//       g flag doesn't compile
 #[tokio::test]
 #[cfg(feature = "unicode_expressions")]
 async fn test_fn_regexp_match() -> Result<()> {
     let expr = regexp_match(vec![col("a"), lit("[a-z]")]);
-    // The below will fail
-    // let expr = regexp_match( vec![col("a"), lit("[a-z]"), lit("g")]);
 
     let expected = vec![
         "+-----------------------------------+",

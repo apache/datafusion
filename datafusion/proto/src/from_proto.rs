@@ -27,12 +27,11 @@ use crate::protobuf::{
 use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit, UnionMode,
 };
-use datafusion::logical_plan::FunctionRegistry;
+use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
 };
-use datafusion_expr::expr::GroupingSet;
-use datafusion_expr::expr::GroupingSet::GroupingSets;
+use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
@@ -40,10 +39,13 @@ use datafusion_expr::{
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, now, nullif, octet_length, power, random, regexp_match,
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
-    sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr, tan,
-    to_hex, to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate,
-    trim, trunc, upper, AggregateFunction, BuiltInWindowFunction, BuiltinScalarFunction,
-    Expr, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr,
+    substring, tan, to_hex, to_timestamp_micros, to_timestamp_millis,
+    to_timestamp_seconds, translate, trim, trunc, upper, uuid, AggregateFunction,
+    Between, BuiltInWindowFunction, BuiltinScalarFunction, Case, Expr, GetIndexedField,
+    GroupingSet,
+    GroupingSet::GroupingSets,
+    Like, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use std::sync::Arc;
 
@@ -93,10 +95,6 @@ impl From<DataFusionError> for Error {
 impl Error {
     fn required(field: impl Into<String>) -> Error {
         Error::MissingRequiredField(field.into())
-    }
-
-    fn at_least_one(field: impl Into<String>) -> Error {
-        Error::AtLeastOneValue(field.into())
     }
 
     fn unknown(name: impl Into<String>, value: i32) -> Error {
@@ -200,56 +198,6 @@ impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
             protobuf::WindowFrameUnits::Rows => Self::Rows,
             protobuf::WindowFrameUnits::Range => Self::Range,
             protobuf::WindowFrameUnits::Groups => Self::Groups,
-        }
-    }
-}
-
-impl From<protobuf::PrimitiveScalarType> for DataType {
-    fn from(scalar: protobuf::PrimitiveScalarType) -> Self {
-        match scalar {
-            protobuf::PrimitiveScalarType::Bool => DataType::Boolean,
-            protobuf::PrimitiveScalarType::Uint8 => DataType::UInt8,
-            protobuf::PrimitiveScalarType::Int8 => DataType::Int8,
-            protobuf::PrimitiveScalarType::Uint16 => DataType::UInt16,
-            protobuf::PrimitiveScalarType::Int16 => DataType::Int16,
-            protobuf::PrimitiveScalarType::Uint32 => DataType::UInt32,
-            protobuf::PrimitiveScalarType::Int32 => DataType::Int32,
-            protobuf::PrimitiveScalarType::Uint64 => DataType::UInt64,
-            protobuf::PrimitiveScalarType::Int64 => DataType::Int64,
-            protobuf::PrimitiveScalarType::Float32 => DataType::Float32,
-            protobuf::PrimitiveScalarType::Float64 => DataType::Float64,
-            protobuf::PrimitiveScalarType::Utf8 => DataType::Utf8,
-            protobuf::PrimitiveScalarType::LargeUtf8 => DataType::LargeUtf8,
-            protobuf::PrimitiveScalarType::Binary => DataType::Binary,
-            protobuf::PrimitiveScalarType::LargeBinary => DataType::LargeBinary,
-            protobuf::PrimitiveScalarType::Date32 => DataType::Date32,
-            protobuf::PrimitiveScalarType::Time64 => {
-                DataType::Time64(TimeUnit::Nanosecond)
-            }
-            protobuf::PrimitiveScalarType::TimestampMicrosecond => {
-                DataType::Timestamp(TimeUnit::Microsecond, None)
-            }
-            protobuf::PrimitiveScalarType::TimestampNanosecond => {
-                DataType::Timestamp(TimeUnit::Nanosecond, None)
-            }
-            protobuf::PrimitiveScalarType::Null => DataType::Null,
-            protobuf::PrimitiveScalarType::Decimal128 => DataType::Decimal128(0, 0),
-            protobuf::PrimitiveScalarType::Date64 => DataType::Date64,
-            protobuf::PrimitiveScalarType::TimestampSecond => {
-                DataType::Timestamp(TimeUnit::Second, None)
-            }
-            protobuf::PrimitiveScalarType::TimestampMillisecond => {
-                DataType::Timestamp(TimeUnit::Millisecond, None)
-            }
-            protobuf::PrimitiveScalarType::IntervalYearmonth => {
-                DataType::Interval(IntervalUnit::YearMonth)
-            }
-            protobuf::PrimitiveScalarType::IntervalDaytime => {
-                DataType::Interval(IntervalUnit::DayTime)
-            }
-            protobuf::PrimitiveScalarType::IntervalMonthdaynano => {
-                DataType::Interval(IntervalUnit::MonthDayNano)
-            }
         }
     }
 }
@@ -481,6 +429,9 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
             ScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
             ScalarFunction::Now => Self::Now,
+            ScalarFunction::CurrentDate => Self::CurrentDate,
+            ScalarFunction::CurrentTime => Self::CurrentTime,
+            ScalarFunction::Uuid => Self::Uuid,
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::Coalesce => Self::Coalesce,
@@ -541,71 +492,12 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     }
 }
 
-impl TryFrom<&i32> for protobuf::PrimitiveScalarType {
-    type Error = Error;
-
-    fn try_from(value: &i32) -> Result<Self, Self::Error> {
-        protobuf::PrimitiveScalarType::from_i32(*value)
-            .ok_or_else(|| Error::unknown("PrimitiveScalarType", *value))
-    }
-}
-
 impl TryFrom<&i32> for protobuf::AggregateFunction {
     type Error = Error;
 
     fn try_from(value: &i32) -> Result<Self, Self::Error> {
         protobuf::AggregateFunction::from_i32(*value)
             .ok_or_else(|| Error::unknown("AggregateFunction", *value))
-    }
-}
-
-impl TryFrom<&protobuf::scalar_type::Datatype> for DataType {
-    type Error = Error;
-
-    fn try_from(
-        scalar_type: &protobuf::scalar_type::Datatype,
-    ) -> Result<Self, Self::Error> {
-        use protobuf::scalar_type::Datatype;
-
-        Ok(match scalar_type {
-            Datatype::Scalar(scalar_type) => {
-                protobuf::PrimitiveScalarType::try_from(scalar_type)?.into()
-            }
-            Datatype::List(protobuf::ScalarListType {
-                deepest_type,
-                field_names,
-            }) => {
-                if field_names.is_empty() {
-                    return Err(Error::at_least_one("field_names"));
-                }
-                let field_type =
-                    protobuf::PrimitiveScalarType::try_from(deepest_type)?.into();
-                // Because length is checked above it is safe to unwrap .last()
-                let mut scalar_type = DataType::List(Box::new(Field::new(
-                    field_names.last().unwrap().as_str(),
-                    field_type,
-                    true,
-                )));
-                // Iterate over field names in reverse order except for the last item in the vector
-                for name in field_names.iter().rev().skip(1) {
-                    let new_datatype = DataType::List(Box::new(Field::new(
-                        name.as_str(),
-                        scalar_type,
-                        true,
-                    )));
-                    scalar_type = new_datatype;
-                }
-                scalar_type
-            }
-        })
-    }
-}
-
-impl TryFrom<&protobuf::ScalarType> for DataType {
-    type Error = Error;
-
-    fn try_from(scalar: &protobuf::ScalarType) -> Result<Self, Self::Error> {
-        scalar.datatype.as_ref().required("datatype")
     }
 }
 
@@ -629,80 +521,6 @@ impl TryFrom<&protobuf::Schema> for Schema {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self::new(fields))
-    }
-}
-
-impl TryFrom<&protobuf::PrimitiveScalarType> for ScalarValue {
-    type Error = Error;
-
-    fn try_from(scalar: &protobuf::PrimitiveScalarType) -> Result<Self, Self::Error> {
-        use protobuf::PrimitiveScalarType;
-
-        Ok(match scalar {
-            PrimitiveScalarType::Null => Self::Null,
-            PrimitiveScalarType::Bool => Self::Boolean(None),
-            PrimitiveScalarType::Uint8 => Self::UInt8(None),
-            PrimitiveScalarType::Int8 => Self::Int8(None),
-            PrimitiveScalarType::Uint16 => Self::UInt16(None),
-            PrimitiveScalarType::Int16 => Self::Int16(None),
-            PrimitiveScalarType::Uint32 => Self::UInt32(None),
-            PrimitiveScalarType::Int32 => Self::Int32(None),
-            PrimitiveScalarType::Uint64 => Self::UInt64(None),
-            PrimitiveScalarType::Int64 => Self::Int64(None),
-            PrimitiveScalarType::Float32 => Self::Float32(None),
-            PrimitiveScalarType::Float64 => Self::Float64(None),
-            PrimitiveScalarType::Utf8 => Self::Utf8(None),
-            PrimitiveScalarType::LargeUtf8 => Self::LargeUtf8(None),
-            PrimitiveScalarType::Binary => Self::Binary(None),
-            PrimitiveScalarType::LargeBinary => Self::LargeBinary(None),
-            PrimitiveScalarType::Date32 => Self::Date32(None),
-            PrimitiveScalarType::Time64 => Self::Time64(None),
-            PrimitiveScalarType::TimestampMicrosecond => {
-                Self::TimestampMicrosecond(None, None)
-            }
-            PrimitiveScalarType::TimestampNanosecond => {
-                Self::TimestampNanosecond(None, None)
-            }
-            PrimitiveScalarType::Decimal128 => Self::Decimal128(None, 0, 0),
-            PrimitiveScalarType::Date64 => Self::Date64(None),
-            PrimitiveScalarType::TimestampSecond => Self::TimestampSecond(None, None),
-            PrimitiveScalarType::TimestampMillisecond => {
-                Self::TimestampMillisecond(None, None)
-            }
-            PrimitiveScalarType::IntervalYearmonth => Self::IntervalYearMonth(None),
-            PrimitiveScalarType::IntervalDaytime => Self::IntervalDayTime(None),
-            PrimitiveScalarType::IntervalMonthdaynano => Self::IntervalMonthDayNano(None),
-        })
-    }
-}
-
-impl TryFrom<&protobuf::ScalarListType> for DataType {
-    type Error = Error;
-    fn try_from(scalar: &protobuf::ScalarListType) -> Result<Self, Self::Error> {
-        use protobuf::PrimitiveScalarType;
-
-        let protobuf::ScalarListType {
-            deepest_type,
-            field_names,
-        } = scalar;
-
-        let depth = field_names.len();
-        if depth == 0 {
-            return Err(Error::at_least_one("field_names"));
-        }
-
-        let mut curr_type = Self::List(Box::new(Field::new(
-            // Since checked vector is not empty above this is safe to unwrap
-            field_names.last().unwrap(),
-            PrimitiveScalarType::try_from(deepest_type)?.into(),
-            true,
-        )));
-        // Iterates over field names in reverse order except for the last item in the vector
-        for name in field_names.iter().rev().skip(1) {
-            let temp_curr_type = Self::List(Box::new(Field::new(name, curr_type, true)));
-            curr_type = temp_curr_type;
-        }
-        Ok(curr_type)
     }
 }
 
@@ -734,27 +552,27 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Date32Value(v) => Self::Date32(Some(*v)),
             Value::ListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
+                    is_null,
                     values,
-                    field: opt_field,
+                    field,
                 } = &scalar_list;
 
-                let field = opt_field.as_ref().required("field")?;
+                let field: Field = field.as_ref().required("field")?;
                 let field = Box::new(field);
 
-                let typechecked_values: Vec<ScalarValue> = values
-                    .iter()
-                    .map(|val| val.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
+                let values: Result<Vec<ScalarValue>, Error> =
+                    values.iter().map(|val| val.try_into()).collect();
+                let values = values?;
 
-                Self::List(Some(typechecked_values), field)
-            }
-            Value::NullListValue(v) => {
-                let field = Field::new("item", v.try_into()?, true);
-                Self::List(None, Box::new(field))
+                validate_list_values(field.as_ref(), &values)?;
+
+                let values = if *is_null { None } else { Some(values) };
+
+                Self::List(values, field)
             }
             Value::NullValue(v) => {
-                let null_type_enum = protobuf::PrimitiveScalarType::try_from(v)?;
-                (&null_type_enum).try_into()?
+                let null_type: DataType = v.try_into()?;
+                null_type.try_into().map_err(Error::DataFusionError)?
             }
             Value::Decimal128Value(val) => {
                 let array = vec_to_array(val.value.clone());
@@ -765,7 +583,30 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 )
             }
             Value::Date64Value(v) => Self::Date64(Some(*v)),
-            Value::Time64Value(v) => Self::Time64(Some(*v)),
+            Value::Time32Value(v) => {
+                let time_value =
+                    v.value.as_ref().ok_or_else(|| Error::required("value"))?;
+                match time_value {
+                    protobuf::scalar_time32_value::Value::Time32SecondValue(t) => {
+                        Self::Time32Second(Some(*t))
+                    }
+                    protobuf::scalar_time32_value::Value::Time32MillisecondValue(t) => {
+                        Self::Time32Millisecond(Some(*t))
+                    }
+                }
+            }
+            Value::Time64Value(v) => {
+                let time_value =
+                    v.value.as_ref().ok_or_else(|| Error::required("value"))?;
+                match time_value {
+                    protobuf::scalar_time64_value::Value::Time64MicrosecondValue(t) => {
+                        Self::Time64Microsecond(Some(*t))
+                    }
+                    protobuf::scalar_time64_value::Value::Time64NanosecondValue(t) => {
+                        Self::Time64Nanosecond(Some(*t))
+                    }
+                }
+            }
             Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
             Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(*v)),
             Value::TimestampValue(v) => {
@@ -836,8 +677,28 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
 
                 Self::Struct(values, Box::new(fields))
             }
+            Value::FixedSizeBinaryValue(v) => {
+                Self::FixedSizeBinary(v.length, Some(v.clone().values))
+            }
         })
     }
+}
+
+/// Ensures that all `values` are of type DataType::List and have the
+/// same type as field
+fn validate_list_values(field: &Field, values: &[ScalarValue]) -> Result<(), Error> {
+    for value in values {
+        let field_type = field.data_type();
+        let value_type = value.get_datatype();
+
+        if field_type != &value_type {
+            return Err(proto_error(format!(
+                "Expected field type {:?}, got scalar of type: {:?}",
+                field_type, value_type
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub fn parse_expr(
@@ -852,25 +713,42 @@ pub fn parse_expr(
         .ok_or_else(|| Error::required("expr_type"))?;
 
     match expr_type {
-        ExprType::BinaryExpr(binary_expr) => Ok(Expr::BinaryExpr {
-            left: Box::new(parse_required_expr(&binary_expr.l, registry, "l")?),
-            op: from_proto_binary_op(&binary_expr.op)?,
-            right: Box::new(parse_required_expr(&binary_expr.r, registry, "r")?),
-        }),
-        ExprType::GetIndexedField(field) => {
-            let key = field.key.as_ref().ok_or_else(|| Error::required("value"))?;
+        ExprType::BinaryExpr(binary_expr) => {
+            let op = from_proto_binary_op(&binary_expr.op)?;
+            let operands = binary_expr
+                .operands
+                .iter()
+                .map(|expr| parse_expr(expr, registry))
+                .collect::<Result<Vec<_>, _>>()?;
 
-            let key = typechecked_scalar_value_conversion(
-                key.value.as_ref().ok_or_else(|| Error::required("value"))?,
-                protobuf::PrimitiveScalarType::Utf8,
-            )?;
+            if operands.len() < 2 {
+                return Err(proto_error(
+                    "A binary expression must always have at least 2 operands",
+                ));
+            }
+
+            // Reduce the linearized operands (ordered by left innermost to right
+            // outermost) into a single expression tree.
+            Ok(operands
+                .into_iter()
+                .reduce(|left, right| {
+                    Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
+                })
+                .expect("Binary expression could not be reduced to a single expression."))
+        }
+        ExprType::GetIndexedField(field) => {
+            let key = field
+                .key
+                .as_ref()
+                .ok_or_else(|| Error::required("value"))?
+                .try_into()?;
 
             let expr = parse_required_expr(&field.expr, registry, "expr")?;
 
-            Ok(Expr::GetIndexedField {
-                expr: Box::new(expr),
+            Ok(Expr::GetIndexedField(GetIndexedField::new(
+                Box::new(expr),
                 key,
-            })
+            )))
         }
         ExprType::Column(column) => Ok(Expr::Column(column.into())),
         ExprType::Literal(literal) => {
@@ -987,30 +865,30 @@ pub fn parse_expr(
         ExprType::IsNotUnknown(msg) => Ok(Expr::IsNotUnknown(Box::new(
             parse_required_expr(&msg.expr, registry, "expr")?,
         ))),
-        ExprType::Between(between) => Ok(Expr::Between {
-            expr: Box::new(parse_required_expr(&between.expr, registry, "expr")?),
-            negated: between.negated,
-            low: Box::new(parse_required_expr(&between.low, registry, "expr")?),
-            high: Box::new(parse_required_expr(&between.high, registry, "expr")?),
-        }),
-        ExprType::Like(like) => Ok(Expr::Like {
-            expr: Box::new(parse_required_expr(&like.expr, registry, "expr")?),
-            negated: like.negated,
-            pattern: Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
-            escape_char: parse_escape_char(&like.escape_char)?,
-        }),
-        ExprType::Ilike(like) => Ok(Expr::ILike {
-            expr: Box::new(parse_required_expr(&like.expr, registry, "expr")?),
-            negated: like.negated,
-            pattern: Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
-            escape_char: parse_escape_char(&like.escape_char)?,
-        }),
-        ExprType::SimilarTo(like) => Ok(Expr::SimilarTo {
-            expr: Box::new(parse_required_expr(&like.expr, registry, "expr")?),
-            negated: like.negated,
-            pattern: Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
-            escape_char: parse_escape_char(&like.escape_char)?,
-        }),
+        ExprType::Between(between) => Ok(Expr::Between(Between::new(
+            Box::new(parse_required_expr(&between.expr, registry, "expr")?),
+            between.negated,
+            Box::new(parse_required_expr(&between.low, registry, "expr")?),
+            Box::new(parse_required_expr(&between.high, registry, "expr")?),
+        ))),
+        ExprType::Like(like) => Ok(Expr::Like(Like::new(
+            like.negated,
+            Box::new(parse_required_expr(&like.expr, registry, "expr")?),
+            Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
+            parse_escape_char(&like.escape_char)?,
+        ))),
+        ExprType::Ilike(like) => Ok(Expr::ILike(Like::new(
+            like.negated,
+            Box::new(parse_required_expr(&like.expr, registry, "expr")?),
+            Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
+            parse_escape_char(&like.escape_char)?,
+        ))),
+        ExprType::SimilarTo(like) => Ok(Expr::SimilarTo(Like::new(
+            like.negated,
+            Box::new(parse_required_expr(&like.expr, registry, "expr")?),
+            Box::new(parse_required_expr(&like.pattern, registry, "pattern")?),
+            parse_escape_char(&like.escape_char)?,
+        ))),
         ExprType::Case(case) => {
             let when_then_expr = case
                 .when_then_expr
@@ -1023,16 +901,16 @@ pub fn parse_expr(
                     Ok((Box::new(when_expr), Box::new(then_expr)))
                 })
                 .collect::<Result<Vec<(Box<Expr>, Box<Expr>)>, Error>>()?;
-            Ok(Expr::Case {
-                expr: parse_optional_expr(&case.expr, registry)?.map(Box::new),
+            Ok(Expr::Case(Case::new(
+                parse_optional_expr(&case.expr, registry)?.map(Box::new),
                 when_then_expr,
-                else_expr: parse_optional_expr(&case.else_expr, registry)?.map(Box::new),
-            })
+                parse_optional_expr(&case.else_expr, registry)?.map(Box::new),
+            )))
         }
         ExprType::Cast(cast) => {
             let expr = Box::new(parse_required_expr(&cast.expr, registry, "expr")?);
             let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            Ok(Expr::Cast { expr, data_type })
+            Ok(Expr::Cast(Cast::new(expr, data_type)))
         }
         ExprType::TryCast(cast) => {
             let expr = Box::new(parse_required_expr(&cast.expr, registry, "expr")?);
@@ -1134,6 +1012,7 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                 )),
                 ScalarFunction::Random => Ok(random()),
+                ScalarFunction::Uuid => Ok(uuid()),
                 ScalarFunction::Repeat => Ok(repeat(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
@@ -1203,10 +1082,21 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                 )),
-                ScalarFunction::Substr => Ok(substr(
-                    parse_expr(&args[0], registry)?,
-                    parse_expr(&args[1], registry)?,
-                )),
+                ScalarFunction::Substr => {
+                    if args.len() > 2 {
+                        assert_eq!(args.len(), 3);
+                        Ok(substring(
+                            parse_expr(&args[0], registry)?,
+                            parse_expr(&args[1], registry)?,
+                            parse_expr(&args[2], registry)?,
+                        ))
+                    } else {
+                        Ok(substr(
+                            parse_expr(&args[0], registry)?,
+                            parse_expr(&args[1], registry)?,
+                        ))
+                    }
+                }
                 ScalarFunction::ToHex => Ok(to_hex(parse_expr(&args[0], registry)?)),
                 ScalarFunction::ToTimestampMillis => {
                     Ok(to_timestamp_millis(parse_expr(&args[0], registry)?))
@@ -1347,23 +1237,14 @@ impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
             protobuf::WindowFrameBoundType::Preceding => {
                 // FIXME implement bound value parsing
                 // https://github.com/apache/arrow-datafusion/issues/361
-                Ok(Self::Preceding(Some(1)))
+                Ok(Self::Preceding(ScalarValue::UInt64(Some(1))))
             }
             protobuf::WindowFrameBoundType::Following => {
                 // FIXME implement bound value parsing
                 // https://github.com/apache/arrow-datafusion/issues/361
-                Ok(Self::Following(Some(1)))
+                Ok(Self::Following(ScalarValue::UInt64(Some(1))))
             }
         }
-    }
-}
-
-impl TryFrom<&Box<protobuf::List>> for DataType {
-    type Error = Error;
-    fn try_from(list: &Box<protobuf::List>) -> Result<Self, Self::Error> {
-        Ok(Self::List(Box::new(
-            list.as_ref().field_type.as_deref().required("field_type")?,
-        )))
     }
 }
 
@@ -1411,184 +1292,6 @@ fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
     v.try_into().unwrap_or_else(|v: Vec<T>| {
         panic!("Expected a Vec of length {} but it was {}", N, v.len())
     })
-}
-
-//Does not typecheck lists
-fn typechecked_scalar_value_conversion(
-    tested_type: &protobuf::scalar_value::Value,
-    required_type: protobuf::PrimitiveScalarType,
-) -> Result<ScalarValue, Error> {
-    use protobuf::{scalar_value::Value, PrimitiveScalarType};
-
-    Ok(match (tested_type, &required_type) {
-        (Value::BoolValue(v), PrimitiveScalarType::Bool) => {
-            ScalarValue::Boolean(Some(*v))
-        }
-        (Value::Int8Value(v), PrimitiveScalarType::Int8) => {
-            ScalarValue::Int8(Some(*v as i8))
-        }
-        (Value::Int16Value(v), PrimitiveScalarType::Int16) => {
-            ScalarValue::Int16(Some(*v as i16))
-        }
-        (Value::Int32Value(v), PrimitiveScalarType::Int32) => {
-            ScalarValue::Int32(Some(*v))
-        }
-        (Value::Int64Value(v), PrimitiveScalarType::Int64) => {
-            ScalarValue::Int64(Some(*v))
-        }
-        (Value::Uint8Value(v), PrimitiveScalarType::Uint8) => {
-            ScalarValue::UInt8(Some(*v as u8))
-        }
-        (Value::Uint16Value(v), PrimitiveScalarType::Uint16) => {
-            ScalarValue::UInt16(Some(*v as u16))
-        }
-        (Value::Uint32Value(v), PrimitiveScalarType::Uint32) => {
-            ScalarValue::UInt32(Some(*v))
-        }
-        (Value::Uint64Value(v), PrimitiveScalarType::Uint64) => {
-            ScalarValue::UInt64(Some(*v))
-        }
-        (Value::Float32Value(v), PrimitiveScalarType::Float32) => {
-            ScalarValue::Float32(Some(*v))
-        }
-        (Value::Float64Value(v), PrimitiveScalarType::Float64) => {
-            ScalarValue::Float64(Some(*v))
-        }
-        (Value::Date32Value(v), PrimitiveScalarType::Date32) => {
-            ScalarValue::Date32(Some(*v))
-        }
-        (
-            Value::TimestampValue(protobuf::ScalarTimestampValue {
-                timezone,
-                value:
-                    Some(protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(v)),
-            }),
-            PrimitiveScalarType::TimestampMicrosecond,
-        ) => ScalarValue::TimestampMicrosecond(Some(*v), unwrap_timezone(timezone)),
-        (
-            Value::TimestampValue(protobuf::ScalarTimestampValue {
-                timezone,
-                value:
-                    Some(protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(v)),
-            }),
-            PrimitiveScalarType::TimestampNanosecond,
-        ) => ScalarValue::TimestampNanosecond(Some(*v), unwrap_timezone(timezone)),
-        (
-            Value::TimestampValue(protobuf::ScalarTimestampValue {
-                timezone,
-                value: Some(protobuf::scalar_timestamp_value::Value::TimeSecondValue(v)),
-            }),
-            PrimitiveScalarType::TimestampSecond,
-        ) => ScalarValue::TimestampSecond(Some(*v), unwrap_timezone(timezone)),
-        (
-            Value::TimestampValue(protobuf::ScalarTimestampValue {
-                timezone,
-                value:
-                    Some(protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(v)),
-            }),
-            PrimitiveScalarType::TimestampMillisecond,
-        ) => ScalarValue::TimestampMillisecond(Some(*v), unwrap_timezone(timezone)),
-        (Value::Utf8Value(v), PrimitiveScalarType::Utf8) => {
-            ScalarValue::Utf8(Some(v.to_owned()))
-        }
-        (Value::LargeUtf8Value(v), PrimitiveScalarType::LargeUtf8) => {
-            ScalarValue::LargeUtf8(Some(v.to_owned()))
-        }
-
-        (Value::NullValue(i32_enum), required_scalar_type) => {
-            if *i32_enum == *required_scalar_type as i32 {
-                let pb_scalar_type = PrimitiveScalarType::try_from(i32_enum)?;
-                let scalar_value: ScalarValue = match pb_scalar_type {
-                    PrimitiveScalarType::Bool => ScalarValue::Boolean(None),
-                    PrimitiveScalarType::Uint8 => ScalarValue::UInt8(None),
-                    PrimitiveScalarType::Int8 => ScalarValue::Int8(None),
-                    PrimitiveScalarType::Uint16 => ScalarValue::UInt16(None),
-                    PrimitiveScalarType::Int16 => ScalarValue::Int16(None),
-                    PrimitiveScalarType::Uint32 => ScalarValue::UInt32(None),
-                    PrimitiveScalarType::Int32 => ScalarValue::Int32(None),
-                    PrimitiveScalarType::Uint64 => ScalarValue::UInt64(None),
-                    PrimitiveScalarType::Int64 => ScalarValue::Int64(None),
-                    PrimitiveScalarType::Float32 => ScalarValue::Float32(None),
-                    PrimitiveScalarType::Float64 => ScalarValue::Float64(None),
-                    PrimitiveScalarType::Utf8 => ScalarValue::Utf8(None),
-                    PrimitiveScalarType::LargeUtf8 => ScalarValue::LargeUtf8(None),
-                    PrimitiveScalarType::Date32 => ScalarValue::Date32(None),
-                    PrimitiveScalarType::Time64 => ScalarValue::Time64(None),
-                    PrimitiveScalarType::TimestampMicrosecond => {
-                        ScalarValue::TimestampMicrosecond(None, None)
-                    }
-                    PrimitiveScalarType::TimestampNanosecond => {
-                        ScalarValue::TimestampNanosecond(None, None)
-                    }
-                    PrimitiveScalarType::Null => {
-                        return Err(proto_error(
-                            "Untyped scalar null is not a valid scalar value",
-                        ));
-                    }
-                    PrimitiveScalarType::Decimal128 => {
-                        ScalarValue::Decimal128(None, 0, 0)
-                    }
-                    PrimitiveScalarType::Date64 => ScalarValue::Date64(None),
-                    PrimitiveScalarType::TimestampSecond => {
-                        ScalarValue::TimestampSecond(None, None)
-                    }
-                    PrimitiveScalarType::TimestampMillisecond => {
-                        ScalarValue::TimestampMillisecond(None, None)
-                    }
-                    PrimitiveScalarType::IntervalYearmonth => {
-                        ScalarValue::IntervalYearMonth(None)
-                    }
-                    PrimitiveScalarType::IntervalDaytime => {
-                        ScalarValue::IntervalDayTime(None)
-                    }
-                    PrimitiveScalarType::IntervalMonthdaynano => {
-                        ScalarValue::IntervalMonthDayNano(None)
-                    }
-                    PrimitiveScalarType::Binary => ScalarValue::Binary(None),
-                    PrimitiveScalarType::LargeBinary => ScalarValue::LargeBinary(None),
-                };
-                scalar_value
-            } else {
-                return Err(proto_error("Could not convert to the proper type"));
-            }
-        }
-        (Value::Decimal128Value(val), PrimitiveScalarType::Decimal128) => {
-            let array = vec_to_array(val.value.clone());
-            ScalarValue::Decimal128(
-                Some(i128::from_be_bytes(array)),
-                val.p as u8,
-                val.s as u8,
-            )
-        }
-        (Value::Date64Value(v), PrimitiveScalarType::Date64) => {
-            ScalarValue::Date64(Some(*v))
-        }
-        (Value::IntervalYearmonthValue(v), PrimitiveScalarType::IntervalYearmonth) => {
-            ScalarValue::IntervalYearMonth(Some(*v))
-        }
-        (Value::IntervalDaytimeValue(v), PrimitiveScalarType::IntervalDaytime) => {
-            ScalarValue::IntervalDayTime(Some(*v))
-        }
-        (Value::IntervalMonthDayNano(v), PrimitiveScalarType::IntervalMonthdaynano) => {
-            let protobuf::IntervalMonthDayNanoValue {
-                months,
-                days,
-                nanos,
-            } = v;
-            ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNanoType::make_value(
-                *months, *days, *nanos,
-            )))
-        }
-        _ => return Err(proto_error("Could not convert to the proper type")),
-    })
-}
-
-fn unwrap_timezone(proto_value: &str) -> Option<String> {
-    if proto_value.is_empty() {
-        None
-    } else {
-        Some(proto_value.to_string())
-    }
 }
 
 pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {

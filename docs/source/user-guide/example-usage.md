@@ -19,6 +19,8 @@
 
 # Example Usage
 
+In this example some simple processing is performed on the [`example.csv`](../../../datafusion/core/tests/example.csv) file.
+
 ## Update `Cargo.toml`
 
 Add the following to your `Cargo.toml` file:
@@ -74,6 +76,63 @@ async fn main() -> datafusion::error::Result<()> {
 +---+--------+
 | a | MIN(b) |
 +---+--------+
+| 1 | 2      |
++---+--------+
+```
+
+# Identifiers and Capitalization
+
+Please be aware that all identifiers are effectively made lower-case in SQL, so if your csv file has capital letters (ex: `Name`) you must put your column name in double quotes or the examples won't work.
+
+To illustrate this behavior, consider the [`capitalized_example.csv`](../../../datafusion/core/tests/capitalized_example.csv) file:
+
+## Run a SQL query against data stored in a CSV:
+
+```rust
+use datafusion::prelude::*;
+
+#[tokio::main]
+async fn main() -> datafusion::error::Result<()> {
+  // register the table
+  let ctx = SessionContext::new();
+  ctx.register_csv("example", "tests/capitalized_example.csv", CsvReadOptions::new()).await?;
+
+  // create a plan to run a SQL query
+  let df = ctx.sql("SELECT \"A\", MIN(b) FROM example GROUP BY \"A\" LIMIT 100").await?;
+
+  // execute and print results
+  df.show().await?;
+  Ok(())
+}
+```
+
+## Use the DataFrame API to process data stored in a CSV:
+
+```rust
+use datafusion::prelude::*;
+
+#[tokio::main]
+async fn main() -> datafusion::error::Result<()> {
+  // create the dataframe
+  let ctx = SessionContext::new();
+  let df = ctx.read_csv("tests/capitalized_example.csv", CsvReadOptions::new()).await?;
+
+  let df = df.filter(col("A").lt_eq(col("c")))?
+           .aggregate(vec![col("A")], vec![min(col("b"))])?;
+
+  // execute and print results
+  df.show_limit(100).await?;
+  Ok(())
+}
+```
+
+## Output from both examples
+
+```text
++---+--------+
+| A | MIN(b) |
++---+--------+
+| 2 | 1      |
 | 1 | 2      |
 +---+--------+
 ```

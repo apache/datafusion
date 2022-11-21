@@ -25,6 +25,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use datafusion_common::DataFusionError;
+use datafusion_optimizer::utils::conjunction;
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::parquet_to_arrow_schema;
@@ -40,8 +41,7 @@ use crate::arrow::array::{
 use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
-use crate::logical_plan::combine_filters;
-use crate::logical_plan::Expr;
+use crate::logical_expr::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
 use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
@@ -177,7 +177,7 @@ impl FileFormat for ParquetFormat {
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
         let predicate = if self.enable_pruning {
-            combine_filters(filters)
+            conjunction(filters.to_vec())
         } else {
             None
         };
@@ -532,25 +532,43 @@ pub(crate) mod test_util {
 
     pub async fn store_parquet(
         batches: Vec<RecordBatch>,
+        multi_page: bool,
     ) -> Result<(Vec<ObjectMeta>, Vec<NamedTempFile>)> {
-        let files: Vec<_> = batches
-            .into_iter()
-            .map(|batch| {
-                let mut output = NamedTempFile::new().expect("creating temp file");
+        if multi_page {
+            // All batches write in to one file, each batch must have same schema.
+            let mut output = NamedTempFile::new().expect("creating temp file");
+            let mut builder = WriterProperties::builder();
+            builder = builder.set_data_page_row_count_limit(2);
+            let proper = builder.build();
+            let mut writer =
+                ArrowWriter::try_new(&mut output, batches[0].schema(), Some(proper))
+                    .expect("creating writer");
+            for b in batches {
+                writer.write(&b).expect("Writing batch");
+            }
+            writer.close().unwrap();
+            Ok((vec![local_unpartitioned_file(&output)], vec![output]))
+        } else {
+            // Each batch writes to their own file
+            let files: Vec<_> = batches
+                .into_iter()
+                .map(|batch| {
+                    let mut output = NamedTempFile::new().expect("creating temp file");
 
-                let props = WriterProperties::builder().build();
-                let mut writer =
-                    ArrowWriter::try_new(&mut output, batch.schema(), Some(props))
-                        .expect("creating writer");
+                    let props = WriterProperties::builder().build();
+                    let mut writer =
+                        ArrowWriter::try_new(&mut output, batch.schema(), Some(props))
+                            .expect("creating writer");
 
-                writer.write(&batch).expect("Writing batch");
-                writer.close().unwrap();
-                output
-            })
-            .collect();
+                    writer.write(&batch).expect("Writing batch");
+                    writer.close().unwrap();
+                    output
+                })
+                .collect();
 
-        let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
-        Ok((meta, files))
+            let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
+            Ok((meta, files))
+        }
     }
 }
 
@@ -568,12 +586,14 @@ mod tests {
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{
-        Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
-        Int32Array, StringArray, TimestampNanosecondArray,
+        Array, ArrayRef, BinaryArray, StringArray, TimestampNanosecondArray,
     };
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
     use bytes::Bytes;
+    use datafusion_common::cast::{
+        as_boolean_array, as_float32_array, as_float64_array, as_int32_array,
+    };
     use datafusion_common::ScalarValue;
     use futures::stream::BoxStream;
     use futures::StreamExt;
@@ -599,7 +619,7 @@ mod tests {
         let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)]).unwrap();
 
         let store = Arc::new(LocalFileSystem::new()) as _;
-        let (meta, _files) = store_parquet(vec![batch1, batch2]).await?;
+        let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
 
         let format = ParquetFormat::default();
         let schema = format.infer_schema(&store, &meta).await.unwrap();
@@ -738,7 +758,7 @@ mod tests {
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
         )));
-        let (meta, _files) = store_parquet(vec![batch1, batch2]).await?;
+        let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
 
         // Use a size hint larger than the parquet footer but smaller than the actual metadata, requiring a second fetch
         // for the remaining metadata
@@ -927,11 +947,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .unwrap();
+        let array = as_boolean_array(batches[0].column(0))?;
         let mut values: Vec<bool> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));
@@ -957,11 +973,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
+        let array = as_int32_array(batches[0].column(0))?;
         let mut values: Vec<i32> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));
@@ -1011,11 +1023,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Float32Array>()
-            .unwrap();
+        let array = as_float32_array(batches[0].column(0))?;
         let mut values: Vec<f32> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));
@@ -1041,11 +1049,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap();
+        let array = as_float64_array(batches[0].column(0))?;
         let mut values: Vec<f64> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));

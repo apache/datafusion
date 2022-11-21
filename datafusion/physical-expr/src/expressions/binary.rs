@@ -73,7 +73,9 @@ use kernels_arrow::{
 use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 
-use crate::PhysicalExpr;
+use crate::physical_expr::down_cast_any_ref;
+use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
+use datafusion_common::cast::{as_boolean_array, as_decimal128_array};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::binary_operator_data_type;
@@ -121,7 +123,7 @@ impl std::fmt::Display for BinaryExpr {
 
 macro_rules! compute_decimal_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
-        let ll = $LEFT.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        let ll = as_decimal128_array($LEFT).unwrap();
         if let ScalarValue::Decimal128(Some(_), _, _) = $RIGHT {
             Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
                 ll,
@@ -136,7 +138,7 @@ macro_rules! compute_decimal_op_dyn_scalar {
 
 macro_rules! compute_decimal_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        let ll = as_decimal128_array($LEFT).unwrap();
         if let ScalarValue::Decimal128(Some(_), _, _) = $RIGHT {
             Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
                 ll,
@@ -374,8 +376,6 @@ macro_rules! binary_string_array_op {
 macro_rules! binary_primitive_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
-            // TODO support decimal type
-            // which is not the primitive type
             DataType::Decimal128(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
             DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
@@ -458,6 +458,18 @@ macro_rules! binary_array_op {
             DataType::Date64 => {
                 compute_op!($LEFT, $RIGHT, $OP, Date64Array)
             }
+            DataType::Time32(TimeUnit::Second) => {
+                compute_op!($LEFT, $RIGHT, $OP, Time32SecondArray)
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                compute_op!($LEFT, $RIGHT, $OP, Time32MillisecondArray)
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                compute_op!($LEFT, $RIGHT, $OP, Time64MicrosecondArray)
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                compute_op!($LEFT, $RIGHT, $OP, Time64NanosecondArray)
+            }
             DataType::Boolean => compute_bool_op!($LEFT, $RIGHT, $OP, BooleanArray),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for binary operation '{}' on dyn arrays",
@@ -470,14 +482,8 @@ macro_rules! binary_array_op {
 /// Invoke a boolean kernel on a pair of arrays
 macro_rules! boolean_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("boolean_op failed to downcast array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("boolean_op failed to downcast array");
+        let ll = as_boolean_array($LEFT).expect("boolean_op failed to downcast array");
+        let rr = as_boolean_array($RIGHT).expect("boolean_op failed to downcast array");
         Ok(Arc::new($OP(&ll, &rr)?))
     }};
 }
@@ -640,6 +646,140 @@ impl PhysicalExpr for BinaryExpr {
         self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
             .map(|a| ColumnarValue::Array(a))
     }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.left.clone(), self.right.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(BinaryExpr::new(
+            children[0].clone(),
+            self.op,
+            children[1].clone(),
+        )))
+    }
+
+    /// Return the boundaries of this binary expression's result.
+    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
+        match &self.op {
+            Operator::Eq
+            | Operator::Gt
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::GtEq => {
+                // We currently only support comparison when we know at least one of the sides are
+                // a known value (a scalar). This includes predicates like a > 20 or 5 > a.
+                let left_boundaries = self.left.boundaries(context)?;
+                let right_boundaries = self.right.boundaries(context)?;
+                let (op, left, right) = match right_boundaries.reduce() {
+                    Some(right_value) => {
+                        // We know the right side is a scalar, so we can use the operator as is
+                        (self.op, self.left.clone(), right_value)
+                    }
+                    None => {
+                        // If not, we have to swap the operator and left/right (since this means
+                        // left has to be a scalar).
+                        (
+                            self.op.swap()?,
+                            self.right.clone(),
+                            left_boundaries.reduce()?,
+                        )
+                    }
+                };
+                analyze_expr_scalar_comparison(&op, context, &left, right)
+            }
+            _ => None,
+        }
+    }
+}
+
+impl PartialEq<dyn Any> for BinaryExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.left.eq(&x.left) && self.op == x.op && self.right.eq(&x.right))
+            .unwrap_or(false)
+    }
+}
+
+// Analyze the comparison between an expression (on the left) and a scalar value
+// (on the right). The new boundaries will indicate whether it is always true, always
+// false, or unknown (with a probablistic selectivity value attached).
+fn analyze_expr_scalar_comparison(
+    op: &Operator,
+    context: &AnalysisContext,
+    left: &Arc<dyn PhysicalExpr>,
+    right: ScalarValue,
+) -> Option<ExprBoundaries> {
+    let left_bounds = left.boundaries(context)?;
+    let left_min = left_bounds.min_value;
+    let left_max = left_bounds.max_value;
+
+    // Direct selectivity is applicable when we can determine that this comparison will
+    // always be true or false (e.g. `x > 10` where the `x`'s min value is 11 or `a < 5`
+    // where the `a`'s max value is 4).
+    let (always_selects, never_selects) = match op {
+        Operator::Lt => (right > left_max, right <= left_min),
+        Operator::LtEq => (right >= left_max, right < left_min),
+        Operator::Gt => (right < left_min, right >= left_max),
+        Operator::GtEq => (right <= left_min, right > left_max),
+        Operator::Eq => (
+            // Since min/max can be artificial (e.g. the min or max value of a column
+            // might be under/over the real value), we can't assume if the right equals
+            // to any left.min / left.max values it is always going to be selected. But
+            // we can assume that if the range(left) doesn't overlap with right, it is
+            // never going to be selected.
+            false,
+            right < left_min || right > left_max,
+        ),
+        _ => unreachable!(),
+    };
+
+    // Both can not be true at the same time.
+    assert!(!(always_selects && never_selects));
+
+    let selectivity = match (always_selects, never_selects) {
+        (true, _) => Some(1.0),
+        (_, true) => Some(0.0),
+        (false, false) => {
+            // If there is a partial overlap, then we can estimate the selectivity
+            // by computing the ratio of the existing overlap to the total range. Since we
+            // currently don't have access to a value distribution histogram, the part below
+            // assumes a uniform distribution by default.
+
+            // Our [min, max] is inclusive, so we need to add 1 to the difference.
+            let total_range = left_max.distance(&left_min)? + 1;
+            let overlap_between_boundaries = match op {
+                Operator::Lt => right.distance(&left_min)?,
+                Operator::Gt => left_max.distance(&right)?,
+                Operator::LtEq => right.distance(&left_min)? + 1,
+                Operator::GtEq => left_max.distance(&right)? + 1,
+                Operator::Eq => 1,
+                _ => unreachable!(),
+            };
+
+            Some(overlap_between_boundaries as f64 / total_range as f64)
+        }
+    }?;
+
+    // The selectivity can't be be greater than 1.0.
+    assert!(selectivity <= 1.0);
+
+    let (pred_min, pred_max, pred_distinct) = match (always_selects, never_selects) {
+        (false, true) => (false, false, 1),
+        (true, false) => (true, true, 1),
+        _ => (false, true, 2),
+    };
+
+    Some(ExprBoundaries::new_with_selectivity(
+        ScalarValue::Boolean(Some(pred_min)),
+        ScalarValue::Boolean(Some(pred_max)),
+        Some(pred_distinct),
+        Some(selectivity),
+    ))
 }
 
 /// unwrap underlying (non dictionary) value, if any, to pass to a scalar kernel
@@ -678,6 +818,10 @@ macro_rules! binary_array_op_dyn_scalar {
             ScalarValue::Float64(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Date32(_) => compute_op_scalar!($LEFT, right, $OP, Date32Array),
             ScalarValue::Date64(_) => compute_op_scalar!($LEFT, right, $OP, Date64Array),
+            ScalarValue::Time32Second(_) => compute_op_scalar!($LEFT, right, $OP, Time32SecondArray),
+            ScalarValue::Time32Millisecond(_) => compute_op_scalar!($LEFT, right, $OP, Time32MillisecondArray),
+            ScalarValue::Time64Microsecond(_) => compute_op_scalar!($LEFT, right, $OP, Time64MicrosecondArray),
+            ScalarValue::Time64Nanosecond(_) => compute_op_scalar!($LEFT, right, $OP, Time64NanosecondArray),
             ScalarValue::TimestampSecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampSecondArray),
             ScalarValue::TimestampMillisecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMillisecondArray),
             ScalarValue::TimestampMicrosecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMicrosecondArray),
@@ -867,7 +1011,7 @@ impl BinaryExpr {
             Operator::Modulo => binary_primitive_array_op!(left, right, modulus),
             Operator::And => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op!(left, right, and_kleene)
+                    boolean_op!(&left, &right, and_kleene)
                 } else {
                     Err(DataFusionError::Internal(format!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -879,7 +1023,7 @@ impl BinaryExpr {
             }
             Operator::Or => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op!(left, right, or_kleene)
+                    boolean_op!(&left, &right, or_kleene)
                 } else {
                     Err(DataFusionError::Internal(format!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -937,7 +1081,7 @@ mod tests {
     use crate::expressions::try_cast;
     use crate::expressions::{col, lit};
     use arrow::datatypes::{ArrowNumericType, Field, Int32Type, SchemaRef};
-    use datafusion_common::Result;
+    use datafusion_common::{ColumnStatistics, Result, Statistics};
     use datafusion_expr::type_coercion::binary::coerce_types;
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
@@ -974,10 +1118,8 @@ mod tests {
         assert_eq!(result.len(), 5);
 
         let expected = vec![false, false, true, true, true];
-        let result = result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("failed to downcast to BooleanArray");
+        let result =
+            as_boolean_array(&result).expect("failed to downcast to BooleanArray");
         for (i, &expected_item) in expected.iter().enumerate().take(5) {
             assert_eq!(result.value(i), expected_item);
         }
@@ -1020,10 +1162,8 @@ mod tests {
         assert_eq!(result.len(), 5);
 
         let expected = vec![true, true, false, true, false];
-        let result = result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("failed to downcast to BooleanArray");
+        let result =
+            as_boolean_array(&result).expect("failed to downcast to BooleanArray");
         for (i, &expected_item) in expected.iter().enumerate().take(5) {
             assert_eq!(result.value(i), expected_item);
         }
@@ -2152,19 +2292,14 @@ mod tests {
         precision: u8,
         scale: u8,
     ) -> Decimal128Array {
-        let mut decimal_builder =
-            Decimal128Builder::with_capacity(array.len(), precision, scale);
-        for value in array {
-            match value {
-                None => {
-                    decimal_builder.append_null();
-                }
-                Some(v) => {
-                    decimal_builder.append_value(*v).expect("valid value");
-                }
-            }
+        let mut decimal_builder = Decimal128Builder::with_capacity(array.len());
+        for value in array.iter().copied() {
+            decimal_builder.append_option(value)
         }
-        decimal_builder.finish()
+        decimal_builder
+            .finish()
+            .with_precision_and_scale(precision, scale)
+            .unwrap()
     }
 
     #[test]
@@ -2253,24 +2388,89 @@ mod tests {
         )
         .unwrap();
 
-        // compare decimal array with other array type
+        let value: i128 = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[Some(value), None, Some(value - 1), Some(value + 1)],
+            10,
+            0,
+        )) as ArrayRef;
+
+        // comparison array op for decimal array
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, true),
+            Field::new("a", DataType::Decimal128(10, 0), true),
             Field::new("b", DataType::Decimal128(10, 0), true),
         ]));
-
-        let value: i64 = 123;
-
-        let decimal_array = Arc::new(create_decimal_array(
+        let right_decimal_array = Arc::new(create_decimal_array(
             &[
-                Some(value as i128),
-                None,
-                Some((value - 1) as i128),
-                Some((value + 1) as i128),
+                Some(value - 1),
+                Some(value),
+                Some(value + 1),
+                Some(value + 1),
             ],
             10,
             0,
         )) as ArrayRef;
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::Eq,
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::NotEq,
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::Lt,
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::LtEq,
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::Gt,
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::GtEq,
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        // compare decimal array with other array type
+        let value: i64 = 123;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Decimal128(10, 0), true),
+        ]));
 
         let int64_array = Arc::new(Int64Array::from(vec![
             Some(value),
@@ -2306,10 +2506,10 @@ mod tests {
         let value: i128 = 123;
         let decimal_array = Arc::new(create_decimal_array(
             &[
-                Some(value as i128), // 1.23
+                Some(value), // 1.23
                 None,
-                Some((value - 1) as i128), // 1.22
-                Some((value + 1) as i128), // 1.24
+                Some(value - 1), // 1.22
+                Some(value + 1), // 1.24
             ],
             10,
             2,
@@ -2397,9 +2597,22 @@ mod tests {
         let right_expr = if right.data_type().eq(&op_type) {
             col("b", schema)?
         } else {
-            try_cast(col("b", schema)?, schema, op_type)?
+            try_cast(col("b", schema)?, schema, op_type.clone())?
         };
-        let arithmetic_op = binary_simple(left_expr, op, right_expr, schema);
+
+        let coerced_schema = Schema::new(vec![
+            Field::new(
+                schema.field(0).name(),
+                op_type.clone(),
+                schema.field(0).is_nullable(),
+            ),
+            Field::new(
+                schema.field(1).name(),
+                op_type,
+                schema.field(1).is_nullable(),
+            ),
+        ]);
+        let arithmetic_op = binary_simple(left_expr, op, right_expr, &coerced_schema);
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
@@ -2417,10 +2630,10 @@ mod tests {
         let value: i128 = 123;
         let decimal_array = Arc::new(create_decimal_array(
             &[
-                Some(value as i128), // 1.23
+                Some(value), // 1.23
                 None,
-                Some((value - 1) as i128), // 1.22
-                Some((value + 1) as i128), // 1.24
+                Some(value - 1), // 1.22
+                Some(value + 1), // 1.24
             ],
             10,
             2,
@@ -2528,6 +2741,125 @@ mod tests {
     }
 
     #[test]
+    fn arithmetic_decimal_float_expr_test() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Decimal128(10, 2), true),
+        ]));
+        let value: i128 = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value), // 1.23
+                None,
+                Some(value - 1), // 1.22
+                Some(value + 1), // 1.24
+            ],
+            10,
+            2,
+        )) as ArrayRef;
+        let float64_array = Arc::new(Float64Array::from(vec![
+            Some(123.0),
+            Some(122.0),
+            Some(123.0),
+            Some(124.0),
+        ])) as ArrayRef;
+
+        // add: float64 array add decimal array
+        let expect = Arc::new(Float64Array::from(vec![
+            Some(124.23),
+            None,
+            Some(124.22),
+            Some(125.24),
+        ])) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::Plus,
+            expect,
+        )
+        .unwrap();
+
+        // subtract: decimal array subtract float64 array
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Decimal128(10, 2), true),
+        ]));
+        let expect = Arc::new(Float64Array::from(vec![
+            Some(121.77),
+            None,
+            Some(121.78),
+            Some(122.76),
+        ])) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::Minus,
+            expect,
+        )
+        .unwrap();
+
+        // multiply: decimal array multiply float64 array
+        let expect = Arc::new(Float64Array::from(vec![
+            Some(151.29),
+            None,
+            Some(150.06),
+            Some(153.76),
+        ])) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::Multiply,
+            expect,
+        )
+        .unwrap();
+
+        // divide: float64 array divide decimal array
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Decimal128(10, 2), true),
+        ]));
+        let expect = Arc::new(Float64Array::from(vec![
+            Some(100.0),
+            None,
+            Some(100.81967213114754),
+            Some(100.0),
+        ])) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::Divide,
+            expect,
+        )
+        .unwrap();
+
+        // modulus: float64 array modulus decimal array
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Decimal128(10, 2), true),
+        ]));
+        let expect = Arc::new(Float64Array::from(vec![
+            Some(1.7763568394002505e-15),
+            None,
+            Some(1.0000000000000027),
+            Some(8.881784197001252e-16),
+        ])) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::Modulo,
+            expect,
+        )
+        .unwrap();
+
+        Ok(())
+    }
+
+    #[test]
     fn bitwise_array_test() -> Result<()> {
         let left = Arc::new(Int32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right =
@@ -2604,6 +2936,257 @@ mod tests {
 
         result = bitwise_shift_right_scalar(&result, module).unwrap()?;
         assert_eq!(result.as_ref(), &input);
+
+        Ok(())
+    }
+
+    /// Return a pair of (schema, statistics) for a table with a single column (called "a") with
+    /// the same type as the `min_value`/`max_value`.
+    fn get_test_table_stats(
+        min_value: ScalarValue,
+        max_value: ScalarValue,
+    ) -> (Schema, Statistics) {
+        assert!(min_value.get_datatype() == max_value.get_datatype());
+        let schema = Schema::new(vec![Field::new("a", min_value.get_datatype(), false)]);
+        let columns = vec![ColumnStatistics {
+            min_value: Some(min_value),
+            max_value: Some(max_value),
+            null_count: None,
+            distinct_count: None,
+        }];
+        let statistics = Statistics {
+            column_statistics: Some(columns),
+            ..Default::default()
+        };
+        (schema, statistics)
+    }
+
+    #[test]
+    fn test_analyze_expr_scalar_comparison() -> Result<()> {
+        // A table where the column 'a' has a min of 1, a max of 100.
+        let (schema, statistics) =
+            get_test_table_stats(ScalarValue::from(1i64), ScalarValue::from(100i64));
+
+        let cases = [
+            // (operator, rhs), (expected selectivity, expected min, expected max)
+            // -------------------------------------------------------------------
+            //
+            // Table:
+            //   - a (min = 1, max = 100, distinct_count = null)
+            //
+            // Equality (a = $):
+            //
+            ((Operator::Eq, 1), (1.0 / 100.0, 1, 1)),
+            ((Operator::Eq, 5), (1.0 / 100.0, 5, 5)),
+            ((Operator::Eq, 99), (1.0 / 100.0, 99, 99)),
+            ((Operator::Eq, 100), (1.0 / 100.0, 100, 100)),
+            // For never matches like the following, we still produce the correct
+            // min/max values since if this condition holds by an off chance, then
+            // the result of expression will effectively become the = $limit.
+            ((Operator::Eq, 0), (0.0, 0, 0)),
+            ((Operator::Eq, -101), (0.0, -101, -101)),
+            ((Operator::Eq, 101), (0.0, 101, 101)),
+            //
+            // Less than (a < $):
+            //
+            // Note: upper bounds for less than is currently overstated (by the closest value).
+            // see the comment in `compare_left_boundaries` for the reason
+            ((Operator::Lt, 5), (4.0 / 100.0, 1, 5)),
+            ((Operator::Lt, 99), (98.0 / 100.0, 1, 99)),
+            ((Operator::Lt, 101), (100.0 / 100.0, 1, 100)),
+            // Unlike equality, we now have an obligation to provide a range of values here
+            // so if "col < -100" expr is executed, we don't want to say col can take [0, -100].
+            ((Operator::Lt, 0), (0.0, 1, 100)),
+            ((Operator::Lt, 1), (0.0, 1, 100)),
+            ((Operator::Lt, -100), (0.0, 1, 100)),
+            ((Operator::Lt, -200), (0.0, 1, 100)),
+            // We also don't want to expand the range unnecessarily even if the predicate is
+            // successful.
+            ((Operator::Lt, 200), (1.0, 1, 100)),
+            //
+            // Less than or equal (a <= $):
+            //
+            ((Operator::LtEq, -100), (0.0, 1, 100)),
+            ((Operator::LtEq, 0), (0.0, 1, 100)),
+            ((Operator::LtEq, 1), (1.0 / 100.0, 1, 1)),
+            ((Operator::LtEq, 5), (5.0 / 100.0, 1, 5)),
+            ((Operator::LtEq, 99), (99.0 / 100.0, 1, 99)),
+            ((Operator::LtEq, 100), (100.0 / 100.0, 1, 100)),
+            ((Operator::LtEq, 101), (1.0, 1, 100)),
+            ((Operator::LtEq, 200), (1.0, 1, 100)),
+            //
+            // Greater than (a > $):
+            //
+            ((Operator::Gt, -100), (1.0, 1, 100)),
+            ((Operator::Gt, 0), (1.0, 1, 100)),
+            ((Operator::Gt, 1), (99.0 / 100.0, 1, 100)),
+            ((Operator::Gt, 5), (95.0 / 100.0, 5, 100)),
+            ((Operator::Gt, 99), (1.0 / 100.0, 99, 100)),
+            ((Operator::Gt, 100), (0.0, 1, 100)),
+            ((Operator::Gt, 101), (0.0, 1, 100)),
+            ((Operator::Gt, 200), (0.0, 1, 100)),
+            //
+            // Greater than or equal (a >= $):
+            //
+            ((Operator::GtEq, -100), (1.0, 1, 100)),
+            ((Operator::GtEq, 0), (1.0, 1, 100)),
+            ((Operator::GtEq, 1), (1.0, 1, 100)),
+            ((Operator::GtEq, 5), (96.0 / 100.0, 5, 100)),
+            ((Operator::GtEq, 99), (2.0 / 100.0, 99, 100)),
+            ((Operator::GtEq, 100), (1.0 / 100.0, 100, 100)),
+            ((Operator::GtEq, 101), (0.0, 1, 100)),
+            ((Operator::GtEq, 200), (0.0, 1, 100)),
+        ];
+
+        for ((operator, rhs), (exp_selectivity, _, _)) in cases {
+            let context = AnalysisContext::from_statistics(&schema, &statistics);
+            let left = col("a", &schema).unwrap();
+            let right = ScalarValue::Int64(Some(rhs));
+            let boundaries =
+                analyze_expr_scalar_comparison(&operator, &context, &left, right)
+                    .expect("this case should not return None");
+
+            assert_eq!(
+                boundaries
+                    .selectivity
+                    .expect("compare_left_boundaries must produce a selectivity value"),
+                exp_selectivity
+            );
+
+            if exp_selectivity == 1.0 {
+                // When the expected selectivity is 1.0, the resulting expression
+                // should always be true.
+                assert_eq!(boundaries.reduce(), Some(ScalarValue::Boolean(Some(true))));
+            } else if exp_selectivity == 0.0 {
+                // When the expected selectivity is 0.0, the resulting expression
+                // should always be false.
+                assert_eq!(boundaries.reduce(), Some(ScalarValue::Boolean(Some(false))));
+            } else {
+                // Otherwise, it should be [false, true] (since we don't know anything for sure)
+                assert_eq!(boundaries.min_value, ScalarValue::Boolean(Some(false)));
+                assert_eq!(boundaries.max_value, ScalarValue::Boolean(Some(true)));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_comparison_result_estimate_different_type() -> Result<()> {
+        // A table where the column 'a' has a min of 1.3, a max of 50.7.
+        let (schema, statistics) =
+            get_test_table_stats(ScalarValue::from(1.3), ScalarValue::from(50.7));
+        let distance = 50.0; // rounded distance is (max - min) + 1
+
+        // Since the generic version already covers all the paths, we can just
+        // test a small subset of the cases.
+        let cases = [
+            // (operator, rhs), (expected selectivity, expected min, expected max)
+            // -------------------------------------------------------------------
+            //
+            // Table:
+            //   - a (min = 1.3, max = 50.7, distinct_count = 25)
+            //
+            // Never selects (out of range)
+            ((Operator::Eq, 1.1), (0.0, 1.1, 1.1)),
+            ((Operator::Eq, 50.75), (0.0, 50.75, 50.75)),
+            ((Operator::Lt, 1.3), (0.0, 1.3, 50.7)),
+            ((Operator::LtEq, 1.29), (0.0, 1.3, 50.7)),
+            ((Operator::Gt, 50.7), (0.0, 1.3, 50.7)),
+            ((Operator::GtEq, 50.75), (0.0, 1.3, 50.7)),
+            // Always selects
+            ((Operator::Lt, 50.75), (1.0, 1.3, 50.7)),
+            ((Operator::LtEq, 50.75), (1.0, 1.3, 50.7)),
+            ((Operator::Gt, 1.29), (1.0, 1.3, 50.7)),
+            ((Operator::GtEq, 1.3), (1.0, 1.3, 50.7)),
+            // Partial selection (the x in 'x/distance' is basically the rounded version of
+            // the bound distance, as per the implementation).
+            ((Operator::Eq, 27.8), (1.0 / distance, 27.8, 27.8)),
+            ((Operator::Lt, 5.2), (4.0 / distance, 1.3, 5.2)), // On a uniform distribution, this is {2.6, 3.9}
+            ((Operator::LtEq, 1.3), (1.0 / distance, 1.3, 1.3)),
+            ((Operator::Gt, 45.5), (5.0 / distance, 45.5, 50.7)), // On a uniform distribution, this is {46.8, 48.1, 49.4}
+            ((Operator::GtEq, 50.7), (1.0 / distance, 50.7, 50.7)),
+        ];
+
+        for ((operator, rhs), (exp_selectivity, _, _)) in cases {
+            let context = AnalysisContext::from_statistics(&schema, &statistics);
+            let left = col("a", &schema).unwrap();
+            let right = ScalarValue::from(rhs);
+            let boundaries =
+                analyze_expr_scalar_comparison(&operator, &context, &left, right)
+                    .expect("this case should not return None");
+
+            assert_eq!(
+                boundaries
+                    .selectivity
+                    .expect("compare_left_boundaries must produce a selectivity value"),
+                exp_selectivity
+            );
+
+            if exp_selectivity == 1.0 {
+                // When the expected selectivity is 1.0, the resulting expression
+                // should always be true.
+                assert_eq!(boundaries.reduce(), Some(ScalarValue::from(true)));
+            } else if exp_selectivity == 0.0 {
+                // When the expected selectivity is 0.0, the resulting expression
+                // should always be false.
+                assert_eq!(boundaries.reduce(), Some(ScalarValue::from(false)));
+            } else {
+                // Otherwise, it should be [false, true] (since we don't know anything for sure)
+                assert_eq!(boundaries.min_value, ScalarValue::from(false));
+                assert_eq!(boundaries.max_value, ScalarValue::from(true));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_binary_expression_boundaries() -> Result<()> {
+        // A table where the column 'a' has a min of 1, a max of 100.
+        let (schema, statistics) =
+            get_test_table_stats(ScalarValue::from(1), ScalarValue::from(100));
+
+        // expression: "a >= 25"
+        let a = col("a", &schema).unwrap();
+        let gt = binary_simple(
+            a.clone(),
+            Operator::GtEq,
+            lit(ScalarValue::from(25)),
+            &schema,
+        );
+
+        let context = AnalysisContext::from_statistics(&schema, &statistics);
+        let predicate_boundaries = gt
+            .boundaries(&context)
+            .expect("boundaries should not be None");
+        assert_eq!(predicate_boundaries.selectivity, Some(0.76));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_binary_expression_boundaries_rhs() -> Result<()> {
+        // This test is about the column rewriting feature in the boundary provider
+        // (e.g. if the lhs is a literal and rhs is the column, then we swap them when
+        // doing the computation).
+
+        // A table where the column 'a' has a min of 1, a max of 100.
+        let (schema, statistics) =
+            get_test_table_stats(ScalarValue::from(1), ScalarValue::from(100));
+
+        // expression: "50 >= a"
+        let a = col("a", &schema).unwrap();
+        let gt = binary_simple(
+            lit(ScalarValue::from(50)),
+            Operator::GtEq,
+            a.clone(),
+            &schema,
+        );
+
+        let context = AnalysisContext::from_statistics(&schema, &statistics);
+        let predicate_boundaries = gt
+            .boundaries(&context)
+            .expect("boundaries should not be None");
+        assert_eq!(predicate_boundaries.selectivity, Some(0.5));
 
         Ok(())
     }

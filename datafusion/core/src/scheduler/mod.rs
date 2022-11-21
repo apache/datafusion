@@ -323,7 +323,11 @@ mod tests {
     async fn test_simple() {
         init_logging();
 
-        let scheduler = Scheduler::new(4);
+        let scheduler = SchedulerBuilder::new(4)
+            .panic_handler(|panic| {
+                unreachable!("not expect panic: {:?}", panic);
+            })
+            .build();
 
         let config = SessionConfig::new().with_target_partitions(4);
         let context = SessionContext::with_config(config);
@@ -341,6 +345,8 @@ mod tests {
             "select id, b from (select id, b from table1 union all select id, b from table2 where a > 100 order by id) as t where b > 10 order by id, b",
             "select id, MIN(b), MAX(b), AVG(b) from table1 group by id order by id",
             "select count(*) from table1 where table1.a > 4",
+            "WITH gp AS (SELECT id FROM table1 GROUP BY id) 
+            SELECT COUNT(CAST(CAST(gp.id || 'xx' AS TIMESTAMP) AS BIGINT)) FROM gp",
         ];
 
         for sql in queries {
@@ -353,8 +359,8 @@ mod tests {
             info!("Plan: {}", displayable(plan.as_ref()).indent());
 
             let stream = scheduler.schedule(plan, task).unwrap().stream();
-            let scheduled: Vec<_> = stream.try_collect().await.unwrap();
-            let expected = query.collect().await.unwrap();
+            let scheduled: Vec<_> = stream.try_collect().await.unwrap_or_default();
+            let expected = query.collect().await.unwrap_or_default();
 
             let total_expected = expected.iter().map(|x| x.num_rows()).sum::<usize>();
             let total_scheduled = scheduled.iter().map(|x| x.num_rows()).sum::<usize>();

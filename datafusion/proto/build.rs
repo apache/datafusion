@@ -15,25 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::path::{Path, PathBuf};
+
 type Error = Box<dyn std::error::Error>;
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 fn main() -> Result<(), String> {
     // for use in docker build where file changes can be wonky
     println!("cargo:rerun-if-env-changed=FORCE_REBUILD");
-    println!("cargo:rerun-if-changed=proto/datafusion.proto");
 
-    build()?;
+    // We don't include the proto files in releases so that downstreams
+    // do not need to have PROTOC included
+    if Path::new("proto/datafusion.proto").exists() {
+        println!("cargo:rerun-if-changed=proto/datafusion.proto");
+        build()?
+    }
 
     Ok(())
 }
 
 fn build() -> Result<(), String> {
-    use std::io::Write;
-
-    let out = std::path::PathBuf::from(
-        std::env::var("OUT_DIR").expect("Cannot find OUT_DIR environment variable"),
-    );
+    let out: PathBuf = std::env::var("OUT_DIR")
+        .expect("Cannot find OUT_DIR environment variable")
+        .into();
     let descriptor_path = out.join("proto_descriptor.bin");
 
     prost_build::Config::new()
@@ -43,41 +47,22 @@ fn build() -> Result<(), String> {
         .compile_protos(&["proto/datafusion.proto"], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {}", e))?;
 
-    #[cfg(feature = "json")]
     let descriptor_set = std::fs::read(&descriptor_path)
-        .expect(&*format!("Cannot read {:?}", &descriptor_path));
+        .unwrap_or_else(|e| panic!("Cannot read {:?}: {}", &descriptor_path, e));
 
-    #[cfg(feature = "json")]
     pbjson_build::Builder::new()
         .register_descriptors(&descriptor_set)
-        .expect(&*format!(
-            "Cannot register descriptors {:?}",
-            &descriptor_set
-        ))
+        .unwrap_or_else(|e| {
+            panic!("Cannot register descriptors {:?}: {}", &descriptor_set, e)
+        })
         .build(&[".datafusion"])
         .map_err(|e| format!("pbjson compilation failed: {}", e))?;
 
-    // .serde.rs is not a valid package name, so append to datafusion.rs so we can treat it normally
-    let proto = std::fs::read_to_string(out.join("datafusion.rs")).unwrap();
+    let prost = out.join("datafusion.rs");
+    let pbjson = out.join("datafusion.serde.rs");
 
-    #[cfg(feature = "json")]
-    let json = std::fs::read_to_string(out.join("datafusion.serde.rs")).unwrap();
-
-    #[cfg(feature = "docsrs")]
-    let path = out.join("datafusion.rs");
-    #[cfg(not(feature = "docsrs"))]
-    let path = "src/generated/datafusion.rs";
-
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .create(true)
-        .open(path)
-        .unwrap();
-    file.write_all(proto.as_str().as_ref()).unwrap();
-
-    #[cfg(feature = "json")]
-    file.write_all(json.as_str().as_ref()).unwrap();
+    std::fs::copy(prost, "src/generated/prost.rs").unwrap();
+    std::fs::copy(pbjson, "src/generated/pbjson.rs").unwrap();
 
     Ok(())
 }

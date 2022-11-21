@@ -21,12 +21,11 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
-use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{cast::as_boolean_array, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 /// Not expression
@@ -72,15 +71,7 @@ impl PhysicalExpr for NotExpr {
         let evaluate_arg = self.arg.evaluate(batch)?;
         match evaluate_arg {
             ColumnarValue::Array(array) => {
-                let array =
-                    array
-                        .as_any()
-                        .downcast_ref::<BooleanArray>()
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "boolean_op failed to downcast array".to_owned(),
-                            )
-                        })?;
+                let array = as_boolean_array(&array)?;
                 Ok(ColumnarValue::Array(Arc::new(
                     arrow::compute::kernels::boolean::not(array)?,
                 )))
@@ -103,6 +94,26 @@ impl PhysicalExpr for NotExpr {
             }
         }
     }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.arg.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(NotExpr::new(children[0].clone())))
+    }
+}
+
+impl PartialEq<dyn Any> for NotExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.arg.eq(&x.arg))
+            .unwrap_or(false)
+    }
 }
 
 /// Creates a unary expression NOT
@@ -114,7 +125,7 @@ pub fn not(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
 mod tests {
     use super::*;
     use crate::expressions::col;
-    use arrow::datatypes::*;
+    use arrow::{array::BooleanArray, datatypes::*};
     use datafusion_common::Result;
 
     #[test]
@@ -132,10 +143,8 @@ mod tests {
             RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(input)])?;
 
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("failed to downcast to BooleanArray");
+        let result =
+            as_boolean_array(&result).expect("failed to downcast to BooleanArray");
         assert_eq!(result, expected);
 
         Ok(())

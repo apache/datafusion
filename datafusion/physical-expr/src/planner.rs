@@ -27,7 +27,10 @@ use crate::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::{binary_expr, Expr, Operator};
+use datafusion_expr::expr::Cast;
+use datafusion_expr::{
+    binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator,
+};
 use std::sync::Arc;
 
 /// Create a physical expression from a logical expression ([Expr]).
@@ -166,7 +169,7 @@ pub fn create_physical_expr(
                 execution_props,
             )
         }
-        Expr::BinaryExpr { left, op, right } => {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             let lhs = create_physical_expr(
                 left,
                 input_dfschema,
@@ -201,12 +204,12 @@ pub fn create_physical_expr(
                 }
             }
         }
-        Expr::Like {
+        Expr::Like(Like {
             negated,
             expr,
             pattern,
             escape_char,
-        } => {
+        }) => {
             if escape_char.is_some() {
                 return Err(DataFusionError::Execution(
                     "LIKE does not support escape_char".to_string(),
@@ -221,13 +224,8 @@ pub fn create_physical_expr(
                 binary_expr(expr.as_ref().clone(), op, pattern.as_ref().clone());
             create_physical_expr(&bin_expr, input_dfschema, input_schema, execution_props)
         }
-        Expr::Case {
-            expr,
-            when_then_expr,
-            else_expr,
-            ..
-        } => {
-            let expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = expr {
+        Expr::Case(case) => {
+            let expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = &case.expr {
                 Some(create_physical_expr(
                     e.as_ref(),
                     input_dfschema,
@@ -237,7 +235,8 @@ pub fn create_physical_expr(
             } else {
                 None
             };
-            let when_expr = when_then_expr
+            let when_expr = case
+                .when_then_expr
                 .iter()
                 .map(|(w, _)| {
                     create_physical_expr(
@@ -248,7 +247,8 @@ pub fn create_physical_expr(
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let then_expr = when_then_expr
+            let then_expr = case
+                .when_then_expr
                 .iter()
                 .map(|(_, t)| {
                     create_physical_expr(
@@ -265,19 +265,20 @@ pub fn create_physical_expr(
                     .zip(then_expr.iter())
                     .map(|(w, t)| (w.clone(), t.clone()))
                     .collect();
-            let else_expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = else_expr {
-                Some(create_physical_expr(
-                    e.as_ref(),
-                    input_dfschema,
-                    input_schema,
-                    execution_props,
-                )?)
-            } else {
-                None
-            };
+            let else_expr: Option<Arc<dyn PhysicalExpr>> =
+                if let Some(e) = &case.else_expr {
+                    Some(create_physical_expr(
+                        e.as_ref(),
+                        input_dfschema,
+                        input_schema,
+                        execution_props,
+                    )?)
+                } else {
+                    None
+                };
             Ok(expressions::case(expr, when_then_expr, else_expr)?)
         }
-        Expr::Cast { expr, data_type } => expressions::cast(
+        Expr::Cast(Cast { expr, data_type }) => expressions::cast(
             create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
             input_schema,
             data_type.clone(),
@@ -309,10 +310,17 @@ pub fn create_physical_expr(
             input_schema,
             execution_props,
         )?),
-        Expr::GetIndexedField { expr, key } => Ok(Arc::new(GetIndexedFieldExpr::new(
-            create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
-            key.clone(),
-        ))),
+        Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+            Ok(Arc::new(GetIndexedFieldExpr::new(
+                create_physical_expr(
+                    expr,
+                    input_dfschema,
+                    input_schema,
+                    execution_props,
+                )?,
+                key.clone(),
+            )))
+        }
 
         Expr::ScalarFunction { fun, args } => {
             let physical_args = args
@@ -341,12 +349,12 @@ pub fn create_physical_expr(
 
             udf::create_physical_expr(fun.clone().as_ref(), &physical_args, input_schema)
         }
-        Expr::Between {
+        Expr::Between(Between {
             expr,
             negated,
             low,
             high,
-        } => {
+        }) => {
             let value_expr = create_physical_expr(
                 expr,
                 input_dfschema,
