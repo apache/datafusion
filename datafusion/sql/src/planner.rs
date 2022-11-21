@@ -505,16 +505,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         statement: DescribeTable,
     ) -> Result<LogicalPlan> {
-        let table_name = statement.table_name;
+        let table_name = statement.table_name.to_string();
         let table_ref: TableReference = table_name.as_str().into();
 
         // check if table_name exists
         let _ = self.schema_provider.get_table_provider(table_ref)?;
 
+        let where_clause = object_name_to_qualifier(&statement.table_name);
+
         if self.has_table("information_schema", "tables") {
-            let sql = format!("SELECT column_name, data_type, is_nullable \
-                                FROM information_schema.columns WHERE table_name = '{table_name}';");
-            let mut rewrite = DFParser::parse_sql(&sql[..])?;
+            let sql = format!(
+                "SELECT column_name, data_type, is_nullable \
+                                FROM information_schema.columns WHERE {where_clause};"
+            );
+            let mut rewrite = DFParser::parse_sql(&sql)?;
             self.statement_to_plan(rewrite.pop_front().unwrap())
         } else {
             Err(DataFusionError::Plan(
@@ -2684,17 +2688,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let _ = self.schema_provider.get_table_provider(table_ref)?;
 
         // Figure out the where clause
-        let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
-        let where_clause = sql_table_name
-            .0
-            .iter()
-            .rev()
-            .zip(columns)
-            .map(|(ident, column_name)| {
-                format!(r#"{} = '{}'"#, column_name, normalize_ident(ident))
-            })
-            .collect::<Vec<_>>()
-            .join(" AND ");
+        let where_clause = object_name_to_qualifier(sql_table_name);
 
         // treat both FULL and EXTENDED as the same
         let select_list = if full || extended {
@@ -2729,17 +2723,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let _ = self.schema_provider.get_table_provider(table_ref)?;
 
         // Figure out the where clause
-        let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
-        let where_clause = sql_table_name
-            .0
-            .iter()
-            .rev()
-            .zip(columns)
-            .map(|(ident, column_name)| {
-                format!(r#"{} = '{}'"#, column_name, normalize_ident(ident))
-            })
-            .collect::<Vec<_>>()
-            .join(" AND ");
+        let where_clause = object_name_to_qualifier(sql_table_name);
 
         let query = format!(
             "SELECT table_catalog, table_schema, table_name, definition FROM information_schema.views WHERE {}",
@@ -2977,6 +2961,22 @@ fn normalize_sql_object_name(sql_object_name: &ObjectName) -> String {
         .map(normalize_ident)
         .collect::<Vec<String>>()
         .join(".")
+}
+
+/// Construct a WHERE qualifier suitable for e.g. information_schema filtering
+/// from the provided object identifiers (catalog, schema and table names).
+pub fn object_name_to_qualifier(sql_table_name: &ObjectName) -> String {
+    let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
+    sql_table_name
+        .0
+        .iter()
+        .rev()
+        .zip(columns)
+        .map(|(ident, column_name)| {
+            format!(r#"{} = '{}'"#, column_name, normalize_ident(ident))
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ")
 }
 
 /// Remove join expressions from a filter expression
