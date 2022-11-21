@@ -43,7 +43,10 @@ use datafusion_common::{
 };
 use std::any::Any;
 use std::convert::TryFrom;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -456,6 +459,81 @@ impl LogicalPlanBuilder {
         filter: Option<Expr>,
     ) -> Result<Self> {
         self.join_detailed(right, join_type, join_keys, filter, false)
+    }
+
+    /// Apply a join with on constraint which the key is an expression.
+    ///
+    /// Filter expression expected to contain non-equality predicates that can not be pushed
+    /// down to any of join inputs.
+    /// In case of outer join, filter applied to only matched rows.
+    pub fn join_with_expr_keys(
+        &self,
+        right: &LogicalPlan,
+        join_type: JoinType,
+        join_keys: (Vec<impl Into<Expr>>, Vec<impl Into<Expr>>),
+        filter: Option<Expr>,
+    ) -> Result<Self> {
+        if join_keys.0.len() != join_keys.1.len() {
+            return Err(DataFusionError::Plan(
+                "left_keys and right_keys were not the same length".to_string(),
+            ));
+        }
+
+        let left_keys = join_keys
+            .0
+            .into_iter()
+            .map(|key| normalize_col(key.into(), &self.plan))
+            .collect::<Result<Vec<_>>>()?;
+
+        let right_keys = join_keys
+            .1
+            .into_iter()
+            .map(|key| normalize_col(key.into(), right))
+            .collect::<Result<Vec<_>>>()?;
+
+        let join_schema =
+            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+
+        // Wrap projection for left input if left join keys contain normal expression.
+        let (left_child, left_projected) =
+            wrap_projection_for_join_if_necessary(&left_keys, self.plan.clone())?;
+        let left_join_keys = left_keys
+            .iter()
+            .map(|key| {
+                key.try_into_col()
+                    .or_else(|_| Ok(Column::from_name(key.display_name()?)))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Wrap projection for right input if right join keys contains normal expression.
+        let (right_child, right_projected) =
+            wrap_projection_for_join_if_necessary(&right_keys, right.clone())?;
+        let right_join_keys = right_keys
+            .iter()
+            .map(|key| {
+                key.try_into_col()
+                    .or_else(|_| Ok(Column::from_name(key.display_name()?)))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let join_plan_builder = LogicalPlanBuilder::from(left_child).join(
+            &right_child,
+            join_type,
+            (left_join_keys, right_join_keys),
+            filter,
+        )?;
+
+        // Remove temporary projected columns if necessary.
+        if left_projected || right_projected {
+            let final_join_result = join_schema
+                .fields()
+                .iter()
+                .map(|field| Expr::Column(field.qualified_column()))
+                .collect::<Vec<_>>();
+            join_plan_builder.project(final_join_result)
+        } else {
+            Ok(join_plan_builder)
+        }
     }
 
     fn normalize(
@@ -1031,6 +1109,32 @@ impl TableSource for LogicalTableSource {
     }
 }
 
+/// Wrap projection for a plan, if the join keys contains normal expression.
+fn wrap_projection_for_join_if_necessary(
+    join_keys: &[Expr],
+    input: LogicalPlan,
+) -> Result<(LogicalPlan, bool)> {
+    let expr_join_keys = join_keys
+        .iter()
+        .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))
+        .cloned()
+        .collect::<HashSet<Expr>>();
+
+    let need_project = !expr_join_keys.is_empty();
+    let plan = if need_project {
+        let mut projection = vec![Expr::Wildcard];
+        projection.extend(expr_join_keys.into_iter());
+
+        LogicalPlanBuilder::from(input)
+            .project(projection)?
+            .build()?
+    } else {
+        input
+    };
+
+    Ok((plan, need_project))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::expr_fn::exists;
@@ -1419,6 +1523,80 @@ mod tests {
                 .unwrap_err();
 
         assert_eq!(err_msg1.to_string(), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_equijoin_with_expr_keys() -> Result<()> {
+        let plan1 = test_table_scan_with_name("test0")?;
+        let plan2 = test_table_scan_with_name("test1")?;
+
+        let left_join_keys = vec![col("a") + col("c")];
+        let right_join_keys = vec![col("b")];
+
+        let join_plan = LogicalPlanBuilder::from(plan1)
+            .join_with_expr_keys(
+                &plan2,
+                JoinType::Inner,
+                (left_join_keys, right_join_keys),
+                None,
+            )?
+            .build()?;
+
+        let expected = "Projection: test0.a, test0.b, test0.c, test1.a, test1.b, test1.c\
+        \n  Inner Join: test0.a + test0.c = test1.b\
+        \n    Projection: test0.a, test0.b, test0.c, test0.a + test0.c\
+        \n      TableScan: test0\
+        \n    TableScan: test1";
+        assert_eq!(join_plan.display_indent().to_string(), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_key_not_exists_join_with_expr_keys() -> Result<()> {
+        let plan1 = test_table_scan_with_name("test0")?;
+        let plan2 = test_table_scan_with_name("test1")?;
+
+        let left_join_keys = vec![col("a") + col("c")];
+        let right_join_keys = vec![col("d")];
+
+        let result = LogicalPlanBuilder::from(plan1)
+            .join_with_expr_keys(
+                &plan2,
+                JoinType::Inner,
+                (left_join_keys, right_join_keys),
+                None,
+            )
+            .unwrap_err();
+
+        let expected_error = "Schema error: No field named 'd'. Valid fields are 'test1'.'a', 'test1'.'b', 'test1'.'c'.";
+        assert_eq!(result.to_string(), expected_error);
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_wrong_key_count_join_with_expr_keys() -> Result<()> {
+        let plan1 = test_table_scan_with_name("test0")?;
+        let plan2 = test_table_scan_with_name("test1")?;
+
+        let left_join_keys = vec![col("a") + col("c"), col("b")];
+        let right_join_keys = vec![col("b")];
+
+        let result = LogicalPlanBuilder::from(plan1)
+            .join_with_expr_keys(
+                &plan2,
+                JoinType::Inner,
+                (left_join_keys, right_join_keys),
+                None,
+            )
+            .unwrap_err();
+
+        let expected_error =
+            "Error during planning: left_keys and right_keys were not the same length";
+        assert_eq!(result.to_string(), expected_error);
 
         Ok(())
     }
