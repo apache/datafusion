@@ -87,21 +87,17 @@ fn limit_push_down(
                 Ancestor::FromLimit {
                     skip: ancestor_skip,
                     fetch: ancestor_fetch,
-                } => {
-                    if let Some(fetch) = current_fetch {
-                        // extend ancestor's fetch
-                        let ancestor_fetch = ancestor_fetch.map(|f| f + ancestor_skip);
-
-                        let new_current_fetch =
-                            ancestor_fetch.map_or(*fetch, |x| std::cmp::min(x, *fetch));
-
-                        Some(new_current_fetch)
-                    } else {
-                        // we dont have a "fetch", and we can push down our parent's "fetch"
-                        // extend ancestor's fetch
-                        ancestor_fetch.map(|f| f + ancestor_skip)
-                    }
-                }
+                } => match ancestor_fetch {
+                    Some(fetch) => match current_fetch {
+                        Some(child_fetch) => Some(std::cmp::min(
+                            fetch,
+                            fetch_minus_skip(*child_fetch, ancestor_skip),
+                        )),
+                        None => Some(fetch),
+                    },
+                    _ => current_fetch
+                        .map(|child_fetch| fetch_minus_skip(child_fetch, ancestor_skip)),
+                },
                 _ => *current_fetch,
             };
 
@@ -389,6 +385,14 @@ impl OptimizerRule for LimitPushDown {
     }
 }
 
+fn fetch_minus_skip(fetch: usize, skip: usize) -> usize {
+    if skip > fetch {
+        0
+    } else {
+        fetch - skip
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::vec;
@@ -598,9 +602,9 @@ mod test {
             .build()?;
 
         let expected = "Limit: skip=10, fetch=None\
-        \n  Limit: skip=0, fetch=1000\
+        \n  Limit: skip=0, fetch=990\
         \n    Projection: test.a\
-        \n      TableScan: test, fetch=1000";
+        \n      TableScan: test, fetch=990";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -947,5 +951,43 @@ mod test {
         assert_optimized_plan_eq(&plan, expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn merge_limit_result_empty() {
+        let scan = test_table_scan().unwrap();
+
+        let plan = LogicalPlanBuilder::from(scan)
+            .limit(0, Some(1000))
+            .unwrap()
+            .limit(1000, None)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = "Limit: skip=1000, fetch=None\
+        \n  Limit: skip=0, fetch=0\
+        \n    TableScan: test, fetch=0";
+
+        assert_optimized_plan_eq(&plan, expected);
+    }
+
+    #[test]
+    fn skip_great_than_fetch() {
+        let scan = test_table_scan().unwrap();
+
+        let plan = LogicalPlanBuilder::from(scan)
+            .limit(0, Some(1))
+            .unwrap()
+            .limit(1000, None)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let expected = "Limit: skip=1000, fetch=None\
+        \n  Limit: skip=0, fetch=0\
+        \n    TableScan: test, fetch=0";
+
+        assert_optimized_plan_eq(&plan, expected);
     }
 }
