@@ -243,7 +243,29 @@ pub fn get_sort_fields(expr: &Expr) -> Result<SortField> {
     }
 }
 
-pub fn decide_col_sorting(
+pub fn get_column_info_v2(input_schema: &DFSchemaRef, expr: &Expr) -> Result<ColumnInfo> {
+    println!("expr: {:?}", expr);
+    let field_name = match expr {
+        Expr::Sort { expr, .. } => match &**expr {
+            Expr::Column(column) => &column.name,
+            _ => {
+                return Err(DataFusionError::Execution(
+                    "Expects to get Column type".to_string(),
+                ))
+            }
+        },
+        Expr::Column(column) => &column.name,
+        _ => {
+            return Err(DataFusionError::Execution(
+                "Expects to get Column type".to_string(),
+            ))
+        }
+    };
+
+    get_decision_flags(input_schema, field_name)
+}
+
+pub fn get_column_info(
     input_schema: &Option<DFSchemaRef>,
     expr: &Expr,
 ) -> Result<Option<ColumnInfo>> {
@@ -255,13 +277,24 @@ pub fn decide_col_sorting(
                 asc: _asc,
                 nulls_first: _nulls_first,
             } => {
-                let field_str = expr.to_string();
-                let field_name = field_str.split('.').last();
-                if let Some(field_name) = field_name {
-                    Ok(get_decision_flags(input_schema, field_name))
-                } else {
-                    Ok(None)
-                }
+                let a = &**expr;
+                let field_name = match &**expr {
+                    Expr::Column(column) => &column.name,
+                    expr => {
+                        println!("expr is not supported :{:?}", expr);
+                        panic!("Not yet impelemneted");
+                        // todo!()
+                    },
+                };
+                // let field_str = expr.to_string();
+                // let field_name = field_str.split('.').last();
+
+                Ok(Some(get_decision_flags(input_schema, field_name)?))
+                // if let Some(field_name) = field_name {
+                //     Ok(get_decision_flags(input_schema, field_name))
+                // } else {
+                //     Ok(None)
+                // }
             }
             unexpected => Err(DataFusionError::Internal(format!(
                 "expected expression to be Expr:Sort {:?}",
@@ -289,29 +322,32 @@ pub fn get_column_from_name<'a>(
 pub fn get_decision_flags(
     input_schema: &DFSchemaRef,
     field_name: &str,
-) -> Option<ColumnInfo> {
-    let b = get_column_from_name(input_schema, field_name);
-    if let Some(b) = b {
-        let is_nullable = b.is_nullable();
-        if let Some(metadata) = b.field().metadata() {
-            let is_sorted = if metadata.contains_key("is_sorted") {
-                metadata["is_sorted"] == "true"
-            } else {
-                false
-            };
-            let is_ascending = if metadata.contains_key("is_ascending") {
-                metadata["is_ascending"] == "true"
-            } else {
-                return None;
-            };
-            return Some(ColumnInfo {
-                is_sorted,
-                is_ascending,
-                is_nullable,
-            });
-        }
+) -> Result<ColumnInfo> {
+    let b = get_column_from_name(input_schema, field_name).ok_or_else(|| {
+        DataFusionError::Execution(format!(
+            "Expects to have annotation for field_name: {}",
+            field_name
+        ))
+    })?;
+    // let b = get_column_from_name(input_schema, field_name);
+    let is_nullable = b.is_nullable();
+    let is_sorted = b.is_sorted();
+    if is_sorted {
+        let is_ascending = b.is_ascending()?;
+        // let _is_nulls_first = b.is_nulls_first()?;
+        Ok(ColumnInfo {
+            is_sorted,
+            is_ascending,
+            is_nullable,
+        })
+    } else {
+        // once is_sorted is false rest are meaningless
+        Ok(ColumnInfo {
+            is_sorted: false,
+            is_ascending: false,
+            is_nullable,
+        })
     }
-    None
 }
 
 pub fn is_all_window_functions_aggregate(exprs: &[&Expr]) -> Result<bool> {
@@ -423,6 +459,17 @@ fn can_skip_column(column_info: Option<ColumnInfo>, expr: &Expr) -> Result<(bool
     })
 }
 
+pub fn get_column_annotations(
+    exprs: &[Expr],
+    input_schema: &DFSchemaRef,
+) -> Result<Vec<ColumnInfo>> {
+    let mut column_infos = vec![];
+    for expr in exprs {
+        column_infos.push(get_column_info_v2(input_schema, expr)?);
+    }
+    Ok(column_infos)
+}
+
 /// Generate a sort key for a given window expr's partition_by and order_bu expr
 pub fn generate_sort_key(
     partition_by: &[Expr],
@@ -432,7 +479,7 @@ pub fn generate_sort_key(
     let mut sort_key = vec![];
     partition_by.iter().try_for_each(|expr| -> Result<()> {
         let expr = expr.clone().sort(true, true);
-        let column_info = decide_col_sorting(input_schema, &expr)?;
+        let column_info = get_column_info(input_schema, &expr)?;
         // TODO: If the repartition is false we can skip in partition by queries also
         // once this information is available handle that case. For now we are not optimizing in
         // partition by columns.
@@ -453,7 +500,7 @@ pub fn generate_sort_key(
         Ok(())
     })?;
     order_by.iter().try_for_each(|expr| -> Result<()> {
-        let column_info = decide_col_sorting(input_schema, expr)?;
+        let column_info = get_column_info(input_schema, expr)?;
         let (can_skip, is_reversed) = can_skip_column(column_info, expr)?;
         let elem = WindowSortKey {
             expr: expr.clone(),

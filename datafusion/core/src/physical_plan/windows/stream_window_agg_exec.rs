@@ -46,6 +46,7 @@ use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use arrow::util::pretty::print_batches;
 
 use datafusion_expr::utils::WindowSortKeys;
 use datafusion_physical_expr::window::{
@@ -257,7 +258,7 @@ fn compute_window_aggregates(
 pub struct WindowAggStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
-    batch: Option<RecordBatch>,
+    batch: RecordBatch,
     partition_batches: PartitionBatches,
     window_agg_states: Vec<PartitionWindowAggStates>,
     finished: bool,
@@ -279,10 +280,11 @@ impl WindowAggStream {
         for _i in 0..window_expr.len() {
             state.push(IndexMap::new());
         }
+        let empty_batch = RecordBatch::new_empty(schema.clone());
         Self {
             schema,
             input,
-            batch: None,
+            batch: empty_batch,
             partition_batches: IndexMap::new(),
             window_agg_states: state,
             finished: false,
@@ -324,10 +326,10 @@ impl WindowAggStream {
 
         let batch_to_show = self
             .batch
-            .as_ref()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expects something in the batch".to_string())
-            })?
+            // .as_ref()
+            // .ok_or_else(|| {
+            //     DataFusionError::Execution("Expects something in the batch".to_string())
+            // })?
             .columns()
             .iter()
             .map(|elem| elem.slice(0, len_to_show))
@@ -380,19 +382,18 @@ impl WindowAggStream {
         }
 
         // retracts showed parts from batch
-        if let Some(batch) = &self.batch {
-            let len_batch = batch.num_rows();
-            let n_to_keep = len_batch - n_showed;
-            let batch_to_keep = batch
-                .columns()
-                .iter()
-                .map(|elem| elem.slice(n_showed, n_to_keep))
-                .collect::<Vec<_>>();
-            self.batch = Some(RecordBatch::try_new(
-                self.batch.as_ref().unwrap().schema(),
-                batch_to_keep,
-            )?);
-        }
+        let len_batch = self.batch.num_rows();
+        let n_to_keep = len_batch - n_showed;
+        let batch_to_keep = self.batch
+            .columns()
+            .iter()
+            .map(|elem| elem.slice(n_showed, n_to_keep))
+            .collect::<Vec<_>>();
+        self.batch = RecordBatch::try_new(
+            self.batch.schema(),
+            batch_to_keep,
+        )?;
+
 
         // Retracts showed parts for each WindowAggState out_col field
         for partition_window_agg_states in self.window_agg_states.iter_mut() {
@@ -402,26 +403,22 @@ impl WindowAggStream {
     }
 
     fn compute_aggregates(&mut self, is_end: bool) -> ArrowResult<RecordBatch> {
-        if self.batch.is_some() {
-            // calculate window cols
-            compute_window_aggregates(
-                &self.window_expr,
-                &self.window_sort_keys.clone(),
-                &mut self.window_agg_states,
-                &self.partition_batches,
-                is_end,
-            )?;
+        // calculate window cols
+        compute_window_aggregates(
+            &self.window_expr,
+            &self.window_sort_keys.clone(),
+            &mut self.window_agg_states,
+            &self.partition_batches,
+            is_end,
+        )?;
 
-            let len_to_show = self.calc_len_to_show();
+        let len_to_show = self.calc_len_to_show();
 
-            if len_to_show > 0 {
-                let columns_to_show = self.calc_columns_to_show(len_to_show)?;
-                self.retract_state(len_to_show)?;
+        if len_to_show > 0 {
+            let columns_to_show = self.calc_columns_to_show(len_to_show)?;
+            self.retract_state(len_to_show)?;
 
-                RecordBatch::try_new(self.schema.clone(), columns_to_show)
-            } else {
-                Ok(RecordBatch::new_empty(self.schema.clone()))
-            }
+            RecordBatch::try_new(self.schema.clone(), columns_to_show)
         } else {
             Ok(RecordBatch::new_empty(self.schema.clone()))
         }
@@ -492,11 +489,15 @@ impl WindowAggStream {
                         };
                     }
                 }
-                self.batch = Some(if let Some(state_batch) = &self.batch {
-                    common::append_new_batch(state_batch, &batch, self.input.schema())?
-                } else {
-                    batch
-                });
+                if self.batch.num_rows() == 0 {
+                    // println!("batch init state");
+                    // print_batches(&[self.batch.clone()])?;
+                    // println!("batch init first received");
+                    // print_batches(&[batch.clone()])?;
+                    self.batch = batch;
+                }else {
+                    self.batch = common::append_new_batch(&self.batch, &batch, self.input.schema())?;
+                }
                 self.compute_aggregates(false)
             }
             Some(Err(e)) => Err(e),

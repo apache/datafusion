@@ -56,8 +56,8 @@ fn split_record_batches(
 fn mock_data_running_test() -> Result<(SchemaRef, Vec<RecordBatch>)> {
     let mut ts_field = Field::new("ts", DataType::Int32, false);
     ts_field.set_metadata(Some(BTreeMap::from([
-        (String::from("is_sorted"), String::from("true")),
         (String::from("is_ascending"), String::from("true")),
+        (String::from("nulls_first"), String::from("true")),
     ])));
     let mut inc_field = Field::new("inc_col", DataType::Int32, false);
     inc_field.set_metadata(Some(BTreeMap::from([
@@ -2091,7 +2091,8 @@ FROM annotated_data";
         let mem_table = MemTable::try_new(schema, vec![batches]).unwrap();
         ctx.register_table("annotated_data", Arc::new(mem_table))?;
         let sql = "SELECT
-    SUM(inc_col) OVER(PARTITION BY unsorted_non_unique_field ORDER BY desc_col ASC ROWS BETWEEN 10 PRECEDING AND 5 FOLLOWING)
+	SUM(inc_col) OVER(PARTITION BY unsorted_non_unique_field ORDER BY inc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+	SUM(inc_col) OVER(PARTITION BY unsorted_non_unique_field ORDER BY desc_col RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING)
 FROM annotated_data";
 
         // let tmp_dir = TempDir::new()?;

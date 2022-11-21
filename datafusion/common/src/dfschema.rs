@@ -18,7 +18,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::sync::Arc;
 
@@ -559,6 +559,61 @@ impl DFField {
     /// Indicates whether this `DFField` supports null values
     pub fn is_nullable(&self) -> bool {
         self.field.is_nullable()
+    }
+
+    /// Indicates whether columns is sorted
+    pub fn is_sorted(&self) -> bool {
+        if let Some(metadata) = self.field().metadata() {
+            metadata.get("is_sorted").unwrap_or(&"false".to_string()) == "true"
+        } else {
+            false
+        }
+    }
+
+    /// Indicates whether column is ascending sorted
+    pub fn is_ascending(&self) -> Result<bool> {
+        if self.is_sorted() {
+            Ok(self
+                .field()
+                .metadata()
+                .ok_or_else(|| {
+                    DataFusionError::Execution("We expect to have metadata".to_string())
+                })?
+                .get("is_ascending")
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "Expects to have is_ascending annotation".to_string(),
+                    )
+                })?
+                == "true")
+        } else {
+            Err(DataFusionError::Execution(
+                "To use sort direction column should be sorted".to_string(),
+            ))
+        }
+    }
+
+    /// Indicates whether nulls_first at the sorting
+    pub fn is_nulls_first(&self) -> Result<bool> {
+        if self.is_sorted() {
+            Ok(self
+                .field()
+                .metadata()
+                .ok_or_else(|| {
+                    DataFusionError::Execution("We expect to have metadata".to_string())
+                })?
+                .get("is_nulls_first")
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "Expects to have is_nulls_first annotation".to_string(),
+                    )
+                })?
+                == "true")
+        } else {
+            Err(DataFusionError::Execution(
+                "To use nulls first information column should be sorted".to_string(),
+            ))
+        }
     }
 
     /// Returns a string to the `DFField`'s qualified name

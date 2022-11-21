@@ -65,7 +65,7 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::{
     can_run_frames_in_streaming, expand_wildcard, expr_to_columns,
-    is_all_window_functions_aggregate,
+    get_column_annotations, is_all_window_functions_aggregate,
 };
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_optimizer::utils::unalias;
@@ -554,6 +554,36 @@ impl DefaultPhysicalPlanner {
                         input_exec
                     };
 
+                    // We will receive this information from source
+                    let mut is_stream = true;
+                    // let mut is_stream = false;
+
+                    let get_partition_bys_orderbys = |expr: &Expr| match expr {
+                        Expr::WindowFunction {
+                            ref partition_by,
+                            ref order_by,
+                            ..
+                        } => (partition_by.clone(), order_by.clone()),
+                        Expr::Alias(expr, _) => {
+                            // Convert &Box<T> to &T
+                            match &**expr {
+                                Expr::WindowFunction {
+                                    ref partition_by,
+                                    ref order_by,
+                                    ..} => (partition_by.clone(), order_by.clone()),
+                                _ => unreachable!(),
+                            }
+                        }
+                        _ => unreachable!(),
+                    };
+                    let (partition_bys, order_bys) = get_partition_bys_orderbys(&window_expr[0]);
+                    println!("partition bys:{:?}", partition_bys);
+                    println!("order bys:{:?}", order_bys);
+                    let partition_column_annotations = get_column_annotations(&partition_bys, input.schema())?;
+                    let orderby_column_annotations = get_column_annotations(&order_bys, input.schema())?;
+                    println!("partition_column_annotations:{:?}", partition_column_annotations);
+                    println!("orderby_column_annotations:{:?}", orderby_column_annotations);
+
                     // add a sort phase
                     let get_sort_keys = |expr: &Expr| match expr {
                         Expr::WindowFunction {
@@ -573,10 +603,6 @@ impl DefaultPhysicalPlanner {
                         }
                         _ => unreachable!(),
                     };
-
-                    // We will receive this information from source
-                    let mut is_stream = true;
-                    // let mut is_stream = false;
 
                     let sort_keys = get_sort_keys(&window_expr[0])?;
                     if window_expr.len() > 1 {

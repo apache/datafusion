@@ -392,7 +392,12 @@ fn get_window_frame_to_use(
     window_sort_keys: &WindowSortKeys,
 ) -> Result<Option<Arc<WindowFrame>>> {
     if reverse_window_frame_flag(sort_options, window_sort_keys)? {
-        get_reversed_window_frame(window_frame)
+        if let Some(window_frame) = window_frame {
+            Ok(Some(Arc::new(window_frame.reverse())))
+        } else {
+            Ok(None)
+        }
+        // get_reversed_window_frame(window_frame)
     } else {
         Ok(window_frame.clone())
     }
@@ -416,39 +421,6 @@ fn reverse_window_frame_flag(
         }
     };
     Ok(false)
-}
-
-fn get_reversed_window_frame(
-    window_frame: &Option<Arc<WindowFrame>>,
-) -> Result<Option<Arc<WindowFrame>>> {
-    if let Some(window_frame) = &window_frame {
-        let mut new_window_frame = (*window_frame.clone()).clone();
-        match &window_frame.start_bound {
-            WindowFrameBound::Preceding(elem) => {
-                new_window_frame.end_bound = WindowFrameBound::Following(elem.clone())
-            }
-            WindowFrameBound::Following(elem) => {
-                new_window_frame.end_bound = WindowFrameBound::Preceding(elem.clone())
-            }
-            WindowFrameBound::CurrentRow => {
-                new_window_frame.end_bound = WindowFrameBound::CurrentRow
-            }
-        };
-        match &window_frame.end_bound {
-            WindowFrameBound::Preceding(elem) => {
-                new_window_frame.start_bound = WindowFrameBound::Following(elem.clone())
-            }
-            WindowFrameBound::Following(elem) => {
-                new_window_frame.start_bound = WindowFrameBound::Preceding(elem.clone())
-            }
-            WindowFrameBound::CurrentRow => {
-                new_window_frame.start_bound = WindowFrameBound::CurrentRow
-            }
-        };
-        Ok(Some(Arc::new(new_window_frame)))
-    } else {
-        Ok(window_frame.clone())
-    }
 }
 
 #[allow(dead_code)]
