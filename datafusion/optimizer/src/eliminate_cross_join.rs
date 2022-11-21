@@ -107,7 +107,6 @@ impl OptimizerRule for ReduceCrossJoin {
                     left = LogicalPlan::Projection(Projection::new_from_schema(
                         Arc::new(left.clone()),
                         plan.schema().clone(),
-                        None,
                     ));
                 }
 
