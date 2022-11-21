@@ -21,7 +21,7 @@
 
 The DataFusion CLI is a command-line interactive SQL utility that allows
 queries to be executed against any supported data files. It is a convenient way to
-try DataFusion out with your own data sources.
+try DataFusion out with your own data sources, and test out its SQL support.
 
 ## Example
 
@@ -230,4 +230,87 @@ Available commands inside DataFusion CLI are:
 
 ```bash
 > \h function_table
+```
+
+- Show configuration options
+
+```SQL
+> show all;
+
++-------------------------------------------------+---------+
+| name                                            | setting |
++-------------------------------------------------+---------+
+| datafusion.execution.batch_size                 | 8192    |
+| datafusion.execution.coalesce_batches           | true    |
+| datafusion.execution.coalesce_target_batch_size | 4096    |
+| datafusion.execution.time_zone                  | UTC     |
+| datafusion.explain.logical_plan_only            | false   |
+| datafusion.explain.physical_plan_only           | false   |
+| datafusion.optimizer.filter_null_join_keys      | false   |
+| datafusion.optimizer.skip_failed_rules          | true    |
++-------------------------------------------------+---------+
+
+```
+
+- Set configuration options
+
+```SQL
+> SET datafusion.execution.batch_size to 1024;
+```
+
+## Changing Configuration Options
+
+All available configuration options can be seen using `SHOW ALL` as described above.
+
+You can change the configuration options using environment
+variables. `datafusion-cli` looks in the corresponding environment
+variable with an upper case name and all `.` is converted to `_`.
+
+For example, to set `datafusion.execution.batch_size` to `1024` you
+would set the `DATAFUSION_EXECUTION_BATCH_SIZE` environment variable
+appropriately:
+
+```shell
+$ DATAFUSION_EXECUTION_BATCH_SIZE=1024 datafusion-cli
+DataFusion CLI v12.0.0
+❯ show all;
++-------------------------------------------------+---------+
+| name                                            | setting |
++-------------------------------------------------+---------+
+| datafusion.execution.batch_size                 | 1024    |
+| datafusion.execution.coalesce_batches           | true    |
+| datafusion.execution.coalesce_target_batch_size | 4096    |
+| datafusion.execution.time_zone                  | UTC     |
+| datafusion.explain.logical_plan_only            | false   |
+| datafusion.explain.physical_plan_only           | false   |
+| datafusion.optimizer.filter_null_join_keys      | false   |
+| datafusion.optimizer.skip_failed_rules          | true    |
++-------------------------------------------------+---------+
+8 rows in set. Query took 0.002 seconds.
+```
+
+You can change the configuration options using `SET` statement as well
+
+```shell
+$ datafusion-cli
+DataFusion CLI v13.0.0
+
+❯ show datafusion.execution.batch_size;
++---------------------------------+---------+
+| name                            | setting |
++---------------------------------+---------+
+| datafusion.execution.batch_size | 8192    |
++---------------------------------+---------+
+1 row in set. Query took 0.011 seconds.
+
+❯ set datafusion.execution.batch_size to 1024;
+0 rows in set. Query took 0.000 seconds.
+
+❯ show datafusion.execution.batch_size;
++---------------------------------+---------+
+| name                            | setting |
++---------------------------------+---------+
+| datafusion.execution.batch_size | 1024    |
++---------------------------------+---------+
+1 row in set. Query took 0.005 seconds.
 ```

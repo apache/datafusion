@@ -55,13 +55,12 @@ impl OptimizerRule for SubqueryFilterToJoin {
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         match plan {
-            LogicalPlan::Filter(Filter { predicate, input }) => {
+            LogicalPlan::Filter(filter) => {
                 // Apply optimizer rule to current input
-                let optimized_input = self.optimize(input, optimizer_config)?;
+                let optimized_input = self.optimize(filter.input(), optimizer_config)?;
 
                 // Splitting filter expression into components by AND
-                let mut filters = vec![];
-                utils::split_conjunction(predicate, &mut filters);
+                let filters = utils::split_conjunction(filter.predicate());
 
                 // Searching for subquery-based filters
                 let (subquery_filters, regular_filters): (Vec<&Expr>, Vec<&Expr>) =
@@ -79,10 +78,10 @@ impl OptimizerRule for SubqueryFilterToJoin {
                 })?;
 
                 if !subqueries_in_regular.is_empty() {
-                    return Ok(LogicalPlan::Filter(Filter {
-                        predicate: predicate.clone(),
-                        input: Arc::new(optimized_input),
-                    }));
+                    return Ok(LogicalPlan::Filter(Filter::try_new(
+                        filter.predicate().clone(),
+                        Arc::new(optimized_input),
+                    )?));
                 };
 
                 // Add subquery joins to new_input
@@ -117,9 +116,9 @@ impl OptimizerRule for SubqueryFilterToJoin {
                             };
 
                             let join_type = if *negated {
-                                JoinType::Anti
+                                JoinType::LeftAnti
                             } else {
-                                JoinType::Semi
+                                JoinType::LeftSemi
                             };
 
                             let schema = build_join_schema(
@@ -151,10 +150,10 @@ impl OptimizerRule for SubqueryFilterToJoin {
                 let new_input = match opt_result {
                     Ok(plan) => plan,
                     Err(_) => {
-                        return Ok(LogicalPlan::Filter(Filter {
-                            predicate: predicate.clone(),
-                            input: Arc::new(optimized_input),
-                        }))
+                        return Ok(LogicalPlan::Filter(Filter::try_new(
+                            filter.predicate().clone(),
+                            Arc::new(optimized_input),
+                        )?))
                     }
                 };
 
@@ -162,7 +161,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                 if regular_filters.is_empty() {
                     Ok(new_input)
                 } else {
-                    Ok(utils::add_filter(new_input, &regular_filters))
+                    utils::add_filter(new_input, &regular_filters)
                 }
             }
             _ => {
@@ -232,7 +231,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.b [b:UInt32]\
-        \n  Semi Join: test.c = sq.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n  LeftSemi Join: test.c = sq.c [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n    Projection: sq.c [c:UInt32]\
         \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
@@ -251,7 +250,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.b [b:UInt32]\
-        \n  Anti Join: test.c = sq.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n  LeftAnti Join: test.c = sq.c [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n    Projection: sq.c [c:UInt32]\
         \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
@@ -273,8 +272,8 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.b [b:UInt32]\
-        \n  Semi Join: test.b = sq_2.c [a:UInt32, b:UInt32, c:UInt32]\
-        \n    Semi Join: test.c = sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n  LeftSemi Join: test.b = sq_2.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    LeftSemi Join: test.c = sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
         \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n      Projection: sq_1.c [c:UInt32]\
         \n        TableScan: sq_1 [a:UInt32, b:UInt32, c:UInt32]\
@@ -302,7 +301,7 @@ mod tests {
 
         let expected = "Projection: test.b [b:UInt32]\
         \n  Filter: test.a = UInt32(1) AND test.b < UInt32(30) [a:UInt32, b:UInt32, c:UInt32]\
-        \n    Semi Join: test.c = sq.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    LeftSemi Join: test.c = sq.c [a:UInt32, b:UInt32, c:UInt32]\
         \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n      Projection: sq.c [c:UInt32]\
         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
@@ -353,7 +352,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.b [b:UInt32]\
-        \n  Filter: test.a = UInt32(1) OR test.b IN (<subquery>) AND test.c IN (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
+        \n  Filter: (test.a = UInt32(1) OR test.b IN (<subquery>)) AND test.c IN (<subquery>) [a:UInt32, b:UInt32, c:UInt32]\
         \n    Subquery: [c:UInt32]\
         \n      Projection: sq1.c [c:UInt32]\
         \n        TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]\
@@ -382,10 +381,10 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.b [b:UInt32]\
-        \n  Semi Join: test.b = sq.a [a:UInt32, b:UInt32, c:UInt32]\
+        \n  LeftSemi Join: test.b = sq.a [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n    Projection: sq.a [a:UInt32]\
-        \n      Semi Join: sq.a = sq_nested.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n      LeftSemi Join: sq.a = sq_nested.c [a:UInt32, b:UInt32, c:UInt32]\
         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]\
         \n        Projection: sq_nested.c [c:UInt32]\
         \n          TableScan: sq_nested [a:UInt32, b:UInt32, c:UInt32]";
@@ -414,7 +413,7 @@ mod tests {
         \n    Subquery: [c:UInt32]\n      Projection: sq_outer.c [c:UInt32]\
         \n        TableScan: sq_outer [a:UInt32, b:UInt32, c:UInt32]\
         \n    Projection: test.b, test.c, alias=wrapped [b:UInt32, c:UInt32]\
-        \n      Semi Join: test.c = sq_inner.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n      LeftSemi Join: test.c = sq_inner.c [a:UInt32, b:UInt32, c:UInt32]\
         \n        TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n        Projection: sq_inner.c [c:UInt32]\
         \n          TableScan: sq_inner [a:UInt32, b:UInt32, c:UInt32]";

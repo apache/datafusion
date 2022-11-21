@@ -27,7 +27,7 @@ use std::task::{Context, Poll};
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
 use arrow::array::ArrayRef;
 use arrow::compute::limit;
@@ -98,10 +98,9 @@ impl ExecutionPlan for GlobalLimitExec {
         vec![self.input.clone()]
     }
 
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::SinglePartition
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
     }
-
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
@@ -121,6 +120,10 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.input.output_ordering()
+    }
+
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(
@@ -281,14 +284,13 @@ impl ExecutionPlan for LocalLimitExec {
         false
     }
 
-    // Local limit does not make any attempt to maintain the input
-    // sortedness (if there is more than one partition)
+    // Local limit will not change the input plan's ordering
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        if self.output_partitioning().partition_count() == 1 {
-            self.input.output_ordering()
-        } else {
-            None
-        }
+        self.input.output_ordering()
+    }
+
+    fn equivalence_properties(&self) -> EquivalenceProperties {
+        self.input.equivalence_properties()
     }
 
     fn with_new_children(

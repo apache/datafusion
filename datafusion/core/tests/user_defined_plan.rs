@@ -68,11 +68,15 @@ use arrow::{
     util::pretty::pretty_format_batches,
 };
 use datafusion::{
+    common::cast::{as_int64_array, as_string_array},
+    common::DFSchemaRef,
     error::{DataFusionError, Result},
-    execution::context::QueryPlanner,
-    execution::context::SessionState,
-    logical_plan::{Expr, LogicalPlan, UserDefinedLogicalNode},
-    optimizer::{optimizer::OptimizerRule, utils::optimize_children},
+    execution::{
+        context::{QueryPlanner, SessionState, TaskContext},
+        runtime_env::RuntimeEnv,
+    },
+    logical_expr::{Expr, Extension, Limit, LogicalPlan, Sort, UserDefinedLogicalNode},
+    optimizer::{optimize_children, OptimizerConfig, OptimizerRule},
     physical_plan::{
         expressions::PhysicalSortExpr,
         planner::{DefaultPhysicalPlanner, ExtensionPlanner},
@@ -81,16 +85,12 @@ use datafusion::{
     },
     prelude::{SessionConfig, SessionContext},
 };
+
 use fmt::Debug;
 use std::task::{Context, Poll};
 use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use async_trait::async_trait;
-use datafusion::execution::context::TaskContext;
-use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::logical_plan::plan::{Extension, Sort};
-use datafusion::logical_plan::{DFSchemaRef, Limit};
-use datafusion::optimizer::optimizer::OptimizerConfig;
 
 /// Execute the specified sql and return the resulting record batches
 /// pretty printed as a String.
@@ -442,12 +442,8 @@ impl ExecutionPlan for TopKExec {
         None
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        false
-    }
-
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::SinglePartition
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -541,7 +537,6 @@ fn remove_lowest_value(top_values: &mut BTreeMap<i64, String>) {
     }
 }
 
-#[allow(clippy::unnecessary_wraps)]
 fn accumulate_batch(
     input_batch: &RecordBatch,
     mut top_values: BTreeMap<i64, String>,
@@ -551,17 +546,10 @@ fn accumulate_batch(
     // Assuming the input columns are
     // column[0]: customer_id / UTF8
     // column[1]: revenue: Int64
-    let customer_id = input_batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("Column 0 is not customer_id");
+    let customer_id =
+        as_string_array(input_batch.column(0)).expect("Column 0 is not customer_id");
 
-    let revenue = input_batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .expect("Column 1 is not revenue");
+    let revenue = as_int64_array(input_batch.column(1)).unwrap();
 
     for row in 0..num_rows {
         add_row(

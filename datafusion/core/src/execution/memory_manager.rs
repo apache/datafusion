@@ -178,10 +178,8 @@ pub trait MemoryConsumer: Send + Sync {
             self.id(),
         );
 
-        let can_grow_directly = self
-            .memory_manager()
-            .can_grow_directly(required, current)
-            .await;
+        let can_grow_directly =
+            self.memory_manager().can_grow_directly(required, current);
         if !can_grow_directly {
             debug!(
                 "Failed to grow memory of {} directly from consumer {}, spilling first ...",
@@ -193,6 +191,13 @@ pub trait MemoryConsumer: Send + Sync {
                 .record_free_then_acquire(freed, required);
         }
         Ok(())
+    }
+
+    /// Grow without spilling to the disk. It grows the memory directly
+    /// so it should be only used when the consumer already allocated the
+    /// memory and it is safe to grow without spilling.
+    fn grow(&self, required: usize) {
+        self.memory_manager().record_free_then_acquire(0, required);
     }
 
     /// Return `freed` memory to the memory manager,
@@ -327,7 +332,7 @@ impl MemoryManager {
     }
 
     /// Grow memory attempt from a consumer, return if we could grant that much to it
-    async fn can_grow_directly(&self, required: usize, current: usize) -> bool {
+    fn can_grow_directly(&self, required: usize, current: usize) -> bool {
         let num_rqt = self.requesters.lock().len();
         let mut rqt_current_used = self.requesters_total.lock();
         let mut rqt_max = self.max_mem_for_requesters();

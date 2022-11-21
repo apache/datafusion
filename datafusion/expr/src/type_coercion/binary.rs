@@ -20,7 +20,9 @@
 use crate::type_coercion::is_numeric;
 use crate::Operator;
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, TimeUnit};
+use arrow::datatypes::{
+    DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+};
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 
@@ -98,8 +100,12 @@ pub fn coerce_types(
         | Operator::BitwiseShiftRight
         | Operator::BitwiseShiftLeft => bitwise_coercion(lhs_type, rhs_type),
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {
-            // logical binary boolean operators can only be evaluated in bools
+            // logical binary boolean operators can only be evaluated in bools or nulls
             (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
+            (DataType::Null, DataType::Null) => Some(DataType::Null),
+            (DataType::Boolean, DataType::Null) | (DataType::Null, DataType::Boolean) => {
+                Some(DataType::Boolean)
+            }
             _ => None,
         },
         // logical comparison operators have their own rules, and always return a boolean
@@ -333,6 +339,8 @@ fn mathematics_numerical_coercion(
         (Null, dec_type @ Decimal128(_, _)) | (dec_type @ Decimal128(_, _), Null) => {
             Some(dec_type.clone())
         }
+        (Decimal128(_, _), Float32 | Float64) => Some(Float64),
+        (Float32 | Float64, Decimal128(_, _)) => Some(Float64),
         (Decimal128(_, _), _) => {
             let converted_decimal_type = coerce_numeric_type_to_decimal(rhs_type);
             match converted_decimal_type {
@@ -515,13 +523,13 @@ fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 /// as Time32 can only be used to Second and Millisecond accuracy, while Time64
 /// is exclusively used to Microsecond and Nanosecond accuracy
 fn is_time_with_valid_unit(datatype: DataType) -> bool {
-    match datatype {
+    matches!(
+        datatype,
         DataType::Time32(TimeUnit::Second)
-        | DataType::Time32(TimeUnit::Millisecond)
-        | DataType::Time64(TimeUnit::Microsecond)
-        | DataType::Time64(TimeUnit::Nanosecond) => true,
-        _ => false,
-    }
+            | DataType::Time32(TimeUnit::Millisecond)
+            | DataType::Time64(TimeUnit::Microsecond)
+            | DataType::Time64(TimeUnit::Nanosecond)
+    )
 }
 
 /// Coercion rules for Temporal columns: the type that both lhs and rhs can be
@@ -854,6 +862,30 @@ mod tests {
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
+            DataType::Time32(TimeUnit::Second),
+            Operator::Eq,
+            DataType::Time32(TimeUnit::Second)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Time32(TimeUnit::Millisecond),
+            Operator::Eq,
+            DataType::Time32(TimeUnit::Millisecond)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Time64(TimeUnit::Microsecond),
+            Operator::Eq,
+            DataType::Time64(TimeUnit::Microsecond)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Time64(TimeUnit::Nanosecond),
+            Operator::Eq,
+            DataType::Time64(TimeUnit::Nanosecond)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
             DataType::Utf8,
             Operator::RegexMatch,
             DataType::Utf8
@@ -1044,6 +1076,42 @@ mod tests {
 
         test_coercion_binary_rule!(
             DataType::Boolean,
+            DataType::Boolean,
+            Operator::Or,
+            DataType::Boolean
+        );
+        test_coercion_binary_rule!(
+            DataType::Boolean,
+            DataType::Null,
+            Operator::And,
+            DataType::Boolean
+        );
+        test_coercion_binary_rule!(
+            DataType::Boolean,
+            DataType::Null,
+            Operator::Or,
+            DataType::Boolean
+        );
+        test_coercion_binary_rule!(
+            DataType::Null,
+            DataType::Null,
+            Operator::Or,
+            DataType::Null
+        );
+        test_coercion_binary_rule!(
+            DataType::Null,
+            DataType::Null,
+            Operator::And,
+            DataType::Null
+        );
+        test_coercion_binary_rule!(
+            DataType::Null,
+            DataType::Boolean,
+            Operator::And,
+            DataType::Boolean
+        );
+        test_coercion_binary_rule!(
+            DataType::Null,
             DataType::Boolean,
             Operator::Or,
             DataType::Boolean

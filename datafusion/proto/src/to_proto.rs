@@ -34,7 +34,9 @@ use arrow::datatypes::{
     UnionMode,
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, ScalarValue};
-use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::expr::{
+    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
+};
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
     BuiltInWindowFunction, BuiltinScalarFunction, Expr, WindowFrame, WindowFrameBound,
@@ -101,27 +103,6 @@ impl std::fmt::Display for Error {
     }
 }
 
-impl Error {
-    fn inconsistent_list_typing(type1: &DataType, type2: &DataType) -> Self {
-        Self::InconsistentListTyping(type1.to_owned(), type2.to_owned())
-    }
-
-    fn inconsistent_list_designated(value: &ScalarValue, designated: &DataType) -> Self {
-        Self::InconsistentListDesignated {
-            value: value.to_owned(),
-            designated: designated.to_owned(),
-        }
-    }
-
-    fn invalid_scalar_type(data_type: &DataType) -> Self {
-        Self::InvalidScalarType(data_type.to_owned())
-    }
-
-    fn invalid_time_unit(time_unit: &TimeUnit) -> Self {
-        Self::InvalidTimeUnit(time_unit.to_owned())
-    }
-}
-
 impl TryFrom<&Field> for protobuf::Field {
     type Error = Error;
 
@@ -151,8 +132,7 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
     type Error = Error;
 
     fn try_from(val: &DataType) -> Result<Self, Self::Error> {
-        let res =
-        match val {
+        let res = match val {
             DataType::Null => Self::None(EmptyMessage {}),
             DataType::Boolean => Self::Bool(EmptyMessage {}),
             DataType::Int8 => Self::Int8(EmptyMessage {}),
@@ -215,7 +195,10 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     UnionMode::Dense => protobuf::UnionMode::Dense,
                 };
                 Self::Union(protobuf::Union {
-                    union_types: union_types.iter().map(|field| field.try_into()).collect::<Result<Vec<_>, Error>>()?,
+                    union_types: union_types
+                        .iter()
+                        .map(|field| field.try_into())
+                        .collect::<Result<Vec<_>, Error>>()?,
                     union_mode: union_mode.into(),
                     type_ids: type_ids.iter().map(|x| *x as i32).collect(),
                 })
@@ -410,9 +393,11 @@ impl From<WindowFrameUnits> for protobuf::WindowFrameUnits {
     }
 }
 
-impl From<WindowFrameBound> for protobuf::WindowFrameBound {
-    fn from(bound: WindowFrameBound) -> Self {
-        match bound {
+impl TryFrom<&WindowFrameBound> for protobuf::WindowFrameBound {
+    type Error = Error;
+
+    fn try_from(bound: &WindowFrameBound) -> Result<Self, Self::Error> {
+        Ok(match bound {
             WindowFrameBound::CurrentRow => Self {
                 window_frame_bound_type: protobuf::WindowFrameBoundType::CurrentRow
                     .into(),
@@ -420,25 +405,27 @@ impl From<WindowFrameBound> for protobuf::WindowFrameBound {
             },
             WindowFrameBound::Preceding(v) => Self {
                 window_frame_bound_type: protobuf::WindowFrameBoundType::Preceding.into(),
-                bound_value: v.map(protobuf::window_frame_bound::BoundValue::Value),
+                bound_value: Some(v.try_into()?),
             },
             WindowFrameBound::Following(v) => Self {
                 window_frame_bound_type: protobuf::WindowFrameBoundType::Following.into(),
-                bound_value: v.map(protobuf::window_frame_bound::BoundValue::Value),
+                bound_value: Some(v.try_into()?),
             },
-        }
+        })
     }
 }
 
-impl From<WindowFrame> for protobuf::WindowFrame {
-    fn from(window: WindowFrame) -> Self {
-        Self {
+impl TryFrom<&WindowFrame> for protobuf::WindowFrame {
+    type Error = Error;
+
+    fn try_from(window: &WindowFrame) -> Result<Self, Self::Error> {
+        Ok(Self {
             window_frame_units: protobuf::WindowFrameUnits::from(window.units).into(),
-            start_bound: Some(window.start_bound.into()),
+            start_bound: Some((&window.start_bound).try_into()?),
             end_bound: Some(protobuf::window_frame::EndBound::Bound(
-                window.end_bound.into(),
+                (&window.end_bound).try_into()?,
             )),
-        }
+        })
     }
 }
 
@@ -467,65 +454,75 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Literal(pb_value)),
                 }
             }
-            Expr::BinaryExpr { left, op, right } => {
-                let binary_expr = Box::new(protobuf::BinaryExprNode {
-                    l: Some(Box::new(left.as_ref().try_into()?)),
-                    r: Some(Box::new(right.as_ref().try_into()?)),
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                // Try to linerize a nested binary expression tree of the same operator
+                // into a flat vector of expressions.
+                let mut exprs = vec![right.as_ref()];
+                let mut current_expr = left.as_ref();
+                while let Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: current_op,
+                    right,
+                }) = current_expr
+                {
+                    if current_op == op {
+                        exprs.push(right.as_ref());
+                        current_expr = left.as_ref();
+                    } else {
+                        break;
+                    }
+                }
+                exprs.push(current_expr);
+
+                let binary_expr = protobuf::BinaryExprNode {
+                    // We need to reverse exprs since operands are expected to be
+                    // linearized from left innermost to right outermost (but while
+                    // traversing the chain we do the exact opposite).
+                    operands: exprs
+                    .into_iter()
+                    .rev()
+                    .map(|expr| expr.try_into())
+                    .collect::<Result<Vec<_>, Error>>()?,
                     op: format!("{:?}", op),
-                });
+                };
                 Self {
                     expr_type: Some(ExprType::BinaryExpr(binary_expr)),
                 }
             }
-            Expr::Like {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
+            Expr::Like(Like { negated, expr, pattern, escape_char }) => {
                 let pb = Box::new(protobuf::LikeNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
                     escape_char: escape_char
                         .map(|ch| ch.to_string())
-                        .unwrap_or_else(|| "".to_string()),
+                        .unwrap_or_default()
                 });
                 Self {
                     expr_type: Some(ExprType::Like(pb)),
                 }
             }
-            Expr::ILike {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
+            Expr::ILike(Like { negated, expr, pattern, escape_char }) => {
                 let pb = Box::new(protobuf::ILikeNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
                     escape_char: escape_char
                         .map(|ch| ch.to_string())
-                        .unwrap_or_else(|| "".to_string()),
+                        .unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::Ilike(pb)),
                 }
             }
-            Expr::SimilarTo {
-                negated,
-                expr,
-                pattern,
-                escape_char,
-            } => {
+            Expr::SimilarTo(Like { negated, expr, pattern, escape_char }) => {
                 let pb = Box::new(protobuf::SimilarToNode {
                     negated: *negated,
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     pattern: Some(Box::new(pattern.as_ref().try_into()?)),
                     escape_char: escape_char
                         .map(|ch| ch.to_string())
-                        .unwrap_or_else(|| "".to_string()),
+                        .unwrap_or_default(),
                 });
                 Self {
                     expr_type: Some(ExprType::SimilarTo(pb)),
@@ -564,9 +561,13 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     .iter()
                     .map(|e| e.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                let window_frame = window_frame.map(|window_frame| {
-                    protobuf::window_expr_node::WindowFrame::Frame(window_frame.into())
-                });
+
+                let window_frame = match window_frame {
+                    Some(frame) => Some(
+                        protobuf::window_expr_node::WindowFrame::Frame(frame.try_into()?)
+                    ),
+                    None => None
+                };
                 let window_expr = Box::new(protobuf::WindowExprNode {
                     expr: arg_expr,
                     window_function: Some(window_function),
@@ -634,7 +635,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     filter: match filter {
                         Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                         None => None,
-                    }
+                    },
                 };
                 Self {
                     expr_type: Some(ExprType::AggregateExpr(Box::new(aggregate_expr))),
@@ -673,16 +674,15 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             args: args.iter().map(|expr| expr.try_into()).collect::<Result<
                                 Vec<_>,
                                 Error,
-                            >>(
-                            )?,
+                            >>()?,
                             filter: match filter {
                                 Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                                 None => None,
-                            }
+                            },
                         },
-                    ))),
+                        ))),
                 }
-            },
+            }
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
@@ -755,12 +755,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::IsNotUnknown(expr)),
                 }
             }
-            Expr::Between {
+            Expr::Between(Between {
                 expr,
                 negated,
                 low,
                 high,
-            } => {
+            }) => {
                 let expr = Box::new(protobuf::BetweenNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     negated: *negated,
@@ -771,12 +771,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Between(expr)),
                 }
             }
-            Expr::Case {
-                expr,
-                when_then_expr,
-                else_expr,
-            } => {
-                let when_then_expr = when_then_expr
+            Expr::Case(case) => {
+                let when_then_expr = case.when_then_expr
                     .iter()
                     .map(|(w, t)| {
                         Ok(protobuf::WhenThen {
@@ -786,12 +782,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     })
                     .collect::<Result<Vec<protobuf::WhenThen>, Error>>()?;
                 let expr = Box::new(protobuf::CaseNode {
-                    expr: match expr {
+                    expr: match &case.expr {
                         Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                         None => None,
                     },
                     when_then_expr,
-                    else_expr: match else_expr {
+                    else_expr: match &case.else_expr {
                         Some(e) => Some(Box::new(e.as_ref().try_into()?)),
                         None => None,
                     },
@@ -800,7 +796,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Case(expr)),
                 }
             }
-            Expr::Cast { expr, data_type } => {
+            Expr::Cast(Cast { expr, data_type }) => {
                 let expr = Box::new(protobuf::CastNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     arrow_type: Some(data_type.try_into()?),
@@ -854,24 +850,24 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } => {
                 // we would need to add logical plan operators to datafusion.proto to support this
                 // see discussion in https://github.com/apache/arrow-datafusion/issues/2565
-                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } not supported".to_string()))
+                return Err(Error::General("Proto serialization error: Expr::ScalarSubquery(_) | Expr::InSubquery { .. } | Expr::Exists { .. } not supported".to_string()));
             }
-            Expr::GetIndexedField { key, expr } => Self {
-                expr_type: Some(ExprType::GetIndexedField(Box::new(
-                    protobuf::GetIndexedField {
-                        key: Some(key.try_into()?),
-                        expr: Some(Box::new(expr.as_ref().try_into()?)),
-                    },
-                ))),
-            },
+            Expr::GetIndexedField(GetIndexedField { key, expr }) =>
+                Self {
+                    expr_type: Some(ExprType::GetIndexedField(Box::new(
+                        protobuf::GetIndexedField {
+                            key: Some(key.try_into()?),
+                            expr: Some(Box::new(expr.as_ref().try_into()?)),
+                        },
+                    ))),
+                },
 
             Expr::GroupingSet(GroupingSet::Cube(exprs)) => Self {
                 expr_type: Some(ExprType::Cube(CubeNode {
                     expr: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
                         Vec<_>,
                         Self::Error,
-                    >>(
-                    )?,
+                    >>()?,
                 })),
             },
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => Self {
@@ -879,8 +875,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr: exprs.iter().map(|expr| expr.try_into()).collect::<Result<
                         Vec<_>,
                         Self::Error,
-                    >>(
-                    )?,
+                    >>()?,
                 })),
             },
             Expr::GroupingSet(GroupingSet::GroupingSets(exprs)) => Self {
@@ -900,7 +895,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
             },
 
             Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } =>
-            return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } not supported".to_string())),
+                return Err(Error::General("Proto serialization error: Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } not supported".to_string())),
         };
 
         Ok(expr_node)
@@ -912,190 +907,80 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
 
     fn try_from(val: &ScalarValue) -> Result<Self, Self::Error> {
         use datafusion_common::scalar;
-        use protobuf::{scalar_value::Value, PrimitiveScalarType};
+        use protobuf::scalar_value::Value;
 
-        let scalar_val = match val {
+        let data_type = val.get_datatype();
+        match val {
             scalar::ScalarValue::Boolean(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Bool, |s| {
-                    Value::BoolValue(*s)
-                })
+                create_proto_scalar(val, &data_type, |s| Value::BoolValue(*s))
             }
             scalar::ScalarValue::Float32(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Float32, |s| {
-                    Value::Float32Value(*s)
-                })
+                create_proto_scalar(val, &data_type, |s| Value::Float32Value(*s))
             }
             scalar::ScalarValue::Float64(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Float64, |s| {
-                    Value::Float64Value(*s)
-                })
+                create_proto_scalar(val, &data_type, |s| Value::Float64Value(*s))
             }
             scalar::ScalarValue::Int8(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Int8, |s| {
-                    Value::Int8Value(*s as i32)
-                })
+                create_proto_scalar(val, &data_type, |s| Value::Int8Value(*s as i32))
             }
             scalar::ScalarValue::Int16(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Int16, |s| {
-                    Value::Int16Value(*s as i32)
-                })
+                create_proto_scalar(val, &data_type, |s| Value::Int16Value(*s as i32))
             }
             scalar::ScalarValue::Int32(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Int32, |s| {
-                    Value::Int32Value(*s)
-                })
+                create_proto_scalar(val, &data_type, |s| Value::Int32Value(*s))
             }
             scalar::ScalarValue::Int64(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Int64, |s| {
-                    Value::Int64Value(*s)
-                })
+                create_proto_scalar(val, &data_type, |s| Value::Int64Value(*s))
             }
             scalar::ScalarValue::UInt8(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Uint8, |s| {
-                    Value::Uint8Value(*s as u32)
-                })
+                create_proto_scalar(val, &data_type, |s| Value::Uint8Value(*s as u32))
             }
             scalar::ScalarValue::UInt16(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Uint16, |s| {
-                    Value::Uint16Value(*s as u32)
-                })
+                create_proto_scalar(val, &data_type, |s| Value::Uint16Value(*s as u32))
             }
             scalar::ScalarValue::UInt32(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Uint32, |s| {
-                    Value::Uint32Value(*s)
-                })
+                create_proto_scalar(val, &data_type, |s| Value::Uint32Value(*s))
             }
             scalar::ScalarValue::UInt64(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Uint64, |s| {
-                    Value::Uint64Value(*s)
-                })
+                create_proto_scalar(val, &data_type, |s| Value::Uint64Value(*s))
             }
             scalar::ScalarValue::Utf8(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Utf8, |s| {
-                    Value::Utf8Value(s.to_owned())
-                })
+                create_proto_scalar(val, &data_type, |s| Value::Utf8Value(s.to_owned()))
             }
             scalar::ScalarValue::LargeUtf8(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::LargeUtf8, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::LargeUtf8Value(s.to_owned())
                 })
             }
-            scalar::ScalarValue::List(value, boxed_field) => match value {
-                Some(values) => {
-                    if values.is_empty() {
-                        protobuf::ScalarValue {
-                            value: Some(protobuf::scalar_value::Value::ListValue(
-                                protobuf::ScalarListValue {
-                                    field: Some(boxed_field.as_ref().try_into()?),
-                                    values: Vec::new(),
-                                },
-                            )),
-                        }
-                    } else {
-                        let scalar_type = match boxed_field.data_type() {
-                            DataType::List(field) => field.as_ref().data_type(),
-                            unsupported => {
-                                return Err(Error::General(format!("Proto serialization error: {:?} not supported to convert to DataType::List", unsupported)));
-                            }
-                        };
+            scalar::ScalarValue::List(values, boxed_field) => {
+                let is_null = values.is_none();
 
-                        let type_checked_values: Vec<protobuf::ScalarValue> = values
-                            .iter()
-                            .map(|scalar| match (scalar, scalar_type) {
-                                (
-                                    scalar::ScalarValue::List(_, list_type),
-                                    DataType::List(field),
-                                ) => {
-                                    if let DataType::List(list_field) =
-                                        list_type.data_type()
-                                    {
-                                        let scalar_datatype = field.data_type();
-                                        let list_datatype = list_field.data_type();
-                                        if std::mem::discriminant(list_datatype)
-                                            != std::mem::discriminant(scalar_datatype)
-                                        {
-                                            return Err(Error::inconsistent_list_typing(
-                                                list_datatype,
-                                                scalar_datatype,
-                                            ));
-                                        }
-                                        scalar.try_into()
-                                    } else {
-                                        Err(Error::inconsistent_list_designated(
-                                            scalar,
-                                            boxed_field.data_type(),
-                                        ))
-                                    }
-                                }
-                                (scalar::ScalarValue::Boolean(_), DataType::Boolean) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Float32(_), DataType::Float32) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Float64(_), DataType::Float64) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Int8(_), DataType::Int8) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Int16(_), DataType::Int16) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Int32(_), DataType::Int32) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Int64(_), DataType::Int64) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::UInt8(_), DataType::UInt8) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::UInt16(_), DataType::UInt16) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::UInt32(_), DataType::UInt32) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::UInt64(_), DataType::UInt64) => {
-                                    scalar.try_into()
-                                }
-                                (scalar::ScalarValue::Utf8(_), DataType::Utf8) => {
-                                    scalar.try_into()
-                                }
-                                (
-                                    scalar::ScalarValue::LargeUtf8(_),
-                                    DataType::LargeUtf8,
-                                ) => scalar.try_into(),
-                                _ => Err(Error::inconsistent_list_designated(
-                                    scalar,
-                                    boxed_field.data_type(),
-                                )),
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        protobuf::ScalarValue {
-                            value: Some(protobuf::scalar_value::Value::ListValue(
-                                protobuf::ScalarListValue {
-                                    field: Some(boxed_field.as_ref().try_into()?),
-                                    values: type_checked_values,
-                                },
-                            )),
-                        }
-                    }
-                }
-                None => protobuf::ScalarValue {
-                    value: Some(protobuf::scalar_value::Value::NullListValue(
-                        boxed_field.as_ref().try_into()?,
+                let values = if let Some(values) = values.as_ref() {
+                    values
+                        .iter()
+                        .map(|v| v.try_into())
+                        .collect::<Result<Vec<protobuf::ScalarValue>, _>>()?
+                } else {
+                    vec![]
+                };
+
+                let field = boxed_field.as_ref().try_into()?;
+
+                Ok(protobuf::ScalarValue {
+                    value: Some(protobuf::scalar_value::Value::ListValue(
+                        protobuf::ScalarListValue {
+                            is_null,
+                            field: Some(field),
+                            values,
+                        },
                     )),
-                },
-            },
-            datafusion::scalar::ScalarValue::Date32(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Date32, |s| {
-                    Value::Date32Value(*s)
                 })
             }
+            datafusion::scalar::ScalarValue::Date32(val) => {
+                create_proto_scalar(val, &data_type, |s| Value::Date32Value(*s))
+            }
             datafusion::scalar::ScalarValue::TimestampMicrosecond(val, tz) => {
-                create_proto_scalar(val, PrimitiveScalarType::TimestampMicrosecond, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
                         timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
                         value: Some(
@@ -1107,7 +992,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             datafusion::scalar::ScalarValue::TimestampNanosecond(val, tz) => {
-                create_proto_scalar(val, PrimitiveScalarType::TimestampNanosecond, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
                         timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
                         value: Some(
@@ -1122,27 +1007,25 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 Some(v) => {
                     let array = v.to_be_bytes();
                     let vec_val: Vec<u8> = array.to_vec();
-                    protobuf::ScalarValue {
+                    Ok(protobuf::ScalarValue {
                         value: Some(Value::Decimal128Value(protobuf::Decimal128 {
                             value: vec_val,
                             p: *p as i64,
                             s: *s as i64,
                         })),
-                    }
+                    })
                 }
-                None => protobuf::ScalarValue {
+                None => Ok(protobuf::ScalarValue {
                     value: Some(protobuf::scalar_value::Value::NullValue(
-                        PrimitiveScalarType::Decimal128 as i32,
+                        (&data_type).try_into()?,
                     )),
-                },
+                }),
             },
             datafusion::scalar::ScalarValue::Date64(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Date64, |s| {
-                    Value::Date64Value(*s)
-                })
+                create_proto_scalar(val, &data_type, |s| Value::Date64Value(*s))
             }
             datafusion::scalar::ScalarValue::TimestampSecond(val, tz) => {
-                create_proto_scalar(val, PrimitiveScalarType::TimestampSecond, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
                         timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
                         value: Some(
@@ -1152,7 +1035,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             datafusion::scalar::ScalarValue::TimestampMillisecond(val, tz) => {
-                create_proto_scalar(val, PrimitiveScalarType::TimestampMillisecond, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::TimestampValue(protobuf::ScalarTimestampValue {
                         timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
                         value: Some(
@@ -1164,32 +1047,36 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             datafusion::scalar::ScalarValue::IntervalYearMonth(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::IntervalYearmonth, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::IntervalYearmonthValue(*s)
                 })
             }
             datafusion::scalar::ScalarValue::IntervalDayTime(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::IntervalDaytime, |s| {
-                    Value::IntervalDaytimeValue(*s)
-                })
+                create_proto_scalar(val, &data_type, |s| Value::IntervalDaytimeValue(*s))
             }
-            datafusion::scalar::ScalarValue::Null => protobuf::ScalarValue {
-                value: Some(Value::NullValue(PrimitiveScalarType::Null as i32)),
-            },
+            datafusion::scalar::ScalarValue::Null => Ok(protobuf::ScalarValue {
+                value: Some(Value::NullValue((&data_type).try_into()?)),
+            }),
 
             scalar::ScalarValue::Binary(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Binary, |s| {
-                    Value::BinaryValue(s.to_owned())
-                })
+                create_proto_scalar(val, &data_type, |s| Value::BinaryValue(s.to_owned()))
             }
             scalar::ScalarValue::LargeBinary(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::LargeBinary, |s| {
+                create_proto_scalar(val, &data_type, |s| {
                     Value::LargeBinaryValue(s.to_owned())
+                })
+            }
+            scalar::ScalarValue::FixedSizeBinary(length, val) => {
+                create_proto_scalar(val, &data_type, |s| {
+                    Value::FixedSizeBinaryValue(protobuf::ScalarFixedSizeBinary {
+                        values: s.to_owned(),
+                        length: *length,
+                    })
                 })
             }
 
             datafusion::scalar::ScalarValue::Time32Second(v) => {
-                create_proto_scalar(v, PrimitiveScalarType::Time32Second, |v| {
+                create_proto_scalar(v, &data_type, |v| {
                     Value::Time32Value(protobuf::ScalarTime32Value {
                         value: Some(
                             protobuf::scalar_time32_value::Value::Time32SecondValue(*v),
@@ -1199,7 +1086,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             }
 
             datafusion::scalar::ScalarValue::Time32Millisecond(v) => {
-                create_proto_scalar(v, PrimitiveScalarType::Time32Millisecond, |v| {
+                create_proto_scalar(v, &data_type, |v| {
                     Value::Time32Value(protobuf::ScalarTime32Value {
                         value: Some(
                             protobuf::scalar_time32_value::Value::Time32MillisecondValue(
@@ -1211,7 +1098,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             }
 
             datafusion::scalar::ScalarValue::Time64Microsecond(v) => {
-                create_proto_scalar(v, PrimitiveScalarType::Time64Microsecond, |v| {
+                create_proto_scalar(v, &data_type, |v| {
                     Value::Time64Value(protobuf::ScalarTime64Value {
                         value: Some(
                             protobuf::scalar_time64_value::Value::Time64MicrosecondValue(
@@ -1223,7 +1110,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             }
 
             datafusion::scalar::ScalarValue::Time64Nanosecond(v) => {
-                create_proto_scalar(v, PrimitiveScalarType::Time64Nanosecond, |v| {
+                create_proto_scalar(v, &data_type, |v| {
                     Value::Time64Value(protobuf::ScalarTime64Value {
                         value: Some(
                             protobuf::scalar_time64_value::Value::Time64NanosecondValue(
@@ -1243,11 +1130,10 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                         nanos,
                     })
                 } else {
-                    let null_arrow_type = PrimitiveScalarType::IntervalMonthdaynano;
-                    protobuf::scalar_value::Value::NullValue(null_arrow_type as i32)
+                    protobuf::scalar_value::Value::NullValue((&data_type).try_into()?)
                 };
 
-                protobuf::ScalarValue { value: Some(value) }
+                Ok(protobuf::ScalarValue { value: Some(value) })
             }
 
             datafusion::scalar::ScalarValue::Struct(values, fields) => {
@@ -1269,28 +1155,26 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     .map(|f| f.try_into())
                     .collect::<Result<Vec<protobuf::Field>, _>>()?;
 
-                protobuf::ScalarValue {
+                Ok(protobuf::ScalarValue {
                     value: Some(Value::StructValue(protobuf::StructValue {
                         field_values,
                         fields,
                     })),
-                }
+                })
             }
 
             datafusion::scalar::ScalarValue::Dictionary(index_type, val) => {
                 let value: protobuf::ScalarValue = val.as_ref().try_into()?;
-                protobuf::ScalarValue {
+                Ok(protobuf::ScalarValue {
                     value: Some(Value::DictionaryValue(Box::new(
                         protobuf::ScalarDictionaryValue {
                             index_type: Some(index_type.as_ref().try_into()?),
                             value: Some(Box::new(value)),
                         },
                     ))),
-                }
+                })
             }
-        };
-
-        Ok(scalar_val)
+        }
     }
 }
 
@@ -1347,6 +1231,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Left => Self::Left,
             BuiltinScalarFunction::Lpad => Self::Lpad,
             BuiltinScalarFunction::Random => Self::Random,
+            BuiltinScalarFunction::Uuid => Self::Uuid,
             BuiltinScalarFunction::RegexpReplace => Self::RegexpReplace,
             BuiltinScalarFunction::Repeat => Self::Repeat,
             BuiltinScalarFunction::Replace => Self::Replace,
@@ -1361,6 +1246,8 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
             BuiltinScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
             BuiltinScalarFunction::Now => Self::Now,
+            BuiltinScalarFunction::CurrentDate => Self::CurrentDate,
+            BuiltinScalarFunction::CurrentTime => Self::CurrentTime,
             BuiltinScalarFunction::Translate => Self::Translate,
             BuiltinScalarFunction::RegexpMatch => Self::RegexpMatch,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
@@ -1372,128 +1259,6 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
         };
 
         Ok(scalar_function)
-    }
-}
-
-impl TryFrom<&Field> for protobuf::ScalarType {
-    type Error = Error;
-
-    fn try_from(value: &Field) -> Result<Self, Self::Error> {
-        let datatype = protobuf::scalar_type::Datatype::try_from(value.data_type())?;
-        Ok(Self {
-            datatype: Some(datatype),
-        })
-    }
-}
-
-impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
-    type Error = Error;
-
-    fn try_from(val: &DataType) -> Result<Self, Self::Error> {
-        use protobuf::PrimitiveScalarType;
-
-        let scalar_value = match val {
-            DataType::Boolean => Self::Scalar(PrimitiveScalarType::Bool as i32),
-            DataType::Int8 => Self::Scalar(PrimitiveScalarType::Int8 as i32),
-            DataType::Int16 => Self::Scalar(PrimitiveScalarType::Int16 as i32),
-            DataType::Int32 => Self::Scalar(PrimitiveScalarType::Int32 as i32),
-            DataType::Int64 => Self::Scalar(PrimitiveScalarType::Int64 as i32),
-            DataType::UInt8 => Self::Scalar(PrimitiveScalarType::Uint8 as i32),
-            DataType::UInt16 => Self::Scalar(PrimitiveScalarType::Uint16 as i32),
-            DataType::UInt32 => Self::Scalar(PrimitiveScalarType::Uint32 as i32),
-            DataType::UInt64 => Self::Scalar(PrimitiveScalarType::Uint64 as i32),
-            DataType::Float32 => Self::Scalar(PrimitiveScalarType::Float32 as i32),
-            DataType::Float64 => Self::Scalar(PrimitiveScalarType::Float64 as i32),
-            DataType::Date32 => Self::Scalar(PrimitiveScalarType::Date32 as i32),
-            DataType::Time64(time_unit) => match time_unit {
-                TimeUnit::Microsecond => {
-                    Self::Scalar(PrimitiveScalarType::TimestampMicrosecond as i32)
-                }
-                TimeUnit::Nanosecond => {
-                    Self::Scalar(PrimitiveScalarType::TimestampNanosecond as i32)
-                }
-                _ => {
-                    return Err(Error::invalid_time_unit(time_unit));
-                }
-            },
-            DataType::Utf8 => Self::Scalar(PrimitiveScalarType::Utf8 as i32),
-            DataType::LargeUtf8 => Self::Scalar(PrimitiveScalarType::LargeUtf8 as i32),
-            DataType::List(field_type) => {
-                let mut field_names: Vec<String> = Vec::new();
-                let mut curr_field = field_type.as_ref();
-                field_names.push(curr_field.name().to_owned());
-                // For each nested field check nested datatype, since datafusion scalars only
-                // support recursive lists with a leaf scalar type
-                // any other compound types are errors.
-
-                while let DataType::List(nested_field_type) = curr_field.data_type() {
-                    curr_field = nested_field_type.as_ref();
-                    field_names.push(curr_field.name().to_owned());
-                    if !is_valid_scalar_type_no_list_check(curr_field.data_type()) {
-                        return Err(Error::invalid_scalar_type(curr_field.data_type()));
-                    }
-                }
-                let deepest_datatype = curr_field.data_type();
-                if !is_valid_scalar_type_no_list_check(deepest_datatype) {
-                    return Err(Error::invalid_scalar_type(deepest_datatype));
-                }
-                let pb_deepest_type: PrimitiveScalarType = match deepest_datatype {
-                    DataType::Boolean => PrimitiveScalarType::Bool,
-                    DataType::Int8 => PrimitiveScalarType::Int8,
-                    DataType::Int16 => PrimitiveScalarType::Int16,
-                    DataType::Int32 => PrimitiveScalarType::Int32,
-                    DataType::Int64 => PrimitiveScalarType::Int64,
-                    DataType::UInt8 => PrimitiveScalarType::Uint8,
-                    DataType::UInt16 => PrimitiveScalarType::Uint16,
-                    DataType::UInt32 => PrimitiveScalarType::Uint32,
-                    DataType::UInt64 => PrimitiveScalarType::Uint64,
-                    DataType::Float32 => PrimitiveScalarType::Float32,
-                    DataType::Float64 => PrimitiveScalarType::Float64,
-                    DataType::Date32 => PrimitiveScalarType::Date32,
-                    DataType::Time64(time_unit) => match time_unit {
-                        TimeUnit::Microsecond => {
-                            PrimitiveScalarType::TimestampMicrosecond
-                        }
-                        TimeUnit::Nanosecond => PrimitiveScalarType::TimestampNanosecond,
-                        _ => {
-                            return Err(Error::invalid_time_unit(time_unit));
-                        }
-                    },
-
-                    DataType::Utf8 => PrimitiveScalarType::Utf8,
-                    DataType::LargeUtf8 => PrimitiveScalarType::LargeUtf8,
-                    _ => {
-                        return Err(Error::invalid_scalar_type(val));
-                    }
-                };
-                Self::List(protobuf::ScalarListType {
-                    field_names,
-                    deepest_type: pb_deepest_type as i32,
-                })
-            }
-            DataType::Null
-            | DataType::Float16
-            | DataType::Timestamp(_, _)
-            | DataType::Date64
-            | DataType::Time32(_)
-            | DataType::Duration(_)
-            | DataType::Interval(_)
-            | DataType::Binary
-            | DataType::FixedSizeBinary(_)
-            | DataType::LargeBinary
-            | DataType::FixedSizeList(_, _)
-            | DataType::LargeList(_)
-            | DataType::Struct(_)
-            | DataType::Union(_, _, _)
-            | DataType::Dictionary(_, _)
-            | DataType::Map(_, _)
-            | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _) => {
-                return Err(Error::invalid_scalar_type(val));
-            }
-        };
-
-        Ok(scalar_value)
     }
 }
 
@@ -1518,40 +1283,19 @@ impl From<&IntervalUnit> for protobuf::IntervalUnit {
     }
 }
 
+/// Creates a scalar protobuf value from an optional value (T), and
+/// encoding None as the appropriate datatype
 fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
     v: &Option<I>,
-    null_arrow_type: protobuf::PrimitiveScalarType,
+    null_arrow_type: &DataType,
     constructor: T,
-) -> protobuf::ScalarValue {
-    protobuf::ScalarValue {
-        value: Some(v.as_ref().map(constructor).unwrap_or(
-            protobuf::scalar_value::Value::NullValue(null_arrow_type as i32),
-        )),
-    }
-}
+) -> Result<protobuf::ScalarValue, Error> {
+    let value =
+        v.as_ref()
+            .map(constructor)
+            .unwrap_or(protobuf::scalar_value::Value::NullValue(
+                null_arrow_type.try_into()?,
+            ));
 
-// Does not check if list subtypes are valid
-fn is_valid_scalar_type_no_list_check(datatype: &DataType) -> bool {
-    match datatype {
-        DataType::Boolean
-        | DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Float32
-        | DataType::Float64
-        | DataType::LargeUtf8
-        | DataType::Utf8
-        | DataType::Date32 => true,
-        DataType::Time64(time_unit) => {
-            matches!(time_unit, TimeUnit::Microsecond | TimeUnit::Nanosecond)
-        }
-
-        DataType::List(_) => true,
-        _ => false,
-    }
+    Ok(protobuf::ScalarValue { value: Some(value) })
 }

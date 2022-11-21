@@ -19,13 +19,15 @@
 
 use crate::PhysicalExpr;
 use arrow::array::Array;
-use arrow::array::{ListArray, StructArray};
+use arrow::array::ListArray;
 use arrow::compute::concat;
 
+use crate::physical_expr::down_cast_any_ref;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
+use datafusion_common::cast::as_struct_array;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
@@ -121,7 +123,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                 }
             }
             (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
-                let as_struct_array = array.as_any().downcast_ref::<StructArray>().unwrap();
+                let as_struct_array = as_struct_array(&array)?;
                 match as_struct_array.column_by_name(k) {
                     None => Err(DataFusionError::Execution(format!("get indexed field {} not found in struct", k))),
                     Some(col) => Ok(ColumnarValue::Array(col.clone()))
@@ -131,6 +133,29 @@ impl PhysicalExpr for GetIndexedFieldExpr {
             (DataType::Struct(_), key) => Err(DataFusionError::Execution(format!("get indexed field is only possible on struct with utf8 indexes. Tried with {:?} index", key))),
             (dt, key) => Err(DataFusionError::Execution(format!("get indexed field is only possible on lists with int64 indexes or struct with utf8 indexes. Tried {:?} with {:?} index", dt, key))),
         }
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.arg.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(GetIndexedFieldExpr::new(
+            children[0].clone(),
+            self.key.clone(),
+        )))
+    }
+}
+
+impl PartialEq<dyn Any> for GetIndexedFieldExpr {
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| self.arg.eq(&x.arg) && self.key == x.key)
+            .unwrap_or(false)
     }
 }
 
@@ -143,6 +168,7 @@ mod tests {
         Int64Array, Int64Builder, ListBuilder, StringBuilder, StructArray, StructBuilder,
     };
     use arrow::{array::StringArray, datatypes::Field};
+    use datafusion_common::cast::{as_int64_array, as_string_array};
     use datafusion_common::Result;
 
     fn build_utf8_lists(list_of_lists: Vec<Vec<Option<&str>>>) -> GenericListArray<i32> {
@@ -174,10 +200,7 @@ mod tests {
         let key = ScalarValue::Int64(Some(index));
         let expr = Arc::new(GetIndexedFieldExpr::new(expr, key));
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("failed to downcast to StringArray");
+        let result = as_string_array(&result).expect("failed to downcast to StringArray");
         let expected = &StringArray::from(expected);
         assert_eq!(expected, result);
         Ok(())
@@ -318,10 +341,7 @@ mod tests {
         let result = get_field_expr
             .evaluate(&batch)?
             .into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("failed to downcast to Int64Array");
+        let result = as_int64_array(&result)?;
         let expected = &Int64Array::from(expected_ints);
         assert_eq!(expected, result);
 
@@ -345,12 +365,7 @@ mod tests {
             let result = get_nested_str_expr
                 .evaluate(&batch)?
                 .into_array(batch.num_rows());
-            let result = result
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap_or_else(|| {
-                    panic!("failed to downcast to StringArray : {:?}", result)
-                });
+            let result = as_string_array(&result)?;
             let expected = &StringArray::from(expected);
             assert_eq!(expected, result);
         }

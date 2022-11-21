@@ -22,6 +22,7 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util::{round_upto_power_of_2, set_bit_raw, unset_bit_raw};
+use datafusion_common::cast::{as_date32_array, as_string_array};
 use datafusion_common::Result;
 use std::cmp::max;
 use std::sync::Arc;
@@ -190,7 +191,7 @@ impl RowWriter {
     fn set_bool(&mut self, idx: usize, value: bool) {
         self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
-        self.data[offset] = if value { 1 } else { 0 };
+        self.data[offset] = u8::from(value);
     }
 
     fn set_u8(&mut self, idx: usize, value: u8) {
@@ -326,8 +327,10 @@ pub(crate) fn write_field_date32(
     col_idx: usize,
     row_idx: usize,
 ) {
-    let from = from.as_any().downcast_ref::<Date32Array>().unwrap();
-    to.set_date32(col_idx, from.value(row_idx));
+    match as_date32_array(from) {
+        Ok(from) => to.set_date32(col_idx, from.value(row_idx)),
+        Err(e) => panic!("{}", e),
+    };
 }
 
 pub(crate) fn write_field_date64(
@@ -346,7 +349,7 @@ pub(crate) fn write_field_utf8(
     col_idx: usize,
     row_idx: usize,
 ) {
-    let from = from.as_any().downcast_ref::<StringArray>().unwrap();
+    let from = as_string_array(from).unwrap();
     let s = from.value(row_idx);
     let new_width = to.current_width() + s.as_bytes().len();
     if new_width > to.data.len() {

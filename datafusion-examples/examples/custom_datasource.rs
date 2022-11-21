@@ -20,16 +20,17 @@ use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::dataframe::DataFrame;
+use datafusion::datasource::provider_as_source;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionState, TaskContext};
-use datafusion::logical_plan::{provider_as_source, Expr, LogicalPlanBuilder};
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
     project_schema, ExecutionPlan, SendableRecordBatchStream, Statistics,
 };
 use datafusion::prelude::*;
+use datafusion_expr::{Expr, LogicalPlanBuilder};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Formatter};

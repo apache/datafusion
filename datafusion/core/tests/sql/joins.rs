@@ -768,9 +768,9 @@ async fn test_join_timestamp() -> Result<()> {
         "+-------------------------------+-------------------------------+",
         "| time                          | time                          |",
         "+-------------------------------+-------------------------------+",
-        "| 1970-01-02 12:39:24.190213133 | 1970-01-02 12:39:24.190213133 |",
-        "| 1970-01-02 12:39:24.190213134 | 1970-01-02 12:39:24.190213134 |",
-        "| 1970-01-02 12:39:24.190213135 | 1970-01-02 12:39:24.190213135 |",
+        "| 1970-01-02T12:39:24.190213133 | 1970-01-02T12:39:24.190213133 |",
+        "| 1970-01-02T12:39:24.190213134 | 1970-01-02T12:39:24.190213134 |",
+        "| 1970-01-02T12:39:24.190213135 | 1970-01-02T12:39:24.190213135 |",
         "+-------------------------------+-------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -791,7 +791,7 @@ async fn test_join_float32() -> Result<()> {
         population_schema.clone(),
         vec![
             Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
-            Arc::new(Float32Array::from_slice(&[838.698, 1778.934, 626.443])),
+            Arc::new(Float32Array::from_slice([838.698, 1778.934, 626.443])),
         ],
     )?;
     ctx.register_batch("population", population_data)?;
@@ -830,7 +830,7 @@ async fn test_join_float64() -> Result<()> {
         population_schema.clone(),
         vec![
             Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
-            Arc::new(Float64Array::from_slice(&[838.698, 1778.934, 626.443])),
+            Arc::new(Float64Array::from_slice([838.698, 1778.934, 626.443])),
         ],
     )?;
     ctx.register_batch("population", population_data)?;
@@ -959,10 +959,10 @@ async fn inner_join_nulls() {
 async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Result<()> {
     let ctx = SessionContext::new();
     let batch = RecordBatch::try_from_iter(vec![
-        ("id", Arc::new(Int32Array::from_slice(&[1, 2, 3])) as _),
+        ("id", Arc::new(Int32Array::from_slice([1, 2, 3])) as _),
         (
             "country",
-            Arc::new(StringArray::from_slice(&["Germany", "Sweden", "Japan"])) as _,
+            Arc::new(StringArray::from_slice(["Germany", "Sweden", "Japan"])) as _,
         ),
     ])
     .unwrap();
@@ -971,11 +971,11 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
     let batch = RecordBatch::try_from_iter(vec![
         (
             "id",
-            Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7])) as _,
+            Arc::new(Int32Array::from_slice([1, 2, 3, 4, 5, 6, 7])) as _,
         ),
         (
             "city",
-            Arc::new(StringArray::from_slice(&[
+            Arc::new(StringArray::from_slice([
                 "Hamburg",
                 "Stockholm",
                 "Osaka",
@@ -987,7 +987,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
         ),
         (
             "country_id",
-            Arc::new(Int32Array::from_slice(&[1, 2, 3, 1, 2, 3, 3])) as _,
+            Arc::new(Int32Array::from_slice([1, 2, 3, 1, 2, 3, 3])) as _,
         ),
     ])
     .unwrap();
@@ -1025,9 +1025,9 @@ async fn join_timestamp() -> Result<()> {
         "+-------------------------------+----------------------------+-------------------------+---------------------+-------+-------------------------------+----------------------------+-------------------------+---------------------+-------+",
         "| nanos                         | micros                     | millis                  | secs                | name  | nanos                         | micros                     | millis                  | secs                | name  |",
         "+-------------------------------+----------------------------+-------------------------+---------------------+-------+-------------------------------+----------------------------+-------------------------+---------------------+-------+",
-        "| 2011-12-13 11:13:10.123450    | 2011-12-13 11:13:10.123450 | 2011-12-13 11:13:10.123 | 2011-12-13 11:13:10 | Row 1 | 2011-12-13 11:13:10.123450    | 2011-12-13 11:13:10.123450 | 2011-12-13 11:13:10.123 | 2011-12-13 11:13:10 | Row 1 |",
-        "| 2018-11-13 17:11:10.011375885 | 2018-11-13 17:11:10.011375 | 2018-11-13 17:11:10.011 | 2018-11-13 17:11:10 | Row 0 | 2018-11-13 17:11:10.011375885 | 2018-11-13 17:11:10.011375 | 2018-11-13 17:11:10.011 | 2018-11-13 17:11:10 | Row 0 |",
-        "| 2021-01-01 05:11:10.432       | 2021-01-01 05:11:10.432    | 2021-01-01 05:11:10.432 | 2021-01-01 05:11:10 | Row 3 | 2021-01-01 05:11:10.432       | 2021-01-01 05:11:10.432    | 2021-01-01 05:11:10.432 | 2021-01-01 05:11:10 | Row 3 |",
+        "| 2011-12-13T11:13:10.123450    | 2011-12-13T11:13:10.123450 | 2011-12-13T11:13:10.123 | 2011-12-13T11:13:10 | Row 1 | 2011-12-13T11:13:10.123450    | 2011-12-13T11:13:10.123450 | 2011-12-13T11:13:10.123 | 2011-12-13T11:13:10 | Row 1 |",
+        "| 2018-11-13T17:11:10.011375885 | 2018-11-13T17:11:10.011375 | 2018-11-13T17:11:10.011 | 2018-11-13T17:11:10 | Row 0 | 2018-11-13T17:11:10.011375885 | 2018-11-13T17:11:10.011375 | 2018-11-13T17:11:10.011 | 2018-11-13T17:11:10 | Row 0 |",
+        "| 2021-01-01T05:11:10.432       | 2021-01-01T05:11:10.432    | 2021-01-01T05:11:10.432 | 2021-01-01T05:11:10 | Row 3 | 2021-01-01T05:11:10.432       | 2021-01-01T05:11:10.432    | 2021-01-01T05:11:10.432 | 2021-01-01T05:11:10 | Row 3 |",
         "+-------------------------------+----------------------------+-------------------------+---------------------+-------+-------------------------------+----------------------------+-------------------------+---------------------+-------+",
     ];
 
@@ -1075,8 +1075,8 @@ async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
     let t1_data = RecordBatch::try_new(
         Arc::new(t1_schema),
         vec![
-            Arc::new(Int64Array::from_slice(&[5247, 3821, 6321, 8821, 7748])),
-            Arc::new(StringArray::from_slice(&["a", "b", "c", "d", "e"])),
+            Arc::new(Int64Array::from_slice([5247, 3821, 6321, 8821, 7748])),
+            Arc::new(StringArray::from_slice(["a", "b", "c", "d", "e"])),
         ],
     )?;
     ctx.register_batch("t1", t1_data)?;
@@ -1088,7 +1088,7 @@ async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
     let t2_data = RecordBatch::try_new(
         Arc::new(t2_schema),
         vec![
-            Arc::new(Int64Array::from_slice(&[358, 2820, 3804, 7748])),
+            Arc::new(Int64Array::from_slice([358, 2820, 3804, 7748])),
             Arc::new(BooleanArray::from(vec![
                 Some(true),
                 Some(false),
@@ -1428,9 +1428,9 @@ async fn reduce_left_join_1() -> Result<()> {
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         "    Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "      Filter: CAST(t1.t1_id AS Int64) < Int64(100) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      Filter: t1.t1_id < UInt32(100) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
         "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "      Filter: CAST(t2.t2_id AS Int64) < Int64(100) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "      Filter: t2.t2_id < UInt32(100) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
@@ -1468,13 +1468,19 @@ async fn reduce_left_join_2() -> Result<()> {
         .expect(&msg);
     let state = ctx.state();
     let plan = state.optimize(&plan)?;
+
+    // filter expr:  `t2.t2_int < 10 or (t1.t1_int > 2 and t2.t2_name != 'w')`
+    // could be write to: `(t1.t1_int > 2 or t2.t2_int < 10) and (t2.t2_name != 'w' or t2.t2_int < 10)`
+    // the right part `(t2.t2_name != 'w' or t2.t2_int < 10)` could be push down left join side and remove in filter.
+
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "    Filter: CAST(t2.t2_int AS Int64) < Int64(10) OR CAST(t1.t1_int AS Int64) > Int64(2) AND t2.t2_name != Utf8(\"w\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "    Filter: t2.t2_int < UInt32(10) OR t1.t1_int > UInt32(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         "      Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "        TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "        Filter: t2.t2_int < UInt32(10) OR t2.t2_name != Utf8(\"w\") [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "          TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1515,12 +1521,12 @@ async fn reduce_left_join_3() -> Result<()> {
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: t3.t1_id, t3.t1_name, t3.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         "    Left Join: t3.t1_int = t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "      Projection: t3.t1_id, t3.t1_name, t3.t1_int, alias=t3 [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "        Projection: t1.t1_id, t1.t1_name, t1.t1_int, alias=t3 [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      Projection: t1.t1_id, t1.t1_name, t1.t1_int, alias=t3 [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "        Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
         "          Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-        "            Filter: CAST(t1.t1_id AS Int64) < Int64(100) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "            Filter: t1.t1_id < UInt32(100) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
         "              TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "            Filter: CAST(t2.t2_int AS Int64) < Int64(3) AND CAST(t2.t2_id AS Int64) < Int64(100) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+        "            Filter: t2.t2_int < UInt32(3) AND t2.t2_id < UInt32(100) [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         "              TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
         "      TableScan: t2 projection=[t2_id, t2_name, t2_int] [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
     ];

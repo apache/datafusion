@@ -27,6 +27,7 @@ use datafusion::{
 use datafusion::from_slice::FromSlice;
 use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
+use datafusion_common::cast::as_float64_array;
 use std::sync::Arc;
 
 // create local execution context with an in-memory table
@@ -42,8 +43,8 @@ fn create_context() -> Result<SessionContext> {
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(Float32Array::from_slice(&[2.1, 3.1, 4.1, 5.1])),
-            Arc::new(Float64Array::from_slice(&[1.0, 2.0, 3.0, 4.0])),
+            Arc::new(Float32Array::from_slice([2.1, 3.1, 4.1, 5.1])),
+            Arc::new(Float64Array::from_slice([1.0, 2.0, 3.0, 4.0])),
         ],
     )?;
 
@@ -70,14 +71,8 @@ async fn main() -> Result<()> {
         assert_eq!(args.len(), 2);
 
         // 1. cast both arguments to f64. These casts MUST be aligned with the signature or this function panics!
-        let base = &args[0]
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("cast failed");
-        let exponent = &args[1]
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .expect("cast failed");
+        let base = as_float64_array(&args[0]).expect("cast failed");
+        let exponent = as_float64_array(&args[1]).expect("cast failed");
 
         // this is guaranteed by DataFusion. We place it just to make it obvious.
         assert_eq!(exponent.len(), base.len());

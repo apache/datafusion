@@ -16,13 +16,15 @@
 // under the License.
 
 use crate::utils::{
-    exprs_to_join_cols, find_join_exprs, only_or_err, split_conjunction,
+    conjunction, exprs_to_join_cols, find_join_exprs, split_conjunction,
     verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{context, plan_err};
-use datafusion_expr::logical_plan::{Filter, JoinType, Subquery};
-use datafusion_expr::{combine_filters, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::{context, Result};
+use datafusion_expr::{
+    logical_plan::{Filter, JoinType, Subquery},
+    Expr, LogicalPlan, LogicalPlanBuilder,
+};
 use std::sync::Arc;
 
 /// Optimizer rule for rewriting subquery filters to joins
@@ -47,9 +49,8 @@ impl DecorrelateWhereExists {
         &self,
         predicate: &Expr,
         optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
-        let mut filters = vec![];
-        split_conjunction(predicate, &mut filters);
+    ) -> Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
+        let filters = split_conjunction(predicate);
 
         let mut subqueries = vec![];
         let mut others = vec![];
@@ -75,36 +76,55 @@ impl OptimizerRule for DecorrelateWhereExists {
         &self,
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<LogicalPlan> {
+    ) -> Result<LogicalPlan> {
+        Ok(self
+            .try_optimize(plan, optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
-            LogicalPlan::Filter(Filter {
-                predicate,
-                input: filter_input,
-            }) => {
+            LogicalPlan::Filter(filter) => {
+                let predicate = filter.predicate();
+                let filter_input = filter.input();
+
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(filter_input, optimizer_config)?;
 
                 let (subqueries, other_exprs) =
                     self.extract_subquery_exprs(predicate, optimizer_config)?;
-                let optimized_plan = LogicalPlan::Filter(Filter {
-                    predicate: predicate.clone(),
-                    input: Arc::new(optimized_input),
-                });
+                let optimized_plan = LogicalPlan::Filter(Filter::try_new(
+                    predicate.clone(),
+                    Arc::new(optimized_input),
+                )?);
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
-                    return Ok(optimized_plan);
+                    return Ok(Some(optimized_plan));
                 }
 
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = (**filter_input).clone();
                 for subquery in subqueries {
-                    cur_input = optimize_exists(&subquery, &cur_input, &other_exprs)?;
+                    if let Some(x) = optimize_exists(&subquery, &cur_input, &other_exprs)?
+                    {
+                        cur_input = x;
+                    } else {
+                        return Ok(None);
+                    }
                 }
-                Ok(cur_input)
+                Ok(Some(cur_input))
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, optimizer_config)
+                Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
             }
         }
     }
@@ -133,30 +153,43 @@ fn optimize_exists(
     query_info: &SubqueryInfo,
     outer_input: &LogicalPlan,
     outer_other_exprs: &[Expr],
-) -> datafusion_common::Result<LogicalPlan> {
-    let subqry_inputs = query_info.query.subquery.inputs();
-    let subqry_input = only_or_err(subqry_inputs.as_slice())
-        .map_err(|e| context!("single expression projection required", e))?;
-    let subqry_filter = Filter::try_from_plan(subqry_input)
-        .map_err(|e| context!("cannot optimize non-correlated subquery", e))?;
+) -> Result<Option<LogicalPlan>> {
+    let subqry_filter = match query_info.query.subquery.as_ref() {
+        LogicalPlan::Distinct(subqry_distinct) => match subqry_distinct.input.as_ref() {
+            LogicalPlan::Projection(subqry_proj) => {
+                Filter::try_from_plan(&subqry_proj.input)
+            }
+            _ => {
+                // Subquery currently only supports distinct or projection
+                return Ok(None);
+            }
+        },
+        LogicalPlan::Projection(subqry_proj) => Filter::try_from_plan(&subqry_proj.input),
+        _ => {
+            // Subquery currently only supports distinct or projection
+            return Ok(None);
+        }
+    }
+    .map_err(|e| context!("cannot optimize non-correlated subquery", e))?;
 
     // split into filters
-    let mut subqry_filter_exprs = vec![];
-    split_conjunction(&subqry_filter.predicate, &mut subqry_filter_exprs);
+    let subqry_filter_exprs = split_conjunction(subqry_filter.predicate());
     verify_not_disjunction(&subqry_filter_exprs)?;
 
     // Grab column names to join on
     let (col_exprs, other_subqry_exprs) =
-        find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema())?;
+        find_join_exprs(subqry_filter_exprs, subqry_filter.input().schema())?;
     let (outer_cols, subqry_cols, join_filters) =
-        exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)?;
+        exprs_to_join_cols(&col_exprs, subqry_filter.input().schema(), false)?;
     if subqry_cols.is_empty() || outer_cols.is_empty() {
-        plan_err!("cannot optimize non-correlated subquery")?;
+        // cannot optimize non-correlated subquery
+        return Ok(None);
     }
 
     // build subquery side of join - the thing the subquery was querying
-    let mut subqry_plan = LogicalPlanBuilder::from((*subqry_filter.input).clone());
-    if let Some(expr) = combine_filters(&other_subqry_exprs) {
+    let mut subqry_plan =
+        LogicalPlanBuilder::from(subqry_filter.input().as_ref().clone());
+    if let Some(expr) = conjunction(other_subqry_exprs) {
         subqry_plan = subqry_plan.filter(expr)? // if the subquery had additional expressions, restore them
     }
     let subqry_plan = subqry_plan.build()?;
@@ -165,8 +198,8 @@ fn optimize_exists(
 
     // join our sub query into the main plan
     let join_type = match query_info.negated {
-        true => JoinType::Anti,
-        false => JoinType::Semi,
+        true => JoinType::LeftAnti,
+        false => JoinType::LeftSemi,
     };
     let mut new_plan = LogicalPlanBuilder::from(outer_input.clone()).join(
         &subqry_plan,
@@ -174,12 +207,12 @@ fn optimize_exists(
         join_keys,
         join_filters,
     )?;
-    if let Some(expr) = combine_filters(outer_other_exprs) {
+    if let Some(expr) = conjunction(outer_other_exprs.to_vec()) {
         new_plan = new_plan.filter(expr)? // if the main query had additional expressions, restore them
     }
 
     let result = new_plan.build()?;
-    Ok(result)
+    Ok(Some(result))
 }
 
 struct SubqueryInfo {
@@ -219,8 +252,8 @@ mod tests {
             .build()?;
 
         let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  Semi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
-    Semi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
+  LeftSemi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
+    LeftSemi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
       TableScan: customer [c_custkey:Int64, c_name:Utf8]
       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
     TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
@@ -255,9 +288,9 @@ mod tests {
             .build()?;
 
         let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  Semi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
+  LeftSemi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]
-    Semi Join: orders.o_orderkey = lineitem.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+    LeftSemi Join: orders.o_orderkey = lineitem.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
       TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]"#;
 
@@ -285,7 +318,7 @@ mod tests {
             .build()?;
 
         let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  Semi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
+  LeftSemi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]
     Filter: orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
@@ -309,9 +342,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"cannot optimize non-correlated subquery"#;
-
-        assert_optimizer_err(&DecorrelateWhereExists::new(), &plan, expected);
+        assert_optimization_skipped(&DecorrelateWhereExists::new(), &plan);
         Ok(())
     }
 
@@ -330,9 +361,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"cannot optimize non-correlated subquery"#;
-
-        assert_optimizer_err(&DecorrelateWhereExists::new(), &plan, expected);
+        assert_optimization_skipped(&DecorrelateWhereExists::new(), &plan);
         Ok(())
     }
 
@@ -351,9 +380,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"cannot optimize non-correlated subquery"#;
-
-        assert_optimizer_err(&DecorrelateWhereExists::new(), &plan, expected);
+        assert_optimization_skipped(&DecorrelateWhereExists::new(), &plan);
         Ok(())
     }
 
@@ -417,9 +444,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"cannot optimize non-correlated subquery"#;
-
-        assert_optimizer_err(&DecorrelateWhereExists::new(), &plan, expected);
+        assert_optimization_skipped(&DecorrelateWhereExists::new(), &plan);
         Ok(())
     }
 
@@ -440,7 +465,7 @@ mod tests {
 
         // Doesn't matter we projected an expression, just that we returned a result
         let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  Semi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
+  LeftSemi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]
     TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
@@ -464,7 +489,7 @@ mod tests {
 
         let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
   Filter: customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
-    Semi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
+    LeftSemi Join: customer.c_custkey = orders.o_custkey [c_custkey:Int64, c_name:Utf8]
       TableScan: customer [c_custkey:Int64, c_name:Utf8]
       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
 
@@ -516,7 +541,7 @@ mod tests {
             .build()?;
 
         let expected = r#"Projection: test.c [c:UInt32]
-  Semi Join: test.a = sq.a [a:UInt32, b:UInt32, c:UInt32]
+  LeftSemi Join: test.a = sq.a [a:UInt32, b:UInt32, c:UInt32]
     TableScan: test [a:UInt32, b:UInt32, c:UInt32]
     TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
 

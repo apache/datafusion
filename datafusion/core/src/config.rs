@@ -21,8 +21,11 @@ use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use itertools::Itertools;
 use log::warn;
-use std::collections::HashMap;
+use parking_lot::RwLock;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
 /// Configuration option "datafusion.optimizer.filter_null_join_keys"
 pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filter_null_join_keys";
@@ -43,12 +46,33 @@ pub const OPT_COALESCE_BATCHES: &str = "datafusion.execution.coalesce_batches";
 pub const OPT_COALESCE_TARGET_BATCH_SIZE: &str =
     "datafusion.execution.coalesce_target_batch_size";
 
+/// Configuration option "datafusion.execution.time_zone"
+pub const OPT_TIME_ZONE: &str = "datafusion.execution.time_zone";
+
+/// Configuration option "datafusion.execution.parquet.pushdown_filters"
+pub const OPT_PARQUET_PUSHDOWN_FILTERS: &str =
+    "datafusion.execution.parquet.pushdown_filters";
+
+/// Configuration option "datafusion.execution.parquet.reorder_filters"
+pub const OPT_PARQUET_REORDER_FILTERS: &str =
+    "datafusion.execution.parquet.reorder_filters";
+
+/// Configuration option "datafusion.execution.parquet.enable_page_index"
+pub const OPT_PARQUET_ENABLE_PAGE_INDEX: &str =
+    "datafusion.execution.parquet.enable_page_index";
+
 /// Configuration option "datafusion.optimizer.skip_failed_rules"
 pub const OPT_OPTIMIZER_SKIP_FAILED_RULES: &str =
     "datafusion.optimizer.skip_failed_rules";
 
-/// Configuration option "datafusion.execution.time_zone"
-pub const OPT_TIME_ZONE: &str = "datafusion.execution.time_zone";
+/// Configuration option "datafusion.optimizer.max_passes"
+pub const OPT_OPTIMIZER_MAX_PASSES: &str = "datafusion.optimizer.max_passes";
+
+/// Location scanned to load tables for `default` schema
+pub const OPT_CATALOG_LOCATION: &str = "datafusion.catalog.location";
+
+/// Type of `TableProvider` to use when loading `default` schema
+pub const OPT_CATALOG_TYPE: &str = "datafusion.catalog.type";
 
 /// Definition of a configuration option
 pub struct ConfigDefinition {
@@ -126,13 +150,13 @@ impl ConfigDefinition {
     pub fn new_string(
         key: impl Into<String>,
         description: impl Into<String>,
-        default_value: String,
+        default_value: Option<String>,
     ) -> Self {
         Self::new(
             key,
             description,
             DataType::Utf8,
-            ScalarValue::Utf8(Some(default_value)),
+            ScalarValue::Utf8(default_value),
         )
     }
 }
@@ -173,11 +197,11 @@ impl BuiltInConfigs {
                 false,
             ),
             ConfigDefinition::new_u64(
-            OPT_BATCH_SIZE,
-            "Default batch size while creating new batches, it's especially useful for \
-            buffer-in-memory batches since creating tiny batches would results in too much metadata \
-            memory consumption.",
-            8192,
+                OPT_BATCH_SIZE,
+                "Default batch size while creating new batches, it's especially useful for \
+                 buffer-in-memory batches since creating tiny batches would results in too much metadata \
+                 memory consumption.",
+                8192,
             ),
             ConfigDefinition::new_bool(
                 OPT_COALESCE_BATCHES,
@@ -191,8 +215,34 @@ impl BuiltInConfigs {
              ConfigDefinition::new_u64(
                  OPT_COALESCE_TARGET_BATCH_SIZE,
                  format!("Target batch size when coalescing batches. Uses in conjunction with the \
-            configuration setting '{}'.", OPT_COALESCE_BATCHES),
+                          configuration setting '{}'.", OPT_COALESCE_BATCHES),
                  4096,
+            ),
+            ConfigDefinition::new_string(
+                OPT_TIME_ZONE,
+                "The session time zone which some function require \
+                e.g. EXTRACT(HOUR from SOME_TIME) shift the underline datetime according to the time zone,
+                then extract the hour.",
+                Some("+00:00".into()),
+            ),
+            ConfigDefinition::new_bool(
+                OPT_PARQUET_PUSHDOWN_FILTERS,
+                "If true, filter expressions are be applied during the parquet decoding operation to \
+                 reduce the number of rows decoded.",
+                false,
+            ),
+            ConfigDefinition::new_bool(
+                OPT_PARQUET_REORDER_FILTERS,
+                "If true, filter expressions evaluated during the parquet decoding opearation \
+                 will be reordered heuristically to minimize the cost of evaluation. If false, \
+                 the filters are applied in the same order as written in the query.",
+                false,
+            ),
+            ConfigDefinition::new_bool(
+                OPT_PARQUET_ENABLE_PAGE_INDEX,
+                "If true, uses parquet data page level metadata (Page Index) statistics \
+                 to reduce the number of rows decoded.",
+                false,
             ),
             ConfigDefinition::new_bool(
                 OPT_OPTIMIZER_SKIP_FAILED_RULES,
@@ -201,13 +251,22 @@ impl BuiltInConfigs {
                 rule. When set to false, any rules that produce errors will cause the query to fail.",
                 true
             ),
+            ConfigDefinition::new_u64(
+                OPT_OPTIMIZER_MAX_PASSES,
+                "Number of times that the optimizer will attempt to optimize the plan",
+                3
+            ),
             ConfigDefinition::new_string(
-                OPT_TIME_ZONE,
-                "The session time zone which some function require \
-                e.g. EXTRACT(HOUR from SOME_TIME) shift the underline datetime according to the time zone,
-                then extract the hour",
-                "UTC".into()
-            )]
+                OPT_CATALOG_LOCATION,
+                "Location scanned to load tables for `default` schema, defaults to None",
+                None,
+            ),
+            ConfigDefinition::new_string(
+                OPT_CATALOG_TYPE,
+                "Type of `TableProvider` to use when loading `default` schema. Defaults to None",
+                None,
+            ),
+            ]
         }
     }
 
@@ -233,9 +292,21 @@ impl BuiltInConfigs {
 }
 
 /// Configuration options struct. This can contain values for built-in and custom options
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ConfigOptions {
     options: HashMap<String, ScalarValue>,
+}
+
+/// Print the configurations in an ordered way so that we can directly compare the equality of two ConfigOptions by their debug strings
+impl Debug for ConfigOptions {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfigOptions")
+            .field(
+                "options",
+                &format!("{:?}", BTreeMap::from_iter(self.options.iter())),
+            )
+            .finish()
+    }
 }
 
 impl Default for ConfigOptions {
@@ -255,8 +326,16 @@ impl ConfigOptions {
         Self { options }
     }
 
-    /// Create new ConfigOptions struct, taking values from environment variables where possible.
-    /// For example, setting `DATAFUSION_EXECUTION_BATCH_SIZE` to control `datafusion.execution.batch_size`.
+    /// Create a new [`ConfigOptions`] wrapped in an RwLock and Arc
+    pub fn into_shareable(self) -> Arc<RwLock<Self>> {
+        Arc::new(RwLock::new(self))
+    }
+
+    /// Create new ConfigOptions struct, taking values from
+    /// environment variables where possible.
+    ///
+    /// For example, setting `DATAFUSION_EXECUTION_BATCH_SIZE` will
+    /// control `datafusion.execution.batch_size`.
     pub fn from_env() -> Self {
         let built_in = BuiltInConfigs::new();
         let mut options = HashMap::with_capacity(built_in.config_definitions.len());
@@ -296,6 +375,11 @@ impl ConfigOptions {
     /// set a `u64` configuration option
     pub fn set_u64(&mut self, key: &str, value: u64) {
         self.set(key, ScalarValue::UInt64(Some(value)))
+    }
+
+    /// set a `String` configuration option
+    pub fn set_string(&mut self, key: &str, value: impl Into<String>) {
+        self.set(key, ScalarValue::Utf8(Some(value.into())))
     }
 
     /// get a configuration option

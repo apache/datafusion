@@ -19,11 +19,13 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::{
+    expr::BinaryExpr,
     logical_plan::{Filter, Join, JoinType, LogicalPlan, Projection},
     utils::from_plan,
 };
 use datafusion_expr::{Expr, Operator};
 
+use datafusion_expr::expr::Cast;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -69,34 +71,34 @@ fn reduce_outer_join(
     _optimizer_config: &OptimizerConfig,
 ) -> Result<LogicalPlan> {
     match plan {
-        LogicalPlan::Filter(Filter { input, predicate }) => match &**input {
+        LogicalPlan::Filter(filter) => match filter.input().as_ref() {
             LogicalPlan::Join(join) => {
                 extract_nonnullable_columns(
-                    predicate,
+                    filter.predicate(),
                     nonnullable_cols,
                     join.left.schema(),
                     join.right.schema(),
                     true,
                 )?;
-                Ok(LogicalPlan::Filter(Filter {
-                    predicate: predicate.clone(),
-                    input: Arc::new(reduce_outer_join(
+                Ok(LogicalPlan::Filter(Filter::try_new(
+                    filter.predicate().clone(),
+                    Arc::new(reduce_outer_join(
                         _optimizer,
-                        input,
+                        filter.input(),
                         nonnullable_cols,
                         _optimizer_config,
                     )?),
-                }))
+                )?))
             }
-            _ => Ok(LogicalPlan::Filter(Filter {
-                predicate: predicate.clone(),
-                input: Arc::new(reduce_outer_join(
+            _ => Ok(LogicalPlan::Filter(Filter::try_new(
+                filter.predicate().clone(),
+                Arc::new(reduce_outer_join(
                     _optimizer,
-                    input,
+                    filter.input(),
                     nonnullable_cols,
                     _optimizer_config,
                 )?),
-            })),
+            )?)),
         },
         LogicalPlan::Join(join) => {
             let mut new_join_type = join.join_type;
@@ -224,7 +226,7 @@ fn reduce_outer_join(
     }
 }
 
-/// Recursively traversese expr, if expr returns false when
+/// Recursively traverses expr, if expr returns false when
 /// any inputs are null, treats columns of both sides as nonnullable columns.
 ///
 /// For and/or expr, extracts from all sub exprs and merges the columns.
@@ -244,7 +246,7 @@ fn extract_nonnullable_columns(
             nonnullable_cols.push(col.clone());
             Ok(())
         }
-        Expr::BinaryExpr { left, op, right } => match op {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
             // If one of the inputs are null for these operators, the results should be false.
             Operator::Eq
             | Operator::NotEq
@@ -350,15 +352,14 @@ fn extract_nonnullable_columns(
                 false,
             )
         }
-        Expr::Cast { expr, data_type: _ } | Expr::TryCast { expr, data_type: _ } => {
-            extract_nonnullable_columns(
-                expr,
-                nonnullable_cols,
-                left_schema,
-                right_schema,
-                false,
-            )
-        }
+        Expr::Cast(Cast { expr, data_type: _ })
+        | Expr::TryCast { expr, data_type: _ } => extract_nonnullable_columns(
+            expr,
+            nonnullable_cols,
+            left_schema,
+            right_schema,
+            false,
+        ),
         _ => Ok(()),
     }
 }

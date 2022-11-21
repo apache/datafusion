@@ -18,11 +18,10 @@
 //! Optimizer rule to replace `where false` on a plan with an empty relation.
 //! This saves time in planning and executing the query.
 //! Note that this rule should be applied after simplify expressions optimizer rule.
-use crate::{OptimizerConfig, OptimizerRule};
+use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    logical_plan::{EmptyRelation, Filter, LogicalPlan},
-    utils::from_plan,
+    logical_plan::{EmptyRelation, LogicalPlan},
     Expr,
 };
 
@@ -41,31 +40,27 @@ impl OptimizerRule for EliminateFilter {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        _optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        match plan {
-            LogicalPlan::Filter(Filter {
-                predicate: Expr::Literal(ScalarValue::Boolean(Some(v))),
-                input,
-            }) => {
-                if !*v {
-                    Ok(LogicalPlan::EmptyRelation(EmptyRelation {
-                        produce_one_row: false,
-                        schema: input.schema().clone(),
-                    }))
-                } else {
-                    self.optimize(input, optimizer_config)
+        let predicate_and_input = match plan {
+            LogicalPlan::Filter(filter) => match filter.predicate() {
+                Expr::Literal(ScalarValue::Boolean(Some(v))) => {
+                    Some((*v, filter.input()))
                 }
-            }
-            _ => {
-                // Apply the optimization to all inputs of the plan
-                let inputs = plan.inputs();
-                let new_inputs = inputs
-                    .iter()
-                    .map(|plan| self.optimize(plan, optimizer_config))
-                    .collect::<Result<Vec<_>>>()?;
+                _ => None,
+            },
+            _ => None,
+        };
 
-                from_plan(plan, &plan.expressions(), &new_inputs)
+        match predicate_and_input {
+            Some((true, input)) => self.optimize(input, _optimizer_config),
+            Some((false, input)) => Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: input.schema().clone(),
+            })),
+            None => {
+                // Apply the optimization to all inputs of the plan
+                utils::optimize_children(self, plan, _optimizer_config)
             }
         }
     }
@@ -92,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn fliter_false() {
+    fn filter_false() {
         let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(false)));
 
         let table_scan = test_table_scan().unwrap();
@@ -110,7 +105,7 @@ mod tests {
     }
 
     #[test]
-    fn fliter_false_nested() {
+    fn filter_false_nested() {
         let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(false)));
 
         let table_scan = test_table_scan().unwrap();
@@ -138,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn fliter_true() {
+    fn filter_true() {
         let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(true)));
 
         let table_scan = test_table_scan().unwrap();
@@ -156,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn fliter_true_nested() {
+    fn filter_true_nested() {
         let filter_expr = Expr::Literal(ScalarValue::Boolean(Some(true)));
 
         let table_scan = test_table_scan().unwrap();
@@ -185,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn fliter_from_subquery() {
+    fn filter_from_subquery() {
         // SELECT a FROM (SELECT a FROM test WHERE FALSE) WHERE TRUE
 
         let false_filter = lit(false);

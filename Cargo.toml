@@ -16,6 +16,7 @@
 # under the License.
 
 [workspace]
+exclude = ["datafusion-cli"]
 members = [
     "datafusion/common",
     "datafusion/core",
@@ -27,10 +28,25 @@ members = [
     "datafusion/row",
     "datafusion/sql",
     "datafusion-examples",
+    "test-utils",
+    "parquet-test-utils",
     "benchmarks",
 ]
-exclude = ["datafusion-cli"]
 
 [profile.release]
 codegen-units = 1
 lto = true
+
+# the release profile takes a long time to build so we can use this profile during development to save time
+# cargo build --profile release-nonlto
+[profile.release-nonlto]
+codegen-units = 16
+debug = false
+debug-assertions = false
+incremental = false
+inherits = "release"
+lto = false
+opt-level = 3
+overflow-checks = false
+panic = 'unwind'
+rpath = false

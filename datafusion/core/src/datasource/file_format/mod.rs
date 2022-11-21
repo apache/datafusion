@@ -22,6 +22,7 @@ pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
 
 pub mod avro;
 pub mod csv;
+pub mod file_type;
 pub mod json;
 pub mod parquet;
 
@@ -31,7 +32,7 @@ use std::sync::Arc;
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
-use crate::logical_plan::Expr;
+use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::FileScanConfig;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
@@ -83,6 +84,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
 #[cfg(test)]
 pub(crate) mod test_util {
     use super::*;
+    use crate::config::ConfigOptions;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::test::object_store::local_unpartitioned_file;
@@ -121,6 +123,8 @@ pub(crate) mod test_util {
                     projection,
                     limit,
                     table_partition_cols: vec![],
+                    config_options: ConfigOptions::new().into_shareable(),
+                    output_ordering: None,
                 },
                 &[],
             )

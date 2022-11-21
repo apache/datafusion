@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::{
     error::{DataFusionError, Result},
-    logical_plan::StringifiedPlan,
+    logical_expr::StringifiedPlan,
     physical_plan::{
         common::SizedRecordBatchStream, DisplayFormatType, ExecutionPlan, Partitioning,
         Statistics,
@@ -95,10 +95,6 @@ impl ExecutionPlan for ExplainExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
-    }
-
-    fn relies_on_input_order(&self) -> bool {
-        false
     }
 
     fn with_new_children(

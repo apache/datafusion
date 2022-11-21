@@ -27,7 +27,7 @@ use arrow::{
 };
 use arrow::{
     array::{
-        Date32Array, Date64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
+        Date64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray,
     },
     compute::kernels::temporal,
@@ -36,6 +36,7 @@ use arrow::{
 };
 use chrono::prelude::*;
 use chrono::Duration;
+use datafusion_common::cast::as_date32_array;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_common::{ScalarType, ScalarValue};
 use datafusion_expr::ColumnarValue;
@@ -179,9 +180,40 @@ pub fn make_now(
     move |_arg| {
         Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
             now_ts,
-            Some("UTC".to_owned()),
+            Some("+00:00".to_owned()),
         )))
     }
+}
+
+/// Create an implementation of `current_date()` that always returns the
+/// specified current date.
+///
+/// The semantics of `current_date()` require it to return the same value
+/// wherever it appears within a single statement. This value is
+/// chosen during planning time.
+pub fn make_current_date(
+    now_ts: DateTime<Utc>,
+) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
+    let days = Some(
+        now_ts.num_days_from_ce()
+            - NaiveDate::from_ymd_opt(1970, 1, 1)
+                .unwrap()
+                .num_days_from_ce(),
+    );
+    move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Date32(days)))
+}
+
+/// Create an implementation of `current_time()` that always returns the
+/// specified current time.
+///
+/// The semantics of `current_time()` require it to return the same value
+/// wherever it appears within a single statement. This value is
+/// chosen during planning time.
+pub fn make_current_time(
+    now_ts: DateTime<Utc>,
+) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue> {
+    let nano = Some(now_ts.timestamp_nanos() % 86400000000000);
+    move |_arg| Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(nano)))
 }
 
 fn quarter_month(date: &NaiveDateTime) -> u32 {
@@ -189,7 +221,11 @@ fn quarter_month(date: &NaiveDateTime) -> u32 {
 }
 
 fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
-    let value = timestamp_ns_to_datetime(value).with_nanosecond(0);
+    let value = timestamp_ns_to_datetime(value)
+        .ok_or_else(|| {
+            DataFusionError::Execution(format!("Timestamp {} out of range", value))
+        })?
+        .with_nanosecond(0);
     let value = match granularity {
         "second" => value,
         "minute" => value.and_then(|d| d.with_second(0)),
@@ -377,10 +413,10 @@ pub fn date_bin(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 macro_rules! extract_date_part {
     ($ARRAY: expr, $FN:expr) => {
         match $ARRAY.data_type() {
-            DataType::Date32 => {
-                let array = $ARRAY.as_any().downcast_ref::<Date32Array>().unwrap();
-                Ok($FN(array)?)
-            }
+            DataType::Date32 => match as_date32_array($ARRAY) {
+                Ok(array) => Ok($FN(array)?),
+                Err(e) => Err(e),
+            },
             DataType::Date64 => {
                 let array = $ARRAY.as_any().downcast_ref::<Date64Array>().unwrap();
                 Ok($FN(array)?)
@@ -448,16 +484,16 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     };
 
     let arr = match date_part.to_lowercase().as_str() {
-        "year" => extract_date_part!(array, temporal::year),
-        "quarter" => extract_date_part!(array, temporal::quarter),
-        "month" => extract_date_part!(array, temporal::month),
-        "week" => extract_date_part!(array, temporal::week),
-        "day" => extract_date_part!(array, temporal::day),
-        "doy" => extract_date_part!(array, temporal::doy),
-        "dow" => extract_date_part!(array, temporal::num_days_from_sunday),
-        "hour" => extract_date_part!(array, temporal::hour),
-        "minute" => extract_date_part!(array, temporal::minute),
-        "second" => extract_date_part!(array, temporal::second),
+        "year" => extract_date_part!(&array, temporal::year),
+        "quarter" => extract_date_part!(&array, temporal::quarter),
+        "month" => extract_date_part!(&array, temporal::month),
+        "week" => extract_date_part!(&array, temporal::week),
+        "day" => extract_date_part!(&array, temporal::day),
+        "doy" => extract_date_part!(&array, temporal::doy),
+        "dow" => extract_date_part!(&array, temporal::num_days_from_sunday),
+        "hour" => extract_date_part!(&array, temporal::hour),
+        "minute" => extract_date_part!(&array, temporal::minute),
+        "second" => extract_date_part!(&array, temporal::second),
         _ => Err(DataFusionError::Execution(format!(
             "Date part '{}' not supported",
             date_part

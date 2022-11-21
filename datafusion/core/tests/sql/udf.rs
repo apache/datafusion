@@ -18,16 +18,18 @@
 use super::*;
 use arrow::compute::add;
 use datafusion::{
-    logical_plan::{create_udaf, FunctionRegistry, LogicalPlanBuilder},
+    execution::registry::FunctionRegistry,
     physical_plan::{expressions::AvgAccumulator, functions::make_scalar_function},
 };
+use datafusion_common::cast::as_int32_array;
+use datafusion_expr::{create_udaf, LogicalPlanBuilder};
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
 /// physical plan have the same schema.
 #[tokio::test]
 async fn csv_query_custom_udf_with_cast() -> Result<()> {
-    let ctx = create_ctx()?;
+    let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(custom_sqrt(c11)) FROM aggregate_test_100";
     let actual = execute(&ctx, sql).await;
@@ -46,8 +48,8 @@ async fn scalar_udf() -> Result<()> {
     let batch = RecordBatch::try_new(
         Arc::new(schema.clone()),
         vec![
-            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
-            Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
+            Arc::new(Int32Array::from_slice([1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice([2, 12, 12, 120])),
         ],
     )?;
 
@@ -56,14 +58,8 @@ async fn scalar_udf() -> Result<()> {
     ctx.register_batch("t", batch)?;
 
     let myfunc = |args: &[ArrayRef]| {
-        let l = &args[0]
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("cast failed");
-        let r = &args[1]
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("cast failed");
+        let l = as_int32_array(&args[0])?;
+        let r = as_int32_array(&args[1])?;
         Ok(Arc::new(add(l, r)?) as ArrayRef)
     };
     let myfunc = make_scalar_function(myfunc);
@@ -112,21 +108,9 @@ async fn scalar_udf() -> Result<()> {
     assert_batches_eq!(expected, &result);
 
     let batch = &result[0];
-    let a = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .expect("failed to cast a");
-    let b = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .expect("failed to cast b");
-    let sum = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .expect("failed to cast sum");
+    let a = as_int32_array(batch.column(0))?;
+    let b = as_int32_array(batch.column(1))?;
+    let sum = as_int32_array(batch.column(2))?;
 
     assert_eq!(4, a.len());
     assert_eq!(4, b.len());
@@ -147,11 +131,11 @@ async fn simple_udaf() -> Result<()> {
 
     let batch1 = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
+        vec![Arc::new(Int32Array::from_slice([1, 2, 3]))],
     )?;
     let batch2 = RecordBatch::try_new(
         Arc::new(schema.clone()),
-        vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
+        vec![Arc::new(Int32Array::from_slice([4, 5]))],
     )?;
 
     let mut ctx = SessionContext::new();

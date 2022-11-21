@@ -34,6 +34,14 @@ pub struct Column {
 }
 
 impl Column {
+    /// Create Column from optional qualifier and name
+    pub fn new(relation: Option<impl Into<String>>, name: impl Into<String>) -> Self {
+        Self {
+            relation: relation.map(|r| r.into()),
+            name: name.into(),
+        }
+    }
+
     /// Create Column from unqualified name.
     pub fn from_name(name: impl Into<String>) -> Self {
         Self {
@@ -120,12 +128,11 @@ impl Column {
         }
 
         Err(DataFusionError::SchemaError(SchemaError::FieldNotFound {
-            qualifier: self.relation.clone(),
-            name: self.name,
+            field: Column::new(self.relation.clone(), self.name),
             valid_fields: Some(
                 schemas
                     .iter()
-                    .flat_map(|s| s.fields().iter().map(|f| f.qualified_name()))
+                    .flat_map(|s| s.fields().iter().map(|f| f.qualified_column()))
                     .collect(),
             ),
         }))

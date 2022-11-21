@@ -647,6 +647,24 @@ async fn test_not_expressions() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_negative_expressions() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT null, -null";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------+----------+",
+        "| NULL | (- NULL) |",
+        "+------+----------+",
+        "|      |          |",
+        "+------+----------+",
+    ];
+
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_boolean_expressions() -> Result<()> {
     test_expression!("true", "true");
     test_expression!("false", "false");
@@ -899,11 +917,11 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '0.499 day'",
-        "0 years 0 mons 0 days 11 hours 58 mins 33.596 secs"
+        "0 years 0 mons 0 days 11 hours 58 mins 33.600 secs"
     );
     test_expression!(
         "interval '0.4999 day'",
-        "0 years 0 mons 0 days 11 hours 59 mins 51.364 secs"
+        "0 years 0 mons 0 days 11 hours 59 mins 51.360 secs"
     );
     test_expression!(
         "interval '0.49999 day'",
@@ -911,7 +929,7 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '0.49999999999 day'",
-        "0 years 0 mons 0 days 12 hours 0 mins 0.00 secs"
+        "0 years 0 mons 0 days 11 hours 59 mins 59.999999136 secs"
     );
     test_expression!(
         "interval '5 day'",
@@ -1152,12 +1170,22 @@ async fn test_cast_expressions() -> Result<()> {
 
 #[tokio::test]
 async fn test_random_expression() -> Result<()> {
-    let ctx = create_ctx()?;
+    let ctx = create_ctx();
     let sql = "SELECT random() r1";
     let actual = execute(&ctx, sql).await;
     let r1 = actual[0][0].parse::<f64>().unwrap();
     assert!(0.0 <= r1);
     assert!(r1 < 1.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_uuid_expression() -> Result<()> {
+    let ctx = create_ctx();
+    let sql = "SELECT uuid()";
+    let actual = execute(&ctx, sql).await;
+    let uuid = actual[0][0].parse::<uuid::Uuid>().unwrap();
+    assert_eq!(uuid.get_version_num(), 4);
     Ok(())
 }
 
@@ -1462,7 +1490,7 @@ async fn csv_count_star() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_avg_sqrt() -> Result<()> {
-    let ctx = create_ctx()?;
+    let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
     let mut actual = execute(&ctx, sql).await;
@@ -1475,7 +1503,7 @@ async fn csv_query_avg_sqrt() -> Result<()> {
 // this query used to deadlock due to the call udf(udf())
 #[tokio::test]
 async fn csv_query_sqrt_sqrt() -> Result<()> {
-    let ctx = create_ctx()?;
+    let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT sqrt(sqrt(c12)) FROM aggregate_test_100 LIMIT 1";
     let actual = execute(&ctx, sql).await;

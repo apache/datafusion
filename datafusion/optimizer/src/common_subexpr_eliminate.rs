@@ -17,15 +17,14 @@
 
 //! Eliminate common sub-expression.
 
-use crate::{OptimizerConfig, OptimizerRule};
+use crate::{utils, OptimizerConfig, OptimizerRule};
 use arrow::datatypes::DataType;
-use datafusion_common::{DFField, DFSchema, DataFusionError, Result};
+use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::{
     col,
     expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
     expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
     logical_plan::{Aggregate, Filter, LogicalPlan, Projection, Sort, Window},
-    utils::from_plan,
     Expr, ExprSchemable,
 };
 use std::collections::{BTreeSet, HashMap};
@@ -54,13 +53,202 @@ type Identifier = String;
 /// be eliminated.
 pub struct CommonSubexprEliminate {}
 
+impl CommonSubexprEliminate {
+    fn rewrite_expr(
+        &self,
+        exprs_list: &[&[Expr]],
+        arrays_list: &[&[Vec<(usize, String)>]],
+        input: &LogicalPlan,
+        expr_set: &mut ExprSet,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
+        let mut affected_id = BTreeSet::<Identifier>::new();
+
+        let rewrite_exprs = exprs_list
+            .iter()
+            .zip(arrays_list.iter())
+            .map(|(exprs, arrays)| {
+                exprs
+                    .iter()
+                    .cloned()
+                    .zip(arrays.iter())
+                    .map(|(expr, id_array)| {
+                        replace_common_expr(expr, id_array, expr_set, &mut affected_id)
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut new_input = self.optimize(input, optimizer_config)?;
+        if !affected_id.is_empty() {
+            new_input = build_project_plan(new_input, affected_id, expr_set)?;
+        }
+
+        Ok((rewrite_exprs, new_input))
+    }
+}
+
 impl OptimizerRule for CommonSubexprEliminate {
     fn optimize(
         &self,
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        optimize(plan, optimizer_config)
+        let mut expr_set = ExprSet::new();
+
+        match plan {
+            LogicalPlan::Projection(Projection {
+                expr,
+                input,
+                schema,
+                alias,
+            }) => {
+                let input_schema = Arc::clone(input.schema());
+                let arrays = to_arrays(expr, input_schema, &mut expr_set)?;
+
+                let (mut new_expr, new_input) = self.rewrite_expr(
+                    &[expr],
+                    &[&arrays],
+                    input,
+                    &mut expr_set,
+                    optimizer_config,
+                )?;
+
+                Ok(LogicalPlan::Projection(
+                    Projection::try_new_with_schema_alias(
+                        pop_expr(&mut new_expr)?,
+                        Arc::new(new_input),
+                        schema.clone(),
+                        alias.clone(),
+                    )?,
+                ))
+            }
+            LogicalPlan::Filter(filter) => {
+                let input = filter.input();
+                let predicate = filter.predicate();
+                let input_schema = Arc::clone(input.schema());
+                let mut id_array = vec![];
+                expr_to_identifier(
+                    predicate,
+                    &mut expr_set,
+                    &mut id_array,
+                    input_schema,
+                )?;
+
+                let (mut new_expr, new_input) = self.rewrite_expr(
+                    &[&[predicate.clone()]],
+                    &[&[id_array]],
+                    filter.input(),
+                    &mut expr_set,
+                    optimizer_config,
+                )?;
+
+                if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
+                    Ok(LogicalPlan::Filter(Filter::try_new(
+                        predicate,
+                        Arc::new(new_input),
+                    )?))
+                } else {
+                    Err(DataFusionError::Internal(
+                        "Failed to pop predicate expr".to_string(),
+                    ))
+                }
+            }
+            LogicalPlan::Window(Window {
+                input,
+                window_expr,
+                schema,
+            }) => {
+                let input_schema = Arc::clone(input.schema());
+                let arrays = to_arrays(window_expr, input_schema, &mut expr_set)?;
+
+                let (mut new_expr, new_input) = self.rewrite_expr(
+                    &[window_expr],
+                    &[&arrays],
+                    input,
+                    &mut expr_set,
+                    optimizer_config,
+                )?;
+
+                Ok(LogicalPlan::Window(Window {
+                    input: Arc::new(new_input),
+                    window_expr: pop_expr(&mut new_expr)?,
+                    schema: schema.clone(),
+                }))
+            }
+            LogicalPlan::Aggregate(Aggregate {
+                group_expr,
+                aggr_expr,
+                input,
+                schema,
+            }) => {
+                let input_schema = Arc::clone(input.schema());
+                let group_arrays =
+                    to_arrays(group_expr, Arc::clone(&input_schema), &mut expr_set)?;
+                let aggr_arrays = to_arrays(aggr_expr, input_schema, &mut expr_set)?;
+
+                let (mut new_expr, new_input) = self.rewrite_expr(
+                    &[group_expr, aggr_expr],
+                    &[&group_arrays, &aggr_arrays],
+                    input,
+                    &mut expr_set,
+                    optimizer_config,
+                )?;
+                // note the reversed pop order.
+                let new_aggr_expr = pop_expr(&mut new_expr)?;
+                let new_group_expr = pop_expr(&mut new_expr)?;
+
+                Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+                    Arc::new(new_input),
+                    new_group_expr,
+                    new_aggr_expr,
+                    schema.clone(),
+                )?))
+            }
+            LogicalPlan::Sort(Sort { expr, input, fetch }) => {
+                let input_schema = Arc::clone(input.schema());
+                let arrays = to_arrays(expr, input_schema, &mut expr_set)?;
+
+                let (mut new_expr, new_input) = self.rewrite_expr(
+                    &[expr],
+                    &[&arrays],
+                    input,
+                    &mut expr_set,
+                    optimizer_config,
+                )?;
+
+                Ok(LogicalPlan::Sort(Sort {
+                    expr: pop_expr(&mut new_expr)?,
+                    input: Arc::new(new_input),
+                    fetch: *fetch,
+                }))
+            }
+            LogicalPlan::Join(_)
+            | LogicalPlan::CrossJoin(_)
+            | LogicalPlan::Repartition(_)
+            | LogicalPlan::Union(_)
+            | LogicalPlan::TableScan(_)
+            | LogicalPlan::Values(_)
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Subquery(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Limit(_)
+            | LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::CreateMemoryTable(_)
+            | LogicalPlan::CreateView(_)
+            | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::DropView(_)
+            | LogicalPlan::SetVariable(_)
+            | LogicalPlan::Distinct(_)
+            | LogicalPlan::Extension(_) => {
+                // apply the optimization to all inputs of the plan
+                utils::optimize_children(self, plan, optimizer_config)
+            }
+        }
     }
 
     fn name(&self) -> &str {
@@ -81,172 +269,6 @@ impl CommonSubexprEliminate {
     }
 }
 
-fn optimize(
-    plan: &LogicalPlan,
-    optimizer_config: &OptimizerConfig,
-) -> Result<LogicalPlan> {
-    let mut expr_set = ExprSet::new();
-
-    match plan {
-        LogicalPlan::Projection(Projection {
-            expr,
-            input,
-            schema,
-            alias,
-        }) => {
-            let arrays = to_arrays(expr, input, &mut expr_set)?;
-
-            let (mut new_expr, new_input) = rewrite_expr(
-                &[expr],
-                &[&arrays],
-                input,
-                &mut expr_set,
-                optimizer_config,
-            )?;
-
-            Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                pop_expr(&mut new_expr)?,
-                Arc::new(new_input),
-                schema.clone(),
-                alias.clone(),
-            )?))
-        }
-        LogicalPlan::Filter(Filter { predicate, input }) => {
-            let schema = plan.schema().as_ref().clone();
-            let data_type = if let Ok(data_type) = predicate.get_type(&schema) {
-                data_type
-            } else {
-                // predicate type could not be resolved in schema, fall back to all schemas
-                let schemas = plan.all_schemas();
-                let all_schema =
-                    schemas.into_iter().fold(DFSchema::empty(), |mut lhs, rhs| {
-                        lhs.merge(rhs);
-                        lhs
-                    });
-                predicate.get_type(&all_schema)?
-            };
-
-            let mut id_array = vec![];
-            expr_to_identifier(predicate, &mut expr_set, &mut id_array, data_type)?;
-
-            let (mut new_expr, new_input) = rewrite_expr(
-                &[&[predicate.clone()]],
-                &[&[id_array]],
-                input,
-                &mut expr_set,
-                optimizer_config,
-            )?;
-
-            if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
-                Ok(LogicalPlan::Filter(Filter {
-                    predicate,
-                    input: Arc::new(new_input),
-                }))
-            } else {
-                Err(DataFusionError::Internal(
-                    "Failed to pop predicate expr".to_string(),
-                ))
-            }
-        }
-        LogicalPlan::Window(Window {
-            input,
-            window_expr,
-            schema,
-        }) => {
-            let arrays = to_arrays(window_expr, input, &mut expr_set)?;
-
-            let (mut new_expr, new_input) = rewrite_expr(
-                &[window_expr],
-                &[&arrays],
-                input,
-                &mut expr_set,
-                optimizer_config,
-            )?;
-
-            Ok(LogicalPlan::Window(Window {
-                input: Arc::new(new_input),
-                window_expr: pop_expr(&mut new_expr)?,
-                schema: schema.clone(),
-            }))
-        }
-        LogicalPlan::Aggregate(Aggregate {
-            group_expr,
-            aggr_expr,
-            input,
-            schema,
-        }) => {
-            let group_arrays = to_arrays(group_expr, input, &mut expr_set)?;
-            let aggr_arrays = to_arrays(aggr_expr, input, &mut expr_set)?;
-
-            let (mut new_expr, new_input) = rewrite_expr(
-                &[group_expr, aggr_expr],
-                &[&group_arrays, &aggr_arrays],
-                input,
-                &mut expr_set,
-                optimizer_config,
-            )?;
-            // note the reversed pop order.
-            let new_aggr_expr = pop_expr(&mut new_expr)?;
-            let new_group_expr = pop_expr(&mut new_expr)?;
-
-            Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                Arc::new(new_input),
-                new_group_expr,
-                new_aggr_expr,
-                schema.clone(),
-            )?))
-        }
-        LogicalPlan::Sort(Sort { expr, input, fetch }) => {
-            let arrays = to_arrays(expr, input, &mut expr_set)?;
-
-            let (mut new_expr, new_input) = rewrite_expr(
-                &[expr],
-                &[&arrays],
-                input,
-                &mut expr_set,
-                optimizer_config,
-            )?;
-
-            Ok(LogicalPlan::Sort(Sort {
-                expr: pop_expr(&mut new_expr)?,
-                input: Arc::new(new_input),
-                fetch: *fetch,
-            }))
-        }
-        LogicalPlan::Join { .. }
-        | LogicalPlan::CrossJoin(_)
-        | LogicalPlan::Repartition(_)
-        | LogicalPlan::Union(_)
-        | LogicalPlan::TableScan { .. }
-        | LogicalPlan::Values(_)
-        | LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::Subquery(_)
-        | LogicalPlan::SubqueryAlias(_)
-        | LogicalPlan::Limit(_)
-        | LogicalPlan::CreateExternalTable(_)
-        | LogicalPlan::Explain { .. }
-        | LogicalPlan::Analyze { .. }
-        | LogicalPlan::CreateMemoryTable(_)
-        | LogicalPlan::CreateView(_)
-        | LogicalPlan::CreateCatalogSchema(_)
-        | LogicalPlan::CreateCatalog(_)
-        | LogicalPlan::DropTable(_)
-        | LogicalPlan::DropView(_)
-        | LogicalPlan::Distinct(_)
-        | LogicalPlan::Extension { .. } => {
-            // apply the optimization to all inputs of the plan
-            let expr = plan.expressions();
-            let inputs = plan.inputs();
-            let new_inputs = inputs
-                .iter()
-                .map(|input_plan| optimize(input_plan, optimizer_config))
-                .collect::<Result<Vec<_>>>()?;
-
-            from_plan(plan, &expr, &new_inputs)
-        }
-    }
-}
-
 fn pop_expr(new_expr: &mut Vec<Vec<Expr>>) -> Result<Vec<Expr>> {
     new_expr
         .pop()
@@ -255,14 +277,13 @@ fn pop_expr(new_expr: &mut Vec<Vec<Expr>>) -> Result<Vec<Expr>> {
 
 fn to_arrays(
     expr: &[Expr],
-    input: &LogicalPlan,
+    input_schema: DFSchemaRef,
     expr_set: &mut ExprSet,
 ) -> Result<Vec<Vec<(usize, String)>>> {
     expr.iter()
         .map(|e| {
-            let data_type = e.get_type(input.schema())?;
             let mut id_array = vec![];
-            expr_to_identifier(e, expr_set, &mut id_array, data_type)?;
+            expr_to_identifier(e, expr_set, &mut id_array, Arc::clone(&input_schema))?;
 
             Ok(id_array)
         })
@@ -291,7 +312,7 @@ fn build_project_plan(
             _ => {
                 return Err(DataFusionError::Internal(
                     "expr_set invalid state".to_string(),
-                ))
+                ));
             }
         }
     }
@@ -309,41 +330,7 @@ fn build_project_plan(
         project_exprs,
         Arc::new(input),
         Arc::new(schema),
-        None,
     )?))
-}
-
-#[inline]
-fn rewrite_expr(
-    exprs_list: &[&[Expr]],
-    arrays_list: &[&[Vec<(usize, String)>]],
-    input: &LogicalPlan,
-    expr_set: &mut ExprSet,
-    optimizer_config: &OptimizerConfig,
-) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
-    let mut affected_id = BTreeSet::<Identifier>::new();
-
-    let rewrote_exprs = exprs_list
-        .iter()
-        .zip(arrays_list.iter())
-        .map(|(exprs, arrays)| {
-            exprs
-                .iter()
-                .cloned()
-                .zip(arrays.iter())
-                .map(|(expr, id_array)| {
-                    replace_common_expr(expr, id_array, expr_set, &mut affected_id)
-                })
-                .collect::<Result<Vec<_>>>()
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let mut new_input = optimize(input, optimizer_config)?;
-    if !affected_id.is_empty() {
-        new_input = build_project_plan(new_input, affected_id, expr_set)?;
-    }
-
-    Ok((rewrote_exprs, new_input))
 }
 
 /// Go through an expression tree and generate identifier.
@@ -370,8 +357,9 @@ struct ExprIdentifierVisitor<'a> {
     expr_set: &'a mut ExprSet,
     /// series number (usize) and identifier.
     id_array: &'a mut Vec<(usize, Identifier)>,
-    data_type: DataType,
-
+    /// input schema for the node that we're optimizing, so we can determine the correct datatype
+    /// for each subexpression
+    input_schema: DFSchemaRef,
     // inner states
     visit_stack: Vec<VisitRecord>,
     /// increased in pre_visit, start from 0.
@@ -448,7 +436,9 @@ impl ExpressionVisitor for ExprIdentifierVisitor<'_> {
 
         self.id_array[idx] = (self.series_number, desc.clone());
         self.visit_stack.push(VisitRecord::ExprItem(desc.clone()));
-        let data_type = self.data_type.clone();
+
+        let data_type = expr.get_type(&self.input_schema)?;
+
         self.expr_set
             .entry(desc)
             .or_insert_with(|| (expr.clone(), 0, data_type))
@@ -462,12 +452,12 @@ fn expr_to_identifier(
     expr: &Expr,
     expr_set: &mut ExprSet,
     id_array: &mut Vec<(usize, Identifier)>,
-    data_type: DataType,
+    input_schema: DFSchemaRef,
 ) -> Result<()> {
     expr.accept(ExprIdentifierVisitor {
         expr_set,
         id_array,
-        data_type,
+        input_schema,
         visit_stack: vec![],
         node_count: 0,
         series_number: 0,
@@ -550,11 +540,11 @@ impl ExprRewriter for CommonSubexprRewriter<'_> {
             self.curr_index += 1;
         }
 
-        let expr_name = expr.name()?;
+        let expr_name = expr.display_name()?;
         // Alias this `Column` expr to it original "expr name",
         // `projection_push_down` optimizer use "expr name" to eliminate useless
         // projections.
-        Ok(col(id).alias(&expr_name))
+        Ok(col(id).alias(expr_name))
     }
 }
 
@@ -577,7 +567,8 @@ fn replace_common_expr(
 mod test {
     use super::*;
     use crate::test::*;
-    use datafusion_expr::logical_plan::JoinType;
+    use arrow::datatypes::{Field, Schema};
+    use datafusion_expr::logical_plan::{table_scan, JoinType};
     use datafusion_expr::{
         avg, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
         Operator,
@@ -597,7 +588,7 @@ mod test {
     fn id_array_visitor() -> Result<()> {
         let expr = binary_expr(
             binary_expr(
-                sum(binary_expr(col("a"), Operator::Plus, lit("1"))),
+                sum(binary_expr(col("a"), Operator::Plus, lit(1))),
                 Operator::Minus,
                 avg(col("c")),
             ),
@@ -605,14 +596,27 @@ mod test {
             lit(2),
         );
 
+        let schema = Arc::new(DFSchema::new_with_metadata(
+            vec![
+                DFField::new(None, "a", DataType::Int64, false),
+                DFField::new(None, "c", DataType::Int64, false),
+            ],
+            Default::default(),
+        )?);
+
         let mut id_array = vec![];
-        expr_to_identifier(&expr, &mut HashMap::new(), &mut id_array, DataType::Int64)?;
+        expr_to_identifier(
+            &expr,
+            &mut HashMap::new(),
+            &mut id_array,
+            Arc::clone(&schema),
+        )?;
 
         let expected = vec![
-            (9, "SUM(a + Utf8(\"1\")) - AVG(c) * Int32(2)Int32(2)SUM(a + Utf8(\"1\")) - AVG(c)AVG(c)cSUM(a + Utf8(\"1\"))a + Utf8(\"1\")Utf8(\"1\")a"),
-            (7, "SUM(a + Utf8(\"1\")) - AVG(c)AVG(c)cSUM(a + Utf8(\"1\"))a + Utf8(\"1\")Utf8(\"1\")a"),
-            (4, "SUM(a + Utf8(\"1\"))a + Utf8(\"1\")Utf8(\"1\")a"),
-            (3, "a + Utf8(\"1\")Utf8(\"1\")a"),
+            (9, "(SUM(a + Int32(1)) - AVG(c)) * Int32(2)Int32(2)SUM(a + Int32(1)) - AVG(c)AVG(c)cSUM(a + Int32(1))a + Int32(1)Int32(1)a"),
+            (7, "SUM(a + Int32(1)) - AVG(c)AVG(c)cSUM(a + Int32(1))a + Int32(1)Int32(1)a"),
+            (4, "SUM(a + Int32(1))a + Int32(1)Int32(1)a"),
+            (3, "a + Int32(1)Int32(1)a"),
             (1, ""),
             (2, ""),
             (6, "AVG(c)c"),
@@ -661,8 +665,8 @@ mod test {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(test.a * Int32(1) - test.bInt32(1) - test.btest.bInt32(1)test.a AS test.a * Int32(1) - test.b), SUM(test.a * Int32(1) - test.bInt32(1) - test.btest.bInt32(1)test.a AS test.a * Int32(1) - test.b * Int32(1) + test.c)]]\
-        \n  Projection: test.a * Int32(1) - test.b AS test.a * Int32(1) - test.bInt32(1) - test.btest.bInt32(1)test.a, test.a, test.b, test.c\
+        let expected = "Aggregate: groupBy=[[]], aggr=[[SUM(test.a * (Int32(1) - test.b)Int32(1) - test.btest.bInt32(1)test.a AS test.a * Int32(1) - test.b), SUM(test.a * (Int32(1) - test.b)Int32(1) - test.btest.bInt32(1)test.a AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]\
+        \n  Projection: test.a * (Int32(1) - test.b) AS test.a * (Int32(1) - test.b)Int32(1) - test.btest.bInt32(1)test.a, test.a, test.b, test.c\
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
@@ -795,5 +799,56 @@ mod test {
         for field in project_2.schema().fields() {
             assert!(field_set.insert(field.qualified_name()));
         }
+    }
+
+    #[test]
+    fn eliminated_subexpr_datatype() {
+        use datafusion_expr::cast;
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt64, false),
+            Field::new("b", DataType::UInt64, false),
+            Field::new("c", DataType::UInt64, false),
+        ]);
+
+        let plan = table_scan(Some("table"), &schema, None)
+            .unwrap()
+            .filter(
+                cast(col("a"), DataType::Int64)
+                    .lt(lit(1_i64))
+                    .and(cast(col("a"), DataType::Int64).not_eq(lit(1_i64))),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+        let rule = CommonSubexprEliminate {};
+        let optimized_plan = rule.optimize(&plan, &mut OptimizerConfig::new()).unwrap();
+
+        let schema = optimized_plan.schema();
+        let fields_with_datatypes: Vec<_> = schema
+            .fields()
+            .iter()
+            .map(|field| (field.name(), field.data_type()))
+            .collect();
+        let formatted_fields_with_datatype = format!("{fields_with_datatypes:#?}");
+        let expected = r###"[
+    (
+        "CAST(table.a AS Int64)table.a",
+        Int64,
+    ),
+    (
+        "a",
+        UInt64,
+    ),
+    (
+        "b",
+        UInt64,
+    ),
+    (
+        "c",
+        UInt64,
+    ),
+]"###;
+        assert_eq!(expected, formatted_fields_with_datatype);
     }
 }

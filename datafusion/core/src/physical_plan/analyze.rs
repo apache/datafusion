@@ -72,8 +72,8 @@ impl ExecutionPlan for AnalyzeExec {
     }
 
     /// Specifies we want the input as a single stream
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::SinglePartition
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
     }
 
     /// Get the output partitioning of this plan
@@ -83,10 +83,6 @@ impl ExecutionPlan for AnalyzeExec {
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
-    }
-
-    fn relies_on_input_order(&self) -> bool {
-        false
     }
 
     fn with_new_children(

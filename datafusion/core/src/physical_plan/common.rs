@@ -328,8 +328,8 @@ mod tests {
                 RecordBatch::try_new(
                     Arc::clone(&schema),
                     vec![
-                        Arc::new(Float32Array::from_slice(&vec![i as f32; batch_size])),
-                        Arc::new(Float64Array::from_slice(&vec![i as f64; batch_size])),
+                        Arc::new(Float32Array::from_slice(vec![i as f32; batch_size])),
+                        Arc::new(Float64Array::from_slice(vec![i as f64; batch_size])),
                     ],
                 )
                 .unwrap()
@@ -366,8 +366,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(Float32Array::from_slice(&[1., 2., 3.])),
-                Arc::new(Float64Array::from_slice(&[9., 8., 7.])),
+                Arc::new(Float32Array::from_slice([1., 2., 3.])),
+                Arc::new(Float64Array::from_slice([9., 8., 7.])),
             ],
         )?;
         let actual =

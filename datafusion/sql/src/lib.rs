@@ -18,11 +18,9 @@
 //! This module provides a SQL parser that translates SQL queries into an abstract syntax
 //! tree (AST), and a SQL query planner that creates a logical plan from the AST.
 
-mod interval;
 pub mod parser;
 pub mod planner;
-mod table_reference;
 pub mod utils;
 
+pub use datafusion_common::{ResolvedTableReference, TableReference};
 pub use sqlparser;
-pub use table_reference::{ResolvedTableReference, TableReference};

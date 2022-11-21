@@ -29,13 +29,14 @@
 //! This module also has a set of coercion rules to improve user experience: if an argument i32 is passed
 //! to a function that supports f64, it is coerced to f64.
 
+use crate::physical_expr::down_cast_any_ref;
+use crate::utils::expr_list_eq_strict_order;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::ColumnarValue;
-pub use datafusion_expr::NullColumnarValue;
 use datafusion_expr::ScalarFunctionImplementation;
 use std::any::Any;
 use std::fmt::Debug;
@@ -132,7 +133,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // indicating the batch size (as a convention)
         let inputs = match (self.args.len(), self.name.parse::<BuiltinScalarFunction>()) {
             (0, Ok(scalar_fun)) if scalar_fun.supports_zero_argument() => {
-                vec![NullColumnarValue::from(batch)]
+                vec![ColumnarValue::create_null_array(batch.num_rows())]
             }
             _ => self
                 .args
@@ -144,5 +145,35 @@ impl PhysicalExpr for ScalarFunctionExpr {
         // evaluate the function
         let fun = self.fun.as_ref();
         (fun)(&inputs)
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.args.clone()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(ScalarFunctionExpr::new(
+            &self.name,
+            self.fun.clone(),
+            children,
+            self.return_type(),
+        )))
+    }
+}
+
+impl PartialEq<dyn Any> for ScalarFunctionExpr {
+    /// Comparing name, args and return_type
+    fn eq(&self, other: &dyn Any) -> bool {
+        down_cast_any_ref(other)
+            .downcast_ref::<Self>()
+            .map(|x| {
+                self.name == x.name
+                    && expr_list_eq_strict_order(&self.args, &x.args)
+                    && self.return_type == x.return_type
+            })
+            .unwrap_or(false)
     }
 }

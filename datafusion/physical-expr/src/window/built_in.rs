@@ -17,15 +17,19 @@
 
 //! Physical exec for built-in window function expressions.
 
+use super::window_frame_state::WindowFrameContext;
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
-use arrow::compute::concat;
+use arrow::array::Array;
+use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+use datafusion_expr::WindowFrame;
 use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// A window expr that takes the form of a built in window function
@@ -34,6 +38,7 @@ pub struct BuiltInWindowExpr {
     expr: Arc<dyn BuiltInWindowFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
+    window_frame: Option<Arc<WindowFrame>>,
 }
 
 impl BuiltInWindowExpr {
@@ -42,11 +47,13 @@ impl BuiltInWindowExpr {
         expr: Arc<dyn BuiltInWindowFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
+        window_frame: Option<Arc<WindowFrame>>,
     ) -> Self {
         Self {
             expr,
             partition_by: partition_by.to_vec(),
             order_by: order_by.to_vec(),
+            window_frame,
         }
     }
 }
@@ -80,11 +87,55 @@ impl WindowExpr for BuiltInWindowExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let evaluator = self.expr.create_evaluator(batch)?;
         let num_rows = batch.num_rows();
+        let partition_columns = self.partition_columns(batch)?;
         let partition_points =
-            self.evaluate_partition_points(num_rows, &self.partition_columns(batch)?)?;
-        let results = if evaluator.include_rank() {
+            self.evaluate_partition_points(num_rows, &partition_columns)?;
+
+        let results = if evaluator.uses_window_frame() {
+            let sort_options: Vec<SortOptions> =
+                self.order_by.iter().map(|o| o.options).collect();
+            let columns = self.sort_columns(batch)?;
+            let order_columns: Vec<&ArrayRef> =
+                columns.iter().map(|s| &s.values).collect();
+            // Sort values, this will make the same partitions consecutive. Also, within the partition
+            // range, values will be sorted.
+            let order_bys = &order_columns[self.partition_by.len()..];
+            let window_frame = if !order_bys.is_empty() && self.window_frame.is_none() {
+                // OVER (ORDER BY a) case
+                // We create an implicit window for ORDER BY.
+                Some(Arc::new(WindowFrame::default()))
+            } else {
+                self.window_frame.clone()
+            };
+            let mut row_wise_results = vec![];
+            for partition_range in &partition_points {
+                let length = partition_range.end - partition_range.start;
+                let slice_order_bys = order_bys
+                    .iter()
+                    .map(|v| v.slice(partition_range.start, length))
+                    .collect::<Vec<_>>();
+                let mut window_frame_ctx = WindowFrameContext::new(&window_frame);
+                // We iterate on each row to calculate window frame range and and window function result
+                for idx in 0..length {
+                    let range = window_frame_ctx.calculate_range(
+                        &slice_order_bys,
+                        &sort_options,
+                        num_rows,
+                        idx,
+                    )?;
+                    let range = Range {
+                        start: partition_range.start + range.0,
+                        end: partition_range.start + range.1,
+                    };
+                    let value = evaluator.evaluate_inside_range(range)?;
+                    row_wise_results.push(value.to_array());
+                }
+            }
+            row_wise_results
+        } else if evaluator.include_rank() {
+            let columns = self.sort_columns(batch)?;
             let sort_partition_points =
-                self.evaluate_partition_points(num_rows, &self.sort_columns(batch)?)?;
+                self.evaluate_partition_points(num_rows, &columns)?;
             evaluator.evaluate_with_rank(partition_points, sort_partition_points)?
         } else {
             evaluator.evaluate(partition_points)?

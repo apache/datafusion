@@ -50,7 +50,7 @@ impl OptimizerRule for ProjectionPushDown {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        // set of all columns refered by the plan (and thus considered required by the root)
+        // set of all columns referred by the plan (and thus considered required by the root)
         let required_columns = plan
             .schema()
             .fields()
@@ -112,9 +112,9 @@ fn get_projected_schema(
 
     // create the projected schema
     let projected_fields: Vec<DFField> = match table_name {
-        Some(qualifer) => projection
+        Some(qualifier) => projection
             .iter()
-            .map(|i| DFField::from_qualified(qualifer, schema.fields()[*i].clone()))
+            .map(|i| DFField::from_qualified(qualifier, schema.fields()[*i].clone()))
             .collect(),
         None => projection
             .iter()
@@ -135,7 +135,7 @@ fn optimize_plan(
     _optimizer_config: &OptimizerConfig,
 ) -> Result<LogicalPlan> {
     let mut new_required_columns = required_columns.clone();
-    match plan {
+    let new_plan = match plan {
         LogicalPlan::Projection(Projection {
             input,
             expr,
@@ -192,12 +192,16 @@ fn optimize_plan(
                 Ok(new_input)
             } else {
                 let metadata = new_input.schema().metadata().clone();
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    new_expr,
-                    Arc::new(new_input),
-                    DFSchemaRef::new(DFSchema::new_with_metadata(new_fields, metadata)?),
-                    alias.clone(),
-                )?))
+                Ok(LogicalPlan::Projection(
+                    Projection::try_new_with_schema_alias(
+                        new_expr,
+                        Arc::new(new_input),
+                        DFSchemaRef::new(DFSchema::new_with_metadata(
+                            new_fields, metadata,
+                        )?),
+                        alias.clone(),
+                    )?,
+                ))
             }
         }
         LogicalPlan::Join(Join {
@@ -259,7 +263,7 @@ fn optimize_plan(
             let mut new_window_expr = Vec::new();
             {
                 window_expr.iter().try_for_each(|expr| {
-                    let name = &expr.name()?;
+                    let name = &expr.display_name()?;
                     let column = Column::from_name(name);
                     if required_columns.contains(&column) {
                         new_window_expr.push(expr.clone());
@@ -317,7 +321,7 @@ fn optimize_plan(
             // Gather all columns needed for expressions in this Aggregate
             let mut new_aggr_expr = Vec::new();
             aggr_expr.iter().try_for_each(|expr| {
-                let name = &expr.name()?;
+                let name = &expr.display_name()?;
                 let column = Column::from_name(name);
                 if required_columns.contains(&column) {
                     new_aggr_expr.push(expr.clone());
@@ -392,11 +396,7 @@ fn optimize_plan(
                 schema: a.schema.clone(),
             }))
         }
-        LogicalPlan::Union(Union {
-            inputs,
-            schema,
-            alias,
-        }) => {
+        LogicalPlan::Union(Union { inputs, schema }) => {
             // UNION inputs will reference the same column with different identifiers, so we need
             // to populate new_required_columns by unqualified column name based on required fields
             // from the resulting UNION output
@@ -438,7 +438,6 @@ fn optimize_plan(
             Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs.iter().cloned().map(Arc::new).collect(),
                 schema: Arc::new(new_schema),
-                alias: alias.clone(),
             }))
         }
         LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
@@ -485,6 +484,7 @@ fn optimize_plan(
         | LogicalPlan::CreateCatalog(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::DropView(_)
+        | LogicalPlan::SetVariable(_)
         | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Distinct(_)
         | LogicalPlan::Extension { .. } => {
@@ -509,15 +509,35 @@ fn optimize_plan(
 
             from_plan(plan, &expr, &new_inputs)
         }
-    }
+    };
+
+    // when this rule is applied multiple times it will insert duplicate nested projections,
+    // so we catch this here
+    let with_dupe_projection_removed = match new_plan? {
+        LogicalPlan::Projection(p) => match p.input.as_ref() {
+            LogicalPlan::Projection(p2) if projection_equal(&p, p2) => {
+                LogicalPlan::Projection(p2.clone())
+            }
+            _ => LogicalPlan::Projection(p),
+        },
+        other => other,
+    };
+
+    Ok(with_dupe_projection_removed)
+}
+
+fn projection_equal(p: &Projection, p2: &Projection) -> bool {
+    p.expr.len() == p2.expr.len()
+        && p.alias == p2.alias
+        && p.expr.iter().zip(&p2.expr).all(|(l, r)| l == r)
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::test::*;
     use arrow::datatypes::DataType;
+    use datafusion_expr::expr::Cast;
     use datafusion_expr::{
         col, count, lit,
         logical_plan::{builder::LogicalPlanBuilder, JoinType},
@@ -580,12 +600,12 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("c"))?
+            .filter(col("c").gt(lit(1)))?
             .aggregate(Vec::<Expr>::new(), vec![max(col("b"))])?
             .build()?;
 
         let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(test.b)]]\
-        \n  Filter: test.c\
+        \n  Filter: test.c > Int32(1)\
         \n    TableScan: test projection=[b, c]";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -594,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn redundunt_project() -> Result<()> {
+    fn redundant_project() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -625,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn noncontiguous_redundunt_projection() -> Result<()> {
+    fn noncontinuous_redundant_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -679,7 +699,7 @@ mod tests {
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
                     DFField::new(Some("test2"), "c1", DataType::UInt32, false),
                 ],
-                HashMap::new()
+                HashMap::new(),
             )?,
         );
 
@@ -722,7 +742,7 @@ mod tests {
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
                     DFField::new(Some("test2"), "c1", DataType::UInt32, false),
                 ],
-                HashMap::new()
+                HashMap::new(),
             )?,
         );
 
@@ -731,7 +751,7 @@ mod tests {
 
     #[test]
     fn join_schema_trim_using_join() -> Result<()> {
-        // shared join colums from using join should be pushed to both sides
+        // shared join columns from using join should be pushed to both sides
 
         let table_scan = test_table_scan()?;
 
@@ -763,7 +783,7 @@ mod tests {
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
                     DFField::new(Some("test2"), "a", DataType::UInt32, false),
                 ],
-                HashMap::new()
+                HashMap::new(),
             )?,
         );
 
@@ -775,10 +795,10 @@ mod tests {
         let table_scan = test_table_scan()?;
 
         let projection = LogicalPlanBuilder::from(table_scan)
-            .project(vec![Expr::Cast {
-                expr: Box::new(col("c")),
-                data_type: DataType::Float64,
-            }])?
+            .project(vec![Expr::Cast(Cast::new(
+                Box::new(col("c")),
+                DataType::Float64,
+            ))])?
             .build()?;
 
         let expected = "Projection: CAST(test.c AS Float64)\
@@ -820,11 +840,8 @@ mod tests {
         // that the Column references are unqualified (e.g. their
         // relation is `None`). PlanBuilder resolves the expressions
         let expr = vec![col("a"), col("b")];
-        let plan = LogicalPlan::Projection(Projection::try_new(
-            expr,
-            Arc::new(table_scan),
-            None,
-        )?);
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(expr, Arc::new(table_scan))?);
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 

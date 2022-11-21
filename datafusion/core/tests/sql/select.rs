@@ -497,7 +497,7 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    let input = Int64Array::from_slice(&[1, 2, 3, 4]);
+    let input = Int64Array::from_slice([1, 2, 3, 4]);
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
     ctx.register_batch("test", batch)?;
 
@@ -1389,14 +1389,19 @@ async fn boolean_literal() -> Result<()> {
 
 #[tokio::test]
 async fn unprojected_filter() {
-    let ctx = SessionContext::new();
+    let config = SessionConfig::new();
+    let ctx = SessionContext::with_config(config);
     let df = ctx.read_table(table_with_sequence(1, 3).unwrap()).unwrap();
 
     let df = df
-        .select(vec![col("i") + col("i")])
-        .unwrap()
         .filter(col("i").gt(lit(2)))
+        .unwrap()
+        .select(vec![col("i") + col("i")])
         .unwrap();
+
+    let plan = df.to_logical_plan().unwrap();
+    println!("{}", plan.display_indent());
+
     let results = df.collect().await.unwrap();
 
     let expected = vec![

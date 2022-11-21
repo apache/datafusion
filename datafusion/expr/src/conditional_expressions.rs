@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expr::Case;
 ///! Conditional expressions
 use crate::{expr_schema::ExprSchemable, Expr};
 use arrow::datatypes::DataType;
@@ -108,16 +109,15 @@ impl CaseBuilder {
             }
         }
 
-        Ok(Expr::Case {
-            expr: self.expr.clone(),
-            when_then_expr: self
-                .when_expr
+        Ok(Expr::Case(Case::new(
+            self.expr.clone(),
+            self.when_expr
                 .iter()
                 .zip(self.then_expr.iter())
                 .map(|(w, t)| (Box::new(w.clone()), Box::new(t.clone())))
                 .collect(),
-            else_expr: self.else_expr.clone(),
-        })
+            self.else_expr.clone(),
+        )))
     }
 }
 

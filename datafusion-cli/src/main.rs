@@ -93,7 +93,7 @@ pub async fn main() -> Result<()> {
 
     if let Some(ref path) = args.data_path {
         let p = Path::new(path);
-        env::set_current_dir(&p).unwrap();
+        env::set_current_dir(p).unwrap();
     };
 
     let mut session_config = SessionConfig::from_env().with_information_schema(true);
@@ -105,6 +105,7 @@ pub async fn main() -> Result<()> {
     let runtime_env = create_runtime_env()?;
     let mut ctx =
         SessionContext::with_config_rt(session_config.clone(), Arc::new(runtime_env));
+    ctx.refresh_catalogs().await?;
 
     let mut print_options = PrintOptions {
         format: args.format,
@@ -145,9 +146,9 @@ fn create_runtime_env() -> Result<RuntimeEnv> {
     let object_store_provider = DatafusionCliObjectStoreProvider {};
     let object_store_registry =
         ObjectStoreRegistry::new_with_provider(Some(Arc::new(object_store_provider)));
-    let rn_config =
-        RuntimeConfig::new().with_object_store_registry(Arc::new(object_store_registry));
-    return RuntimeEnv::new(rn_config);
+    let rn_config = RuntimeConfig::new()
+        .with_object_store_registry(Arc::new(object_store_registry));
+    RuntimeEnv::new(rn_config)
 }
 
 fn is_valid_file(dir: &str) -> std::result::Result<(), String> {

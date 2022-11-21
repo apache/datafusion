@@ -24,15 +24,14 @@ use arrow::util::pretty::pretty_format_batches;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use datafusion::logical_plan::JoinType;
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::expressions::Column;
-use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
+use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion::physical_plan::memory::MemoryExec;
-use datafusion::physical_plan::sort_merge_join::SortMergeJoinExec;
+use datafusion_expr::JoinType;
 
 use datafusion::prelude::{SessionConfig, SessionContext};
-use fuzz_utils::add_empty_batches;
+use test_utils::add_empty_batches;
 
 #[tokio::test]
 async fn test_inner_join_1k() {
@@ -79,7 +78,7 @@ async fn test_semi_join_1k() {
     run_join_test(
         make_staggered_batches(10000),
         make_staggered_batches(10000),
-        JoinType::Semi,
+        JoinType::LeftSemi,
     )
     .await
 }
@@ -89,7 +88,7 @@ async fn test_anti_join_1k() {
     run_join_test(
         make_staggered_batches(10000),
         make_staggered_batches(10000),
-        JoinType::Anti,
+        JoinType::LeftAnti,
     )
     .await
 }

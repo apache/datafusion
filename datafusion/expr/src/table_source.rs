@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::Expr;
+use crate::{Expr, LogicalPlan};
 use arrow::datatypes::SchemaRef;
 use std::any::Any;
 
@@ -75,5 +75,10 @@ pub trait TableSource: Sync + Send {
         _filter: &Expr,
     ) -> datafusion_common::Result<TableProviderFilterPushDown> {
         Ok(TableProviderFilterPushDown::Unsupported)
+    }
+
+    /// Get the Logical plan of this table provider, if available.
+    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+        None
     }
 }

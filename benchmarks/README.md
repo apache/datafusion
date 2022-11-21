@@ -25,7 +25,7 @@ implementations as well as other query engines.
 
 ## Benchmark derived from TPC-H
 
-These benchmarks are derived from the [TPC-H][1] benchmark. And we use this repo as the source of tpch-gen and answers: 
+These benchmarks are derived from the [TPC-H][1] benchmark. And we use this repo as the source of tpch-gen and answers:
 https://github.com/databricks/tpch-dbgen.git, based on [2.17.1](https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf) version of TPC-H.
 
 ## Generating Test Data
@@ -49,10 +49,20 @@ The benchmark can then be run (assuming the data created from `dbgen` is in `./d
 cargo run --release --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
 ```
 
+If you omit `--query=<query_id>` argument, then all benchmarks will be run one by one (from query 1 to query 22).
+```bash
+cargo run --release --bin tpch -- benchmark datafusion --iterations 1 --path ./data --format tbl --batch-size 4096
+```
+
 You can enable the features `simd` (to use SIMD instructions, `cargo nightly` is required.) and/or `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`:
 
 ```
 cargo run --release --features "simd mimalloc" --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
+```
+
+If you want to disable collection of statistics (and thus cost based optimizers), you can pass `--disable-statistics` flag.
+```bash
+cargo run --release --bin tpch -- benchmark datafusion --iterations 3 --path /mnt/tpch-parquet --format parquet --query 17 --disable-statistics
 ```
 
 The benchmark program also supports CSV and Parquet input file formats and a utility is provided to convert from `tbl`
@@ -63,6 +73,12 @@ cargo run --release --bin tpch -- convert --input ./data --output /mnt/tpch-parq
 ```
 
 Or if you want to verify and run all the queries in the benchmark, you can just run `cargo test`.
+
+### Machine readable benchmark summary
+
+Any `tpch` execution with `-o <dir>` argument will produce a summary file right under the `<dir>`
+directory. It is a JSON serialized form of all the runs that happened as well as the runtime metadata
+(number of cores, DataFusion version, etc.).
 
 ## Expected output
 
@@ -126,3 +142,37 @@ h2o groupby query 1 took 1669 ms
 
 [1]: http://www.tpc.org/tpch/
 [2]: https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page
+
+## Parquet filter pushdown benchmarks
+
+This is a set of benchmarks for testing and verifying performance of parquet filter pushdown. The queries are executed on
+a synthetic dataset generated during the benchmark execution and designed to simulate web server access logs.
+
+```base
+cargo run --release --bin parquet_filter_pushdown --  --path ./data --scale-factor 1.0
+```
+
+This will generate the synthetic dataset at `./data/logs.parquet`. The size of the dataset can be controlled through the `size_factor`
+(with the default value of `1.0` generating a ~1GB parquet file).
+
+For each filter we will run the query using different `ParquetScanOption` settings.
+
+Example run:
+```
+Running benchmarks with the following options: Opt { debug: false, iterations: 3, partitions: 2, path: "./data", batch_size: 8192, scale_factor: 1.0 }
+Generated test dataset with 10699521 rows
+Executing with filter 'request_method = Utf8("GET")'
+Using scan options ParquetScanOptions { pushdown_filters: false, reorder_predicates: false, enable_page_index: false }
+Iteration 0 returned 10699521 rows in 1303 ms
+Iteration 1 returned 10699521 rows in 1288 ms
+Iteration 2 returned 10699521 rows in 1266 ms
+Using scan options ParquetScanOptions { pushdown_filters: true, reorder_predicates: true, enable_page_index: true }
+Iteration 0 returned 1781686 rows in 1970 ms
+Iteration 1 returned 1781686 rows in 2002 ms
+Iteration 2 returned 1781686 rows in 1988 ms
+Using scan options ParquetScanOptions { pushdown_filters: true, reorder_predicates: false, enable_page_index: true }
+Iteration 0 returned 1781686 rows in 1940 ms
+Iteration 1 returned 1781686 rows in 1986 ms
+Iteration 2 returned 1781686 rows in 1947 ms
+...
+```

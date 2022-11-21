@@ -28,7 +28,7 @@ use object_store::{GetResult, ObjectMeta, ObjectStore};
 use super::FileFormat;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
 use crate::error::Result;
-use crate::logical_plan::Expr;
+use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
@@ -92,9 +92,9 @@ mod tests {
     use crate::datasource::file_format::test_util::scan_format;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
-    use arrow::array::{
-        BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
-        TimestampMicrosecondArray,
+    use arrow::array::{BinaryArray, TimestampMicrosecondArray};
+    use datafusion_common::cast::{
+        as_boolean_array, as_float32_array, as_float64_array, as_int32_array,
     };
     use futures::StreamExt;
 
@@ -172,14 +172,14 @@ mod tests {
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
             "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
-            "| 4  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30332f30312f3039 | 30         | 2009-03-01 00:00:00 |",
-            "| 5  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30332f30312f3039 | 31         | 2009-03-01 00:01:00 |",
-            "| 6  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30342f30312f3039 | 30         | 2009-04-01 00:00:00 |",
-            "| 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01 00:01:00 |",
-            "| 2  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30322f30312f3039 | 30         | 2009-02-01 00:00:00 |",
-            "| 3  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30322f30312f3039 | 31         | 2009-02-01 00:01:00 |",
-            "| 0  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30312f30312f3039 | 30         | 2009-01-01 00:00:00 |",
-            "| 1  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30312f30312f3039 | 31         | 2009-01-01 00:01:00 |",
+            "| 4  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |",
+            "| 5  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30332f30312f3039 | 31         | 2009-03-01T00:01:00 |",
+            "| 6  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30342f30312f3039 | 30         | 2009-04-01T00:00:00 |",
+            "| 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01T00:01:00 |",
+            "| 2  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30322f30312f3039 | 30         | 2009-02-01T00:00:00 |",
+            "| 3  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30322f30312f3039 | 31         | 2009-02-01T00:01:00 |",
+            "| 0  | true     | 0           | 0            | 0       | 0          | 0         | 0          | 30312f30312f3039 | 30         | 2009-01-01T00:00:00 |",
+            "| 1  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30312f30312f3039 | 31         | 2009-01-01T00:01:00 |",
             "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
         ];
 
@@ -199,11 +199,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .unwrap();
+        let array = as_boolean_array(batches[0].column(0))?;
         let mut values: Vec<bool> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));
@@ -229,11 +225,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
+        let array = as_int32_array(batches[0].column(0))?;
         let mut values: Vec<i32> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));
@@ -283,11 +275,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Float32Array>()
-            .unwrap();
+        let array = as_float32_array(batches[0].column(0))?;
         let mut values: Vec<f32> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));
@@ -313,11 +301,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap();
+        let array = as_float64_array(batches[0].column(0))?;
         let mut values: Vec<f64> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));

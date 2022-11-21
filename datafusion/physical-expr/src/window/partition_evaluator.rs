@@ -18,8 +18,8 @@
 //! partition evaluation module
 
 use arrow::array::ArrayRef;
-use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+use datafusion_common::{DataFusionError, ScalarValue};
 use std::ops::Range;
 
 /// Given a partition range, and the full list of sort partition points, given that the sort
@@ -43,6 +43,10 @@ pub(crate) fn find_ranges_in_range<'a>(
 pub trait PartitionEvaluator {
     /// Whether the evaluator should be evaluated with rank
     fn include_rank(&self) -> bool {
+        false
+    }
+
+    fn uses_window_frame(&self) -> bool {
         false
     }
 
@@ -81,6 +85,13 @@ pub trait PartitionEvaluator {
     ) -> Result<ArrayRef> {
         Err(DataFusionError::NotImplemented(
             "evaluate_partition_with_rank is not implemented by default".into(),
+        ))
+    }
+
+    /// evaluate window function result inside given range
+    fn evaluate_inside_range(&self, _range: Range<usize>) -> Result<ScalarValue> {
+        Err(DataFusionError::NotImplemented(
+            "evaluate_inside_range is not implemented by default".into(),
         ))
     }
 }

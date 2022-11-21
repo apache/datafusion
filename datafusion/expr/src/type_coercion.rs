@@ -48,6 +48,11 @@ pub fn is_signed_numeric(dt: &DataType) -> bool {
     )
 }
 
+// Determine if a DataType is Null or not
+pub fn is_null(dt: &DataType) -> bool {
+    *dt == DataType::Null
+}
+
 /// Determine if a DataType is numeric or not
 pub fn is_numeric(dt: &DataType) -> bool {
     is_signed_numeric(dt)
@@ -55,6 +60,16 @@ pub fn is_numeric(dt: &DataType) -> bool {
             dt,
             DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
         )
+}
+
+/// Determine if a DataType is Timestamp or not
+pub fn is_timestamp(dt: &DataType) -> bool {
+    matches!(dt, DataType::Timestamp(_, _))
+}
+
+/// Determine if a DataType is Date or not
+pub fn is_date(dt: &DataType) -> bool {
+    matches!(dt, DataType::Date32 | DataType::Date64)
 }
 
 pub mod aggregates;

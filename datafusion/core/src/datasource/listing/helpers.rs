@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use arrow::{
     array::{
-        Array, ArrayBuilder, ArrayRef, Date64Array, Date64Builder, StringArray,
-        StringBuilder, UInt64Array, UInt64Builder,
+        Array, ArrayBuilder, ArrayRef, Date64Array, Date64Builder, StringBuilder,
+        UInt64Builder,
     },
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
@@ -38,7 +38,10 @@ use crate::{
 
 use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
-use datafusion_common::{Column, DataFusionError};
+use datafusion_common::{
+    cast::{as_string_array, as_uint64_array},
+    Column, DataFusionError,
+};
 use datafusion_expr::{
     expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
     Expr, Volatility,
@@ -299,16 +302,8 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Result<Vec<PartitionedFile>> {
     batches
         .iter()
         .flat_map(|batch| {
-            let key_array = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let length_array = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap();
+            let key_array = as_string_array(batch.column(0)).unwrap();
+            let length_array = as_uint64_array(batch.column(1)).unwrap();
             let modified_array = batch
                 .column(2)
                 .as_any()
@@ -320,7 +315,7 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Result<Vec<PartitionedFile>> {
                     object_meta: ObjectMeta {
                         location: Path::parse(key_array.value(row))
                             .map_err(|e| DataFusionError::External(Box::new(e)))?,
-                        last_modified: Utc.timestamp_millis(modified_array.value(row)),
+                        last_modified: to_timestamp_millis(modified_array.value(row))?,
                         size: length_array.value(row) as usize,
                     },
                     partition_values: (3..batch.columns().len())
@@ -334,6 +329,20 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Result<Vec<PartitionedFile>> {
             })
         })
         .collect()
+}
+
+fn to_timestamp_millis(v: i64) -> Result<chrono::DateTime<Utc>> {
+    match Utc.timestamp_millis_opt(v) {
+        chrono::LocalResult::None => Err(DataFusionError::Execution(format!(
+            "Can not convert {} to UTC millisecond timestamp",
+            v
+        ))),
+        chrono::LocalResult::Single(v) => Ok(v),
+        chrono::LocalResult::Ambiguous(_, _) => Err(DataFusionError::Execution(format!(
+            "Ambiguous timestamp when converting {} to UTC millisecond timestamp",
+            v
+        ))),
+    }
 }
 
 /// Extract the partition values for the given `file_path` (in the given `table_path`)
@@ -357,7 +366,7 @@ fn parse_partitions_for_path<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crate::logical_plan::{case, col, lit};
+    use crate::logical_expr::{case, col, lit};
     use crate::test::object_store::make_test_store;
     use futures::StreamExt;
 
@@ -594,12 +603,12 @@ mod tests {
         let files = vec![
             ObjectMeta {
                 location: Path::from("mybucket/tablepath/part1=val1/file.parquet"),
-                last_modified: Utc.timestamp_millis(1634722979123),
+                last_modified: to_timestamp_millis(1634722979123).unwrap(),
                 size: 100,
             },
             ObjectMeta {
                 location: Path::from("mybucket/tablepath/part1=val2/file.parquet"),
-                last_modified: Utc.timestamp_millis(0),
+                last_modified: to_timestamp_millis(0).unwrap(),
                 size: 100,
             },
         ];
@@ -625,12 +634,12 @@ mod tests {
         let files = vec![
             ObjectMeta {
                 location: Path::from("mybucket/tablepath/part1=val1/file.parquet"),
-                last_modified: Utc.timestamp_millis(1634722979123),
+                last_modified: to_timestamp_millis(1634722979123).unwrap(),
                 size: 100,
             },
             ObjectMeta {
                 location: Path::from("mybucket/tablepath/part1=val2/file.parquet"),
-                last_modified: Utc.timestamp_millis(0),
+                last_modified: to_timestamp_millis(0).unwrap(),
                 size: 100,
             },
         ];

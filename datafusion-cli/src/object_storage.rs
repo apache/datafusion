@@ -68,7 +68,7 @@ fn build_gcs_object_store(url: &Url) -> Result<Arc<dyn object_store::ObjectStore
     let host = get_host_name(url)?;
     let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(host);
 
-    if let Some(path) = env::var("GCP_SERVICE_ACCOUNT_PATH").ok() {
+    if let Ok(path) = env::var("GCP_SERVICE_ACCOUNT_PATH") {
         builder = builder.with_service_account_path(path);
     }
     match builder.build() {
@@ -78,10 +78,12 @@ fn build_gcs_object_store(url: &Url) -> Result<Arc<dyn object_store::ObjectStore
 }
 
 fn get_host_name(url: &Url) -> Result<&str> {
-    url.host_str().ok_or(DataFusionError::Execution(format!(
-        "Not able to parse hostname from url, {}",
-        url.as_str()
-    )))
+    url.host_str().ok_or_else(|| {
+        DataFusionError::Execution(format!(
+            "Not able to parse hostname from url, {}",
+            url.as_str()
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -139,7 +141,13 @@ mod tests {
         assert!(err.to_string().contains("Generic S3 error: Missing region"));
 
         env::set_var("AWS_REGION", "us-east-1");
-        assert!(provider.get_by_url(&Url::from_str(s3).unwrap()).is_ok());
+        let url = Url::from_str(s3).expect("Unable to parse s3 url");
+        let res = provider.get_by_url(&url);
+        let msg = match res {
+            Err(e) => format!("{}", e),
+            Ok(_) => "".to_string(),
+        };
+        assert_eq!("".to_string(), msg); // Fail with error message
         env::remove_var("AWS_REGION");
     }
 }

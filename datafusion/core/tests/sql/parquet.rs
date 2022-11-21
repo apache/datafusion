@@ -18,6 +18,8 @@
 use std::{fs, path::Path};
 
 use ::parquet::arrow::ArrowWriter;
+use datafusion::datasource::listing::ListingOptions;
+use datafusion_common::cast::as_string_array;
 use tempfile::TempDir;
 
 use super::*;
@@ -46,6 +48,124 @@ async fn parquet_query() {
     ];
 
     assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
+/// Test that if sort order is specified in ListingOptions, the sort
+/// expressions make it all the way down to the ParquetExec
+async fn parquet_with_sort_order_specified() {
+    let parquet_read_options = ParquetReadOptions::default();
+    let target_partitions = 2;
+
+    // The sort order is not specified
+    let options_no_sort = parquet_read_options
+        .to_listing_options(target_partitions)
+        .with_file_sort_order(None);
+
+    // The sort order is specified (not actually correct in this case)
+    let file_sort_order = [col("string_col"), col("int_col")]
+        .into_iter()
+        .map(|e| {
+            let ascending = true;
+            let nulls_first = false;
+            e.sort(ascending, nulls_first)
+        })
+        .collect::<Vec<_>>();
+
+    let options_sort = parquet_read_options
+        .to_listing_options(target_partitions)
+        .with_file_sort_order(Some(file_sort_order));
+
+    // This string appears in ParquetExec if the output ordering is
+    // specified
+    let expected_output_ordering =
+        "output_ordering=[string_col@9 ASC NULLS LAST, int_col@4 ASC NULLS LAST]";
+
+    // when sort not specified, should not appear in the explain plan
+    let num_files = 1;
+    assert_not_contains!(
+        run_query_with_options(options_no_sort, num_files).await,
+        expected_output_ordering
+    );
+
+    // when sort IS specified, SHOULD appear in the explain plan
+    let num_files = 1;
+    assert_contains!(
+        run_query_with_options(options_sort.clone(), num_files).await,
+        expected_output_ordering
+    );
+
+    // when sort IS specified, but there are too many files (greater
+    // than the number of partitions) sort should not appear
+    let num_files = 3;
+    assert_not_contains!(
+        run_query_with_options(options_sort, num_files).await,
+        expected_output_ordering
+    );
+}
+
+/// Runs a limit query against a parquet file that was registered from
+/// options on num_files copies of all_types_plain.parquet
+async fn run_query_with_options(options: ListingOptions, num_files: usize) -> String {
+    let ctx = SessionContext::new();
+
+    let testdata = datafusion::test_util::parquet_test_data();
+    let file_path = format!("{}/alltypes_plain.parquet", testdata);
+
+    // Create a directory of parquet files with names
+    // 0.parquet
+    // 1.parquet
+    let tmpdir = TempDir::new().unwrap();
+    for i in 0..num_files {
+        let target_file = tmpdir.path().join(format!("{i}.parquet"));
+        println!("Copying {file_path} to {target_file:?}");
+        std::fs::copy(&file_path, target_file).unwrap();
+    }
+
+    let provided_schema = None;
+    let sql_definition = None;
+    ctx.register_listing_table(
+        "t",
+        tmpdir.path().to_string_lossy(),
+        options.clone(),
+        provided_schema,
+        sql_definition,
+    )
+    .await
+    .unwrap();
+
+    let batches = ctx.sql("explain select int_col, string_col from t order by string_col, int_col limit 10")
+        .await
+        .expect("planing worked")
+        .collect()
+        .await
+        .expect("execution worked");
+
+    arrow::util::pretty::pretty_format_batches(&batches)
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn fixed_size_binary_columns() {
+    let ctx = SessionContext::new();
+    ctx.register_parquet(
+        "t0",
+        "tests/parquet/data/test_binary.parquet",
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
+    let sql = "SELECT ids FROM t0 ORDER BY ids";
+    let plan = ctx.create_logical_plan(sql).unwrap();
+    let plan = ctx.optimize(&plan).unwrap();
+    let plan = ctx.create_physical_plan(&plan).await.unwrap();
+    let task_ctx = ctx.task_ctx();
+    let results = collect(plan, task_ctx).await.unwrap();
+    for batch in results {
+        assert_eq!(466, batch.num_rows());
+        assert_eq!(1, batch.num_columns());
+    }
 }
 
 #[tokio::test]
@@ -136,11 +256,7 @@ async fn parquet_list_columns() {
     );
 
     assert_eq!(
-        utf8_list_array
-            .value(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap(),
+        as_string_array(&utf8_list_array.value(0)).unwrap(),
         &StringArray::try_from(vec![Some("abc"), Some("efg"), Some("hij"),]).unwrap()
     );
 
@@ -165,7 +281,7 @@ async fn parquet_list_columns() {
     );
 
     let result = utf8_list_array.value(2);
-    let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+    let result = as_string_array(&result).unwrap();
 
     assert_eq!(result.value(0), "efg");
     assert!(result.is_null(1));
@@ -190,16 +306,16 @@ async fn parquet_query_with_max_min() {
 
     if let Ok(()) = fs::create_dir(table_path) {
         let filename = "foo.parquet";
-        let path = table_path.join(&filename);
+        let path = table_path.join(filename);
         let file = fs::File::create(path).unwrap();
         let mut writer =
             ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), None)
                 .unwrap();
 
         // create mock record batch
-        let c1s = Arc::new(Int32Array::from_slice(&[1, 2, 3]));
-        let c2s = Arc::new(StringArray::from_slice(&["aaa", "bbb", "ccc"]));
-        let c3s = Arc::new(Int64Array::from_slice(&[100, 200, 300]));
+        let c1s = Arc::new(Int32Array::from_slice([1, 2, 3]));
+        let c2s = Arc::new(StringArray::from_slice(["aaa", "bbb", "ccc"]));
+        let c3s = Arc::new(Int64Array::from_slice([100, 200, 300]));
         let c4s = Arc::new(Date32Array::from(vec![Some(1), Some(2), Some(3)]));
         let rec_batch =
             RecordBatch::try_new(schema.clone(), vec![c1s, c2s, c3s, c4s]).unwrap();

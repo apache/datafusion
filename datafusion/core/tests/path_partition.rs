@@ -434,8 +434,10 @@ fn register_partitioned_aggregate_csv(
         MirroringObjectStore::new_arc(csv_file_path, store_paths),
     );
 
-    let mut options = ListingOptions::new(Arc::new(CsvFormat::default()));
-    options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
+    let options = ListingOptions::new(Arc::new(CsvFormat::default()))
+        .with_table_partition_cols(
+            partition_cols.iter().map(|&s| s.to_owned()).collect(),
+        );
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
     let config = ListingTableConfig::new(table_path)
@@ -462,9 +464,10 @@ async fn register_partitioned_alltypes_parquet(
         MirroringObjectStore::new_arc(parquet_file_path.clone(), store_paths),
     );
 
-    let mut options = ListingOptions::new(Arc::new(ParquetFormat::default()));
-    options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
-    options.collect_stat = true;
+    let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+        .with_table_partition_cols(
+            partition_cols.iter().map(|&s| s.to_owned()).collect(),
+        );
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
     let store_path =
@@ -548,7 +551,7 @@ impl ObjectStore for MirroringObjectStore {
     ) -> object_store::Result<Bytes> {
         self.files.iter().find(|x| *x == location.as_ref()).unwrap();
         let path = std::path::PathBuf::from(&self.mirrored_file);
-        let mut file = File::open(&path).unwrap();
+        let mut file = File::open(path).unwrap();
         file.seek(SeekFrom::Start(range.start as u64)).unwrap();
 
         let to_read = range.end - range.start;

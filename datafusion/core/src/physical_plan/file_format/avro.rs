@@ -28,7 +28,7 @@ use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
 use std::any::Any;
 use std::sync::Arc;
 
-use super::FileScanConfig;
+use super::{get_output_ordering, FileScanConfig};
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
@@ -73,11 +73,7 @@ impl ExecutionPlan for AvroExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
-    }
-
-    fn relies_on_input_order(&self) -> bool {
-        false
+        get_output_ordering(&self.base_config)
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -208,6 +204,7 @@ mod private {
 #[cfg(test)]
 #[cfg(feature = "avro")]
 mod tests {
+    use crate::config::ConfigOptions;
     use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
@@ -237,6 +234,8 @@ mod tests {
             projection: Some(vec![0, 1, 2]),
             limit: None,
             table_partition_cols: vec![],
+            config_options: ConfigOptions::new().into_shareable(),
+            output_ordering: None,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
@@ -306,6 +305,8 @@ mod tests {
             projection,
             limit: None,
             table_partition_cols: vec![],
+            config_options: ConfigOptions::new().into_shareable(),
+            output_ordering: None,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
@@ -374,6 +375,8 @@ mod tests {
             statistics: Statistics::default(),
             limit: None,
             table_partition_cols: vec!["date".to_owned()],
+            config_options: ConfigOptions::new().into_shareable(),
+            output_ordering: None,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 

@@ -15,13 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_trait::async_trait;
-use std::any::Any;
 use std::io::Write;
 
-use datafusion::datasource::datasource::TableProviderFactory;
-use datafusion::execution::context::SessionState;
-use datafusion_expr::TableType;
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::test_util::TestTableFactory;
 use tempfile::TempDir;
 
 use super::*;
@@ -43,6 +40,71 @@ async fn create_table_as() -> Result<()> {
         "+---------+----------------+------+",
         "| 0.00001 | 0.000000000001 | true |",
         "+---------+----------------+------+",
+    ];
+
+    assert_batches_eq!(expected, &results_all);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_table_with_schema_as_select() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
+
+    let sql = "CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) \
+    AS SELECT *,c3 as c4_tmp FROM aggregate_simple";
+    ctx.sql(sql).await.unwrap();
+
+    let sql_all = "SELECT * FROM my_table order by c1 LIMIT 1";
+    let results_all = execute_to_batches(&ctx, sql_all).await;
+
+    let expected = vec![
+        "+---------+----------------+------+----+",
+        "| c1      | c2             | c3   | c4 |",
+        "+---------+----------------+------+----+",
+        "| 0.00001 | 0.000000000001 | true | 1  |",
+        "+---------+----------------+------+----+",
+    ];
+
+    assert_batches_eq!(expected, &results_all);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_table_with_schema_as_select_mismatch() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
+
+    let sql = "CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) \
+    AS SELECT * FROM aggregate_simple";
+    let expected_err = ctx.sql(sql).await.unwrap_err();
+    assert_contains!(
+        expected_err.to_string(),
+        "Mismatch: 4 columns specified, but result has 3 columns"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_table_with_schema_as_values() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
+
+    let sql =
+        "CREATE TABLE my_table(c1 int, c2 float, c3 varchar) AS VALUES(1, 2, 'hello')";
+    ctx.sql(sql).await.unwrap();
+
+    let sql_all = "SELECT * FROM my_table";
+    let results_all = execute_to_batches(&ctx, sql_all).await;
+
+    let expected = vec![
+        "+----+----+-------+",
+        "| c1 | c2 | c3    |",
+        "+----+----+-------+",
+        "| 1  | 2  | hello |",
+        "+----+----+-------+",
     ];
 
     assert_batches_eq!(expected, &results_all);
@@ -272,8 +334,8 @@ async fn create_external_table_with_timestamps() {
         "+--------+-------------------------+",
         "| name   | ts                      |",
         "+--------+-------------------------+",
-        "| Andrew | 2018-11-13 17:11:10.011 |",
-        "| Jorge  | 2018-12-13 12:12:10.011 |",
+        "| Andrew | 2018-11-13T17:11:10.011 |",
+        "| Jorge  | 2018-12-13T12:12:10.011 |",
         "+--------+-------------------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
@@ -367,47 +429,14 @@ async fn create_pipe_delimited_csv_table() -> Result<()> {
     Ok(())
 }
 
-struct TestTableProvider {}
-
-impl TestTableProvider {}
-
-#[async_trait]
-impl TableProvider for TestTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        unimplemented!("TestTableProvider is a stub for testing.")
-    }
-
-    fn schema(&self) -> SchemaRef {
-        unimplemented!("TestTableProvider is a stub for testing.")
-    }
-
-    fn table_type(&self) -> TableType {
-        unimplemented!("TestTableProvider is a stub for testing.")
-    }
-
-    async fn scan(
-        &self,
-        _ctx: &SessionState,
-        _projection: &Option<Vec<usize>>,
-        _filters: &[Expr],
-        _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        unimplemented!("TestTableProvider is a stub for testing.")
-    }
-}
-
-struct TestTableFactory {}
-
-impl TableProviderFactory for TestTableFactory {
-    fn create(&self, _name: &str, _path: &str) -> Arc<dyn TableProvider> {
-        Arc::new(TestTableProvider {})
-    }
-}
-
 #[tokio::test]
 async fn create_custom_table() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    ctx.register_table_factory("DELTATABLE", Arc::new(TestTableFactory {}));
+    let mut cfg = RuntimeConfig::new();
+    cfg.table_factories
+        .insert("DELTATABLE".to_string(), Arc::new(TestTableFactory {}));
+    let env = RuntimeEnv::new(cfg).unwrap();
+    let ses = SessionConfig::new();
+    let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
 
     let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
     ctx.sql(sql).await.unwrap();
@@ -416,6 +445,35 @@ async fn create_custom_table() -> Result<()> {
     let schema = cat.schema("public").unwrap();
     let exists = schema.table_exist("dt");
     assert!(exists, "Table should have been created!");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_external_table_with_ddl() -> Result<()> {
+    let mut cfg = RuntimeConfig::new();
+    cfg.table_factories
+        .insert("MOCKTABLE".to_string(), Arc::new(TestTableFactory {}));
+    let env = RuntimeEnv::new(cfg).unwrap();
+    let ses = SessionConfig::new();
+    let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
+
+    let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS MOCKTABLE LOCATION 'mockprotocol://path/to/table';";
+    ctx.sql(sql).await.unwrap();
+
+    let cat = ctx.catalog("datafusion").unwrap();
+    let schema = cat.schema("public").unwrap();
+
+    let exists = schema.table_exist("dt");
+    assert!(exists, "Table should have been created!");
+
+    let table_schema = schema.table("dt").unwrap().schema();
+
+    assert_eq!(3, table_schema.fields().len());
+
+    assert_eq!(&DataType::Int32, table_schema.field(0).data_type());
+    assert_eq!(&DataType::Utf8, table_schema.field(1).data_type());
+    assert_eq!(&DataType::Boolean, table_schema.field(2).data_type());
 
     Ok(())
 }
