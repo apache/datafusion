@@ -83,35 +83,42 @@ fn limit_push_down(
             }),
             ancestor,
         ) => {
-            let new_current_fetch = match ancestor {
+            let (new_current_fetch, new_current_skip) = match ancestor {
                 Ancestor::FromLimit {
                     skip: ancestor_skip,
                     fetch: ancestor_fetch,
                 } => match ancestor_fetch {
                     Some(fetch) => match current_fetch {
-                        Some(child_fetch) => Some(std::cmp::min(
-                            fetch,
-                            fetch_minus_skip(*child_fetch, ancestor_skip),
-                        )),
-                        None => Some(fetch),
+                        Some(child_fetch) => (
+                            Some(std::cmp::min(
+                                fetch,
+                                fetch_minus_skip(*child_fetch, ancestor_skip),
+                            )),
+                            current_skip + ancestor_skip,
+                        ),
+                        None => (Some(fetch), current_skip + ancestor_skip),
                     },
-                    _ => current_fetch
-                        .map(|child_fetch| fetch_minus_skip(child_fetch, ancestor_skip)),
+                    _ => (
+                        current_fetch.map(|child_fetch| {
+                            fetch_minus_skip(child_fetch, ancestor_skip)
+                        }),
+                        current_skip + ancestor_skip,
+                    ),
                 },
-                _ => *current_fetch,
+                _ => (*current_fetch, *current_skip),
             };
 
             Ok(LogicalPlan::Limit(Limit {
                 // current node's "skip" is not updated, updating
                 // this value would violate the semantics of Limit operator
-                skip: *current_skip,
+                skip: new_current_skip,
                 fetch: new_current_fetch,
                 input: Arc::new(limit_push_down(
                     _optimizer,
                     Ancestor::FromLimit {
                         // current node's "skip" is passing to the subtree
                         // so that the child can extend the "fetch"
-                        skip: *current_skip,
+                        skip: new_current_skip,
                         fetch: new_current_fetch,
                     },
                     input.as_ref(),
@@ -134,7 +141,11 @@ fn limit_push_down(
                 ..
             },
         ) => {
-            let ancestor_fetch = ancestor_fetch + ancestor_skip;
+            let ancestor_fetch = if ancestor_fetch == 0 {
+                0
+            } else {
+                ancestor_fetch + ancestor_skip
+            };
             Ok(LogicalPlan::TableScan(TableScan {
                 table_name: table_name.clone(),
                 source: source.clone(),
@@ -602,9 +613,9 @@ mod test {
             .build()?;
 
         let expected = "Limit: skip=10, fetch=None\
-        \n  Limit: skip=0, fetch=990\
+        \n  Limit: skip=10, fetch=990\
         \n    Projection: test.a\
-        \n      TableScan: test, fetch=990";
+        \n      TableScan: test, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -966,7 +977,7 @@ mod test {
             .unwrap();
 
         let expected = "Limit: skip=1000, fetch=None\
-        \n  Limit: skip=0, fetch=0\
+        \n  Limit: skip=1000, fetch=0\
         \n    TableScan: test, fetch=0";
 
         assert_optimized_plan_eq(&plan, expected);
@@ -985,7 +996,7 @@ mod test {
             .unwrap();
 
         let expected = "Limit: skip=1000, fetch=None\
-        \n  Limit: skip=0, fetch=0\
+        \n  Limit: skip=1000, fetch=0\
         \n    TableScan: test, fetch=0";
 
         assert_optimized_plan_eq(&plan, expected);
