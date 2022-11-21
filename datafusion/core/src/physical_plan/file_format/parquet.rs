@@ -75,6 +75,8 @@ pub struct ParquetExec {
     projected_schema: SchemaRef,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Optional predicate for row filtering during parquet scan
+    predicate: Option<Expr>,
     /// Optional predicate for pruning row groups
     pruning_predicate: Option<PruningPredicate>,
     /// Optional hint for the size of the parquet metadata
@@ -98,6 +100,7 @@ impl ParquetExec {
             MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
 
         let pruning_predicate = predicate
+            .clone()
             .and_then(|predicate_expr| {
                 match PruningPredicate::try_new(
                     predicate_expr,
@@ -127,6 +130,7 @@ impl ParquetExec {
             projected_schema,
             projected_statistics,
             metrics,
+            predicate,
             pruning_predicate,
             metadata_size_hint,
             parquet_file_reader_factory: None,
@@ -284,6 +288,7 @@ impl ExecutionPlan for ParquetExec {
             partition_index,
             projection: Arc::from(projection),
             batch_size: ctx.session_config().batch_size(),
+            predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
             table_schema: self.base_config.file_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
@@ -312,6 +317,12 @@ impl ExecutionPlan for ParquetExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
+                let predicate_string = self
+                    .predicate
+                    .as_ref()
+                    .map(|p| format!(", predicate={}", p))
+                    .unwrap_or_default();
+
                 let pruning_predicate_string = self
                     .pruning_predicate
                     .as_ref()
@@ -325,9 +336,10 @@ impl ExecutionPlan for ParquetExec {
 
                 write!(
                     f,
-                    "ParquetExec: limit={:?}, partitions={}{}{}, projection={}",
+                    "ParquetExec: limit={:?}, partitions={}{}{}{}, projection={}",
                     self.base_config.limit,
                     super::FileGroupsDisplay(&self.base_config.file_groups),
+                    predicate_string,
                     pruning_predicate_string,
                     output_ordering_string,
                     super::ProjectSchemaDisplay(&self.projected_schema),
@@ -364,6 +376,7 @@ struct ParquetOpener {
     partition_index: usize,
     projection: Arc<[usize]>,
     batch_size: usize,
+    predicate: Option<Expr>,
     pruning_predicate: Option<PruningPredicate>,
     table_schema: SchemaRef,
     metadata_size_hint: Option<usize>,
@@ -399,6 +412,7 @@ impl FileOpener for ParquetOpener {
         let schema_adapter = SchemaAdapter::new(self.table_schema.clone());
         let batch_size = self.batch_size;
         let projection = self.projection.clone();
+        let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
         let table_schema = self.table_schema.clone();
         let reorder_predicates = self.reorder_filters;
@@ -418,11 +432,8 @@ impl FileOpener for ParquetOpener {
                 adapted_projections.iter().cloned(),
             );
 
-            // Filter pushdown: evlauate predicates during scan
-            if let Some(predicate) = pushdown_filters
-                .then(|| pruning_predicate.as_ref().map(|p| p.logical_expr()))
-                .flatten()
-            {
+            // Filter pushdown: evaluate predicates during scan
+            if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
                 let row_filter = row_filter::build_row_filter(
                     predicate.clone(),
                     builder.schema().as_ref(),
@@ -1565,6 +1576,9 @@ mod tests {
             &display,
             "pruning_predicate=c1_min@0 != bar OR bar != c1_max@1"
         );
+
+        assert_contains!(&display, r#"predicate=c1 != Utf8("bar")"#);
+
         assert_contains!(&display, "projection=[c1]");
     }
 
@@ -1588,7 +1602,8 @@ mod tests {
             .otherwise(lit(false))
             .unwrap();
 
-        let rt = round_trip(vec![batch1], None, None, Some(filter), true, false).await;
+        let rt =
+            round_trip(vec![batch1], None, None, Some(filter.clone()), true, false).await;
 
         // Should not contain a pruning predicate
         let pruning_predicate = &rt.parquet_exec.pruning_predicate;
@@ -1596,7 +1611,11 @@ mod tests {
             pruning_predicate.is_none(),
             "Still had pruning predicate: {:?}",
             pruning_predicate
-        )
+        );
+
+        // but does still has a pushdown down predicate
+        let predicate = rt.parquet_exec.predicate.as_ref();
+        assert_eq!(predicate, Some(&filter));
     }
 
     /// returns the sum of all the metrics with the specified name
