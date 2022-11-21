@@ -553,32 +553,33 @@ impl SessionContext {
             (true, Ok(_)) => self.return_empty_dataframe(),
             (_, Err(_)) => {
                 // TODO make schema in CreateExternalTable optional instead of empty
-                let (provided_schema, table_partition_cols_types) =
-                    if cmd.schema.fields().is_empty() {
-                        (None, vec![])
-                    } else {
-                        let schema: SchemaRef =
-                            Arc::new(cmd.schema.as_ref().to_owned().into());
-                        let partition_cols_types = cmd
-                            .table_partition_cols
-                            .iter()
-                            .map(|col| {
-                                schema.field_with_name(col).unwrap().data_type().clone()
-                            })
-                            .collect();
-                        (Some(schema), partition_cols_types)
-                    };
+                let (provided_schema, table_partition_cols) = if cmd
+                    .schema
+                    .fields()
+                    .is_empty()
+                {
+                    (None, vec![])
+                } else {
+                    let schema: SchemaRef =
+                        Arc::new(cmd.schema.as_ref().to_owned().into());
+                    let table_partition_cols = cmd
+                        .table_partition_cols
+                        .iter()
+                        .map(|col| {
+                            (
+                                col.clone(),
+                                schema.field_with_name(col).unwrap().data_type().clone(),
+                            )
+                        })
+                        .collect();
+                    (Some(schema), table_partition_cols)
+                };
                 let options = ListingOptions {
                     format: file_format,
                     collect_stat: self.copied_config().collect_statistics,
                     file_extension: file_extension.to_owned(),
                     target_partitions: self.copied_config().target_partitions,
-                    table_partition_cols: cmd
-                        .table_partition_cols
-                        .iter()
-                        .zip(table_partition_cols_types)
-                        .map(|pc| (pc.0.to_string(), pc.1.clone()))
-                        .collect(),
+                    table_partition_cols,
                     file_sort_order: None,
                 };
                 self.register_listing_table(

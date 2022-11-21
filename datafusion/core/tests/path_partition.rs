@@ -227,6 +227,42 @@ async fn csv_filter_with_file_col() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_filter_with_file_nonstring_col() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    register_partitioned_aggregate_csv(
+        &ctx,
+        &[
+            "mytable/date=2021-10-27/file.csv",
+            "mytable/date=2021-10-28/file.csv",
+        ],
+        &[("date", DataType::Date32)],
+        "mirror:///mytable/",
+    );
+
+    let result = ctx
+        .sql("SELECT c1, c2, date FROM t WHERE date > '2021-10-27' LIMIT 5")
+        .await?
+        .collect()
+        .await?;
+
+    let expected = vec![
+        "+----+----+------------+",
+        "| c1 | c2 | date       |",
+        "+----+----+------------+",
+        "| a  | 1  | 2021-10-28 |",
+        "| b  | 1  | 2021-10-28 |",
+        "| b  | 5  | 2021-10-28 |",
+        "| c  | 2  | 2021-10-28 |",
+        "| d  | 5  | 2021-10-28 |",
+        "+----+----+------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_projection_on_partition() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -308,7 +344,7 @@ async fn parquet_multiple_partitions() -> Result<()> {
             "year=2021/month=10/day=28/file.parquet",
         ],
         &[
-            ("year", DataType::Int32),
+            ("year", DataType::Utf8),
             ("month", DataType::Utf8),
             ("day", DataType::Utf8),
         ],
@@ -335,6 +371,52 @@ async fn parquet_multiple_partitions() -> Result<()> {
         "| 5  | 09  |",
         "| 6  | 09  |",
         "| 7  | 09  |",
+        "+----+-----+",
+    ];
+    assert_batches_sorted_eq!(expected, &result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn parquet_multiple_nonstring_partitions() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    register_partitioned_alltypes_parquet(
+        &ctx,
+        &[
+            "year=2021/month=09/day=09/file.parquet",
+            "year=2021/month=10/day=09/file.parquet",
+            "year=2021/month=10/day=28/file.parquet",
+        ],
+        &[
+            ("year", DataType::Int32),
+            ("month", DataType::Int32),
+            ("day", DataType::Int32),
+        ],
+        "mirror:///",
+        "alltypes_plain.parquet",
+    )
+    .await;
+
+    let result = ctx
+        .sql("SELECT id, day FROM t WHERE day=month ORDER BY id")
+        .await?
+        .collect()
+        .await?;
+
+    let expected = vec![
+        "+----+-----+",
+        "| id | day |",
+        "+----+-----+",
+        "| 0  | 9   |",
+        "| 1  | 9   |",
+        "| 2  | 9   |",
+        "| 3  | 9   |",
+        "| 4  | 9   |",
+        "| 5  | 9   |",
+        "| 6  | 9   |",
+        "| 7  | 9   |",
         "+----+-----+",
     ];
     assert_batches_sorted_eq!(expected, &result);
