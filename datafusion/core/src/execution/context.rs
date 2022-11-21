@@ -558,7 +558,17 @@ impl SessionContext {
                     .fields()
                     .is_empty()
                 {
-                    (None, vec![])
+                    (
+                        None,
+                        cmd.table_partition_cols
+                            .iter()
+                            .zip(
+                                (0..cmd.table_partition_cols.len())
+                                    .map(|_| DataType::Utf8),
+                            )
+                            .map(|x| (x.0.clone(), x.1.clone()))
+                            .collect::<Vec<_>>(),
+                    )
                 } else {
                     let schema: SchemaRef =
                         Arc::new(cmd.schema.as_ref().to_owned().into());
@@ -572,6 +582,16 @@ impl SessionContext {
                             )
                         })
                         .collect();
+                    // exclude partition columns to support creating partitioned external table
+                    // with a specified column definition like
+                    // `create external table a(c0 int, c1 int) stored as csv partitioned by (c1)...`
+                    let mut project_idx = Vec::new();
+                    for i in 0..schema.fields().len() {
+                        if !cmd.table_partition_cols.contains(schema.field(i).name()) {
+                            project_idx.push(i);
+                        }
+                    }
+                    let schema = Arc::new(schema.project(&project_idx)?);
                     (Some(schema), table_partition_cols)
                 };
                 let options = ListingOptions {
