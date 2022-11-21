@@ -22,8 +22,8 @@ use std::sync::Arc;
 use arrow::array::new_empty_array;
 use arrow::{
     array::{
-        Array, ArrayBuilder, ArrayRef, Date64Array, Date64Builder, StringArray,
-        StringBuilder, UInt64Array, UInt64Builder,
+        Array, ArrayBuilder, ArrayRef, Date64Array, Date64Builder, StringBuilder,
+        UInt64Builder,
     },
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
@@ -39,7 +39,10 @@ use crate::{
 
 use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
-use datafusion_common::{Column, DataFusionError};
+use datafusion_common::{
+    cast::{as_string_array, as_uint64_array},
+    Column, DataFusionError,
+};
 use datafusion_expr::{
     expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion},
     Expr, Volatility,
@@ -334,16 +337,8 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Result<Vec<PartitionedFile>> {
     batches
         .iter()
         .flat_map(|batch| {
-            let key_array = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            let length_array = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap();
+            let key_array = as_string_array(batch.column(0)).unwrap();
+            let length_array = as_uint64_array(batch.column(1)).unwrap();
             let modified_array = batch
                 .column(2)
                 .as_any()

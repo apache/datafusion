@@ -391,14 +391,10 @@ async fn get_table(
         };
     let schema = Arc::new(get_tpch_table_schema(table));
 
-    let options = ListingOptions {
-        format,
-        file_extension: extension.to_owned(),
-        target_partitions,
-        collect_stat: ctx.config.collect_statistics,
-        table_partition_cols: vec![],
-        file_sort_order: None,
-    };
+    let options = ListingOptions::new(format)
+        .with_file_extension(extension)
+        .with_target_partitions(target_partitions)
+        .with_collect_stat(ctx.config.collect_statistics);
 
     let table_path = ListingTableUrl::parse(path)?;
     let config = ListingTableConfig::new(table_path).with_listing_options(options);

@@ -103,11 +103,11 @@ impl AnalysisContext {
     }
 
     /// Create a new analysis context from column statistics.
-    pub fn from_statistics(input_schema: &Schema, statistics: Statistics) -> Self {
+    pub fn from_statistics(input_schema: &Schema, statistics: &Statistics) -> Self {
         // Even if the underlying statistics object doesn't have any column level statistics,
         // we can still create an analysis context with the same number of columns and see whether
         // we can infer it during the way.
-        let column_boundaries = match statistics.column_statistics {
+        let column_boundaries = match &statistics.column_statistics {
             Some(columns) => columns
                 .iter()
                 .map(ExprBoundaries::from_column)
@@ -273,7 +273,10 @@ mod tests {
 
     use super::*;
     use arrow::array::Int32Array;
-    use datafusion_common::{cast::as_int32_array, Result};
+    use datafusion_common::{
+        cast::{as_boolean_array, as_int32_array},
+        Result,
+    };
 
     #[test]
     fn scatter_int() -> Result<()> {
@@ -335,7 +338,7 @@ mod tests {
             Some(false),
         ]);
         let result = scatter(&mask, truthy.as_ref())?;
-        let result = result.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let result = as_boolean_array(&result)?;
 
         assert_eq!(&expected, result);
         Ok(())

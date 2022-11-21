@@ -77,7 +77,13 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let values = downcast_string_array_arg!(args[0], "string", T);
             let regex = downcast_string_array_arg!(args[1], "pattern", T);
             let flags = Some(downcast_string_array_arg!(args[2], "flags", T));
-            compute::regexp_match(values, regex,  flags).map_err(DataFusionError::ArrowError)
+
+            match flags {
+                Some(f) if f.iter().any(|s| s == Some("g")) => {
+                    Err(DataFusionError::Plan("regexp_match() does not support the \"global\" option".to_owned()))
+                },
+                _ => compute::regexp_match(values, regex, flags).map_err(DataFusionError::ArrowError),
+            }
         }
         other => Err(DataFusionError::Internal(format!(
             "regexp_match was called with {} arguments. It requires at least 2 and at most 3.",
@@ -395,6 +401,19 @@ mod tests {
                 .unwrap();
 
         assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_unsupported_global_flag_regexp_match() {
+        let values = StringArray::from(vec!["abc"]);
+        let patterns = StringArray::from(vec!["^(a)"]);
+        let flags = StringArray::from(vec!["g"]);
+
+        let re_err =
+            regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
+                .expect_err("unsupported flag should have failed");
+
+        assert_eq!(re_err.to_string(), "Error during planning: regexp_match() does not support the \"global\" option");
     }
 
     #[test]

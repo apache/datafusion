@@ -22,7 +22,8 @@
 
 use crate::DataFusionError;
 use arrow::array::{
-    Array, Date32Array, Decimal128Array, Int32Array, Int64Array, StructArray,
+    Array, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
+    Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
 };
 
 // Downcast ArrayRef to Date32Array
@@ -75,6 +76,75 @@ pub fn as_decimal128_array(
         .ok_or_else(|| {
             DataFusionError::Internal(format!(
                 "Expected a Decimal128Array, got: {}",
+                array.data_type()
+            ))
+        })
+}
+
+// Downcast ArrayRef to Float32Array
+pub fn as_float32_array(array: &dyn Array) -> Result<&Float32Array, DataFusionError> {
+    array
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Expected a Float32Array, got: {}",
+                array.data_type()
+            ))
+        })
+}
+
+// Downcast ArrayRef to Float64Array
+pub fn as_float64_array(array: &dyn Array) -> Result<&Float64Array, DataFusionError> {
+    array
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Expected a Float64Array, got: {}",
+                array.data_type()
+            ))
+        })
+}
+
+// Downcast ArrayRef to StringArray
+pub fn as_string_array(array: &dyn Array) -> Result<&StringArray, DataFusionError> {
+    array.as_any().downcast_ref::<StringArray>().ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "Expected a StringArray, got: {}",
+            array.data_type()
+        ))
+    })
+}
+
+// Downcast ArrayRef to UInt32Array
+pub fn as_uint32_array(array: &dyn Array) -> Result<&UInt32Array, DataFusionError> {
+    array.as_any().downcast_ref::<UInt32Array>().ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "Expected a UInt32Array, got: {}",
+            array.data_type()
+        ))
+    })
+}
+
+// Downcast ArrayRef to UInt64Array
+pub fn as_uint64_array(array: &dyn Array) -> Result<&UInt64Array, DataFusionError> {
+    array.as_any().downcast_ref::<UInt64Array>().ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "Expected a UInt64Array, got: {}",
+            array.data_type()
+        ))
+    })
+}
+
+// Downcast ArrayRef to BooleanArray
+pub fn as_boolean_array(array: &dyn Array) -> Result<&BooleanArray, DataFusionError> {
+    array
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Expected a BooleanArray, got: {}",
                 array.data_type()
             ))
         })

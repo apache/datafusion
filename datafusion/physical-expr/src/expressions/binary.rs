@@ -75,7 +75,7 @@ use arrow::record_batch::RecordBatch;
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
-use datafusion_common::cast::as_decimal128_array;
+use datafusion_common::cast::{as_boolean_array, as_decimal128_array};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::type_coercion::binary::binary_operator_data_type;
@@ -376,8 +376,6 @@ macro_rules! binary_string_array_op {
 macro_rules! binary_primitive_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
-            // TODO support decimal type
-            // which is not the primitive type
             DataType::Decimal128(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
             DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
@@ -460,6 +458,18 @@ macro_rules! binary_array_op {
             DataType::Date64 => {
                 compute_op!($LEFT, $RIGHT, $OP, Date64Array)
             }
+            DataType::Time32(TimeUnit::Second) => {
+                compute_op!($LEFT, $RIGHT, $OP, Time32SecondArray)
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                compute_op!($LEFT, $RIGHT, $OP, Time32MillisecondArray)
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                compute_op!($LEFT, $RIGHT, $OP, Time64MicrosecondArray)
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                compute_op!($LEFT, $RIGHT, $OP, Time64NanosecondArray)
+            }
             DataType::Boolean => compute_bool_op!($LEFT, $RIGHT, $OP, BooleanArray),
             other => Err(DataFusionError::Internal(format!(
                 "Data type {:?} not supported for binary operation '{}' on dyn arrays",
@@ -472,14 +482,8 @@ macro_rules! binary_array_op {
 /// Invoke a boolean kernel on a pair of arrays
 macro_rules! boolean_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("boolean_op failed to downcast array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("boolean_op failed to downcast array");
+        let ll = as_boolean_array($LEFT).expect("boolean_op failed to downcast array");
+        let rr = as_boolean_array($RIGHT).expect("boolean_op failed to downcast array");
         Ok(Arc::new($OP(&ll, &rr)?))
     }};
 }
@@ -814,6 +818,10 @@ macro_rules! binary_array_op_dyn_scalar {
             ScalarValue::Float64(v) => compute_op_dyn_scalar!($LEFT, v, $OP, $OP_TYPE),
             ScalarValue::Date32(_) => compute_op_scalar!($LEFT, right, $OP, Date32Array),
             ScalarValue::Date64(_) => compute_op_scalar!($LEFT, right, $OP, Date64Array),
+            ScalarValue::Time32Second(_) => compute_op_scalar!($LEFT, right, $OP, Time32SecondArray),
+            ScalarValue::Time32Millisecond(_) => compute_op_scalar!($LEFT, right, $OP, Time32MillisecondArray),
+            ScalarValue::Time64Microsecond(_) => compute_op_scalar!($LEFT, right, $OP, Time64MicrosecondArray),
+            ScalarValue::Time64Nanosecond(_) => compute_op_scalar!($LEFT, right, $OP, Time64NanosecondArray),
             ScalarValue::TimestampSecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampSecondArray),
             ScalarValue::TimestampMillisecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMillisecondArray),
             ScalarValue::TimestampMicrosecond(..) => compute_op_scalar!($LEFT, right, $OP, TimestampMicrosecondArray),
@@ -1003,7 +1011,7 @@ impl BinaryExpr {
             Operator::Modulo => binary_primitive_array_op!(left, right, modulus),
             Operator::And => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op!(left, right, and_kleene)
+                    boolean_op!(&left, &right, and_kleene)
                 } else {
                     Err(DataFusionError::Internal(format!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -1015,7 +1023,7 @@ impl BinaryExpr {
             }
             Operator::Or => {
                 if left_data_type == &DataType::Boolean {
-                    boolean_op!(left, right, or_kleene)
+                    boolean_op!(&left, &right, or_kleene)
                 } else {
                     Err(DataFusionError::Internal(format!(
                         "Cannot evaluate binary expression {:?} with types {:?} and {:?}",
@@ -1110,10 +1118,8 @@ mod tests {
         assert_eq!(result.len(), 5);
 
         let expected = vec![false, false, true, true, true];
-        let result = result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("failed to downcast to BooleanArray");
+        let result =
+            as_boolean_array(&result).expect("failed to downcast to BooleanArray");
         for (i, &expected_item) in expected.iter().enumerate().take(5) {
             assert_eq!(result.value(i), expected_item);
         }
@@ -1156,10 +1162,8 @@ mod tests {
         assert_eq!(result.len(), 5);
 
         let expected = vec![true, true, false, true, false];
-        let result = result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("failed to downcast to BooleanArray");
+        let result =
+            as_boolean_array(&result).expect("failed to downcast to BooleanArray");
         for (i, &expected_item) in expected.iter().enumerate().take(5) {
             assert_eq!(result.value(i), expected_item);
         }
@@ -2384,24 +2388,89 @@ mod tests {
         )
         .unwrap();
 
-        // compare decimal array with other array type
+        let value: i128 = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[Some(value), None, Some(value - 1), Some(value + 1)],
+            10,
+            0,
+        )) as ArrayRef;
+
+        // comparison array op for decimal array
         let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int64, true),
+            Field::new("a", DataType::Decimal128(10, 0), true),
             Field::new("b", DataType::Decimal128(10, 0), true),
         ]));
-
-        let value: i64 = 123;
-
-        let decimal_array = Arc::new(create_decimal_array(
+        let right_decimal_array = Arc::new(create_decimal_array(
             &[
-                Some(value as i128),
-                None,
-                Some((value - 1) as i128),
-                Some((value + 1) as i128),
+                Some(value - 1),
+                Some(value),
+                Some(value + 1),
+                Some(value + 1),
             ],
             10,
             0,
         )) as ArrayRef;
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::Eq,
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::NotEq,
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::Lt,
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::LtEq,
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::Gt,
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+        )
+        .unwrap();
+
+        apply_logic_op(
+            &schema,
+            &decimal_array,
+            &right_decimal_array,
+            Operator::GtEq,
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        // compare decimal array with other array type
+        let value: i64 = 123;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Decimal128(10, 0), true),
+        ]));
 
         let int64_array = Arc::new(Int64Array::from(vec![
             Some(value),
@@ -2439,8 +2508,8 @@ mod tests {
             &[
                 Some(value), // 1.23
                 None,
-                Some((value - 1) as i128), // 1.22
-                Some(value + 1),           // 1.24
+                Some(value - 1), // 1.22
+                Some(value + 1), // 1.24
             ],
             10,
             2,
@@ -2561,10 +2630,10 @@ mod tests {
         let value: i128 = 123;
         let decimal_array = Arc::new(create_decimal_array(
             &[
-                Some(value as i128), // 1.23
+                Some(value), // 1.23
                 None,
-                Some(value - 1),           // 1.22
-                Some((value + 1) as i128), // 1.24
+                Some(value - 1), // 1.22
+                Some(value + 1), // 1.24
             ],
             10,
             2,
@@ -2682,8 +2751,8 @@ mod tests {
             &[
                 Some(value), // 1.23
                 None,
-                Some((value - 1) as i128), // 1.22
-                Some(value + 1),           // 1.24
+                Some(value - 1), // 1.22
+                Some(value + 1), // 1.24
             ],
             10,
             2,
@@ -2970,7 +3039,7 @@ mod tests {
         ];
 
         for ((operator, rhs), (exp_selectivity, _, _)) in cases {
-            let context = AnalysisContext::from_statistics(&schema, statistics.clone());
+            let context = AnalysisContext::from_statistics(&schema, &statistics);
             let left = col("a", &schema).unwrap();
             let right = ScalarValue::Int64(Some(rhs));
             let boundaries =
@@ -3039,7 +3108,7 @@ mod tests {
         ];
 
         for ((operator, rhs), (exp_selectivity, _, _)) in cases {
-            let context = AnalysisContext::from_statistics(&schema, statistics.clone());
+            let context = AnalysisContext::from_statistics(&schema, &statistics);
             let left = col("a", &schema).unwrap();
             let right = ScalarValue::from(rhs);
             let boundaries =
@@ -3085,7 +3154,7 @@ mod tests {
             &schema,
         );
 
-        let context = AnalysisContext::from_statistics(&schema, statistics);
+        let context = AnalysisContext::from_statistics(&schema, &statistics);
         let predicate_boundaries = gt
             .boundaries(&context)
             .expect("boundaries should not be None");
@@ -3113,7 +3182,7 @@ mod tests {
             &schema,
         );
 
-        let context = AnalysisContext::from_statistics(&schema, statistics);
+        let context = AnalysisContext::from_statistics(&schema, &statistics);
         let predicate_boundaries = gt
             .boundaries(&context)
             .expect("boundaries should not be None");

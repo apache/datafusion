@@ -711,7 +711,7 @@ impl DefaultPhysicalPlanner {
                             // provided expressions into logical Column expressions if their results
                             // are already provided from the input plans. Because we work with
                             // qualified columns in logical plane, derived columns involve operators or
-                            // functions will contain qualifers as well. This will result in logical
+                            // functions will contain qualifiers as well. This will result in logical
                             // columns with names like `SUM(t1.c1)`, `t1.c1 + t1.c2`, etc.
                             //
                             // If we run these logical columns through physical_name function, we will
@@ -2281,11 +2281,7 @@ mod tests {
             unimplemented!("NoOpExecutionPlan::execute");
         }
 
-        fn fmt_as(
-            &self,
-            t: DisplayFormatType,
-            f: &mut std::fmt::Formatter,
-        ) -> std::fmt::Result {
+        fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
             match t {
                 DisplayFormatType::Default => {
                     write!(f, "NoOpExecutionPlan")

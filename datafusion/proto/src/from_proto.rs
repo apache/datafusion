@@ -583,7 +583,30 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 )
             }
             Value::Date64Value(v) => Self::Date64(Some(*v)),
-            Value::Time64Value(v) => Self::Time64(Some(*v)),
+            Value::Time32Value(v) => {
+                let time_value =
+                    v.value.as_ref().ok_or_else(|| Error::required("value"))?;
+                match time_value {
+                    protobuf::scalar_time32_value::Value::Time32SecondValue(t) => {
+                        Self::Time32Second(Some(*t))
+                    }
+                    protobuf::scalar_time32_value::Value::Time32MillisecondValue(t) => {
+                        Self::Time32Millisecond(Some(*t))
+                    }
+                }
+            }
+            Value::Time64Value(v) => {
+                let time_value =
+                    v.value.as_ref().ok_or_else(|| Error::required("value"))?;
+                match time_value {
+                    protobuf::scalar_time64_value::Value::Time64MicrosecondValue(t) => {
+                        Self::Time64Microsecond(Some(*t))
+                    }
+                    protobuf::scalar_time64_value::Value::Time64NanosecondValue(t) => {
+                        Self::Time64Nanosecond(Some(*t))
+                    }
+                }
+            }
             Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
             Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(*v)),
             Value::TimestampValue(v) => {

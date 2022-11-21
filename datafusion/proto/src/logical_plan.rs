@@ -459,10 +459,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(ListingTableUrl::parse)
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let options = ListingOptions {
-                    file_extension: scan.file_extension.clone(),
-                    format: file_format,
-                    table_partition_cols: scan
+                let options = ListingOptions::new(file_format)
+                    .with_file_extension(scan.file_extension.clone())
+                    .with_table_partition_cols(scan
                         .table_partition_cols
                         .iter()
                         .map(|col| {
@@ -471,11 +470,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 schema.field_with_name(col).unwrap().data_type().clone(),
                             )
                         })
-                        .collect(),
-                    collect_stat: scan.collect_stat,
-                    target_partitions: scan.target_partitions as usize,
-                    file_sort_order,
-                };
+                        .collect())
+                    .with_collect_stat(scan.collect_stat)
+                    .with_target_partitions(scan.target_partitions as usize)
+                    .with_file_sort_order(file_sort_order);
 
                 let config =
                     ListingTableConfig::new_with_multi_paths(table_paths.clone())
@@ -581,17 +579,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     None
                 };
 
-                match create_extern_table.file_type.as_str() {
-                    "CSV" | "JSON" | "PARQUET" | "AVRO" => {}
-                    it => {
-                        let env = &ctx.state.as_ref().read().runtime_env;
-                        if !env.table_factories.contains_key(it) {
-                            Err(DataFusionError::Internal(format!(
-                                "No TableProvider for file type: {}",
-                                it
-                            )))?
-                        }
-                    }
+                let file_type = create_extern_table.file_type.as_str();
+                let env = &ctx.state.as_ref().read().runtime_env;
+                if !env.table_factories.contains_key(file_type) {
+                    Err(DataFusionError::Internal(format!(
+                        "No TableProvider for file type: {}",
+                        file_type
+                    )))?
                 }
 
                 Ok(LogicalPlan::CreateExternalTable(CreateExternalTable {

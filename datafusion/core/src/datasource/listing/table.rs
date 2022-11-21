@@ -160,14 +160,9 @@ impl ListingTableConfig {
         let (format, file_extension) =
             ListingTableConfig::infer_format(file.location.as_ref())?;
 
-        let listing_options = ListingOptions {
-            format,
-            collect_stat: true,
-            file_extension,
-            target_partitions: ctx.config.target_partitions,
-            table_partition_cols: vec![],
-            file_sort_order: None,
-        };
+        let listing_options = ListingOptions::new(format)
+            .with_file_extension(file_extension)
+            .with_target_partitions(ctx.config.target_partitions);
 
         Ok(Self {
             table_paths: self.table_paths,
@@ -251,6 +246,97 @@ impl ListingOptions {
             target_partitions: 1,
             file_sort_order: None,
         }
+    }
+
+    /// Set file extension on [`ListingOptions`] and returns self.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    ///
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_file_extension(".parquet");
+    ///
+    /// assert_eq!(listing_options.file_extension, ".parquet");
+    /// ```
+    pub fn with_file_extension(mut self, file_extension: impl Into<String>) -> Self {
+        self.file_extension = file_extension.into();
+        self
+    }
+
+    /// Set table partition column names on [`ListingOptions`] and returns self.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    ///
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_table_partition_cols(vec!["col_a".to_string(), "col_b".to_string()]);
+    ///
+    /// assert_eq!(listing_options.table_partition_cols, vec!["col_a", "col_b"]);
+    /// ```
+    pub fn with_table_partition_cols(
+        mut self,
+        table_partition_cols: Vec<String>,
+    ) -> Self {
+        self.table_partition_cols = table_partition_cols;
+        self
+    }
+
+    /// Set stat collection on [`ListingOptions`] and returns self.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    ///
+    /// // Enable stat collection
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_collect_stat(true);
+    ///
+    /// assert_eq!(listing_options.collect_stat, true);
+    /// ```
+    pub fn with_collect_stat(mut self, collect_stat: bool) -> Self {
+        self.collect_stat = collect_stat;
+        self
+    }
+
+    /// Set number of target partitions on [`ListingOptions`] and returns self.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    ///
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_target_partitions(8);
+    ///
+    /// assert_eq!(listing_options.target_partitions, 8);
+    /// ```
+    pub fn with_target_partitions(mut self, target_partitions: usize) -> Self {
+        self.target_partitions = target_partitions;
+        self
+    }
+
+    /// Set file sort order on [`ListingOptions`] and returns self.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use datafusion::prelude::{Expr, col};
+    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    ///
+    ///
+    ///  // Tell datafusion that the files are sorted by column "a"
+    ///  let file_sort_order = Some(vec![
+    ///    col("a").sort(true, true)
+    ///  ]);
+    ///
+    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    ///     .with_file_sort_order(file_sort_order.clone());
+    ///
+    /// assert_eq!(listing_options.file_sort_order, file_sort_order);
+    /// ```
+    pub fn with_file_sort_order(mut self, file_sort_order: Option<Vec<Expr>>) -> Self {
+        self.file_sort_order = file_sort_order;
+        self
     }
 
     /// Infer the schema of the files at the given path on the provided object store.
@@ -706,10 +792,8 @@ mod tests {
         ];
 
         for (file_sort_order, expected_result) in cases {
-            let options = ListingOptions {
-                file_sort_order,
-                ..options.clone()
-            };
+            let options = options.clone().with_file_sort_order(file_sort_order);
+
             let config = ListingTableConfig::new(table_path.clone())
                 .with_listing_options(options)
                 .with_schema(schema.clone());
@@ -744,17 +828,10 @@ mod tests {
         let path = String::from("table/p1=v1/file.avro");
         register_test_store(&ctx, &[(&path, 100)]);
 
-        let opt = ListingOptions {
-            file_extension: FileType::AVRO.get_ext(),
-            format: Arc::new(AvroFormat {}),
-            table_partition_cols: vec![(
-                String::from("p1"),
-                partition_type_wrap(DataType::Utf8),
-            )],
-            target_partitions: 4,
-            collect_stat: true,
-            file_sort_order: None,
-        };
+        let opt = ListingOptions::new(Arc::new(AvroFormat {}))
+            .with_file_extension(FileType::AVRO.get_ext())
+            .with_table_partition_cols(vec![(String::from("p1"), partition_type_wrap(DataType::Utf8))])
+            .with_target_partitions(4);
 
         let table_path = ListingTableUrl::parse("test:///table/").unwrap();
         let file_schema =
@@ -950,14 +1027,9 @@ mod tests {
 
         let format = AvroFormat {};
 
-        let opt = ListingOptions {
-            file_extension: "".to_owned(),
-            format: Arc::new(format),
-            table_partition_cols: vec![],
-            target_partitions,
-            collect_stat: true,
-            file_sort_order: None,
-        };
+        let opt = ListingOptions::new(Arc::new(format))
+            .with_file_extension("")
+            .with_target_partitions(target_partitions);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
@@ -988,14 +1060,9 @@ mod tests {
 
         let format = AvroFormat {};
 
-        let opt = ListingOptions {
-            file_extension: "".to_owned(),
-            format: Arc::new(format),
-            table_partition_cols: vec![],
-            target_partitions,
-            collect_stat: true,
-            file_sort_order: None,
-        };
+        let opt = ListingOptions::new(Arc::new(format))
+            .with_file_extension("")
+            .with_target_partitions(target_partitions);
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 

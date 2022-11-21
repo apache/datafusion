@@ -23,6 +23,8 @@ use std::ops::Deref;
 
 use crate::{AggregateFunction, Signature, TypeSignature};
 
+use super::functions::can_coerce_from;
+
 pub static STRINGS: &[DataType] = &[DataType::Utf8, DataType::LargeUtf8];
 
 pub static NUMERICS: &[DataType] = &[
@@ -166,19 +168,22 @@ pub fn coerce_types(
                     agg_fun, input_types[0]
                 )));
             }
-            if !matches!(input_types[1], DataType::Float64) {
-                return Err(DataFusionError::Plan(format!(
-                    "The percentile argument for {:?} must be Float64, not {:?}.",
-                    agg_fun, input_types[1]
-                )));
-            }
             if input_types.len() == 3 && !is_integer_arg_type(&input_types[2]) {
                 return Err(DataFusionError::Plan(format!(
                         "The percentile sample points count for {:?} must be integer, not {:?}.",
                         agg_fun, input_types[2]
                     )));
             }
-            Ok(input_types.to_vec())
+            let mut result = input_types.to_vec();
+            if can_coerce_from(&DataType::Float64, &input_types[1]) {
+                result[1] = DataType::Float64;
+            } else {
+                return Err(DataFusionError::Plan(format!(
+                    "Could not coerce the percent argument for {:?} to Float64. Was  {:?}.",
+                    agg_fun, input_types[1]
+                )));
+            }
+            Ok(result)
         }
         AggregateFunction::ApproxPercentileContWithWeight => {
             if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {

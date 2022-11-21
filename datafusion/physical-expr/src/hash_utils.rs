@@ -22,7 +22,10 @@ use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use arrow_buffer::i256;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{
+    cast::{as_boolean_array, as_string_array},
+    DataFusionError, Result,
+};
 use std::sync::Arc;
 
 // Combines two hashes into one hash
@@ -211,8 +214,8 @@ pub fn create_hashes<'a>(
         downcast_primitive_array! {
             array => hash_array(array, random_state, hashes_buffer, multi_col),
             DataType::Null => hash_null(random_state, hashes_buffer, multi_col),
-            DataType::Boolean => hash_array(as_boolean_array(array), random_state, hashes_buffer, multi_col),
-            DataType::Utf8 => hash_array(as_string_array(array), random_state, hashes_buffer, multi_col),
+            DataType::Boolean => hash_array(as_boolean_array(array)?, random_state, hashes_buffer, multi_col),
+            DataType::Utf8 => hash_array(as_string_array(array)?, random_state, hashes_buffer, multi_col),
             DataType::LargeUtf8 => hash_array(as_largestring_array(array), random_state, hashes_buffer, multi_col),
             DataType::Binary => hash_array(as_generic_binary_array::<i32>(array), random_state, hashes_buffer, multi_col),
             DataType::LargeBinary => hash_array(as_generic_binary_array::<i64>(array), random_state, hashes_buffer, multi_col),

@@ -32,7 +32,10 @@ use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    cast::{as_boolean_array, as_string_array},
+    DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::ColumnarValue;
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
@@ -171,7 +174,7 @@ fn make_set(array: &dyn Array) -> Result<Box<dyn Set>> {
     Ok(downcast_primitive_array! {
         array => Box::new(ArraySet::new(array, make_hash_set(array))),
         DataType::Boolean => {
-            let array = as_boolean_array(array);
+            let array = as_boolean_array(array)?;
             Box::new(ArraySet::new(array, make_hash_set(array)))
         },
         DataType::Decimal128(_, _) => {
@@ -183,7 +186,7 @@ fn make_set(array: &dyn Array) -> Result<Box<dyn Set>> {
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Utf8 => {
-            let array = as_string_array(array);
+            let array = as_string_array(array)?;
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::LargeUtf8 => {
@@ -424,10 +427,8 @@ mod tests {
             let (cast_expr, cast_list_exprs) = in_list_cast($COL, $LIST, $SCHEMA)?;
             let expr = in_list(cast_expr, cast_list_exprs, $NEGATED, $SCHEMA).unwrap();
             let result = expr.evaluate(&$BATCH)?.into_array($BATCH.num_rows());
-            let result = result
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .expect("failed to downcast to BooleanArray");
+            let result =
+                as_boolean_array(&result).expect("failed to downcast to BooleanArray");
             let expected = &BooleanArray::from($EXPECTED);
             assert_eq!(expected, result);
         }};
