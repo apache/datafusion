@@ -5430,7 +5430,7 @@ mod tests {
         let sql = "with a as (select * from person), a as (select * from orders) select * from a;";
         let expected = "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
         let result = logical_plan(sql).err().unwrap();
-        assert_eq!(expected, format!("{}", result));
+        assert_eq!(result.to_string(), expected);
     }
 
     #[test]
@@ -5664,7 +5664,7 @@ mod tests {
 
         let expected = "Error during planning: Source table contains 3 columns but only 1 names given as column alias";
         let result = logical_plan(sql).err().unwrap();
-        assert_eq!(expected, format!("{}", result));
+        assert_eq!(result.to_string(), expected);
     }
 
     #[test]
@@ -5767,7 +5767,7 @@ mod tests {
         let expected = "Projection: SUM(person.age) FILTER (WHERE age > Int64(4))\
         \n  Aggregate: groupBy=[[]], aggr=[[SUM(person.age) FILTER (WHERE age > Int64(4))]]\
         \n    TableScan: person".to_string();
-        assert_eq!(expected, format!("{}", plan.display_indent()));
+        assert_eq!(plan.display_indent().to_string(), expected);
         Ok(())
     }
 
@@ -6057,7 +6057,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ambiguous_coulmn_referece_in_join() {
+    fn test_ambiguous_coulmn_referece_in_on_join() {
         let sql = "select p1.id, p1.age, p2.id 
             from person as p1 
             INNER JOIN person as p2 
@@ -6070,7 +6070,23 @@ mod tests {
         let result = logical_plan(sql);
         assert!(result.is_err());
         let err = result.err().unwrap();
-        assert_eq!(format!("{}", err), expected);
+        assert_eq!(err.to_string(), expected);
+    }
+
+    #[test]
+    fn test_ambiguous_coulmn_referece_with_in_using_join() {
+        let sql = "select p1.id, p1.age, p2.id 
+            from person as p1 
+            INNER JOIN person as p2 
+            using(id)";
+
+        let expected = "Projection: p1.id, p1.age, p2.id\
+            \n  Inner Join: Using p1.id = p2.id\
+            \n    SubqueryAlias: p1\
+            \n      TableScan: person\
+            \n    SubqueryAlias: p2\
+            \n      TableScan: person";
+        quick_test(sql, expected);
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
