@@ -37,7 +37,7 @@ pub trait PhysicalOptimizerRule {
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
 
-    /// A flat to indicate whether the physical planner should valid the rule will not
+    /// A flag to indicate whether the physical planner should valid the rule will not
     /// change the schema of the plan after the rewriting.
     /// Some of the optimization rules might change the nullable properties of the schema
     /// and should disable the schema check.

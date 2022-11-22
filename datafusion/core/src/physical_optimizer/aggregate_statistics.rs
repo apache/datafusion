@@ -98,6 +98,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
         "aggregate_statistics"
     }
 
+    /// This rule will change the nullable properties of the schema, disable the schema check.
     fn schema_check(&self) -> bool {
         false
     }
