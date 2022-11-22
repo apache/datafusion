@@ -500,32 +500,6 @@ macro_rules! get_min_max_values_for_page_index {
 impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
     fn min_values(&self, _column: &Column) -> Option<ArrayRef> {
         get_min_max_values_for_page_index!(self, min)
-        // match self.col_page_indexes {
-        //     Index::NONE => None,
-        //     Index::FIXED_LEN_BYTE_ARRAY(index) => {
-        //         match self.target_type {
-        //             // int32 to decimal with the precision and scale
-        //             Some(DataType::Decimal128(precision, scale)) => {
-        //                 let vec = &index.indexes;
-        //                 // if let Ok(array) = Decimal128Array::from_iter_values(
-        //                 //     vec.iter().map(|x| from_bytes_to_i128(x.min().unwrap())),
-        //                 // )
-        //                 //     .with_precision_and_scale(*precision, *scale)
-        //                 // {
-        //                 //     return Some(Arc::new(array));
-        //                 // } else {
-        //                 //     return None;
-        //                 // }
-        //                 Decimal128Array::from(vec)
-        //                     .with_precision_and_scale(*precision, *scale)
-        //                     .ok()
-        //                     .map(|arr| Arc::new(arr ) as ArrayRef)
-        //             }
-        //             _ => None,
-        //         }
-        //     }
-        //     _ => {None}
-        // }
     }
 
     fn max_values(&self, _column: &Column) -> Option<ArrayRef> {
