@@ -47,7 +47,6 @@ use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion_physical_expr::EquivalenceProperties;
-use futures::lock::Mutex;
 use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, error};
 use std::any::Any;
@@ -75,8 +74,8 @@ use tokio::task;
 struct ExternalSorter {
     id: MemoryConsumerId,
     schema: SchemaRef,
-    in_mem_batches: Mutex<Vec<BatchWithSortArray>>,
-    spills: Mutex<Vec<NamedTempFile>>,
+    in_mem_batches: Vec<BatchWithSortArray>,
+    spills: Vec<NamedTempFile>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
     session_config: Arc<SessionConfig>,
@@ -100,8 +99,8 @@ impl ExternalSorter {
         Self {
             id: MemoryConsumerId::new(partition_id),
             schema,
-            in_mem_batches: Mutex::new(vec![]),
-            spills: Mutex::new(vec![]),
+            in_mem_batches: vec![],
+            spills: vec![],
             expr,
             session_config,
             runtime,
@@ -112,7 +111,7 @@ impl ExternalSorter {
     }
 
     async fn insert_batch(
-        &self,
+        &mut self,
         input: RecordBatch,
         tracking_metrics: &MemTrackingMetrics,
     ) -> Result<()> {
@@ -120,7 +119,6 @@ impl ExternalSorter {
             let size = batch_byte_size(&input);
             self.try_grow(size).await?;
             self.metrics.mem_used().add(size);
-            let mut in_mem_batches = self.in_mem_batches.lock().await;
             // NB timer records time taken on drop, so there are no
             // calls to `timer.done()` below.
             let _timer = tracking_metrics.elapsed_compute().timer();
@@ -147,30 +145,28 @@ impl ExternalSorter {
                 }
                 Ordering::Equal => {}
             }
-            in_mem_batches.push(partial);
+            self.in_mem_batches.push(partial);
         }
         Ok(())
     }
 
     async fn spilled_before(&self) -> bool {
-        let spills = self.spills.lock().await;
-        !spills.is_empty()
+        !self.spills.is_empty()
     }
 
     /// MergeSort in mem batches as well as spills into total order with `SortPreservingMergeStream`.
-    async fn sort(&self) -> Result<SendableRecordBatchStream> {
+    async fn sort(&mut self) -> Result<SendableRecordBatchStream> {
         let partition = self.partition_id();
         let batch_size = self.session_config.batch_size();
-        let mut in_mem_batches = self.in_mem_batches.lock().await;
 
         if self.spilled_before().await {
             let tracking_metrics = self
                 .metrics_set
                 .new_intermediate_tracking(partition, self.runtime.clone());
             let mut streams: Vec<SortedStream> = vec![];
-            if in_mem_batches.len() > 0 {
+            if !self.in_mem_batches.is_empty() {
                 let in_mem_stream = in_mem_partial_sort(
-                    &mut in_mem_batches,
+                    &mut self.in_mem_batches,
                     self.schema.clone(),
                     &self.expr,
                     batch_size,
@@ -181,9 +177,7 @@ impl ExternalSorter {
                 streams.push(SortedStream::new(in_mem_stream, prev_used));
             }
 
-            let mut spills = self.spills.lock().await;
-
-            for spill in spills.drain(..) {
+            for spill in self.spills.drain(..) {
                 let stream = read_spill_as_stream(spill, self.schema.clone())?;
                 streams.push(SortedStream::new(stream, 0));
             }
@@ -197,12 +191,12 @@ impl ExternalSorter {
                 tracking_metrics,
                 self.session_config.batch_size(),
             )?))
-        } else if in_mem_batches.len() > 0 {
+        } else if !self.in_mem_batches.is_empty() {
             let tracking_metrics = self
                 .metrics_set
                 .new_final_tracking(partition, self.runtime.clone());
             let result = in_mem_partial_sort(
-                &mut in_mem_batches,
+                &mut self.in_mem_batches,
                 self.schema.clone(),
                 &self.expr,
                 batch_size,
@@ -271,7 +265,7 @@ impl MemoryConsumer for ExternalSorter {
         &ConsumerType::Requesting
     }
 
-    async fn spill(&self) -> Result<usize> {
+    async fn spill(&mut self) -> Result<usize> {
         debug!(
             "{}[{}] spilling sort data of {} to disk while inserting ({} time(s) so far)",
             self.name(),
@@ -281,9 +275,8 @@ impl MemoryConsumer for ExternalSorter {
         );
 
         let partition = self.partition_id();
-        let mut in_mem_batches = self.in_mem_batches.lock().await;
         // we could always get a chance to free some memory as long as we are holding some
-        if in_mem_batches.len() == 0 {
+        if self.in_mem_batches.is_empty() {
             return Ok(0);
         }
 
@@ -293,7 +286,7 @@ impl MemoryConsumer for ExternalSorter {
 
         let spillfile = self.runtime.disk_manager.create_tmp_file()?;
         let stream = in_mem_partial_sort(
-            &mut in_mem_batches,
+            &mut self.in_mem_batches,
             self.schema.clone(),
             &self.expr,
             self.session_config.batch_size(),
@@ -303,10 +296,9 @@ impl MemoryConsumer for ExternalSorter {
 
         spill_partial_sorted_stream(&mut stream?, spillfile.path(), self.schema.clone())
             .await?;
-        let mut spills = self.spills.lock().await;
         let used = self.metrics.mem_used().set(0);
         self.metrics.record_spill(used);
-        spills.push(spillfile);
+        self.spills.push(spillfile);
         Ok(used)
     }
 
@@ -911,7 +903,7 @@ async fn do_sort(
     let schema = input.schema();
     let tracking_metrics =
         metrics_set.new_intermediate_tracking(partition_id, context.runtime_env());
-    let sorter = ExternalSorter::new(
+    let mut sorter = ExternalSorter::new(
         partition_id,
         schema.clone(),
         expr,

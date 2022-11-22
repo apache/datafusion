@@ -169,7 +169,7 @@ pub trait MemoryConsumer: Send + Sync {
     /// Grow memory by `required` to buffer more data in memory,
     /// this may trigger spill before grow when the memory threshold is
     /// reached for this consumer.
-    async fn try_grow(&self, required: usize) -> Result<()> {
+    async fn try_grow(&mut self, required: usize) -> Result<()> {
         let current = self.mem_used();
         debug!(
             "trying to acquire {} whiling holding {} from consumer {}",
@@ -207,7 +207,7 @@ pub trait MemoryConsumer: Send + Sync {
     }
 
     /// Spill in-memory buffers to disk, free memory, return the previous used
-    async fn spill(&self) -> Result<usize>;
+    async fn spill(&mut self) -> Result<usize>;
 
     /// Current memory used by this consumer
     fn mem_used(&self) -> usize;
@@ -463,14 +463,13 @@ mod tests {
     use crate::execution::MemoryConsumer;
     use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
     use async_trait::async_trait;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
     struct DummyRequester {
         id: MemoryConsumerId,
         runtime: Arc<RuntimeEnv>,
-        spills: AtomicUsize,
-        mem_used: AtomicUsize,
+        spills: usize,
+        mem_used: usize,
     }
 
     impl DummyRequester {
@@ -478,19 +477,19 @@ mod tests {
             Self {
                 id: MemoryConsumerId::new(partition),
                 runtime,
-                spills: AtomicUsize::new(0),
-                mem_used: AtomicUsize::new(0),
+                spills: 0,
+                mem_used: 0,
             }
         }
 
-        async fn do_with_mem(&self, grow: usize) -> Result<()> {
+        async fn do_with_mem(&mut self, grow: usize) -> Result<()> {
             self.try_grow(grow).await?;
-            self.mem_used.fetch_add(grow, Ordering::SeqCst);
+            self.mem_used += grow;
             Ok(())
         }
 
         fn get_spills(&self) -> usize {
-            self.spills.load(Ordering::SeqCst)
+            self.spills
         }
     }
 
@@ -512,14 +511,14 @@ mod tests {
             &ConsumerType::Requesting
         }
 
-        async fn spill(&self) -> Result<usize> {
-            self.spills.fetch_add(1, Ordering::SeqCst);
-            let used = self.mem_used.swap(0, Ordering::SeqCst);
+        async fn spill(&mut self) -> Result<usize> {
+            self.spills += 1;
+            let used = std::mem::replace(&mut self.mem_used, 0);
             Ok(used)
         }
 
         fn mem_used(&self) -> usize {
-            self.mem_used.load(Ordering::SeqCst)
+            self.mem_used
         }
     }
 
@@ -558,7 +557,7 @@ mod tests {
             &ConsumerType::Tracking
         }
 
-        async fn spill(&self) -> Result<usize> {
+        async fn spill(&mut self) -> Result<usize> {
             Ok(0)
         }
 
@@ -594,7 +593,7 @@ mod tests {
         drop(tracking_metric);
         assert_eq!(runtime.memory_manager.get_tracker_total(), 20);
 
-        let requester1 = DummyRequester::new(0, runtime.clone());
+        let mut requester1 = DummyRequester::new(0, runtime.clone());
         runtime.register_requester(requester1.id());
 
         // first requester entered, should be able to use any of the remaining 80
@@ -604,7 +603,7 @@ mod tests {
         assert_eq!(requester1.mem_used(), 50);
         assert_eq!(*runtime.memory_manager.requesters_total.lock(), 50);
 
-        let requester2 = DummyRequester::new(0, runtime.clone());
+        let mut requester2 = DummyRequester::new(0, runtime.clone());
         runtime.register_requester(requester2.id());
 
         requester2.do_with_mem(20).await.unwrap();

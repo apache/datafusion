@@ -511,7 +511,7 @@ impl MemoryConsumer for AggregationStateMemoryConsumer {
         "AggregationState".to_owned()
     }
 
-    fn id(&self) -> &crate::execution::MemoryConsumerId {
+    fn id(&self) -> &MemoryConsumerId {
         &self.id
     }
 
@@ -523,7 +523,7 @@ impl MemoryConsumer for AggregationStateMemoryConsumer {
         &ConsumerType::Tracking
     }
 
-    async fn spill(&self) -> Result<usize> {
+    async fn spill(&mut self) -> Result<usize> {
         Err(DataFusionError::ResourcesExhausted(
             "Cannot spill AggregationState".to_owned(),
         ))
