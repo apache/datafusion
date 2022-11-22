@@ -39,7 +39,7 @@ use super::ParquetFileMetrics;
 pub(crate) fn prune_row_groups(
     groups: &[RowGroupMetaData],
     range: Option<FileRange>,
-    predicate: Option<PruningPredicate>,
+    predicate: Option<&PruningPredicate>,
     metrics: &ParquetFileMetrics,
 ) -> Vec<usize> {
     let mut filtered = Vec::with_capacity(groups.len());
@@ -51,7 +51,7 @@ pub(crate) fn prune_row_groups(
             }
         }
 
-        if let Some(predicate) = &predicate {
+        if let Some(predicate) = predicate {
             let pruning_stats = RowGroupPruningStatistics {
                 row_group_metadata: metadata,
                 parquet_schema: predicate.schema().as_ref(),
@@ -297,7 +297,7 @@ mod tests {
 
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
+            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
             vec![1]
         );
     }
@@ -331,7 +331,7 @@ mod tests {
         // missing statistics for first row group mean that the result from the predicate expression
         // is null / undefined so the first row group can't be filtered out
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
+            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
             vec![0, 1]
         );
     }
@@ -372,7 +372,7 @@ mod tests {
         // the first row group is still filtered out because the predicate expression can be partially evaluated
         // when conditions are joined using AND
         assert_eq!(
-            prune_row_groups(groups, None, Some(pruning_predicate), &metrics),
+            prune_row_groups(groups, None, Some(&pruning_predicate), &metrics),
             vec![1]
         );
 
@@ -384,7 +384,7 @@ mod tests {
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
         assert_eq!(
-            prune_row_groups(groups, None, Some(pruning_predicate), &metrics),
+            prune_row_groups(groups, None, Some(&pruning_predicate), &metrics),
             vec![0, 1]
         );
     }
@@ -426,7 +426,7 @@ mod tests {
         let metrics = parquet_file_metrics();
         // First row group was filtered out because it contains no null value on "c2".
         assert_eq!(
-            prune_row_groups(&groups, None, Some(pruning_predicate), &metrics),
+            prune_row_groups(&groups, None, Some(&pruning_predicate), &metrics),
             vec![1]
         );
     }
@@ -451,7 +451,7 @@ mod tests {
         // bool = NULL always evaluates to NULL (and thus will not
         // pass predicates. Ideally these should both be false
         assert_eq!(
-            prune_row_groups(&groups, None, Some(pruning_predicate), &metrics),
+            prune_row_groups(&groups, None, Some(&pruning_predicate), &metrics),
             vec![1]
         );
     }
@@ -500,7 +500,7 @@ mod tests {
         );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
+            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
             vec![0]
         );
 
@@ -556,7 +556,7 @@ mod tests {
             prune_row_groups(
                 &[rgm1, rgm2, rgm3],
                 None,
-                Some(pruning_predicate),
+                Some(&pruning_predicate),
                 &metrics
             ),
             vec![0, 1]
@@ -597,7 +597,7 @@ mod tests {
         );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
+            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
             vec![1]
         );
 
@@ -656,7 +656,7 @@ mod tests {
         );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(pruning_predicate), &metrics),
+            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
             vec![1]
         );
 

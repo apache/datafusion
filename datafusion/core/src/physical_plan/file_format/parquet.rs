@@ -76,9 +76,9 @@ pub struct ParquetExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for row filtering during parquet scan
-    predicate: Option<Expr>,
+    predicate: Option<Arc<Expr>>,
     /// Optional predicate for pruning row groups
-    pruning_predicate: Option<PruningPredicate>,
+    pruning_predicate: Option<Arc<PruningPredicate>>,
     /// Optional hint for the size of the parquet metadata
     metadata_size_hint: Option<usize>,
     /// Optional user defined parquet file reader factory
@@ -106,7 +106,7 @@ impl ParquetExec {
                     predicate_expr,
                     base_config.file_schema.clone(),
                 ) {
-                    Ok(pruning_predicate) => Some(pruning_predicate),
+                    Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
                     Err(e) => {
                         debug!("Could not create pruning predicate for: {}", e);
                         predicate_creation_errors.add(1);
@@ -122,6 +122,9 @@ impl ParquetExec {
                     Some(pruning_predicate)
                 }
             });
+
+        // Save original predicate
+        let predicate = predicate.map(Arc::new);
 
         let (projected_schema, projected_statistics) = base_config.project();
 
@@ -143,7 +146,7 @@ impl ParquetExec {
     }
 
     /// Optional reference to this parquet scan's pruning predicate
-    pub fn pruning_predicate(&self) -> Option<&PruningPredicate> {
+    pub fn pruning_predicate(&self) -> Option<&Arc<PruningPredicate>> {
         self.pruning_predicate.as_ref()
     }
 
@@ -376,8 +379,8 @@ struct ParquetOpener {
     partition_index: usize,
     projection: Arc<[usize]>,
     batch_size: usize,
-    predicate: Option<Expr>,
-    pruning_predicate: Option<PruningPredicate>,
+    predicate: Option<Arc<Expr>>,
+    pruning_predicate: Option<Arc<PruningPredicate>>,
     table_schema: SchemaRef,
     metadata_size_hint: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
@@ -435,7 +438,7 @@ impl FileOpener for ParquetOpener {
             // Filter pushdown: evaluate predicates during scan
             if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
                 let row_filter = row_filter::build_row_filter(
-                    predicate.clone(),
+                    predicate.as_ref(),
                     builder.schema().as_ref(),
                     table_schema.as_ref(),
                     builder.metadata(),
@@ -463,7 +466,7 @@ impl FileOpener for ParquetOpener {
             let row_groups = row_groups::prune_row_groups(
                 file_metadata.row_groups(),
                 file_range,
-                pruning_predicate.clone(),
+                pruning_predicate.as_ref().map(|p| p.as_ref()),
                 &file_metrics,
             );
 
@@ -473,7 +476,7 @@ impl FileOpener for ParquetOpener {
             if let Some(row_selection) = (enable_page_index && !row_groups.is_empty())
                 .then(|| {
                     page_filter::build_page_filter(
-                        pruning_predicate.as_ref(),
+                        pruning_predicate.as_ref().map(|p| p.as_ref()),
                         builder.schema().clone(),
                         &row_groups,
                         file_metadata.as_ref(),
@@ -1615,7 +1618,7 @@ mod tests {
 
         // but does still has a pushdown down predicate
         let predicate = rt.parquet_exec.predicate.as_ref();
-        assert_eq!(predicate, Some(&filter));
+        assert_eq!(predicate.unwrap().as_ref(), &filter);
     }
 
     /// returns the sum of all the metrics with the specified name
