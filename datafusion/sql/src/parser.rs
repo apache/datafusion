@@ -20,7 +20,10 @@
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
 use sqlparser::{
-    ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
+    ast::{
+        ColumnDef, ColumnOptionDef, ObjectName, Statement as SQLStatement,
+        TableConstraint,
+    },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
@@ -84,7 +87,7 @@ impl fmt::Display for CreateExternalTable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescribeTable {
     /// Table name
-    pub table_name: String,
+    pub table_name: ObjectName,
 }
 
 /// DataFusion Statement representations.
@@ -200,11 +203,7 @@ impl<'a> DFParser<'a> {
 
     pub fn parse_describe(&mut self) -> Result<Statement, ParserError> {
         let table_name = self.parser.parse_object_name()?;
-
-        let des = DescribeTable {
-            table_name: table_name.to_string(),
-        };
-        Ok(Statement::DescribeTable(des))
+        Ok(Statement::DescribeTable(DescribeTable { table_name }))
     }
 
     /// Parse a SQL CREATE statement
