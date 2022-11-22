@@ -72,4 +72,8 @@ impl PhysicalOptimizerRule for CoalesceBatches {
     fn name(&self) -> &str {
         "coalesce_batches"
     }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
 }
