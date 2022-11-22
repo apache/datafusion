@@ -18,6 +18,7 @@
 pub mod common_subexpr_eliminate;
 pub mod decorrelate_where_exists;
 pub mod decorrelate_where_in;
+pub mod eliminate_cross_join;
 pub mod eliminate_filter;
 pub mod eliminate_limit;
 pub mod filter_null_join_keys;
@@ -27,7 +28,6 @@ pub mod limit_push_down;
 pub mod optimizer;
 pub mod projection_push_down;
 pub mod propagate_empty_relation;
-pub mod reduce_cross_join;
 pub mod reduce_outer_join;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
