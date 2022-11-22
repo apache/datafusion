@@ -18,7 +18,6 @@
 //! Utilizing exact statistics from sources to avoid scanning data
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 
 use crate::execution::context::SessionConfig;
@@ -85,7 +84,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 // input can be entirely removed
                 Ok(Arc::new(ProjectionExec::try_new(
                     projections,
-                    Arc::new(EmptyExec::new(true, Arc::new(Schema::empty()))),
+                    Arc::new(EmptyExec::new(true, plan.schema())),
                 )?))
             } else {
                 optimize_children(self, plan, config)
@@ -97,6 +96,11 @@ impl PhysicalOptimizerRule for AggregateStatistics {
 
     fn name(&self) -> &str {
         "aggregate_statistics"
+    }
+
+    /// This rule will change the nullable properties of the schema, disable the schema check.
+    fn schema_check(&self) -> bool {
+        false
     }
 }
 
