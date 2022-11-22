@@ -386,6 +386,27 @@ async fn prune_int32_lt() {
 }
 
 #[tokio::test]
+async fn prune_int32_gt() {
+    test_prune(
+        Scenario::Int32,
+        "SELECT * FROM t where i > 8",
+        Some(0),
+        Some(15),
+        1,
+    )
+    .await;
+
+    test_prune(
+        Scenario::Int32,
+        "SELECT * FROM t where -i < -8",
+        Some(0),
+        Some(15),
+        1,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn prune_int32_eq() {
     test_prune(
         Scenario::Int32,
@@ -640,6 +661,14 @@ async fn prune_decimal_eq() {
         "SELECT * FROM t where decimal_col = 4.00",
         Some(0),
         Some(5),
+        2,
+    )
+    .await;
+    test_prune(
+        Scenario::DecimalLargePrecision,
+        "SELECT * FROM t where decimal_col = 30.00",
+        Some(0),
+        Some(10),
         2,
     )
     .await;
