@@ -3201,9 +3201,8 @@ mod tests {
         quick_test(
             "SELECT CAST (a AS FLOAT) FROM (SELECT 1 AS a)",
             "Projection: CAST(a AS Float32)\
-             \n  Projection: a\
-             \n    Projection: Int64(1) AS a\
-             \n      EmptyRelation",
+            \n  Projection: Int64(1) AS a\
+            \n    EmptyRelation",
         );
     }
 
@@ -3403,11 +3402,11 @@ mod tests {
                      ) AS a
                    ) AS b";
         let expected = "Projection: b.fn2, b.last_name\
-                        \n  Projection: fn2, a.last_name, a.birth_date, alias=b\
-                        \n    Projection: a.fn1 AS fn2, a.last_name, a.birth_date\
-                        \n      Projection: fn1, person.last_name, person.birth_date, person.age, alias=a\
-                        \n        Projection: person.first_name AS fn1, person.last_name, person.birth_date, person.age\
-                        \n          TableScan: person";
+        \n  SubqueryAlias: b\
+        \n    Projection: a.fn1 AS fn2, a.last_name, a.birth_date\
+        \n      SubqueryAlias: a\
+        \n        Projection: person.first_name AS fn1, person.last_name, person.birth_date, person.age\
+        \n          TableScan: person";
         quick_test(sql, expected);
     }
 
@@ -3422,11 +3421,11 @@ mod tests {
                    WHERE fn1 = 'X' AND age < 30";
 
         let expected = "Projection: a.fn1, a.age\
-                        \n  Filter: a.fn1 = Utf8(\"X\") AND a.age < Int64(30)\
-                        \n    Projection: fn1, person.age, alias=a\
-                        \n      Projection: person.first_name AS fn1, person.age\
-                        \n        Filter: person.age > Int64(20)\
-                        \n          TableScan: person";
+        \n  Filter: a.fn1 = Utf8(\"X\") AND a.age < Int64(30)\
+        \n    SubqueryAlias: a\
+        \n      Projection: person.first_name AS fn1, person.age\
+        \n        Filter: person.age > Int64(20)\
+        \n          TableScan: person";
 
         quick_test(sql, expected);
     }
@@ -3436,9 +3435,10 @@ mod tests {
         let sql = "SELECT a, b, c
                    FROM lineitem l (a, b, c)";
         let expected = "Projection: l.a, l.b, l.c\
-                        \n  Projection: l.l_item_id AS a, l.l_description AS b, l.price AS c, alias=l\
-                        \n    SubqueryAlias: l\
-                        \n      TableScan: lineitem";
+        \n  SubqueryAlias: l\
+        \n    Projection: l.l_item_id AS a, l.l_description AS b, l.price AS c\
+        \n      SubqueryAlias: l\
+        \n        TableScan: lineitem";
         quick_test(sql, expected);
     }
 
@@ -3796,10 +3796,10 @@ mod tests {
         quick_test(
             "SELECT * FROM (SELECT first_name, last_name FROM person) AS a GROUP BY first_name, last_name",
             "Projection: a.first_name, a.last_name\
-             \n  Aggregate: groupBy=[[a.first_name, a.last_name]], aggr=[[]]\
-             \n    Projection: person.first_name, person.last_name, alias=a\
-             \n      Projection: person.first_name, person.last_name\
-             \n        TableScan: person",
+            \n  Aggregate: groupBy=[[a.first_name, a.last_name]], aggr=[[]]\
+            \n    SubqueryAlias: a\
+            \n      Projection: person.first_name, person.last_name\
+            \n        TableScan: person",
         );
     }
 
@@ -3865,9 +3865,10 @@ mod tests {
         quick_test(
             "SELECT col1, col2 FROM (VALUES (TIMESTAMP '2021-06-10 17:01:00Z', DATE '2004-04-09')) as t (col1, col2)",
             "Projection: t.col1, t.col2\
-            \n  Projection: t.column1 AS col1, t.column2 AS col2, alias=t\
-            \n    Projection: column1, column2, alias=t\
-            \n      Values: (CAST(Utf8(\"2021-06-10 17:01:00Z\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2004-04-09\") AS Date32))",
+            \n  SubqueryAlias: t\
+            \n    Projection: t.column1 AS col1, t.column2 AS col2\
+            \n      SubqueryAlias: t\
+            \n        Values: (CAST(Utf8(\"2021-06-10 17:01:00Z\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2004-04-09\") AS Date32))",
         );
     }
 
@@ -4703,17 +4704,17 @@ mod tests {
     fn sorted_union_with_different_types_and_group_by() {
         let sql = "SELECT a FROM (select 1 a) x GROUP BY 1 UNION ALL (SELECT a FROM (select 1.1 a) x GROUP BY 1) ORDER BY 1";
         let expected = "Sort: a ASC NULLS LAST\
-            \n  Union\
-            \n    Projection: CAST(x.a AS Float64) AS a\
-            \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n        Projection: a, alias=x\
-            \n          Projection: Int64(1) AS a\
-            \n            EmptyRelation\
-            \n    Projection: x.a\
-            \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n        Projection: a, alias=x\
-            \n          Projection: Float64(1.1) AS a\
-            \n            EmptyRelation";
+        \n  Union\
+        \n    Projection: CAST(x.a AS Float64) AS a\
+        \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
+        \n        SubqueryAlias: x\
+        \n          Projection: Int64(1) AS a\
+        \n            EmptyRelation\
+        \n    Projection: x.a\
+        \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
+        \n        SubqueryAlias: x\
+        \n          Projection: Float64(1.1) AS a\
+        \n            EmptyRelation";
         quick_test(sql, expected);
     }
 
@@ -4721,16 +4722,16 @@ mod tests {
     fn union_with_binary_expr_and_cast() {
         let sql = "SELECT cast(0.0 + a as integer) FROM (select 1 a) x GROUP BY 1 UNION ALL (SELECT 2.1 + a FROM (select 1 a) x GROUP BY 1)";
         let expected = "Union\
-            \n  Projection: CAST(Float64(0) + x.a AS Float64) AS Float64(0) + x.a\
-            \n    Aggregate: groupBy=[[CAST(Float64(0) + x.a AS Int32)]], aggr=[[]]\
-            \n      Projection: a, alias=x\
-            \n        Projection: Int64(1) AS a\
-            \n          EmptyRelation\
-            \n  Projection: Float64(2.1) + x.a\
-            \n    Aggregate: groupBy=[[Float64(2.1) + x.a]], aggr=[[]]\
-            \n      Projection: a, alias=x\
-            \n        Projection: Int64(1) AS a\
-            \n          EmptyRelation";
+        \n  Projection: CAST(Float64(0) + x.a AS Float64) AS Float64(0) + x.a\
+        \n    Aggregate: groupBy=[[CAST(Float64(0) + x.a AS Int32)]], aggr=[[]]\
+        \n      SubqueryAlias: x\
+        \n        Projection: Int64(1) AS a\
+        \n          EmptyRelation\
+        \n  Projection: Float64(2.1) + x.a\
+        \n    Aggregate: groupBy=[[Float64(2.1) + x.a]], aggr=[[]]\
+        \n      SubqueryAlias: x\
+        \n        Projection: Int64(1) AS a\
+        \n          EmptyRelation";
         quick_test(sql, expected);
     }
 
@@ -4738,16 +4739,16 @@ mod tests {
     fn union_with_aliases() {
         let sql = "SELECT a as a1 FROM (select 1 a) x GROUP BY 1 UNION ALL (SELECT a as a1 FROM (select 1.1 a) x GROUP BY 1)";
         let expected = "Union\
-            \n  Projection: CAST(x.a AS Float64) AS a1\
-            \n    Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n      Projection: a, alias=x\
-            \n        Projection: Int64(1) AS a\
-            \n          EmptyRelation\
-            \n  Projection: x.a AS a1\
-            \n    Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n      Projection: a, alias=x\
-            \n        Projection: Float64(1.1) AS a\
-            \n          EmptyRelation";
+        \n  Projection: CAST(x.a AS Float64) AS a1\
+        \n    Aggregate: groupBy=[[x.a]], aggr=[[]]\
+        \n      SubqueryAlias: x\
+        \n        Projection: Int64(1) AS a\
+        \n          EmptyRelation\
+        \n  Projection: x.a AS a1\
+        \n    Aggregate: groupBy=[[x.a]], aggr=[[]]\
+        \n      SubqueryAlias: x\
+        \n        Projection: Float64(1.1) AS a\
+        \n          EmptyRelation";
         quick_test(sql, expected);
     }
 
@@ -5495,8 +5496,9 @@ mod tests {
         \n    Subquery:\
         \n      Projection: cte.id, cte.first_name, cte.last_name, cte.age, cte.state, cte.salary, cte.birth_date, cte.😀\
         \n        Filter: cte.id = person.id\
-        \n          Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, alias=cte\
-        \n            TableScan: person\
+        \n          SubqueryAlias: cte\
+        \n            Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀\
+        \n              TableScan: person\
         \n    TableScan: person";
 
         quick_test(sql, expected)
@@ -5511,8 +5513,9 @@ mod tests {
         SELECT * FROM numbers;";
 
         let expected = "Projection: numbers.a, numbers.b, numbers.c\
-        \n  Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c, alias=numbers\
-        \n    EmptyRelation";
+        \n  SubqueryAlias: numbers\
+        \n    Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c\
+        \n      EmptyRelation";
 
         quick_test(sql, expected)
     }
@@ -5526,9 +5529,11 @@ mod tests {
         SELECT * FROM numbers;";
 
         let expected = "Projection: numbers.a, numbers.b, numbers.c\
-        \n  Projection: numbers.Int64(1) AS a, numbers.Int64(2) AS b, numbers.Int64(3) AS c, alias=numbers\
-        \n    Projection: Int64(1), Int64(2), Int64(3), alias=numbers\
-        \n      EmptyRelation";
+        \n  SubqueryAlias: numbers\
+        \n    Projection: numbers.Int64(1) AS a, numbers.Int64(2) AS b, numbers.Int64(3) AS c\
+        \n      SubqueryAlias: numbers\
+        \n        Projection: Int64(1), Int64(2), Int64(3)\
+        \n          EmptyRelation";
 
         quick_test(sql, expected)
     }
@@ -5543,9 +5548,11 @@ mod tests {
         SELECT * FROM numbers;";
 
         let expected = "Projection: numbers.a, numbers.b, numbers.c\
-        \n  Projection: numbers.x AS a, numbers.y AS b, numbers.z AS c, alias=numbers\
-        \n    Projection: Int64(1) AS x, Int64(2) AS y, Int64(3) AS z, alias=numbers\
-        \n      EmptyRelation";
+        \n  SubqueryAlias: numbers\
+        \n    Projection: numbers.x AS a, numbers.y AS b, numbers.z AS c\
+        \n      SubqueryAlias: numbers\
+        \n        Projection: Int64(1) AS x, Int64(2) AS y, Int64(3) AS z\
+        \n          EmptyRelation";
 
         quick_test(sql, expected)
     }

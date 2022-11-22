@@ -258,14 +258,15 @@ mod tests {
             .build()?;
         debug!("plan to optimize:\n{}", plan.display_indent());
 
-        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  LeftSemi Join: customer.c_custkey = __sq_2.o_custkey [c_custkey:Int64, c_name:Utf8]
-    LeftSemi Join: customer.c_custkey = __sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-      TableScan: customer [c_custkey:Int64, c_name:Utf8]
-      Projection: orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-    Projection: orders.o_custkey AS o_custkey, alias=__sq_2 [o_custkey:Int64]
-      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+        \n  LeftSemi Join: customer.c_custkey = __sq_2.o_custkey [c_custkey:Int64, c_name:Utf8]\
+        \n    LeftSemi Join: customer.c_custkey = __sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]\
+        \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+        \n      SubqueryAlias: __sq_1 [o_custkey:Int64]\
+        \n        Projection: orders.o_custkey AS o_custkey [o_custkey:Int64]\
+        \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+        \n    SubqueryAlias: __sq_2 [o_custkey:Int64]\n      Projection: orders.o_custkey AS o_custkey [o_custkey:Int64]\
+        \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
     }
@@ -296,14 +297,16 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  LeftSemi Join: customer.c_custkey = __sq_2.o_custkey [c_custkey:Int64, c_name:Utf8]
-    TableScan: customer [c_custkey:Int64, c_name:Utf8]
-    Projection: orders.o_custkey AS o_custkey, alias=__sq_2 [o_custkey:Int64]
-      LeftSemi Join: orders.o_orderkey = __sq_1.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-        Projection: lineitem.l_orderkey AS l_orderkey, alias=__sq_1 [l_orderkey:Int64]
-          TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]"#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+        \n  LeftSemi Join: customer.c_custkey = __sq_2.o_custkey [c_custkey:Int64, c_name:Utf8]\
+        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+        \n    SubqueryAlias: __sq_2 [o_custkey:Int64]\
+        \n      Projection: orders.o_custkey AS o_custkey [o_custkey:Int64]\
+        \n        LeftSemi Join: orders.o_orderkey = __sq_1.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+        \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+        \n          SubqueryAlias: __sq_1 [l_orderkey:Int64]\
+        \n            Projection: lineitem.l_orderkey AS l_orderkey [l_orderkey:Int64]\
+        \n              TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]";
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -328,12 +331,13 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  LeftSemi Join: customer.c_custkey = __sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-    TableScan: customer [c_custkey:Int64, c_name:Utf8]
-    Projection: orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
-      Filter: orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+        \n  LeftSemi Join: customer.c_custkey = __sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]\
+        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+        \n    SubqueryAlias: __sq_1 [o_custkey:Int64]\
+        \n      Projection: orders.o_custkey AS o_custkey [o_custkey:Int64]\
+        \n        Filter: orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+        \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -355,12 +359,13 @@ mod tests {
             .build()?;
 
         // Query will fail, but we can still transform the plan
-        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  LeftSemi Join: customer.c_custkey = __sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-    TableScan: customer [c_custkey:Int64, c_name:Utf8]
-    Projection: orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
-      Filter: customer.c_custkey = customer.c_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+        \n  LeftSemi Join: customer.c_custkey = __sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]\
+        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+        \n    SubqueryAlias: __sq_1 [o_custkey:Int64]\
+        \n      Projection: orders.o_custkey AS o_custkey [o_custkey:Int64]\
+        \n        Filter: customer.c_custkey = customer.c_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+        \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -381,12 +386,13 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  LeftSemi Join: customer.c_custkey = __sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-    TableScan: customer [c_custkey:Int64, c_name:Utf8]
-    Projection: orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
-      Filter: orders.o_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+        \n  LeftSemi Join: customer.c_custkey = __sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]\
+        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+        \n    SubqueryAlias: __sq_1 [o_custkey:Int64]\
+        \n      Projection: orders.o_custkey AS o_custkey [o_custkey:Int64]\
+        \n        Filter: orders.o_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+        \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -407,11 +413,12 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  LeftSemi Join: customer.c_custkey = __sq_1.o_custkey Filter: customer.c_custkey != orders.o_custkey [c_custkey:Int64, c_name:Utf8]
-    TableScan: customer [c_custkey:Int64, c_name:Utf8]
-    Projection: orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
-      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+        \n  LeftSemi Join: customer.c_custkey = __sq_1.o_custkey Filter: customer.c_custkey != orders.o_custkey [c_custkey:Int64, c_name:Utf8]\
+        \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+        \n    SubqueryAlias: __sq_1 [o_custkey:Int64]\
+        \n      Projection: orders.o_custkey AS o_custkey [o_custkey:Int64]\
+        \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -583,12 +590,13 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = r#"Projection: customer.c_custkey [c_custkey:Int64]
-  Filter: customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]
-    LeftSemi Join: customer.c_custkey = __sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
-      TableScan: customer [c_custkey:Int64, c_name:Utf8]
-      Projection: orders.o_custkey AS o_custkey, alias=__sq_1 [o_custkey:Int64]
-        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]"#;
+        let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
+        \n  Filter: customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8]\
+        \n    LeftSemi Join: customer.c_custkey = __sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]\
+        \n      TableScan: customer [c_custkey:Int64, c_name:Utf8]\
+        \n      SubqueryAlias: __sq_1 [o_custkey:Int64]\
+        \n        Projection: orders.o_custkey AS o_custkey [o_custkey:Int64]\
+        \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -640,11 +648,12 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        let expected = r#"Projection: test.b [b:UInt32]
-  LeftSemi Join: test.c = __sq_1.c, test.a = __sq_1.a [a:UInt32, b:UInt32, c:UInt32]
-    TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-    Projection: sq.c AS c, sq.a AS a, alias=__sq_1 [c:UInt32, a:UInt32]
-      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
+        let expected = "Projection: test.b [b:UInt32]\
+        \n  LeftSemi Join: test.c = __sq_1.c, test.a = __sq_1.a [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n    SubqueryAlias: __sq_1 [c:UInt32, a:UInt32]\
+        \n      Projection: sq.c AS c, sq.a AS a [c:UInt32, a:UInt32]\
+        \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -659,11 +668,12 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        let expected = r#"Projection: test.b [b:UInt32]
-  LeftSemi Join: test.c = __sq_1.c [a:UInt32, b:UInt32, c:UInt32]
-    TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-    Projection: sq.c AS c, alias=__sq_1 [c:UInt32]
-      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
+        let expected = "Projection: test.b [b:UInt32]\
+        \n  LeftSemi Join: test.c = __sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n    SubqueryAlias: __sq_1 [c:UInt32]\
+        \n      Projection: sq.c AS c [c:UInt32]\
+        \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
@@ -678,11 +688,12 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        let expected = r#"Projection: test.b [b:UInt32]
-  LeftAnti Join: test.c = __sq_1.c [a:UInt32, b:UInt32, c:UInt32]
-    TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-    Projection: sq.c AS c, alias=__sq_1 [c:UInt32]
-      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]"#;
+        let expected = "Projection: test.b [b:UInt32]\
+        \n  LeftAnti Join: test.c = __sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n    SubqueryAlias: __sq_1 [c:UInt32]\
+        \n      Projection: sq.c AS c [c:UInt32]\
+        \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
         Ok(())
