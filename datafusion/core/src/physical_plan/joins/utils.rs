@@ -123,11 +123,11 @@ pub fn adjust_right_output_partitioning(
                 .into_iter()
                 .map(|expr| {
                     expr.transform_down(&|e| match e.as_any().downcast_ref::<Column>() {
-                        Some(col) => Some(Arc::new(Column::new(
+                        Some(col) => Ok(Some(Arc::new(Column::new(
                             col.name(),
                             left_columns_len + col.index(),
-                        ))),
-                        None => None,
+                        )))),
+                        None => Ok(None),
                     })
                     .unwrap()
                 })

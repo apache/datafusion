@@ -874,11 +874,11 @@ mod tests {
                 &|e| match e.as_any().downcast_ref::<crate::expressions::Literal>() {
                     Some(lit_value) => match lit_value.value() {
                         ScalarValue::Utf8(Some(str_value)) => {
-                            Some(lit(str_value.to_uppercase()))
+                            Ok(Some(lit(str_value.to_uppercase())))
                         }
-                        _ => None,
+                        _ => Ok(None),
                     },
-                    _ => None,
+                    _ => Ok(None),
                 },
             )
             .unwrap();
@@ -891,11 +891,11 @@ mod tests {
             {
                 Some(lit_value) => match lit_value.value() {
                     ScalarValue::Utf8(Some(str_value)) => {
-                        Some(lit(str_value.to_uppercase()))
+                        Ok(Some(lit(str_value.to_uppercase())))
                     }
-                    _ => None,
+                    _ => Ok(None),
                 },
-                _ => None,
+                _ => Ok(None),
             })
             .unwrap();
 
