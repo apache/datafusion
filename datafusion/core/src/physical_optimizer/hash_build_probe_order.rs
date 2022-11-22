@@ -211,6 +211,10 @@ impl PhysicalOptimizerRule for HashBuildProbeOrder {
     fn name(&self) -> &str {
         "hash_build_probe_order"
     }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

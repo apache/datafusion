@@ -101,6 +101,10 @@ impl PhysicalOptimizerRule for BasicEnforcement {
     fn name(&self) -> &str {
         "BasicEnforcement"
     }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
 }
 
 /// When the physical planner creates the Joins, the ordering of join keys is from the original query.

@@ -1679,7 +1679,16 @@ impl DefaultPhysicalPlanner {
 
         let mut new_plan = plan;
         for optimizer in optimizers {
+            let before_schema = new_plan.schema();
             new_plan = optimizer.optimize(new_plan, &session_state.config)?;
+            if optimizer.schema_check() && new_plan.schema() != before_schema {
+                return Err(DataFusionError::Internal(format!(
+                        "PhysicalOptimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
+                        optimizer.name(),
+                        before_schema,
+                        new_plan.schema()
+                    )));
+            }
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
         debug!(
