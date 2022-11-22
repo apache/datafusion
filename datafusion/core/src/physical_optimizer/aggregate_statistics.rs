@@ -79,17 +79,13 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 }
             }
 
-            println!("before schema {}", plan.schema());
-
             // TODO fullres: use statistics even if not all aggr_expr could be resolved
             if projections.len() == partial_agg_exec.aggr_expr().len() {
                 // input can be entirely removed
-                let tt = ProjectionExec::try_new(
+                Ok(Arc::new(ProjectionExec::try_new(
                     projections,
                     Arc::new(EmptyExec::new(true, plan.schema())),
-                )?;
-                println!("after schema {}", tt.schema());
-                Ok(Arc::new(tt))
+                )?))
             } else {
                 optimize_children(self, plan, config)
             }
