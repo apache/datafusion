@@ -153,31 +153,32 @@ impl SortMergeJoinExec {
                 .map(|sort_exprs| sort_exprs.to_vec()),
             JoinType::Right => {
                 let left_columns_len = left.schema().fields.len();
-                right.output_ordering().map(|sort_exprs| {
-                    sort_exprs
-                        .iter()
-                        .map(|e| {
-                            let new_expr = e
-                                .expr
-                                .clone()
-                                .transform_down(&|e| match e
-                                    .as_any()
-                                    .downcast_ref::<Column>()
-                                {
-                                    Some(col) => Some(Arc::new(Column::new(
-                                        col.name(),
-                                        left_columns_len + col.index(),
-                                    ))),
-                                    None => None,
+                right
+                    .output_ordering()
+                    .map(|sort_exprs| {
+                        let new_sort_exprs: Result<Vec<PhysicalSortExpr>> = sort_exprs
+                            .iter()
+                            .map(|e| {
+                                let new_expr =
+                                    e.expr.clone().transform_down(&|e| match e
+                                        .as_any()
+                                        .downcast_ref::<Column>(
+                                    ) {
+                                        Some(col) => Ok(Some(Arc::new(Column::new(
+                                            col.name(),
+                                            left_columns_len + col.index(),
+                                        )))),
+                                        None => Ok(None),
+                                    });
+                                Ok(PhysicalSortExpr {
+                                    expr: new_expr?,
+                                    options: e.options,
                                 })
-                                .unwrap();
-                            PhysicalSortExpr {
-                                expr: new_expr,
-                                options: e.options,
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                })
+                            })
+                            .collect();
+                        new_sort_exprs
+                    })
+                    .map_or(Ok(None), |v| v.map(Some))?
             }
             JoinType::Full => None,
         };

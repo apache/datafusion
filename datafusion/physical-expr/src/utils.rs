@@ -141,7 +141,7 @@ pub fn normalize_out_expr_with_alias_schema(
                     }
                     None => None,
                 };
-            normalized_form
+            Ok(normalized_form)
         })
         .unwrap_or(expr)
 }
@@ -161,9 +161,9 @@ pub fn normalize_expr_with_equivalence_properties(
                         break;
                     }
                 }
-                normalized
+                Ok(normalized)
             }
-            None => None,
+            None => Ok(None),
         })
         .unwrap_or(expr)
 }
