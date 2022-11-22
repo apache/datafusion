@@ -26,9 +26,9 @@ use datafusion::{
 };
 use datafusion_expr::Expr;
 
-use super::*;
+use rstest::rstest;
 
-use test_case::test_case;
+use super::*;
 
 #[tokio::test]
 async fn information_schema_tables_not_exist_by_default() {
@@ -242,20 +242,12 @@ async fn information_schema_show_tables_no_information_schema() {
     assert_eq!(err.to_string(), "Error during planning: SHOW TABLES is not supported unless information_schema is enabled");
 }
 
-#[test_case(
-    "datafusion.public.some_table";
-    "Fully qualified name")
-]
-#[test_case(
-    "public.some_table";
-    "Schema specified")
-]
-#[test_case(
-    "some_table";
-    "Bare table name")
-]
+#[rstest]
+#[case("datafusion.public.some_table")]
+#[case("public.some_table")]
+#[case("some_table")]
 #[tokio::test]
-async fn information_schema_describe_table(table_name: &str) {
+async fn information_schema_describe_table(#[case] table_name: &str) {
     let ctx =
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
