@@ -260,7 +260,7 @@ fn timestamp_nano_ts_utc_predicates() {
 
 #[test]
 fn propagate_empty_relation() {
-    let sql = "SELECT col_int32 FROM test JOIN ( SELECT col_int32 FROM test WHERE false ) AS ta1 ON test.col_int32 = ta1.col_int32;";
+    let sql = "SELECT test.col_int32 FROM test JOIN ( SELECT col_int32 FROM test WHERE false ) AS ta1 ON test.col_int32 = ta1.col_int32;";
     let plan = test_sql(sql).unwrap();
     // when children exist EmptyRelation, it will bottom-up propagate.
     let expected = "EmptyRelation";
