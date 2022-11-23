@@ -24,7 +24,7 @@ use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
-use crate::cast::{as_decimal128_array, as_struct_array};
+use crate::cast::{as_decimal128_array, as_list_array, as_struct_array};
 use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
 use arrow::{
@@ -89,8 +89,14 @@ pub enum ScalarValue {
     Date32(Option<i32>),
     /// Date stored as a signed 64bit int milliseconds since UNIX epoch 1970-01-01
     Date64(Option<i64>),
+    /// Time stored as a signed 32bit int as seconds since midnight
+    Time32Second(Option<i32>),
+    /// Time stored as a signed 32bit int as milliseconds since midnight
+    Time32Millisecond(Option<i32>),
+    /// Time stored as a signed 64bit int as microseconds since midnight
+    Time64Microsecond(Option<i64>),
     /// Time stored as a signed 64bit int as nanoseconds since midnight
-    Time64(Option<i64>),
+    Time64Nanosecond(Option<i64>),
     /// Timestamp Second
     TimestampSecond(Option<i64>, Option<String>),
     /// Timestamp Milliseconds
@@ -170,8 +176,14 @@ impl PartialEq for ScalarValue {
             (Date32(_), _) => false,
             (Date64(v1), Date64(v2)) => v1.eq(v2),
             (Date64(_), _) => false,
-            (Time64(v1), Time64(v2)) => v1.eq(v2),
-            (Time64(_), _) => false,
+            (Time32Second(v1), Time32Second(v2)) => v1.eq(v2),
+            (Time32Second(_), _) => false,
+            (Time32Millisecond(v1), Time32Millisecond(v2)) => v1.eq(v2),
+            (Time32Millisecond(_), _) => false,
+            (Time64Microsecond(v1), Time64Microsecond(v2)) => v1.eq(v2),
+            (Time64Microsecond(_), _) => false,
+            (Time64Nanosecond(v1), Time64Nanosecond(v2)) => v1.eq(v2),
+            (Time64Nanosecond(_), _) => false,
             (TimestampSecond(v1, _), TimestampSecond(v2, _)) => v1.eq(v2),
             (TimestampSecond(_, _), _) => false,
             (TimestampMillisecond(v1, _), TimestampMillisecond(v2, _)) => v1.eq(v2),
@@ -263,8 +275,14 @@ impl PartialOrd for ScalarValue {
             (Date32(_), _) => None,
             (Date64(v1), Date64(v2)) => v1.partial_cmp(v2),
             (Date64(_), _) => None,
-            (Time64(v1), Time64(v2)) => v1.partial_cmp(v2),
-            (Time64(_), _) => None,
+            (Time32Second(v1), Time32Second(v2)) => v1.partial_cmp(v2),
+            (Time32Second(_), _) => None,
+            (Time32Millisecond(v1), Time32Millisecond(v2)) => v1.partial_cmp(v2),
+            (Time32Millisecond(_), _) => None,
+            (Time64Microsecond(v1), Time64Microsecond(v2)) => v1.partial_cmp(v2),
+            (Time64Microsecond(_), _) => None,
+            (Time64Nanosecond(v1), Time64Nanosecond(v2)) => v1.partial_cmp(v2),
+            (Time64Nanosecond(_), _) => None,
             (TimestampSecond(v1, _), TimestampSecond(v2, _)) => v1.partial_cmp(v2),
             (TimestampSecond(_, _), _) => None,
             (TimestampMillisecond(v1, _), TimestampMillisecond(v2, _)) => {
@@ -670,7 +688,10 @@ impl std::hash::Hash for ScalarValue {
             }
             Date32(v) => v.hash(state),
             Date64(v) => v.hash(state),
-            Time64(v) => v.hash(state),
+            Time32Second(v) => v.hash(state),
+            Time32Millisecond(v) => v.hash(state),
+            Time64Microsecond(v) => v.hash(state),
+            Time64Nanosecond(v) => v.hash(state),
             TimestampSecond(v, _) => v.hash(state),
             TimestampMillisecond(v, _) => v.hash(state),
             TimestampMicrosecond(v, _) => v.hash(state),
@@ -1036,7 +1057,10 @@ impl ScalarValue {
             ))),
             ScalarValue::Date32(_) => DataType::Date32,
             ScalarValue::Date64(_) => DataType::Date64,
-            ScalarValue::Time64(_) => DataType::Time64(TimeUnit::Nanosecond),
+            ScalarValue::Time32Second(_) => DataType::Time32(TimeUnit::Second),
+            ScalarValue::Time32Millisecond(_) => DataType::Time32(TimeUnit::Millisecond),
+            ScalarValue::Time64Microsecond(_) => DataType::Time64(TimeUnit::Microsecond),
+            ScalarValue::Time64Nanosecond(_) => DataType::Time64(TimeUnit::Nanosecond),
             ScalarValue::IntervalYearMonth(_) => {
                 DataType::Interval(IntervalUnit::YearMonth)
             }
@@ -1120,7 +1144,10 @@ impl ScalarValue {
             ScalarValue::List(v, _) => v.is_none(),
             ScalarValue::Date32(v) => v.is_none(),
             ScalarValue::Date64(v) => v.is_none(),
-            ScalarValue::Time64(v) => v.is_none(),
+            ScalarValue::Time32Second(v) => v.is_none(),
+            ScalarValue::Time32Millisecond(v) => v.is_none(),
+            ScalarValue::Time64Microsecond(v) => v.is_none(),
+            ScalarValue::Time64Nanosecond(v) => v.is_none(),
             ScalarValue::TimestampSecond(v, _) => v.is_none(),
             ScalarValue::TimestampMillisecond(v, _) => v.is_none(),
             ScalarValue::TimestampMicrosecond(v, _) => v.is_none(),
@@ -1380,8 +1407,17 @@ impl ScalarValue {
             DataType::LargeBinary => build_array_string!(LargeBinaryArray, LargeBinary),
             DataType::Date32 => build_array_primitive!(Date32Array, Date32),
             DataType::Date64 => build_array_primitive!(Date64Array, Date64),
+            DataType::Time32(TimeUnit::Second) => {
+                build_array_primitive!(Time32SecondArray, Time32Second)
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                build_array_primitive!(Time32MillisecondArray, Time32Millisecond)
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                build_array_primitive!(Time64MicrosecondArray, Time64Microsecond)
+            }
             DataType::Time64(TimeUnit::Nanosecond) => {
-                build_array_primitive!(Time64NanosecondArray, Time64)
+                build_array_primitive!(Time64NanosecondArray, Time64Nanosecond)
             }
             DataType::Timestamp(TimeUnit::Second, _) => {
                 build_array_primitive_tz!(TimestampSecondArray, TimestampSecond)
@@ -1541,10 +1577,15 @@ impl ScalarValue {
                 Arc::new(array)
             }
             // explicitly enumerate unsupported types so newly added
-            // types must be aknowledged
+            // types must be aknowledged, Time32 and Time64 types are
+            // not supported if the TimeUnit is not valid (Time32 can
+            // only be used with Second and Millisecond, Time64 only
+            // with Microsecond and Nanosecond)
             DataType::Float16
-            | DataType::Time32(_)
-            | DataType::Time64(_)
+            | DataType::Time32(TimeUnit::Microsecond)
+            | DataType::Time32(TimeUnit::Nanosecond)
+            | DataType::Time64(TimeUnit::Second)
+            | DataType::Time64(TimeUnit::Millisecond)
             | DataType::Duration(_)
             | DataType::FixedSizeList(_, _)
             | DataType::Interval(_)
@@ -1600,10 +1641,14 @@ impl ScalarValue {
         let mut valid = BooleanBufferBuilder::new(0);
         let mut flat_len = 0i32;
         for scalar in scalars {
-            if let ScalarValue::List(values, _) = scalar {
+            if let ScalarValue::List(values, field) = scalar {
                 match values {
                     Some(values) => {
-                        let element_array = ScalarValue::iter_to_array(values)?;
+                        let element_array = if !values.is_empty() {
+                            ScalarValue::iter_to_array(values)?
+                        } else {
+                            arrow::array::new_empty_array(field.data_type())
+                        };
 
                         // Add new offset index
                         flat_len += element_array.len() as i32;
@@ -1809,7 +1854,34 @@ impl ScalarValue {
             ScalarValue::Date64(e) => {
                 build_array_from_option!(Date64, Date64Array, e, size)
             }
-            ScalarValue::Time64(e) => {
+            ScalarValue::Time32Second(e) => {
+                build_array_from_option!(
+                    Time32,
+                    TimeUnit::Second,
+                    Time32SecondArray,
+                    e,
+                    size
+                )
+            }
+            ScalarValue::Time32Millisecond(e) => {
+                build_array_from_option!(
+                    Time32,
+                    TimeUnit::Millisecond,
+                    Time32MillisecondArray,
+                    e,
+                    size
+                )
+            }
+            ScalarValue::Time64Microsecond(e) => {
+                build_array_from_option!(
+                    Time64,
+                    TimeUnit::Microsecond,
+                    Time64MicrosecondArray,
+                    e,
+                    size
+                )
+            }
+            ScalarValue::Time64Nanosecond(e) => {
                 build_array_from_option!(
                     Time64,
                     TimeUnit::Nanosecond,
@@ -1929,12 +2001,7 @@ impl ScalarValue {
             DataType::Utf8 => typed_cast!(array, index, StringArray, Utf8),
             DataType::LargeUtf8 => typed_cast!(array, index, LargeStringArray, LargeUtf8),
             DataType::List(nested_type) => {
-                let list_array =
-                    array.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "Failed to downcast ListArray".to_string(),
-                        )
-                    })?;
+                let list_array = as_list_array(array)?;
                 let value = match list_array.is_null(index) {
                     true => None,
                     false => {
@@ -1953,8 +2020,17 @@ impl ScalarValue {
             DataType::Date64 => {
                 typed_cast!(array, index, Date64Array, Date64)
             }
+            DataType::Time32(TimeUnit::Second) => {
+                typed_cast!(array, index, Time32SecondArray, Time32Second)
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                typed_cast!(array, index, Time32MillisecondArray, Time32Millisecond)
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                typed_cast!(array, index, Time64MicrosecondArray, Time64Microsecond)
+            }
             DataType::Time64(TimeUnit::Nanosecond) => {
-                typed_cast!(array, index, Time64NanosecondArray, Time64)
+                typed_cast!(array, index, Time64NanosecondArray, Time64Nanosecond)
             }
             DataType::Timestamp(TimeUnit::Second, tz_opt) => {
                 typed_cast_tz!(
@@ -2159,7 +2235,16 @@ impl ScalarValue {
             ScalarValue::Date64(val) => {
                 eq_array_primitive!(array, index, Date64Array, val)
             }
-            ScalarValue::Time64(val) => {
+            ScalarValue::Time32Second(val) => {
+                eq_array_primitive!(array, index, Time32SecondArray, val)
+            }
+            ScalarValue::Time32Millisecond(val) => {
+                eq_array_primitive!(array, index, Time32MillisecondArray, val)
+            }
+            ScalarValue::Time64Microsecond(val) => {
+                eq_array_primitive!(array, index, Time64MicrosecondArray, val)
+            }
+            ScalarValue::Time64Nanosecond(val) => {
                 eq_array_primitive!(array, index, Time64NanosecondArray, val)
             }
             ScalarValue::TimestampSecond(val, _) => {
@@ -2291,14 +2376,16 @@ macro_rules! impl_try_from {
 impl_try_from!(Int8, i8);
 impl_try_from!(Int16, i16);
 
-// special implementation for i32 because of Date32
+// special implementation for i32 because of Date32 and Time32
 impl TryFrom<ScalarValue> for i32 {
     type Error = DataFusionError;
 
     fn try_from(value: ScalarValue) -> Result<Self> {
         match value {
             ScalarValue::Int32(Some(inner_value))
-            | ScalarValue::Date32(Some(inner_value)) => Ok(inner_value),
+            | ScalarValue::Date32(Some(inner_value))
+            | ScalarValue::Time32Second(Some(inner_value))
+            | ScalarValue::Time32Millisecond(Some(inner_value)) => Ok(inner_value),
             _ => Err(DataFusionError::Internal(format!(
                 "Cannot convert {:?} to {}",
                 value,
@@ -2308,7 +2395,7 @@ impl TryFrom<ScalarValue> for i32 {
     }
 }
 
-// special implementation for i64 because of TimeNanosecond
+// special implementation for i64 because of Date64, Time64 and Timestamp
 impl TryFrom<ScalarValue> for i64 {
     type Error = DataFusionError;
 
@@ -2316,7 +2403,8 @@ impl TryFrom<ScalarValue> for i64 {
         match value {
             ScalarValue::Int64(Some(inner_value))
             | ScalarValue::Date64(Some(inner_value))
-            | ScalarValue::Time64(Some(inner_value))
+            | ScalarValue::Time64Microsecond(Some(inner_value))
+            | ScalarValue::Time64Nanosecond(Some(inner_value))
             | ScalarValue::TimestampNanosecond(Some(inner_value), _)
             | ScalarValue::TimestampMicrosecond(Some(inner_value), _)
             | ScalarValue::TimestampMillisecond(Some(inner_value), _)
@@ -2390,7 +2478,14 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::LargeBinary => ScalarValue::LargeBinary(None),
             DataType::Date32 => ScalarValue::Date32(None),
             DataType::Date64 => ScalarValue::Date64(None),
-            DataType::Time64(TimeUnit::Nanosecond) => ScalarValue::Time64(None),
+            DataType::Time32(TimeUnit::Second) => ScalarValue::Time32Second(None),
+            DataType::Time32(TimeUnit::Millisecond) => {
+                ScalarValue::Time32Millisecond(None)
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                ScalarValue::Time64Microsecond(None)
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => ScalarValue::Time64Nanosecond(None),
             DataType::Timestamp(TimeUnit::Second, tz_opt) => {
                 ScalarValue::TimestampSecond(None, tz_opt.clone())
             }
@@ -2511,7 +2606,10 @@ impl fmt::Display for ScalarValue {
             },
             ScalarValue::Date32(e) => format_option!(f, e)?,
             ScalarValue::Date64(e) => format_option!(f, e)?,
-            ScalarValue::Time64(e) => format_option!(f, e)?,
+            ScalarValue::Time32Second(e) => format_option!(f, e)?,
+            ScalarValue::Time32Millisecond(e) => format_option!(f, e)?,
+            ScalarValue::Time64Microsecond(e) => format_option!(f, e)?,
+            ScalarValue::Time64Nanosecond(e) => format_option!(f, e)?,
             ScalarValue::IntervalDayTime(e) => format_option!(f, e)?,
             ScalarValue::IntervalYearMonth(e) => format_option!(f, e)?,
             ScalarValue::IntervalMonthDayNano(e) => format_option!(f, e)?,
@@ -2578,7 +2676,16 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::List(_, _) => write!(f, "List([{}])", self),
             ScalarValue::Date32(_) => write!(f, "Date32(\"{}\")", self),
             ScalarValue::Date64(_) => write!(f, "Date64(\"{}\")", self),
-            ScalarValue::Time64(_) => write!(f, "Time64(\"{}\")", self),
+            ScalarValue::Time32Second(_) => write!(f, "Time32Second(\"{}\")", self),
+            ScalarValue::Time32Millisecond(_) => {
+                write!(f, "Time32Millisecond(\"{}\")", self)
+            }
+            ScalarValue::Time64Microsecond(_) => {
+                write!(f, "Time64Microsecond(\"{}\")", self)
+            }
+            ScalarValue::Time64Nanosecond(_) => {
+                write!(f, "Time64Nanosecond(\"{}\")", self)
+            }
             ScalarValue::IntervalDayTime(_) => {
                 write!(f, "IntervalDayTime(\"{}\")", self)
             }
@@ -2653,6 +2760,7 @@ mod tests {
     use arrow::compute::kernels;
     use arrow::datatypes::ArrowPrimitiveType;
 
+    use crate::cast::{as_string_array, as_uint32_array, as_uint64_array};
     use crate::from_slice::FromSlice;
 
     use super::*;
@@ -2787,35 +2895,37 @@ mod tests {
     }
 
     #[test]
-    fn scalar_value_to_array_u64() {
+    fn scalar_value_to_array_u64() -> Result<()> {
         let value = ScalarValue::UInt64(Some(13u64));
         let array = value.to_array();
-        let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+        let array = as_uint64_array(&array)?;
         assert_eq!(array.len(), 1);
         assert!(!array.is_null(0));
         assert_eq!(array.value(0), 13);
 
         let value = ScalarValue::UInt64(None);
         let array = value.to_array();
-        let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+        let array = as_uint64_array(&array)?;
         assert_eq!(array.len(), 1);
         assert!(array.is_null(0));
+        Ok(())
     }
 
     #[test]
-    fn scalar_value_to_array_u32() {
+    fn scalar_value_to_array_u32() -> Result<()> {
         let value = ScalarValue::UInt32(Some(13u32));
         let array = value.to_array();
-        let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+        let array = as_uint32_array(&array)?;
         assert_eq!(array.len(), 1);
         assert!(!array.is_null(0));
         assert_eq!(array.value(0), 13);
 
         let value = ScalarValue::UInt32(None);
         let array = value.to_array();
-        let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+        let array = as_uint32_array(&array)?;
         assert_eq!(array.len(), 1);
         assert!(array.is_null(0));
+        Ok(())
     }
 
     #[test]
@@ -2825,7 +2935,7 @@ mod tests {
             Box::new(Field::new("item", DataType::UInt64, false)),
         )
         .to_array();
-        let list_array = list_array_ref.as_any().downcast_ref::<ListArray>().unwrap();
+        let list_array = as_list_array(&list_array_ref).unwrap();
 
         assert!(list_array.is_null(0));
         assert_eq!(list_array.len(), 1);
@@ -2833,7 +2943,7 @@ mod tests {
     }
 
     #[test]
-    fn scalar_list_to_array() {
+    fn scalar_list_to_array() -> Result<()> {
         let list_array_ref = ScalarValue::List(
             Some(vec![
                 ScalarValue::UInt64(Some(100)),
@@ -2844,19 +2954,17 @@ mod tests {
         )
         .to_array();
 
-        let list_array = list_array_ref.as_any().downcast_ref::<ListArray>().unwrap();
+        let list_array = as_list_array(&list_array_ref)?;
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 3);
 
         let prim_array_ref = list_array.value(0);
-        let prim_array = prim_array_ref
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
+        let prim_array = as_uint64_array(&prim_array_ref)?;
         assert_eq!(prim_array.len(), 3);
         assert_eq!(prim_array.value(0), 100);
         assert!(prim_array.is_null(1));
         assert_eq!(prim_array.value(2), 101);
+        Ok(())
     }
 
     /// Creates array directly and via ScalarValue and ensures they are the same
@@ -3016,7 +3124,7 @@ mod tests {
 
         let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
         let array = as_dictionary_array::<Int32Type>(&array);
-        let values_array = as_string_array(array.values());
+        let values_array = as_string_array(array.values()).unwrap();
 
         let values = array
             .keys_iter()
@@ -3207,7 +3315,10 @@ mod tests {
             make_binary_test_case!(str_vals, LargeBinaryArray, LargeBinary),
             make_test_case!(i32_vals, Date32Array, Date32),
             make_test_case!(i64_vals, Date64Array, Date64),
-            make_test_case!(i64_vals, Time64NanosecondArray, Time64),
+            make_test_case!(i32_vals, Time32SecondArray, Time32Second),
+            make_test_case!(i32_vals, Time32MillisecondArray, Time32Millisecond),
+            make_test_case!(i64_vals, Time64MicrosecondArray, Time64Microsecond),
+            make_test_case!(i64_vals, Time64NanosecondArray, Time64Nanosecond),
             make_test_case!(i64_vals, TimestampSecondArray, TimestampSecond, None),
             make_test_case!(
                 i64_vals,
@@ -3642,7 +3753,7 @@ mod tests {
         let nl2 = ScalarValue::new_list(Some(vec![s1]), s0.get_datatype());
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();
-        let array = array.as_any().downcast_ref::<ListArray>().unwrap();
+        let array = as_list_array(&array).unwrap();
 
         // Construct expected array with array builders
         let field_a_builder = StringBuilder::with_capacity(4, 1024);
@@ -3806,7 +3917,7 @@ mod tests {
         );
 
         let array = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();
-        let array = array.as_any().downcast_ref::<ListArray>().unwrap();
+        let array = as_list_array(&array).unwrap();
 
         // Construct expected array with array builders
         let inner_builder = Int32Array::builder(8);

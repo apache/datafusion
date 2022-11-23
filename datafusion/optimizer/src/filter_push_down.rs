@@ -833,9 +833,8 @@ mod tests {
     use async_trait::async_trait;
     use datafusion_common::DFSchema;
     use datafusion_expr::{
-        and, col, in_list, in_subquery, lit,
-        logical_plan::{builder::union_with_alias, JoinType},
-        sum, Expr, LogicalPlanBuilder, Operator, TableSource, TableType,
+        and, col, in_list, in_subquery, lit, logical_plan::JoinType, sum, Expr,
+        LogicalPlanBuilder, Operator, TableSource, TableType,
     };
     use std::sync::Arc;
 
@@ -1184,27 +1183,6 @@ mod tests {
     }
 
     #[test]
-    fn union_all_with_alias() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let union =
-            union_with_alias(table_scan.clone(), table_scan, Some("t".to_string()))?;
-
-        let plan = LogicalPlanBuilder::from(union)
-            .filter(col("t.a").eq(lit(1i64)))?
-            .build()?;
-
-        // filter appears below Union without relation qualifier
-        let expected = "\
-            Union\
-            \n  Filter: a = Int64(1)\
-            \n    TableScan: test\
-            \n  Filter: a = Int64(1)\
-            \n    TableScan: test";
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
-    }
-
-    #[test]
     fn union_all_on_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
         let table = LogicalPlanBuilder::from(table_scan)
@@ -1304,7 +1282,7 @@ mod tests {
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
 
-        let plan = crate::test::user_defined::new(plan);
+        let plan = user_defined::new(plan);
 
         let expected = "\
             TestUserDefined\

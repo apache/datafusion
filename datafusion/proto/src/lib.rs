@@ -208,7 +208,7 @@ mod roundtrip_tests {
     async fn roundtrip_custom_tables() -> Result<(), DataFusionError> {
         let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> =
             HashMap::new();
-        table_factories.insert("testtable".to_string(), Arc::new(TestTableFactory {}));
+        table_factories.insert("TESTTABLE".to_string(), Arc::new(TestTableFactory {}));
         let cfg = RuntimeConfig::new().with_table_factories(table_factories);
         let env = RuntimeEnv::new(cfg).unwrap();
         let ses = SessionConfig::new();
@@ -606,9 +606,21 @@ mod roundtrip_tests {
             ScalarValue::Date32(Some(0)),
             ScalarValue::Date32(Some(i32::MAX)),
             ScalarValue::Date32(None),
-            ScalarValue::Time64(Some(0)),
-            ScalarValue::Time64(Some(i64::MAX)),
-            ScalarValue::Time64(None),
+            ScalarValue::Date64(Some(0)),
+            ScalarValue::Date64(Some(i64::MAX)),
+            ScalarValue::Date64(None),
+            ScalarValue::Time32Second(Some(0)),
+            ScalarValue::Time32Second(Some(i32::MAX)),
+            ScalarValue::Time32Second(None),
+            ScalarValue::Time32Millisecond(Some(0)),
+            ScalarValue::Time32Millisecond(Some(i32::MAX)),
+            ScalarValue::Time32Millisecond(None),
+            ScalarValue::Time64Microsecond(Some(0)),
+            ScalarValue::Time64Microsecond(Some(i64::MAX)),
+            ScalarValue::Time64Microsecond(None),
+            ScalarValue::Time64Nanosecond(Some(0)),
+            ScalarValue::Time64Nanosecond(Some(i64::MAX)),
+            ScalarValue::Time64Nanosecond(None),
             ScalarValue::TimestampNanosecond(Some(0), None),
             ScalarValue::TimestampNanosecond(Some(i64::MAX), None),
             ScalarValue::TimestampNanosecond(Some(0), Some("UTC".to_string())),

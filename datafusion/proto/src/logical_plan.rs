@@ -570,17 +570,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     None
                 };
 
-                match create_extern_table.file_type.as_str() {
-                    "CSV" | "JSON" | "PARQUET" | "AVRO" => {}
-                    it => {
-                        let env = &ctx.state.as_ref().read().runtime_env;
-                        if !env.table_factories.contains_key(it) {
-                            Err(DataFusionError::Internal(format!(
-                                "No TableProvider for file type: {}",
-                                it
-                            )))?
-                        }
-                    }
+                let file_type = create_extern_table.file_type.as_str();
+                let env = &ctx.state.as_ref().read().runtime_env;
+                if !env.table_factories.contains_key(file_type) {
+                    Err(DataFusionError::Internal(format!(
+                        "No TableProvider for file type: {}",
+                        file_type
+                    )))?
                 }
 
                 Ok(LogicalPlan::CreateExternalTable(CreateExternalTable {

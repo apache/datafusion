@@ -91,20 +91,24 @@ impl PhysicalOptimizerRule for BasicEnforcement {
         new_plan.transform_up(&{
             |plan| {
                 let adjusted = if !top_down_join_key_reordering {
-                    reorder_join_keys_to_inputs(plan)
+                    reorder_join_keys_to_inputs(plan)?
                 } else {
                     plan
                 };
-                Some(ensure_distribution_and_ordering(
+                Ok(Some(ensure_distribution_and_ordering(
                     adjusted,
                     target_partitions,
-                ))
+                )?))
             }
         })
     }
 
     fn name(&self) -> &str {
         "BasicEnforcement"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
     }
 }
 
@@ -152,7 +156,7 @@ impl PhysicalOptimizerRule for BasicEnforcement {
 ///
 fn adjust_input_keys_ordering(
     requirements: PlanWithKeyRequirements,
-) -> Option<PlanWithKeyRequirements> {
+) -> Result<Option<PlanWithKeyRequirements>> {
     let parent_required = requirements.required_key_ordering.clone();
     let plan_any = requirements.plan.as_any();
     if let Some(HashJoinExec {
@@ -170,26 +174,23 @@ fn adjust_input_keys_ordering(
             PartitionMode::Partitioned => {
                 let join_constructor =
                     |new_conditions: (Vec<(Column, Column)>, Vec<SortOptions>)| {
-                        Arc::new(
-                            HashJoinExec::try_new(
-                                left.clone(),
-                                right.clone(),
-                                new_conditions.0,
-                                filter.clone(),
-                                join_type,
-                                PartitionMode::Partitioned,
-                                null_equals_null,
-                            )
-                            .unwrap(),
-                        ) as Arc<dyn ExecutionPlan>
+                        Ok(Arc::new(HashJoinExec::try_new(
+                            left.clone(),
+                            right.clone(),
+                            new_conditions.0,
+                            filter.clone(),
+                            join_type,
+                            PartitionMode::Partitioned,
+                            null_equals_null,
+                        )?) as Arc<dyn ExecutionPlan>)
                     };
-                Some(reorder_partitioned_join_keys(
+                Ok(Some(reorder_partitioned_join_keys(
                     requirements.plan.clone(),
                     &parent_required,
                     on,
                     vec![],
                     &join_constructor,
-                ))
+                )?))
             }
             PartitionMode::CollectLeft => {
                 let new_right_request = match join_type {
@@ -207,11 +208,11 @@ fn adjust_input_keys_ordering(
                 };
 
                 // Push down requirements to the right side
-                Some(PlanWithKeyRequirements {
+                Ok(Some(PlanWithKeyRequirements {
                     plan: requirements.plan.clone(),
                     required_key_ordering: vec![],
                     request_key_ordering: vec![None, new_right_request],
-                })
+                }))
             }
             PartitionMode::Auto => {
                 // Can not satisfy, clear the current requirements and generate new empty requirements
@@ -223,14 +224,14 @@ fn adjust_input_keys_ordering(
     {
         let left_columns_len = left.schema().fields().len();
         // Push down requirements to the right side
-        Some(PlanWithKeyRequirements {
+        Ok(Some(PlanWithKeyRequirements {
             plan: requirements.plan.clone(),
             required_key_ordering: vec![],
             request_key_ordering: vec![
                 None,
                 shift_right_required(&parent_required, left_columns_len),
             ],
-        })
+        }))
     } else if let Some(SortMergeJoinExec {
         left,
         right,
@@ -243,25 +244,22 @@ fn adjust_input_keys_ordering(
     {
         let join_constructor =
             |new_conditions: (Vec<(Column, Column)>, Vec<SortOptions>)| {
-                Arc::new(
-                    SortMergeJoinExec::try_new(
-                        left.clone(),
-                        right.clone(),
-                        new_conditions.0,
-                        *join_type,
-                        new_conditions.1,
-                        *null_equals_null,
-                    )
-                    .unwrap(),
-                ) as Arc<dyn ExecutionPlan>
+                Ok(Arc::new(SortMergeJoinExec::try_new(
+                    left.clone(),
+                    right.clone(),
+                    new_conditions.0,
+                    *join_type,
+                    new_conditions.1,
+                    *null_equals_null,
+                )?) as Arc<dyn ExecutionPlan>)
             };
-        Some(reorder_partitioned_join_keys(
+        Ok(Some(reorder_partitioned_join_keys(
             requirements.plan.clone(),
             &parent_required,
             on,
             sort_options.clone(),
             &join_constructor,
-        ))
+        )?))
     } else if let Some(AggregateExec {
         mode,
         group_by,
@@ -273,19 +271,21 @@ fn adjust_input_keys_ordering(
     {
         if !parent_required.is_empty() {
             match mode {
-                AggregateMode::FinalPartitioned => Some(reorder_aggregate_keys(
+                AggregateMode::FinalPartitioned => Ok(Some(reorder_aggregate_keys(
                     requirements.plan.clone(),
                     &parent_required,
                     group_by,
                     aggr_expr,
                     input.clone(),
                     input_schema,
-                )),
-                _ => Some(PlanWithKeyRequirements::new(requirements.plan.clone())),
+                )?)),
+                _ => Ok(Some(PlanWithKeyRequirements::new(
+                    requirements.plan.clone(),
+                ))),
             }
         } else {
             // Keep everything unchanged
-            None
+            Ok(None)
         }
     } else if let Some(ProjectionExec { expr, .. }) =
         plan_any.downcast_ref::<ProjectionExec>()
@@ -295,28 +295,32 @@ fn adjust_input_keys_ordering(
         // Construct a mapping from new name to the the orginal Column
         let new_required = map_columns_before_projection(&parent_required, expr);
         if new_required.len() == parent_required.len() {
-            Some(PlanWithKeyRequirements {
+            Ok(Some(PlanWithKeyRequirements {
                 plan: requirements.plan.clone(),
                 required_key_ordering: vec![],
                 request_key_ordering: vec![Some(new_required.clone())],
-            })
+            }))
         } else {
             // Can not satisfy, clear the current requirements and generate new empty requirements
-            Some(PlanWithKeyRequirements::new(requirements.plan.clone()))
+            Ok(Some(PlanWithKeyRequirements::new(
+                requirements.plan.clone(),
+            )))
         }
     } else if plan_any.downcast_ref::<RepartitionExec>().is_some()
         || plan_any.downcast_ref::<CoalescePartitionsExec>().is_some()
         || plan_any.downcast_ref::<WindowAggExec>().is_some()
     {
-        Some(PlanWithKeyRequirements::new(requirements.plan.clone()))
+        Ok(Some(PlanWithKeyRequirements::new(
+            requirements.plan.clone(),
+        )))
     } else {
         // By default, push down the parent requirements to children
         let children_len = requirements.plan.children().len();
-        Some(PlanWithKeyRequirements {
+        Ok(Some(PlanWithKeyRequirements {
             plan: requirements.plan.clone(),
             required_key_ordering: vec![],
             request_key_ordering: vec![Some(parent_required.clone()); children_len],
-        })
+        }))
     }
 }
 
@@ -326,9 +330,9 @@ fn reorder_partitioned_join_keys<F>(
     on: &[(Column, Column)],
     sort_options: Vec<SortOptions>,
     join_constructor: &F,
-) -> PlanWithKeyRequirements
+) -> Result<PlanWithKeyRequirements>
 where
-    F: Fn((Vec<(Column, Column)>, Vec<SortOptions>)) -> Arc<dyn ExecutionPlan>,
+    F: Fn((Vec<(Column, Column)>, Vec<SortOptions>)) -> Result<Arc<dyn ExecutionPlan>>,
 {
     let join_key_pairs = extract_join_keys(on);
     if let Some((
@@ -349,27 +353,27 @@ where
                 new_sort_options.push(sort_options[new_positions[idx]])
             }
 
-            PlanWithKeyRequirements {
-                plan: join_constructor((new_join_on, new_sort_options)),
+            Ok(PlanWithKeyRequirements {
+                plan: join_constructor((new_join_on, new_sort_options))?,
                 required_key_ordering: vec![],
                 request_key_ordering: vec![Some(left_keys), Some(right_keys)],
-            }
+            })
         } else {
-            PlanWithKeyRequirements {
+            Ok(PlanWithKeyRequirements {
                 plan: join_plan,
                 required_key_ordering: vec![],
                 request_key_ordering: vec![Some(left_keys), Some(right_keys)],
-            }
+            })
         }
     } else {
-        PlanWithKeyRequirements {
+        Ok(PlanWithKeyRequirements {
             plan: join_plan,
             required_key_ordering: vec![],
             request_key_ordering: vec![
                 Some(join_key_pairs.left_keys),
                 Some(join_key_pairs.right_keys),
             ],
-        }
+        })
     }
 }
 
@@ -380,7 +384,7 @@ fn reorder_aggregate_keys(
     aggr_expr: &[Arc<dyn AggregateExpr>],
     agg_input: Arc<dyn ExecutionPlan>,
     input_schema: &SchemaRef,
-) -> PlanWithKeyRequirements {
+) -> Result<PlanWithKeyRequirements> {
     let out_put_columns = group_by
         .expr()
         .iter()
@@ -397,11 +401,11 @@ fn reorder_aggregate_keys(
         || !group_by.null_expr().is_empty()
         || expr_list_eq_strict_order(&out_put_exprs, parent_required)
     {
-        PlanWithKeyRequirements::new(agg_plan)
+        Ok(PlanWithKeyRequirements::new(agg_plan))
     } else {
         let new_positions = expected_expr_positions(&out_put_exprs, parent_required);
         match new_positions {
-            None => PlanWithKeyRequirements::new(agg_plan),
+            None => Ok(PlanWithKeyRequirements::new(agg_plan)),
             Some(positions) => {
                 let new_partial_agg = if let Some(AggregateExec {
                     mode,
@@ -421,16 +425,13 @@ fn reorder_aggregate_keys(
                         let new_partial_group_by =
                             PhysicalGroupBy::new_single(new_group_exprs);
                         // new Partial AggregateExec
-                        Some(Arc::new(
-                            AggregateExec::try_new(
-                                AggregateMode::Partial,
-                                new_partial_group_by,
-                                aggr_expr.clone(),
-                                input.clone(),
-                                input_schema.clone(),
-                            )
-                            .unwrap(),
-                        ))
+                        Some(Arc::new(AggregateExec::try_new(
+                            AggregateMode::Partial,
+                            new_partial_group_by,
+                            aggr_expr.clone(),
+                            input.clone(),
+                            input_schema.clone(),
+                        )?))
                     } else {
                         None
                     }
@@ -443,16 +444,13 @@ fn reorder_aggregate_keys(
                         new_group_exprs.push(group_by.expr()[idx].clone());
                     }
                     let new_group_by = PhysicalGroupBy::new_single(new_group_exprs);
-                    let new_final_agg = Arc::new(
-                        AggregateExec::try_new(
-                            AggregateMode::FinalPartitioned,
-                            new_group_by,
-                            aggr_expr.to_vec(),
-                            partial_agg,
-                            input_schema.clone(),
-                        )
-                        .unwrap(),
-                    );
+                    let new_final_agg = Arc::new(AggregateExec::try_new(
+                        AggregateMode::FinalPartitioned,
+                        new_group_by,
+                        aggr_expr.to_vec(),
+                        partial_agg,
+                        input_schema.clone(),
+                    )?);
 
                     // Need to create a new projection to change the expr ordering back
                     let mut proj_exprs = out_put_columns
@@ -480,11 +478,11 @@ fn reorder_aggregate_keys(
                         ))
                     }
                     // TODO merge adjacent Projections if there are
-                    PlanWithKeyRequirements::new(Arc::new(
-                        ProjectionExec::try_new(proj_exprs, new_final_agg).unwrap(),
-                    ))
+                    Ok(PlanWithKeyRequirements::new(Arc::new(
+                        ProjectionExec::try_new(proj_exprs, new_final_agg)?,
+                    )))
                 } else {
-                    PlanWithKeyRequirements::new(agg_plan)
+                    Ok(PlanWithKeyRequirements::new(agg_plan))
                 }
             }
         }
@@ -567,7 +565,7 @@ fn shift_right_required(
 /// and then can't apply the Top-Down reordering process.
 fn reorder_join_keys_to_inputs(
     plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
-) -> Arc<dyn crate::physical_plan::ExecutionPlan> {
+) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
     let plan_any = plan.as_any();
     if let Some(HashJoinExec {
         left,
@@ -598,26 +596,23 @@ fn reorder_join_keys_to_inputs(
                 ) {
                     if !new_positions.is_empty() {
                         let new_join_on = new_join_conditions(&left_keys, &right_keys);
-                        Arc::new(
-                            HashJoinExec::try_new(
-                                left.clone(),
-                                right.clone(),
-                                new_join_on,
-                                filter.clone(),
-                                join_type,
-                                PartitionMode::Partitioned,
-                                null_equals_null,
-                            )
-                            .unwrap(),
-                        )
+                        Ok(Arc::new(HashJoinExec::try_new(
+                            left.clone(),
+                            right.clone(),
+                            new_join_on,
+                            filter.clone(),
+                            join_type,
+                            PartitionMode::Partitioned,
+                            null_equals_null,
+                        )?))
                     } else {
-                        plan
+                        Ok(plan)
                     }
                 } else {
-                    plan
+                    Ok(plan)
                 }
             }
-            _ => plan,
+            _ => Ok(plan),
         }
     } else if let Some(SortMergeJoinExec {
         left,
@@ -649,25 +644,22 @@ fn reorder_join_keys_to_inputs(
                 for idx in 0..sort_options.len() {
                     new_sort_options.push(sort_options[new_positions[idx]])
                 }
-                Arc::new(
-                    SortMergeJoinExec::try_new(
-                        left.clone(),
-                        right.clone(),
-                        new_join_on,
-                        *join_type,
-                        new_sort_options,
-                        *null_equals_null,
-                    )
-                    .unwrap(),
-                )
+                Ok(Arc::new(SortMergeJoinExec::try_new(
+                    left.clone(),
+                    right.clone(),
+                    new_join_on,
+                    *join_type,
+                    new_sort_options,
+                    *null_equals_null,
+                )?))
             } else {
-                plan
+                Ok(plan)
             }
         } else {
-            plan
+            Ok(plan)
         }
     } else {
-        plan
+        Ok(plan)
     }
 }
 
@@ -844,9 +836,9 @@ fn new_join_conditions(
 fn ensure_distribution_and_ordering(
     plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
     target_partitions: usize,
-) -> Arc<dyn crate::physical_plan::ExecutionPlan> {
+) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
     if plan.children().is_empty() {
-        return plan;
+        return Ok(plan);
     }
     let required_input_distributions = plan.required_input_distribution();
     let required_input_orderings = plan.required_input_ordering();
@@ -863,17 +855,17 @@ fn ensure_distribution_and_ordering(
                 .output_partitioning()
                 .satisfy(required.clone(), || child.equivalence_properties())
             {
-                child
+                Ok(child)
             } else {
-                let new_child: Arc<dyn ExecutionPlan> = match required {
+                let new_child: Result<Arc<dyn ExecutionPlan>> = match required {
                     Distribution::SinglePartition
                         if child.output_partitioning().partition_count() > 1 =>
                     {
-                        Arc::new(CoalescePartitionsExec::new(child.clone()))
+                        Ok(Arc::new(CoalescePartitionsExec::new(child.clone())))
                     }
                     _ => {
                         let partition = required.create_partitioning(target_partitions);
-                        Arc::new(RepartitionExec::try_new(child, partition).unwrap())
+                        Ok(Arc::new(RepartitionExec::try_new(child, partition)?))
                     }
                 };
                 new_child
@@ -881,27 +873,29 @@ fn ensure_distribution_and_ordering(
         });
 
     // Add SortExec to guarantee output ordering
-    let new_children: Vec<Arc<dyn ExecutionPlan>> = children
+    let new_children: Result<Vec<Arc<dyn ExecutionPlan>>> = children
         .zip(required_input_orderings.into_iter())
-        .map(|(child, required)| {
+        .map(|(child_result, required)| {
+            let child = child_result?;
             if ordering_satisfy(child.output_ordering(), required, || {
                 child.equivalence_properties()
             }) {
-                child
+                Ok(child)
             } else {
                 let sort_expr = required.unwrap().to_vec();
                 if child.output_partitioning().partition_count() > 1 {
-                    Arc::new(SortExec::new_with_partitioning(
+                    Ok(Arc::new(SortExec::new_with_partitioning(
                         sort_expr, child, true, None,
-                    ))
+                    )) as Arc<dyn ExecutionPlan>)
                 } else {
-                    Arc::new(SortExec::try_new(sort_expr, child, None).unwrap())
+                    Ok(Arc::new(SortExec::try_new(sort_expr, child, None)?)
+                        as Arc<dyn ExecutionPlan>)
                 }
             }
         })
-        .collect::<Vec<_>>();
+        .collect();
 
-    with_new_children_if_necessary(plan, new_children).unwrap()
+    with_new_children_if_necessary(plan, new_children?)
 }
 
 /// Check the required ordering requirements are satisfied by the provided PhysicalSortExprs.
@@ -1718,7 +1712,7 @@ mod tests {
         let bottom_left_join = ensure_distribution_and_ordering(
             hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
             10,
-        );
+        )?;
 
         // Projection(a as A, a as AA, b as B, c as C)
         let alias_pairs: Vec<(String, String)> = vec![
@@ -1748,7 +1742,7 @@ mod tests {
         let bottom_right_join = ensure_distribution_and_ordering(
             hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
             10,
-        );
+        )?;
 
         // Join on (B == b1 and C == c and AA = a1)
         let top_join_on = vec![
@@ -1787,7 +1781,7 @@ mod tests {
             let top_join_plan =
                 format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(Column {{ name: \"AA\", index: 1 }}, Column {{ name: \"a1\", index: 5 }}), (Column {{ name: \"B\", index: 2 }}, Column {{ name: \"b1\", index: 6 }}), (Column {{ name: \"C\", index: 3 }}, Column {{ name: \"c\", index: 2 }})]", &join_type);
 
-            let reordered = reorder_join_keys_to_inputs(top_join);
+            let reordered = reorder_join_keys_to_inputs(top_join)?;
 
             // The top joins' join key ordering is adjusted based on the children inputs.
             let expected = &[
@@ -1837,7 +1831,7 @@ mod tests {
         let bottom_left_join = ensure_distribution_and_ordering(
             hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
             10,
-        );
+        )?;
 
         // Projection(a as A, a as AA, b as B, c as C)
         let alias_pairs: Vec<(String, String)> = vec![
@@ -1867,7 +1861,7 @@ mod tests {
         let bottom_right_join = ensure_distribution_and_ordering(
             hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
             10,
-        );
+        )?;
 
         // Join on (B == b1 and C == c and AA = a1)
         let top_join_on = vec![
@@ -1906,7 +1900,7 @@ mod tests {
             let top_join_plan =
                 format!("HashJoinExec: mode=Partitioned, join_type={:?}, on=[(Column {{ name: \"C\", index: 3 }}, Column {{ name: \"c\", index: 2 }}), (Column {{ name: \"B\", index: 2 }}, Column {{ name: \"b1\", index: 6 }}), (Column {{ name: \"AA\", index: 1 }}, Column {{ name: \"a1\", index: 5 }})]", &join_type);
 
-            let reordered = reorder_join_keys_to_inputs(top_join);
+            let reordered = reorder_join_keys_to_inputs(top_join)?;
 
             // The top joins' join key ordering is adjusted based on the children inputs.
             let expected = &[

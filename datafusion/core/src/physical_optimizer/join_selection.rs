@@ -279,7 +279,11 @@ impl PhysicalOptimizerRule for JoinSelection {
     }
 
     fn name(&self) -> &str {
-        "[CBO]join_selection"
+        "join_selection"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
     }
 }
 

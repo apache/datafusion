@@ -22,7 +22,7 @@ use arrow::array::*;
 use arrow::compute::eq_dyn;
 use arrow::compute::kernels::boolean::nullif;
 use arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{cast::as_boolean_array, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use super::binary::array_eq_scalar;
@@ -34,10 +34,7 @@ macro_rules! compute_bool_array_op {
             .as_any()
             .downcast_ref::<$DT>()
             .expect("compute_op failed to downcast array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("compute_op failed to downcast array");
+        let rr = as_boolean_array($RIGHT).expect("compute_op failed to downcast array");
         Ok(Arc::new($OP(&ll, &rr)?) as ArrayRef)
     }};
 }
@@ -82,7 +79,7 @@ pub fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         (ColumnarValue::Array(lhs), ColumnarValue::Scalar(rhs)) => {
             let cond_array = array_eq_scalar(lhs, rhs)?;
 
-            let array = primitive_bool_array_op!(lhs, *cond_array, nullif)?;
+            let array = primitive_bool_array_op!(lhs, &cond_array, nullif)?;
 
             Ok(ColumnarValue::Array(array))
         }
@@ -91,7 +88,7 @@ pub fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             let cond_array = eq_dyn(lhs, rhs)?;
 
             // Now, invoke nullif on the result
-            let array = primitive_bool_array_op!(lhs, cond_array, nullif)?;
+            let array = primitive_bool_array_op!(lhs, &cond_array, nullif)?;
             Ok(ColumnarValue::Array(array))
         }
         _ => Err(DataFusionError::NotImplemented(

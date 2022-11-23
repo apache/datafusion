@@ -20,6 +20,7 @@
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_where_exists::DecorrelateWhereExists;
 use crate::decorrelate_where_in::DecorrelateWhereIn;
+use crate::eliminate_cross_join::ReduceCrossJoin;
 use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_limit::EliminateLimit;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
@@ -27,7 +28,7 @@ use crate::filter_push_down::FilterPushDown;
 use crate::inline_table_scan::InlineTableScan;
 use crate::limit_push_down::LimitPushDown;
 use crate::projection_push_down::ProjectionPushDown;
-use crate::reduce_cross_join::ReduceCrossJoin;
+use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::reduce_outer_join::ReduceOuterJoin;
 use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
@@ -176,6 +177,7 @@ impl Optimizer {
             Arc::new(ReduceCrossJoin::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
+            Arc::new(PropagateEmptyRelation::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
         ];
         if config.filter_null_keys {
@@ -223,6 +225,14 @@ impl Optimizer {
                 let result = rule.try_optimize(&new_plan, optimizer_config);
                 match result {
                     Ok(Some(plan)) => {
+                        if plan.schema() != new_plan.schema() {
+                            return Err(DataFusionError::Internal(format!(
+                                "Optimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
+                                rule.name(),
+                                new_plan.schema(),
+                                plan.schema()
+                            )));
+                        }
                         new_plan = plan;
                         observer(&new_plan, rule.as_ref());
                         log_plan(rule.name(), &new_plan);
@@ -280,10 +290,11 @@ fn log_plan(description: &str, plan: &LogicalPlan) {
 #[cfg(test)]
 mod tests {
     use crate::optimizer::Optimizer;
+    use crate::test::test_table_scan;
     use crate::{OptimizerConfig, OptimizerRule};
     use datafusion_common::{DFSchema, DataFusionError};
     use datafusion_expr::logical_plan::EmptyRelation;
-    use datafusion_expr::LogicalPlan;
+    use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
     use std::sync::Arc;
 
     #[test]
@@ -316,6 +327,30 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn generate_different_schema() -> Result<(), DataFusionError> {
+        let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
+        let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
+        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        });
+        let result = opt.optimize(&plan, &mut config, &observe);
+        assert_eq!(
+            "Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
+             original schema: DFSchema { fields: [], metadata: {} }, \
+             new schema: DFSchema { fields: [\
+             DFField { qualifier: Some(\"test\"), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None } }, \
+             DFField { qualifier: Some(\"test\"), field: Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None } }, \
+             DFField { qualifier: Some(\"test\"), field: Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None } }], \
+             metadata: {} }. \
+             This was likely caused by a bug in DataFusion's code \
+             and we would welcome that you file an bug report in our issue tracker",
+            format!("{}", result.err().unwrap())
+        );
+        Ok(())
+    }
+
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
     struct BadRule {}
@@ -331,6 +366,23 @@ mod tests {
 
         fn name(&self) -> &str {
             "bad rule"
+        }
+    }
+
+    struct GetTableScanRule {}
+
+    impl OptimizerRule for GetTableScanRule {
+        fn optimize(
+            &self,
+            _plan: &LogicalPlan,
+            _optimizer_config: &mut OptimizerConfig,
+        ) -> datafusion_common::Result<LogicalPlan> {
+            let table_scan = test_table_scan()?;
+            LogicalPlanBuilder::from(table_scan).build()
+        }
+
+        fn name(&self) -> &str {
+            "get table_scan rule"
         }
     }
 }

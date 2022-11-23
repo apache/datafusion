@@ -109,6 +109,7 @@ impl PartitionEvaluator for CumeDistEvaluator {
 mod tests {
     use super::*;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::cast::as_float64_array;
 
     fn test_i32_result(
         expr: &CumeDist,
@@ -125,7 +126,7 @@ mod tests {
             .create_evaluator(&batch)?
             .evaluate_with_rank(vec![partition], ranks)?;
         assert_eq!(1, result.len());
-        let result = result[0].as_any().downcast_ref::<Float64Array>().unwrap();
+        let result = as_float64_array(&result[0])?;
         let result = result.values();
         assert_eq!(expected, result);
         Ok(())

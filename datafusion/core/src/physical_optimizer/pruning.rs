@@ -50,6 +50,7 @@ use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::{binary_expr, cast, try_cast, ExprSchemable};
 use datafusion_physical_expr::create_physical_expr;
+use datafusion_physical_expr::expressions::Literal;
 use log::trace;
 
 /// Interface to pass statistics information to [`PruningPredicate`]
@@ -222,6 +223,15 @@ impl PruningPredicate {
     /// Returns a reference to the predicate expr
     pub fn predicate_expr(&self) -> &Arc<dyn PhysicalExpr> {
         &self.predicate_expr
+    }
+
+    /// Returns true if this pruning predicate is "always true" (aka will not prune anything)
+    pub fn allways_true(&self) -> bool {
+        self.predicate_expr
+            .as_any()
+            .downcast_ref::<Literal>()
+            .map(|l| matches!(l.value(), ScalarValue::Boolean(Some(true))))
+            .unwrap_or_default()
     }
 
     /// Returns all need column indexes to evaluate this pruning predicate

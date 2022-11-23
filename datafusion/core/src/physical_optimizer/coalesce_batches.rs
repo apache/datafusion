@@ -59,17 +59,21 @@ impl PhysicalOptimizerRule for CoalesceBatches {
                 || plan_any.downcast_ref::<HashJoinExec>().is_some()
                 || plan_any.downcast_ref::<RepartitionExec>().is_some();
             if wrap_in_coalesce {
-                Some(Arc::new(CoalesceBatchesExec::new(
+                Ok(Some(Arc::new(CoalesceBatchesExec::new(
                     plan.clone(),
                     target_batch_size,
-                )))
+                ))))
             } else {
-                None
+                Ok(None)
             }
         })
     }
 
     fn name(&self) -> &str {
         "coalesce_batches"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
     }
 }

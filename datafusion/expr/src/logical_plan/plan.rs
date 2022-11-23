@@ -106,7 +106,7 @@ pub enum LogicalPlan {
     Extension(Extension),
     /// Remove duplicate rows from the input
     Distinct(Distinct),
-    /// Set a Varaible
+    /// Set a Variable
     SetVariable(SetVariable),
 }
 
@@ -254,7 +254,7 @@ impl LogicalPlan {
             LogicalPlan::Sort(Sort { expr, .. }) => expr.clone(),
             LogicalPlan::Extension(extension) => extension.node.expressions(),
             // plans without expressions
-            LogicalPlan::TableScan { .. }
+            LogicalPlan::TableScan(_)
             | LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
@@ -268,8 +268,8 @@ impl LogicalPlan {
             | LogicalPlan::SetVariable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::CrossJoin(_)
-            | LogicalPlan::Analyze { .. }
-            | LogicalPlan::Explain { .. }
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Distinct(_) => {
                 vec![]
@@ -1118,17 +1118,25 @@ impl Projection {
     pub fn try_new(
         expr: Vec<Expr>,
         input: Arc<LogicalPlan>,
-        alias: Option<String>,
     ) -> Result<Self, DataFusionError> {
         let schema = Arc::new(DFSchema::new_with_metadata(
             exprlist_to_fields(&expr, &input)?,
             input.schema().metadata().clone(),
         )?);
-        Self::try_new_with_schema(expr, input, schema, alias)
+        Self::try_new_with_schema(expr, input, schema)
     }
 
     /// Create a new Projection using the specified output schema
     pub fn try_new_with_schema(
+        expr: Vec<Expr>,
+        input: Arc<LogicalPlan>,
+        schema: DFSchemaRef,
+    ) -> Result<Self, DataFusionError> {
+        Self::try_new_with_schema_alias(expr, input, schema, None)
+    }
+
+    /// Create a new Projection using the specified output schema
+    pub fn try_new_with_schema_alias(
         expr: Vec<Expr>,
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
@@ -1143,6 +1151,22 @@ impl Projection {
             schema,
             alias,
         })
+    }
+
+    /// Create a new Projection using the specified output schema
+    pub fn new_from_schema(input: Arc<LogicalPlan>, schema: DFSchemaRef) -> Self {
+        let expr: Vec<Expr> = schema
+            .fields()
+            .iter()
+            .map(|field| field.qualified_column())
+            .map(Expr::Column)
+            .collect();
+        Self {
+            expr,
+            input,
+            schema,
+            alias: None,
+        }
     }
 
     pub fn try_from_plan(plan: &LogicalPlan) -> datafusion_common::Result<&Projection> {
@@ -1970,7 +1994,6 @@ mod tests {
                 schema: empty_schema.clone(),
             })),
             empty_schema,
-            None,
         );
         assert_eq!("Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)", format!("{}", p.err().unwrap()));
         Ok(())

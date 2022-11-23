@@ -714,7 +714,7 @@ impl DefaultPhysicalPlanner {
                             // provided expressions into logical Column expressions if their results
                             // are already provided from the input plans. Because we work with
                             // qualified columns in logical plane, derived columns involve operators or
-                            // functions will contain qualifers as well. This will result in logical
+                            // functions will contain qualifiers as well. This will result in logical
                             // columns with names like `SUM(t1.c1)`, `t1.c1 + t1.c2`, etc.
                             //
                             // If we run these logical columns through physical_name function, we will
@@ -1712,7 +1712,16 @@ impl DefaultPhysicalPlanner {
 
         let mut new_plan = plan;
         for optimizer in optimizers {
+            let before_schema = new_plan.schema();
             new_plan = optimizer.optimize(new_plan, &session_state.config)?;
+            if optimizer.schema_check() && new_plan.schema() != before_schema {
+                return Err(DataFusionError::Internal(format!(
+                        "PhysicalOptimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
+                        optimizer.name(),
+                        before_schema,
+                        new_plan.schema()
+                    )));
+            }
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
         debug!(
@@ -2314,11 +2323,7 @@ mod tests {
             unimplemented!("NoOpExecutionPlan::execute");
         }
 
-        fn fmt_as(
-            &self,
-            t: DisplayFormatType,
-            f: &mut std::fmt::Formatter,
-        ) -> std::fmt::Result {
+        fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
             match t {
                 DisplayFormatType::Default => {
                     write!(f, "NoOpExecutionPlan")

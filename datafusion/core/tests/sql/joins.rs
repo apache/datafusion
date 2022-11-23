@@ -318,7 +318,7 @@ async fn left_join() -> Result<()> {
 
 #[tokio::test]
 async fn left_join_unbalanced() -> Result<()> {
-    // the t1_id is larger than t2_id so the hash_build_probe_order optimizer should kick in
+    // the t1_id is larger than t2_id so the join_selection optimizer should kick in
     let ctx = create_join_context_unbalanced("t1_id", "t2_id")?;
     let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
@@ -781,7 +781,7 @@ async fn cross_join() {
 
 #[tokio::test]
 async fn cross_join_unbalanced() {
-    // the t1_id is larger than t2_id so the hash_build_probe_order optimizer should kick in
+    // the t1_id is larger than t2_id so the join_selection optimizer should kick in
     let ctx = create_join_context_unbalanced("t1_id", "t2_id").unwrap();
 
     // the order of the values is not determinisitic, so we need to sort to check the values

@@ -784,6 +784,7 @@ mod tests {
         datatypes::Field,
         record_batch::RecordBatch,
     };
+    use datafusion_common::cast::as_uint64_array;
     use datafusion_common::{Result, ScalarValue};
 
     /// $FUNC function to test
@@ -2846,7 +2847,7 @@ mod tests {
     #[test]
     #[cfg(feature = "regex_expressions")]
     fn test_regexp_match() -> Result<()> {
-        use arrow::array::ListArray;
+        use datafusion_common::cast::{as_list_array, as_string_array};
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
         let execution_props = ExecutionProps::new();
 
@@ -2871,9 +2872,9 @@ mod tests {
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
 
         // downcast works
-        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let result = as_list_array(&result)?;
         let first_row = result.value(0);
-        let first_row = first_row.as_any().downcast_ref::<StringArray>().unwrap();
+        let first_row = as_string_array(&first_row)?;
 
         // value is correct
         let expected = "555".to_string();
@@ -2885,7 +2886,7 @@ mod tests {
     #[test]
     #[cfg(feature = "regex_expressions")]
     fn test_regexp_match_all_literals() -> Result<()> {
-        use arrow::array::ListArray;
+        use datafusion_common::cast::{as_list_array, as_string_array};
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let execution_props = ExecutionProps::new();
 
@@ -2910,9 +2911,9 @@ mod tests {
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
 
         // downcast works
-        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let result = as_list_array(&result)?;
         let first_row = result.value(0);
-        let first_row = first_row.as_any().downcast_ref::<StringArray>().unwrap();
+        let first_row = as_string_array(&first_row)?;
 
         // value is correct
         let expected = "555".to_string();
@@ -2941,16 +2942,12 @@ mod tests {
     }
 
     fn unpack_uint64_array(col: Result<ColumnarValue>) -> Result<Vec<u64>> {
-        match col? {
-            ColumnarValue::Array(array) => Ok(array
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap()
-                .values()
-                .to_vec()),
-            ColumnarValue::Scalar(_) => Err(DataFusionError::Internal(
+        if let ColumnarValue::Array(array) = col? {
+            Ok(as_uint64_array(&array)?.values().to_vec())
+        } else {
+            Err(DataFusionError::Internal(
                 "Unexpected scalar created by a test function".to_string(),
-            )),
+            ))
         }
     }
 

@@ -746,10 +746,24 @@ message ScalarListValue{
     repeated ScalarValue values = 2;
 }
 
+message ScalarTime32Value {
+  oneof value {
+    int32 time32_second_value = 1;
+    int32 time32_millisecond_value = 2;
+  };
+}
+
+message ScalarTime64Value {
+  oneof value {
+    int64 time64_microsecond_value = 1;
+    int64 time64_nanosecond_value = 2;
+  };
+}
+
 message ScalarTimestampValue {
   oneof value {
-    int64  time_microsecond_value = 1;
-    int64  time_nanosecond_value = 2;
+    int64 time_microsecond_value = 1;
+    int64 time_nanosecond_value = 2;
     int64 time_second_value = 3;
     int64 time_millisecond_value = 4;
   };
@@ -804,6 +818,7 @@ message ScalarValue{
         double float64_value = 13;
         // Literal Date32 value always has a unit of day
         int32  date_32_value = 14;
+        ScalarTime32Value time32_value = 15;
         ScalarListValue list_value = 17;
         //WAS: ScalarType null_list_value = 18;
 
@@ -815,7 +830,7 @@ message ScalarValue{
         ScalarDictionaryValue dictionary_value = 27;
         bytes binary_value = 28;
         bytes large_binary_value = 29;
-        int64 time64_value = 30;
+        ScalarTime64Value time64_value = 30;
         IntervalMonthDayNanoValue interval_month_day_nano = 31;
         StructValue struct_value = 32;
         ScalarFixedSizeBinary fixed_size_binary_value = 34;

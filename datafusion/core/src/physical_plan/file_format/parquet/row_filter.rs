@@ -19,11 +19,13 @@ use arrow::array::{Array, BooleanArray};
 use arrow::datatypes::{DataType, Schema};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, ToDFSchema};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
+use std::collections::BTreeSet;
 
 use datafusion_expr::Expr;
-use datafusion_optimizer::utils::split_conjunction_owned;
+use datafusion_optimizer::utils::split_conjunction;
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
@@ -133,17 +135,12 @@ impl ArrowPredicate for DatafusionArrowPredicate {
             .map(|v| v.into_array(batch.num_rows()))
         {
             Ok(array) => {
-                if let Some(mask) = array.as_any().downcast_ref::<BooleanArray>() {
-                    let bool_arr = BooleanArray::from(mask.data().clone());
-                    let num_filtered = bool_arr.len() - bool_arr.true_count();
-                    self.rows_filtered.add(num_filtered);
-                    timer.stop();
-                    Ok(bool_arr)
-                } else {
-                    Err(ArrowError::ComputeError(
-                        "Unexpected result of predicate evaluation, expected BooleanArray".to_owned(),
-                    ))
-                }
+                let mask = as_boolean_array(&array)?;
+                let bool_arr = BooleanArray::from(mask.data().clone());
+                let num_filtered = bool_arr.len() - bool_arr.true_count();
+                self.rows_filtered.add(num_filtered);
+                timer.stop();
+                Ok(bool_arr)
             }
             Err(e) => Err(ArrowError::ComputeError(format!(
                 "Error evaluating filter predicate: {:?}",
@@ -174,7 +171,7 @@ struct FilterCandidateBuilder<'a> {
     expr: Expr,
     file_schema: &'a Schema,
     table_schema: &'a Schema,
-    required_column_indices: Vec<usize>,
+    required_column_indices: BTreeSet<usize>,
     non_primitive_columns: bool,
     projected_columns: bool,
 }
@@ -185,7 +182,7 @@ impl<'a> FilterCandidateBuilder<'a> {
             expr,
             file_schema,
             table_schema,
-            required_column_indices: vec![],
+            required_column_indices: BTreeSet::default(),
             non_primitive_columns: false,
             projected_columns: false,
         }
@@ -209,7 +206,7 @@ impl<'a> FilterCandidateBuilder<'a> {
                 expr,
                 required_bytes,
                 can_use_index,
-                projection: self.required_column_indices,
+                projection: self.required_column_indices.into_iter().collect(),
             }))
         }
     }
@@ -219,7 +216,7 @@ impl<'a> ExprRewriter for FilterCandidateBuilder<'a> {
     fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
         if let Expr::Column(column) = expr {
             if let Ok(idx) = self.file_schema.index_of(&column.name) {
-                self.required_column_indices.push(idx);
+                self.required_column_indices.insert(idx);
 
                 if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                     self.non_primitive_columns = true;
@@ -284,7 +281,10 @@ fn remap_projection(src: &[usize]) -> Vec<usize> {
 /// Calculate the total compressed size of all `Column's required for
 /// predicate `Expr`. This should represent the total amount of file IO
 /// required to evaluate the predicate.
-fn size_of_columns(columns: &[usize], metadata: &ParquetMetaData) -> Result<usize> {
+fn size_of_columns(
+    columns: &BTreeSet<usize>,
+    metadata: &ParquetMetaData,
+) -> Result<usize> {
     let mut total_size = 0;
     let row_groups = metadata.row_groups();
     for idx in columns {
@@ -299,14 +299,17 @@ fn size_of_columns(columns: &[usize], metadata: &ParquetMetaData) -> Result<usiz
 /// For a given set of `Column`s required for predicate `Expr` determine whether all
 /// columns are sorted. Sorted columns may be queried more efficiently in the presence of
 /// a PageIndex.
-fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<bool> {
+fn columns_sorted(
+    _columns: &BTreeSet<usize>,
+    _metadata: &ParquetMetaData,
+) -> Result<bool> {
     // TODO How do we know this?
     Ok(false)
 }
 
 /// Build a [`RowFilter`] from the given predicate `Expr`
 pub fn build_row_filter(
-    expr: Expr,
+    expr: &Expr,
     file_schema: &Schema,
     table_schema: &Schema,
     metadata: &ParquetMetaData,
@@ -316,13 +319,13 @@ pub fn build_row_filter(
     let rows_filtered = &file_metrics.pushdown_rows_filtered;
     let time = &file_metrics.pushdown_eval_time;
 
-    let predicates = split_conjunction_owned(expr);
+    let predicates = split_conjunction(expr);
 
     let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()
         .flat_map(|expr| {
             if let Ok(candidate) =
-                FilterCandidateBuilder::new(expr, file_schema, table_schema)
+                FilterCandidateBuilder::new(expr.clone(), file_schema, table_schema)
                     .build(metadata)
             {
                 candidate

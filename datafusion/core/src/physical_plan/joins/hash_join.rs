@@ -22,9 +22,10 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        as_dictionary_array, as_string_array, ArrayData, ArrayRef, BooleanArray,
-        Date32Array, Date64Array, Decimal128Array, DictionaryArray, LargeStringArray,
-        PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        as_dictionary_array, ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array,
+        Decimal128Array, DictionaryArray, LargeStringArray, PrimitiveArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
         UInt64Builder,
     },
@@ -41,7 +42,7 @@ use std::{time::Instant, vec};
 
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
-use arrow::array::{as_boolean_array, new_null_array, Array};
+use arrow::array::{new_null_array, Array};
 use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
@@ -52,6 +53,8 @@ use arrow::array::{
     StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
     UInt8Array,
 };
+
+use datafusion_common::cast::{as_boolean_array, as_string_array};
 
 use hashbrown::raw::RawTable;
 
@@ -862,6 +865,7 @@ fn build_join_indexes(
                             &keys_values,
                             *null_equals_null,
                         )? {
+                            left_indices.append(i);
                             right_indices.append(row as u32);
                             break;
                         }
@@ -1039,7 +1043,7 @@ fn apply_join_filter(
                 .expression()
                 .evaluate(&intermediate_batch)?
                 .into_array(intermediate_batch.num_rows());
-            let mask = as_boolean_array(&filter_result);
+            let mask = as_boolean_array(&filter_result)?;
 
             let left_filtered = PrimitiveArray::<UInt64Type>::from(
                 compute::filter(&left_indices, mask)?.data().clone(),
@@ -1062,7 +1066,7 @@ fn apply_join_filter(
                 .expression()
                 .evaluate_selection(&intermediate_batch, &has_match)?
                 .into_array(intermediate_batch.num_rows());
-            let mask = as_boolean_array(&filter_result);
+            let mask = as_boolean_array(&filter_result)?;
 
             let mut left_rebuilt = UInt64Builder::with_capacity(0);
             let mut right_rebuilt = UInt32Builder::with_capacity(0);
@@ -1135,9 +1139,12 @@ macro_rules! equal_rows_elem_with_string_dict {
                     .to_usize()
                     .expect("Can not convert index to usize in dictionary");
 
-                (as_string_array(left_array.values()), Some(values_index))
+                (
+                    as_string_array(left_array.values()).unwrap(),
+                    Some(values_index),
+                )
             } else {
-                (as_string_array(left_array.values()), None)
+                (as_string_array(left_array.values()).unwrap(), None)
             }
         };
         let (right_values, right_values_index) = {
@@ -1148,9 +1155,12 @@ macro_rules! equal_rows_elem_with_string_dict {
                     .to_usize()
                     .expect("Can not convert index to usize in dictionary");
 
-                (as_string_array(right_array.values()), Some(values_index))
+                (
+                    as_string_array(right_array.values()).unwrap(),
+                    Some(values_index),
+                )
             } else {
-                (as_string_array(right_array.values()), None)
+                (as_string_array(right_array.values()).unwrap(), None)
             }
         };
 
@@ -1223,6 +1233,34 @@ fn equal_rows(
             }
             DataType::Date64 => {
                 equal_rows_elem!(Date64Array, l, r, left, right, null_equals_null)
+            }
+            DataType::Time32(time_unit) => match time_unit {
+                TimeUnit::Second => {
+                    equal_rows_elem!(Time32SecondArray, l, r, left, right, null_equals_null)
+                }
+                TimeUnit::Millisecond => {
+                    equal_rows_elem!(Time32MillisecondArray, l, r, left, right, null_equals_null)
+                }
+                _ => {
+                    err = Some(Err(DataFusionError::Internal(
+                        "Unsupported data type in hasher".to_string(),
+                    )));
+                    false
+                }
+            }
+            DataType::Time64(time_unit) => match time_unit {
+                TimeUnit::Microsecond => {
+                    equal_rows_elem!(Time64MicrosecondArray, l, r, left, right, null_equals_null)
+                }
+                TimeUnit::Nanosecond => {
+                    equal_rows_elem!(Time64NanosecondArray, l, r, left, right, null_equals_null)
+                }
+                _ => {
+                    err = Some(Err(DataFusionError::Internal(
+                        "Unsupported data type in hasher".to_string(),
+                    )));
+                    false
+                }
             }
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => {
@@ -1587,6 +1625,8 @@ mod tests {
 
     use super::*;
     use crate::prelude::SessionContext;
+    use datafusion_common::ScalarValue;
+    use datafusion_physical_expr::expressions::Literal;
     use std::sync::Arc;
 
     fn build_table(
@@ -2265,7 +2305,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn join_semi() -> Result<()> {
+    async fn join_left_semi() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let left = build_table(
@@ -2296,6 +2336,63 @@ mod tests {
             "| a1 | b1 | c1 |",
             "+----+----+----+",
             "| 1  | 4  | 7  |",
+            "| 2  | 5  | 8  |",
+            "| 2  | 5  | 8  |",
+            "+----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_left_semi_with_filter() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let left = build_table(
+            ("a1", &vec![1, 2, 2, 3]),
+            ("b1", &vec![4, 5, 5, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30, 40]),
+            ("b1", &vec![4, 5, 6, 5]), // 5 is double on the right
+            ("c2", &vec![70, 80, 90, 100]),
+        );
+        let on = vec![(
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
+        )];
+
+        // build filter right.b2 > 4
+        let column_indices = vec![ColumnIndex {
+            index: 1,
+            side: JoinSide::Right,
+        }];
+        let intermediate_schema =
+            Schema::new(vec![Field::new("x", DataType::Int32, true)]);
+
+        let filter_expression = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(4)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let filter =
+            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+
+        let join = join_with_filter(left, right, on, filter, &JoinType::LeftSemi, false)?;
+
+        let columns = columns(&join.schema());
+        assert_eq!(columns, vec!["a1", "b1", "c1"]);
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let expected = vec![
+            "+----+----+----+",
+            "| a1 | b1 | c1 |",
+            "+----+----+----+",
             "| 2  | 5  | 8  |",
             "| 2  | 5  | 8  |",
             "+----+----+----+",
@@ -2348,7 +2445,66 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn join_anti() -> Result<()> {
+    async fn join_right_semi_with_filter() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let left = build_table(
+            ("a2", &vec![10, 20, 30, 40]),
+            ("b2", &vec![4, 5, 6, 5]), // 5 is double on the left
+            ("c2", &vec![70, 80, 90, 100]),
+        );
+        let right = build_table(
+            ("a1", &vec![1, 2, 2, 3]),
+            ("b1", &vec![4, 5, 5, 7]), // 7 does not exist on the left
+            ("c1", &vec![7, 8, 8, 9]),
+        );
+
+        let on = vec![(
+            Column::new_with_schema("b2", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
+        )];
+
+        // build filter left.b2 > 4
+        let column_indices = vec![ColumnIndex {
+            index: 1,
+            side: JoinSide::Left,
+        }];
+        let intermediate_schema =
+            Schema::new(vec![Field::new("x", DataType::Int32, true)]);
+
+        let filter_expression = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(4)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let filter =
+            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+
+        let join =
+            join_with_filter(left, right, on, filter, &JoinType::RightSemi, false)?;
+
+        let columns = columns(&join.schema());
+        assert_eq!(columns, vec!["a1", "b1", "c1"]);
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let expected = vec![
+            "+----+----+----+",
+            "| a1 | b1 | c1 |",
+            "+----+----+----+",
+            "| 2  | 5  | 8  |",
+            "| 2  | 5  | 8  |",
+            "+----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_left_anti() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let left = build_table(
@@ -2426,7 +2582,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn join_anti_with_filter() -> Result<()> {
+    async fn join_left_anti_with_filter() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let left = build_table(
@@ -2442,7 +2598,7 @@ mod tests {
             Column::new_with_schema("col1", &right.schema())?,
         )];
 
-        // build filter b.col2 <> a.col2
+        // build filter left.col2 <> right.col2
         let column_indices = vec![
             ColumnIndex {
                 index: 1,

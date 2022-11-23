@@ -26,6 +26,8 @@ use datafusion::{
 };
 use datafusion_expr::Expr;
 
+use rstest::rstest;
+
 use super::*;
 
 #[tokio::test]
@@ -240,16 +242,20 @@ async fn information_schema_show_tables_no_information_schema() {
     assert_eq!(err.to_string(), "Error during planning: SHOW TABLES is not supported unless information_schema is enabled");
 }
 
+#[rstest]
+#[case("datafusion.public.some_table")]
+#[case("public.some_table")]
+#[case("some_table")]
 #[tokio::test]
-async fn information_schema_describe_table() {
+async fn information_schema_describe_table(#[case] table_name: &str) {
     let ctx =
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
-    let sql = "CREATE OR REPLACE TABLE y AS VALUES (1,2),(3,4);";
-    ctx.sql(sql).await.unwrap();
+    let sql = format!("CREATE OR REPLACE TABLE {table_name} AS VALUES (1,2),(3,4);");
+    ctx.sql(sql.as_str()).await.unwrap();
 
-    let sql_all = "describe y;";
-    let results_all = execute_to_batches(&ctx, sql_all).await;
+    let sql_all = format!("DESCRIBE {table_name};");
+    let results_all = execute_to_batches(&ctx, sql_all.as_str()).await;
 
     let expected = vec![
         "+-------------+-----------+-------------+",
