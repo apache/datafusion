@@ -29,7 +29,7 @@ use crate::datasource::listing::{
 };
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
-use arrow::datatypes::{DataType, Field, SchemaRef};
+use arrow::datatypes::{DataType, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 use datafusion_expr::CreateExternalTable;
@@ -107,8 +107,7 @@ impl TableProviderFactory for ListingTableFactory {
                         DataFusionError::Execution(arrow_err.to_string())
                     })
                 })
-                .collect::<datafusion_common::Result<Vec<&Field>>>()?;
-            let table_partition_cols = table_partition_cols
+                .collect::<datafusion_common::Result<Vec<_>>>()?
                 .into_iter()
                 .map(|f| (f.name().to_owned(), f.data_type().to_owned()))
                 .collect();
