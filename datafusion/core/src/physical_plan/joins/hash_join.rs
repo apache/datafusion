@@ -22,12 +22,11 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        as_dictionary_array, ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array,
-        Decimal128Array, DictionaryArray, LargeStringArray, PrimitiveArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
-        UInt64Builder,
+        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+        DictionaryArray, LargeStringArray, PrimitiveArray, Time32MillisecondArray,
+        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
+        UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder, UInt64Builder,
     },
     compute,
     datatypes::{
@@ -54,7 +53,7 @@ use arrow::array::{
     UInt8Array,
 };
 
-use datafusion_common::cast::{as_boolean_array, as_string_array};
+use datafusion_common::cast::{as_boolean_array, as_dictionary_array, as_string_array};
 
 use hashbrown::raw::RawTable;
 
@@ -1114,9 +1113,9 @@ macro_rules! equal_rows_elem {
 macro_rules! equal_rows_elem_with_string_dict {
     ($key_array_type:ident, $l: ident, $r: ident, $left: ident, $right: ident, $null_equals_null: ident) => {{
         let left_array: &DictionaryArray<$key_array_type> =
-            as_dictionary_array::<$key_array_type>($l);
+            as_dictionary_array::<$key_array_type>($l).unwrap();
         let right_array: &DictionaryArray<$key_array_type> =
-            as_dictionary_array::<$key_array_type>($r);
+            as_dictionary_array::<$key_array_type>($r).unwrap();
 
         let (left_values, left_values_index) = {
             let keys_col = left_array.keys();

@@ -33,7 +33,9 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use datafusion_common::{
-    cast::{as_boolean_array, as_string_array},
+    cast::{
+        as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array,
+    },
     DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
@@ -178,11 +180,11 @@ fn make_set(array: &dyn Array) -> Result<Box<dyn Set>> {
             Box::new(ArraySet::new(array, make_hash_set(array)))
         },
         DataType::Decimal128(_, _) => {
-            let array = as_primitive_array::<Decimal128Type>(array);
+            let array = as_primitive_array::<Decimal128Type>(array)?;
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Decimal256(_, _) => {
-            let array = as_primitive_array::<Decimal256Type>(array);
+            let array = as_primitive_array::<Decimal256Type>(array)?;
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Utf8 => {
@@ -194,11 +196,11 @@ fn make_set(array: &dyn Array) -> Result<Box<dyn Set>> {
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Binary => {
-            let array = as_generic_binary_array::<i32>(array);
+            let array = as_generic_binary_array::<i32>(array)?;
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::LargeBinary => {
-            let array = as_generic_binary_array::<i64>(array);
+            let array = as_generic_binary_array::<i64>(array)?;
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Dictionary(_, _) => unreachable!("dictionary should have been flattened"),
