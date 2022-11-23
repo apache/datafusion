@@ -182,7 +182,11 @@ impl<F: FileOpener> FileStream<F> {
         let (projected_schema, _) = config.project();
         let pc_projector = PartitionColumnProjector::new(
             projected_schema.clone(),
-            &config.table_partition_cols,
+            &config
+                .table_partition_cols
+                .iter()
+                .map(|x| x.0.clone())
+                .collect::<Vec<_>>(),
         );
 
         let files = config.file_groups[partition].clone();

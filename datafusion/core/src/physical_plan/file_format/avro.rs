@@ -208,6 +208,7 @@ mod tests {
     use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::physical_plan::file_format::partition_type_wrap;
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use crate::test::object_store::local_unpartitioned_file;
@@ -374,7 +375,10 @@ mod tests {
             file_schema,
             statistics: Statistics::default(),
             limit: None,
-            table_partition_cols: vec!["date".to_owned()],
+            table_partition_cols: vec![(
+                "date".to_owned(),
+                partition_type_wrap(DataType::Utf8),
+            )],
             config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
         });

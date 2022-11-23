@@ -725,6 +725,7 @@ mod tests {
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::options::CsvReadOptions;
     use crate::physical_plan::displayable;
+    use crate::physical_plan::file_format::partition_type_wrap;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use crate::{
@@ -1441,9 +1442,9 @@ mod tests {
                 projection: Some(vec![0, 1, 2, 12]),
                 limit: None,
                 table_partition_cols: vec![
-                    "year".to_owned(),
-                    "month".to_owned(),
-                    "day".to_owned(),
+                    ("year".to_owned(), partition_type_wrap(DataType::Utf8)),
+                    ("month".to_owned(), partition_type_wrap(DataType::Utf8)),
+                    ("day".to_owned(), partition_type_wrap(DataType::Utf8)),
                 ],
                 config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,

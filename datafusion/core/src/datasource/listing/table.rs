@@ -21,7 +21,7 @@ use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use datafusion_physical_expr::PhysicalSortExpr;
@@ -41,14 +41,14 @@ use crate::datasource::{
 };
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::physical_plan;
+use crate::physical_plan::file_format::partition_type_wrap;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::SessionState,
     logical_expr::Expr,
     physical_plan::{
-        empty::EmptyExec,
-        file_format::{FileScanConfig, DEFAULT_PARTITION_COLUMN_DATATYPE},
-        project_schema, ExecutionPlan, Statistics,
+        empty::EmptyExec, file_format::FileScanConfig, project_schema, ExecutionPlan,
+        Statistics,
     },
 };
 
@@ -210,9 +210,7 @@ pub struct ListingOptions {
     /// partitioning expected should be named "a" and "b":
     /// - If there is a third level of partitioning it will be ignored.
     /// - Files that don't follow this partitioning will be ignored.
-    /// Note that only `DEFAULT_PARTITION_COLUMN_DATATYPE` is currently
-    /// supported for the column type.
-    pub table_partition_cols: Vec<String>,
+    pub table_partition_cols: Vec<(String, DataType)>,
     /// Set true to try to guess statistics from the files.
     /// This can add a lot of overhead as it will usually require files
     /// to be opened and at least partially parsed.
@@ -270,16 +268,19 @@ impl ListingOptions {
     ///
     /// ```
     /// use std::sync::Arc;
+    /// use arrow::datatypes::DataType;
     /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_table_partition_cols(vec!["col_a".to_string(), "col_b".to_string()]);
+    ///     .with_table_partition_cols(vec![("col_a".to_string(), DataType::Utf8),
+    ///         ("col_b".to_string(), DataType::Utf8)]);
     ///
-    /// assert_eq!(listing_options.table_partition_cols, vec!["col_a", "col_b"]);
+    /// assert_eq!(listing_options.table_partition_cols, vec![("col_a".to_string(), DataType::Utf8),
+    ///     ("col_b".to_string(), DataType::Utf8)]);
     /// ```
     pub fn with_table_partition_cols(
         mut self,
-        table_partition_cols: Vec<String>,
+        table_partition_cols: Vec<(String, DataType)>,
     ) -> Self {
         self.table_partition_cols = table_partition_cols;
         self
@@ -428,10 +429,10 @@ impl ListingTable {
 
         // Add the partition columns to the file schema
         let mut table_fields = file_schema.fields().clone();
-        for part in &options.table_partition_cols {
+        for (part_col_name, part_col_type) in &options.table_partition_cols {
             table_fields.push(Field::new(
-                part,
-                DEFAULT_PARTITION_COLUMN_DATATYPE.clone(),
+                part_col_name,
+                partition_type_wrap(part_col_type.clone()),
                 false,
             ));
         }
@@ -536,6 +537,23 @@ impl TableProvider for ListingTable {
             return Ok(Arc::new(EmptyExec::new(false, projected_schema)));
         }
 
+        // extract types of partition columns
+        let table_partition_cols = self
+            .options
+            .table_partition_cols
+            .iter()
+            .map(|col| {
+                (
+                    col.0.to_owned(),
+                    self.table_schema
+                        .field_with_name(&col.0)
+                        .unwrap()
+                        .data_type()
+                        .clone(),
+                )
+            })
+            .collect();
+
         // create the execution plan
         self.options
             .format
@@ -548,7 +566,7 @@ impl TableProvider for ListingTable {
                     projection: projection.clone(),
                     limit,
                     output_ordering: self.try_create_output_ordering()?,
-                    table_partition_cols: self.options.table_partition_cols.clone(),
+                    table_partition_cols,
                     config_options: ctx.config.config_options(),
                 },
                 filters,
@@ -560,7 +578,15 @@ impl TableProvider for ListingTable {
         &self,
         filter: &Expr,
     ) -> Result<TableProviderFilterPushDown> {
-        if expr_applicable_for_cols(&self.options.table_partition_cols, filter) {
+        if expr_applicable_for_cols(
+            &self
+                .options
+                .table_partition_cols
+                .iter()
+                .map(|x| x.0.clone())
+                .collect::<Vec<_>>(),
+            filter,
+        ) {
             // if filter can be handled by partiton pruning, it is exact
             Ok(TableProviderFilterPushDown::Exact)
         } else {
@@ -807,7 +833,10 @@ mod tests {
 
         let opt = ListingOptions::new(Arc::new(AvroFormat {}))
             .with_file_extension(FileType::AVRO.get_ext())
-            .with_table_partition_cols(vec![String::from("p1")])
+            .with_table_partition_cols(vec![(
+                String::from("p1"),
+                partition_type_wrap(DataType::Utf8),
+            )])
             .with_target_partitions(4);
 
         let table_path = ListingTableUrl::parse("test:///table/").unwrap();
