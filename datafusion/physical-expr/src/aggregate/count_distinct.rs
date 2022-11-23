@@ -218,6 +218,25 @@ impl Accumulator for DistinctCountAccumulator {
             ))),
         }
     }
+
+    fn size(&self) -> usize {
+        // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
+        std::mem::size_of_val(self)
+            + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
+            + self
+                .values
+                .iter()
+                .map(|vals| {
+                    (std::mem::size_of::<ScalarValue>() * vals.0.capacity())
+                        + vals
+                            .0
+                            .iter()
+                            .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
+            + (std::mem::size_of::<DataType>() * self.state_data_types.capacity())
+    }
 }
 
 #[cfg(test)]

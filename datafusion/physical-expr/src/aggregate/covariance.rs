@@ -373,6 +373,10 @@ impl Accumulator for CovarianceAccumulator {
             Ok(ScalarValue::Float64(Some(self.algo_const / count as f64)))
         }
     }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+    }
 }
 
 #[cfg(test)]

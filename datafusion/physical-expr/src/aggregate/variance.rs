@@ -306,6 +306,10 @@ impl Accumulator for VarianceAccumulator {
             Ok(ScalarValue::Float64(Some(self.m2 / count as f64)))
         }
     }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+    }
 }
 
 #[cfg(test)]

@@ -279,6 +279,10 @@ impl Accumulator for SumAccumulator {
             Ok(self.sum.clone())
         }
     }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.sum) + self.sum.size()
+    }
 }
 
 #[derive(Debug)]

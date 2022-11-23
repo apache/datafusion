@@ -149,6 +149,10 @@ impl Accumulator for CountAccumulator {
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(self.count)))
     }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+    }
 }
 
 #[derive(Debug)]

@@ -54,6 +54,9 @@ pub trait Accumulator: Send + Sync + Debug {
 
     /// returns its value based on its current state.
     fn evaluate(&self) -> Result<ScalarValue>;
+
+    /// Size in bytes including `Self`.
+    fn size(&self) -> usize;
 }
 
 /// Representation of internal accumulator state. Accumulators can potentially have a mix of
