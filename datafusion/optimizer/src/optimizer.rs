@@ -225,7 +225,7 @@ impl Optimizer {
                 let result = rule.try_optimize(&new_plan, optimizer_config);
                 match result {
                     Ok(Some(plan)) => {
-                        if plan.schema() != new_plan.schema() {
+                        if !plan.schema().equivalent_names_and_types(new_plan.schema()) {
                             return Err(DataFusionError::Internal(format!(
                                 "Optimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
                                 rule.name(),
@@ -292,9 +292,10 @@ mod tests {
     use crate::optimizer::Optimizer;
     use crate::test::test_table_scan;
     use crate::{OptimizerConfig, OptimizerRule};
-    use datafusion_common::{DFSchema, DataFusionError};
+    use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError};
     use datafusion_expr::logical_plan::EmptyRelation;
-    use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
+    use datafusion_expr::{col, LogicalPlan, LogicalPlanBuilder, Projection};
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     #[test]
@@ -351,6 +352,53 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn generate_same_schema_different_metadata() {
+        // if the plan creates more metadata than previously (because
+        // some wrapping functions are removed, etc) do not error
+        let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
+        let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
+
+        let input = Arc::new(test_table_scan().unwrap());
+        let input_schema = input.schema().clone();
+
+        let plan = LogicalPlan::Projection(Projection {
+            expr: vec![col("a"), col("b"), col("c")],
+            input,
+            schema: add_metadata_to_fields(input_schema.as_ref()),
+            alias: None,
+        });
+
+        // optimizing should be ok, but the schema will have changed  (no metadata)
+        assert_ne!(plan.schema().as_ref(), input_schema.as_ref());
+        let optimized_plan = opt.optimize(&plan, &mut config, &observe).unwrap();
+        // metadata was removed
+        assert_eq!(optimized_plan.schema().as_ref(), input_schema.as_ref());
+    }
+
+    fn add_metadata_to_fields(schema: &DFSchema) -> DFSchemaRef {
+        let new_fields = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let metadata: BTreeMap<_, _> = [("key".into(), format!("value {}", i))]
+                    .into_iter()
+                    .collect();
+
+                let new_arrow_field = f.field().clone().with_metadata(Some(metadata));
+                if let Some(qualifier) = f.qualifier() {
+                    DFField::from_qualified(qualifier, new_arrow_field)
+                } else {
+                    DFField::from(new_arrow_field)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let new_metadata = schema.metadata().clone();
+        Arc::new(DFSchema::new_with_metadata(new_fields, new_metadata).unwrap())
+    }
+
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
     struct BadRule {}
@@ -369,6 +417,7 @@ mod tests {
         }
     }
 
+    /// Replaces whatever plan with a single table scan
     struct GetTableScanRule {}
 
     impl OptimizerRule for GetTableScanRule {
