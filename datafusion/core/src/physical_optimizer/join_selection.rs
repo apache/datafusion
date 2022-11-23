@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utilizing exact statistics from sources to avoid scanning data
+//! Select the proper PartitionMode and build side based on based on the avaliable statistics for hash join.
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
+use crate::config::OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD;
 use crate::execution::context::SessionConfig;
 use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
@@ -215,7 +216,13 @@ impl PhysicalOptimizerRule for JoinSelection {
         plan: Arc<dyn ExecutionPlan>,
         session_config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let collect_left_threshold = session_config.hash_join_collect_left_threshold;
+        let collect_left_threshold: usize = session_config
+            .config_options()
+            .read()
+            .get_u64(OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD)
+            .unwrap_or_default()
+            .try_into()
+            .unwrap();
         plan.transform_up(&|plan| {
             if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
                 match hash_join.partition_mode() {

@@ -1226,13 +1226,6 @@ pub struct SessionConfig {
     pub parquet_pruning: bool,
     /// Should DataFusion collect statistics after listing files
     pub collect_statistics: bool,
-    /// Should DataFusion optimizer run a top down process to reorder the join keys
-    pub top_down_join_key_reordering: bool,
-    /// Should DataFusion optimizer prefer HashJoin over SortMergeJoin.
-    /// HashJoin can work more efficently than SortMergeJoin but consumes more memory.
-    pub prefer_hash_join: bool,
-    /// The maximum estimated size in bytes for the left input a hash join will be collected into one partition
-    pub hash_join_collect_left_threshold: usize,
     /// Configuration options
     pub config_options: Arc<RwLock<ConfigOptions>>,
     /// Opaque extensions.
@@ -1252,9 +1245,6 @@ impl Default for SessionConfig {
             repartition_windows: true,
             parquet_pruning: true,
             collect_statistics: false,
-            top_down_join_key_reordering: true,
-            prefer_hash_join: true,
-            hash_join_collect_left_threshold: 1024 * 1024,
             config_options: Arc::new(RwLock::new(ConfigOptions::new())),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(

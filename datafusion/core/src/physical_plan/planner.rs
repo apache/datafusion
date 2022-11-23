@@ -23,7 +23,9 @@ use super::{
     aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
 };
-use crate::config::{OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY};
+use crate::config::{
+    OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY, OPT_PREFER_HASH_JOIN,
+};
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -931,9 +933,13 @@ impl DefaultPhysicalPlanner {
                         _ => None
                     };
 
+                    let prefer_hash_join = session_state.config.config_options()
+                        .read()
+                        .get_bool(OPT_PREFER_HASH_JOIN)
+                        .unwrap_or_default();
                     if session_state.config.target_partitions > 1
                         && session_state.config.repartition_joins
-                        && !session_state.config.prefer_hash_join
+                        && !prefer_hash_join
                     {
                         // Use SortMergeJoin if hash join is not preferred
                         // Sort-Merge join support currently is experimental
@@ -953,7 +959,7 @@ impl DefaultPhysicalPlanner {
                         }
                     } else if session_state.config.target_partitions > 1
                         && session_state.config.repartition_joins
-                        && session_state.config.prefer_hash_join {
+                        && prefer_hash_join {
                          let partition_mode = {
                             if session_state.config.collect_statistics {
                                 PartitionMode::Auto

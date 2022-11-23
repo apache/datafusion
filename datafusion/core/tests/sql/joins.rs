@@ -1870,3 +1870,125 @@ async fn reduce_full_join_to_inner_join() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn sort_merge_equijoin() -> Result<()> {
+    let ctx = create_sort_merge_join_context("t1_id", "t2_id")?;
+    let equivalent_sql = [
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
+        "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
+    ];
+    let expected = vec![
+        "+-------+---------+---------+",
+        "| t1_id | t1_name | t2_name |",
+        "+-------+---------+---------+",
+        "| 11    | a       | z       |",
+        "| 22    | b       | y       |",
+        "| 44    | d       | x       |",
+        "+-------+---------+---------+",
+    ];
+    for sql in equivalent_sql.iter() {
+        let actual = execute_to_batches(&ctx, sql).await;
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sort_merge_join_on_date32() -> Result<()> {
+    let ctx = create_sort_merge_join_datatype_context()?;
+
+    // inner sort merge join on data type (Date32)
+    let sql = "select * from t1 join t2 on t1.c1 = t2.c1";
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
+    let state = ctx.state();
+    let logical_plan = state.optimize(&plan)?;
+    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let expected = vec![
+        "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@4 as c1, c2@5 as c2, c3@6 as c3, c4@7 as c4]",
+        "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c1\", index: 0 })]",
+        "    SortExec: [c1@0 ASC]",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8)",
+        "          RepartitionExec: partitioning=RoundRobinBatch(8)",
+        "            MemoryExec: partitions=1, partition_sizes=[1]",
+        "    SortExec: [c1@0 ASC]",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 8)",
+        "          RepartitionExec: partitioning=RoundRobinBatch(8)",
+        "            MemoryExec: partitions=1, partition_sizes=[1]",
+    ];
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+
+    let expected = vec![
+        "+------------+------------+---------+-----+------------+------------+---------+-----+",
+        "| c1         | c2         | c3      | c4  | c1         | c2         | c3      | c4  |",
+        "+------------+------------+---------+-----+------------+------------+---------+-----+",
+        "| 1970-01-02 | 1970-01-02 | 1.23    | abc | 1970-01-02 | 1970-01-02 | -123.12 | abc |",
+        "| 1970-01-04 |            | -123.12 | jkl | 1970-01-04 |            | 789.00  |     |",
+        "+------------+------------+---------+-----+------------+------------+---------+-----+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sort_merge_join_on_decimal() -> Result<()> {
+    let ctx = create_sort_merge_join_datatype_context()?;
+
+    // right join on data type (Decimal)
+    let sql = "select * from t1 right join t2 on t1.c3 = t2.c3";
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
+    let state = ctx.state();
+    let logical_plan = state.optimize(&plan)?;
+    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let expected = vec![
+        "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@4 as c1, c2@5 as c2, c3@6 as c3, c4@7 as c4]",
+        "  SortMergeJoin: join_type=Right, on=[(Column { name: \"c3\", index: 2 }, Column { name: \"c3\", index: 2 })]",
+        "    SortExec: [c3@2 ASC]",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c3\", index: 2 }], 8)",
+        "          RepartitionExec: partitioning=RoundRobinBatch(8)",
+        "            MemoryExec: partitions=1, partition_sizes=[1]",
+        "    SortExec: [c3@2 ASC]",
+        "      CoalesceBatchesExec: target_batch_size=4096",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c3\", index: 2 }], 8)",
+        "          RepartitionExec: partitioning=RoundRobinBatch(8)",
+        "            MemoryExec: partitions=1, partition_sizes=[1]",
+    ];
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+
+    let expected = vec![
+        "+------------+------------+---------+-----+------------+------------+-----------+---------+",
+        "| c1         | c2         | c3      | c4  | c1         | c2         | c3        | c4      |",
+        "+------------+------------+---------+-----+------------+------------+-----------+---------+",
+        "|            |            |         |     |            |            | 100000.00 | abcdefg |",
+        "|            |            |         |     |            | 1970-01-04 | 0.00      | qwerty  |",
+        "|            | 1970-01-04 | 789.00  | ghi | 1970-01-04 |            | 789.00    |         |",
+        "| 1970-01-04 |            | -123.12 | jkl | 1970-01-02 | 1970-01-02 | -123.12   | abc     |",
+        "+------------+------------+---------+-----+------------+------------+-----------+---------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
