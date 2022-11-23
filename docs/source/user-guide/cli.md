@@ -161,13 +161,13 @@ The CLI can query data in S3 if the following environment variables are defined:
 
 Details of the environment variables that can be used are
 
-* AWS_ACCESS_KEY_ID -> access_key_id
-* AWS_SECRET_ACCESS_KEY -> secret_access_key
-* AWS_DEFAULT_REGION -> region
-* AWS_ENDPOINT -> endpoint
-* AWS_SESSION_TOKEN -> token
-* AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
-* AWS_ALLOW_HTTP -> set to "true" to permit HTTP connections without TLS
+- AWS_ACCESS_KEY_ID -> access_key_id
+- AWS_SECRET_ACCESS_KEY -> secret_access_key
+- AWS_DEFAULT_REGION -> region
+- AWS_ENDPOINT -> endpoint
+- AWS_SESSION_TOKEN -> token
+- AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+- AWS_ALLOW_HTTP -> set to "true" to permit HTTP connections without TLS
 
 Example:
 
