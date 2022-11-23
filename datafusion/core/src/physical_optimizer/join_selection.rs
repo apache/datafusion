@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Select the proper PartitionMode and build side based on based on the avaliable statistics for hash join.
+//! Select the proper PartitionMode and build side based on the avaliable statistics for hash join.
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
