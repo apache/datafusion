@@ -182,32 +182,29 @@ fn swap_reverting_projection(
 
 /// Swaps join sides for filter column indices and produces new JoinFilter
 fn swap_join_filter(filter: &Option<JoinFilter>) -> Option<JoinFilter> {
-    match filter {
-        Some(filter) => {
-            let column_indices = filter
-                .column_indices()
-                .iter()
-                .map(|idx| {
-                    let side = if matches!(idx.side, JoinSide::Left) {
-                        JoinSide::Right
-                    } else {
-                        JoinSide::Left
-                    };
-                    ColumnIndex {
-                        index: idx.index,
-                        side,
-                    }
-                })
-                .collect();
+    filter.as_ref().map(|filter| {
+        let column_indices = filter
+            .column_indices()
+            .iter()
+            .map(|idx| {
+                let side = if matches!(idx.side, JoinSide::Left) {
+                    JoinSide::Right
+                } else {
+                    JoinSide::Left
+                };
+                ColumnIndex {
+                    index: idx.index,
+                    side,
+                }
+            })
+            .collect();
 
-            Some(JoinFilter::new(
-                filter.expression().clone(),
-                column_indices,
-                filter.schema().clone(),
-            ))
-        }
-        None => None,
-    }
+        JoinFilter::new(
+            filter.expression().clone(),
+            column_indices,
+            filter.schema().clone(),
+        )
+    })
 }
 
 impl PhysicalOptimizerRule for JoinSelection {
