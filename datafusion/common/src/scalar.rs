@@ -2291,7 +2291,8 @@ impl ScalarValue {
         }
     }
 
-    /// Estimate size if bytes including `Self`
+    /// Estimate size if bytes including `Self`. For values with internal containers such as `String`
+    /// includes the allocated size (`capacity`) rather than the current length (`len`)
     pub fn size(&self) -> usize {
         std::mem::size_of_val(&self)
             + match self {

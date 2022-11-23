@@ -55,7 +55,9 @@ pub trait Accumulator: Send + Sync + Debug {
     /// returns its value based on its current state.
     fn evaluate(&self) -> Result<ScalarValue>;
 
-    /// Size in bytes including `Self`.
+    /// Allocated size required for this accumulator, in bytes, including `Self`.
+    /// Allocated means that for internal containers such as `Vec`, the `capacity` should be used
+    /// not the `len`
     fn size(&self) -> usize;
 }
 
