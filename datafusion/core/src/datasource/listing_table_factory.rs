@@ -29,7 +29,7 @@ use crate::datasource::listing::{
 };
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, Field, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
 use datafusion_expr::CreateExternalTable;
@@ -103,11 +103,14 @@ impl TableProviderFactory for ListingTableFactory {
                 .table_partition_cols
                 .iter()
                 .map(|col| {
-                    (
-                        col.clone(),
-                        schema.field_with_name(col).unwrap().data_type().clone(),
-                    )
+                    schema.field_with_name(col).map_err(|arrow_err| {
+                        DataFusionError::Execution(arrow_err.to_string())
+                    })
                 })
+                .collect::<datafusion_common::Result<Vec<&Field>>>()?;
+            let table_partition_cols = table_partition_cols
+                .into_iter()
+                .map(|f| (f.name().to_owned(), f.data_type().to_owned()))
                 .collect();
             // exclude partition columns to support creating partitioned external table
             // with a specified column definition like
