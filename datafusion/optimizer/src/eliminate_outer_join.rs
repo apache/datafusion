@@ -29,6 +29,28 @@ use datafusion_expr::expr::Cast;
 use std::sync::Arc;
 
 #[derive(Default)]
+///
+/// Attempt to replace outer joins with inner joins.
+///
+/// Outer joins are typically more expensive to compute at runtime
+/// than inner joins and prevent various forms fo predicate pushdown
+/// and other optimizations, so removing them if possible is beneficial.
+///
+/// Inner joins filter out rows that do match. Outer joins pass rows
+/// that do not match padded with nulls. If there is a filter in the
+/// query that would filter any such null rows after the join the rows
+/// introduced by the outer join are filtered.
+///
+/// For example, in the `select ... from a left join b on ... where b.xx = 100;`
+///
+/// For rows when `b.xx` is null (as it would be after an outer join),
+/// the `b.xx = 100` predicate filters them out and there there is no
+/// need to produce null rows for output.
+///
+/// Generally, an outer join can be rewritten to inner join if the
+/// filters from the WHERE clause return false while any inputs are
+/// null and columns of those quals are come from nullable side of
+/// outer join.
 pub struct EliminateOuterJoin;
 
 impl EliminateOuterJoin {
