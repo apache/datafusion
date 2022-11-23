@@ -227,30 +227,31 @@ impl PhysicalOptimizerRule for JoinSelection {
             if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
                 match hash_join.partition_mode() {
                     PartitionMode::Auto => {
-                        try_collect_left(hash_join, Some(collect_left_threshold))
-                            .unwrap()
-                            .or_else(|| Some(partitioned_hash_join(hash_join).unwrap()))
+                        try_collect_left(hash_join, Some(collect_left_threshold))?
+                            .map_or_else(
+                                || Ok(Some(partitioned_hash_join(hash_join)?)),
+                                |v| Ok(Some(v)),
+                            )
                     }
-                    PartitionMode::CollectLeft => try_collect_left(hash_join, None)
-                        .unwrap()
-                        .or_else(|| Some(partitioned_hash_join(hash_join).unwrap())),
+                    PartitionMode::CollectLeft => try_collect_left(hash_join, None)?
+                        .map_or_else(
+                            || Ok(Some(partitioned_hash_join(hash_join)?)),
+                            |v| Ok(Some(v)),
+                        ),
                     PartitionMode::Partitioned => {
                         let left = hash_join.left();
                         let right = hash_join.right();
                         if should_swap_join_order(&**left, &**right)
                             && supports_swap(*hash_join.join_type())
                         {
-                            Some(
-                                swap_hash_join(
-                                    hash_join,
-                                    PartitionMode::Partitioned,
-                                    left,
-                                    right,
-                                )
-                                .unwrap(),
-                            )
+                            Ok(Some(swap_hash_join(
+                                hash_join,
+                                PartitionMode::Partitioned,
+                                left,
+                                right,
+                            )?))
                         } else {
-                            None
+                            Ok(None)
                         }
                     }
                 }
@@ -260,20 +261,18 @@ impl PhysicalOptimizerRule for JoinSelection {
                 let right = cross_join.right();
                 if should_swap_join_order(&**left, &**right) {
                     let new_join =
-                        CrossJoinExec::try_new(Arc::clone(right), Arc::clone(left))
-                            .unwrap();
+                        CrossJoinExec::try_new(Arc::clone(right), Arc::clone(left))?;
                     // TODO avoid adding ProjectionExec again and again, only adding Final Projection
                     let proj = ProjectionExec::try_new(
                         swap_reverting_projection(&left.schema(), &right.schema()),
                         Arc::new(new_join),
-                    )
-                    .unwrap();
-                    Some(Arc::new(proj))
+                    )?;
+                    Ok(Some(Arc::new(proj)))
                 } else {
-                    None
+                    Ok(None)
                 }
             } else {
-                None
+                Ok(None)
             }
         })
     }

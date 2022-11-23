@@ -216,7 +216,9 @@ fn adjust_input_keys_ordering(
             }
             PartitionMode::Auto => {
                 // Can not satisfy, clear the current requirements and generate new empty requirements
-                Some(PlanWithKeyRequirements::new(requirements.plan.clone()))
+                Ok(Some(PlanWithKeyRequirements::new(
+                    requirements.plan.clone(),
+                )))
             }
         }
     } else if let Some(CrossJoinExec { left, .. }) =

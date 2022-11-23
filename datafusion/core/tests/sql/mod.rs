@@ -487,7 +487,9 @@ fn create_sort_merge_join_context(
 
 fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
     let ctx = SessionContext::with_config(
-        SessionConfig::new().set_bool(OPT_PREFER_HASH_JOIN, false),
+        SessionConfig::new()
+            .set_bool(OPT_PREFER_HASH_JOIN, false)
+            .with_target_partitions(2),
     );
 
     let t1_schema = Schema::new(vec![
