@@ -227,12 +227,7 @@ impl Accumulator for DistinctCountAccumulator {
                 .values
                 .iter()
                 .map(|vals| {
-                    (std::mem::size_of::<ScalarValue>() * vals.0.capacity())
-                        + vals
-                            .0
-                            .iter()
-                            .map(|sv| sv.size() - std::mem::size_of_val(sv))
-                            .sum::<usize>()
+                    ScalarValue::size_of_vec(&vals.0) - std::mem::size_of_val(&vals.0)
                 })
                 .sum::<usize>()
             + (std::mem::size_of::<DataType>() * self.state_data_types.capacity())

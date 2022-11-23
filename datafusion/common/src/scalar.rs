@@ -19,6 +19,7 @@
 
 use std::borrow::Borrow;
 use std::cmp::{max, Ordering};
+use std::collections::HashSet;
 use std::convert::{Infallible, TryInto};
 use std::ops::{Add, Sub};
 use std::str::FromStr;
@@ -2334,12 +2335,7 @@ impl ScalarValue {
                 // TODO(crepererum): `Field` is NOT fixed size, add `Field::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
                 ScalarValue::List(vals, field) => {
                     vals.as_ref()
-                        .map(|vals| {
-                            vals.iter()
-                                .map(|sv| sv.size() - std::mem::size_of_val(sv))
-                                .sum::<usize>()
-                                + (std::mem::size_of::<ScalarValue>() * vals.capacity())
-                        })
+                        .map(|vals| Self::size_of_vec(vals) - std::mem::size_of_val(vals))
                         .unwrap_or_default()
                         + std::mem::size_of_val(field)
                 }
@@ -2360,6 +2356,28 @@ impl ScalarValue {
                     std::mem::size_of_val(dt.as_ref()) + sv.size()
                 }
             }
+    }
+
+    /// Estimates [size](Self::size) of [`Vec`] in bytes.
+    ///
+    /// Includes the size of the [`Vec`] container itself.
+    pub fn size_of_vec(vec: &Vec<Self>) -> usize {
+        (std::mem::size_of::<ScalarValue>() * vec.capacity())
+            + vec
+                .iter()
+                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                .sum::<usize>()
+    }
+
+    /// Estimates [size](Self::size) of [`HashSet`] in bytes.
+    ///
+    /// Includes the size of the [`HashSet`] container itself.
+    pub fn size_of_hashset<S>(set: &HashSet<Self, S>) -> usize {
+        (std::mem::size_of::<ScalarValue>() * set.capacity())
+            + set
+                .iter()
+                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                .sum::<usize>()
     }
 }
 

@@ -178,9 +178,8 @@ impl Accumulator for DistinctSumAccumulator {
 
     fn size(&self) -> usize {
         // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
-        std::mem::size_of_val(self)
-            + (std::mem::size_of::<ScalarValue>() * self.hash_values.capacity())
-            + self.hash_values.iter().map(|sv| sv.size()).sum::<usize>()
+        std::mem::size_of_val(self) + ScalarValue::size_of_hashset(&self.hash_values)
+            - std::mem::size_of_val(&self.hash_values)
     }
 }
 
