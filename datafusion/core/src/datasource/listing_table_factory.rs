@@ -94,8 +94,7 @@ impl TableProviderFactory for ListingTableFactory {
                 None,
                 cmd.table_partition_cols
                     .iter()
-                    .zip((0..cmd.table_partition_cols.len()).map(|_| DataType::Utf8))
-                    .map(|x| (x.0.clone(), x.1))
+                    .map(|x| (x.clone(), DataType::Utf8))
                     .collect::<Vec<_>>(),
             )
         } else {
