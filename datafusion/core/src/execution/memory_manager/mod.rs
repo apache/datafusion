@@ -28,6 +28,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+pub mod proxy;
+
 static CONSUMER_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone)]
