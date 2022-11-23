@@ -291,7 +291,7 @@ impl MemoryConsumer for ExternalSorter {
             .metrics_set
             .new_intermediate_tracking(partition, self.runtime.clone());
 
-        let spillfile = self.runtime.disk_manager.create_tmp_file()?;
+        let spillfile = self.runtime.disk_manager.create_tmp_file("Sorting")?;
         let stream = in_mem_partial_sort(
             &mut in_mem_batches,
             self.schema.clone(),
