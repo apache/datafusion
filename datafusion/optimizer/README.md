@@ -321,7 +321,7 @@ In the following example, the `type_coercion` and `simplify_expressions` passes 
 |                                                            |   EmptyExec: produce_one_row=true                                         |
 |                                                            |                                                                           |
 | physical_plan after aggregate_statistics                   | SAME TEXT AS ABOVE                                                        |
-| physical_plan after hash_build_probe_order                 | SAME TEXT AS ABOVE                                                        |
+| physical_plan after join_selection                         | SAME TEXT AS ABOVE                                                        |
 | physical_plan after coalesce_batches                       | SAME TEXT AS ABOVE                                                        |
 | physical_plan after repartition                            | SAME TEXT AS ABOVE                                                        |
 | physical_plan after add_merge_exec                         | SAME TEXT AS ABOVE                                                        |
