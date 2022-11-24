@@ -362,26 +362,61 @@ scalar_expr!(Ln, ln, num, "natural logarithm");
 scalar_expr!(NullIf, nullif, arg_1 arg_2, "returns NULL if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the COALESCE expression.");
 scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
 scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
-scalar_expr!(ToHex, to_hex, num, "returns the hexdecimal representation of an integer");
+scalar_expr!(
+    ToHex,
+    to_hex,
+    num,
+    "returns the hexdecimal representation of an integer"
+);
 scalar_expr!(Uuid, uuid, , "Returns uuid v4 as a string value");
 
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
-scalar_expr!(BitLength, bit_length, string, "the number of bits in the `string`");
-scalar_expr!(CharacterLength, character_length, string, "the number of characters in the `string`");
-scalar_expr!(Chr, chr, code_point, "converts the Unicode code point to a UTF8 character");
+scalar_expr!(
+    BitLength,
+    bit_length,
+    string,
+    "the number of bits in the `string`"
+);
+scalar_expr!(
+    CharacterLength,
+    character_length,
+    string,
+    "the number of characters in the `string`"
+);
+scalar_expr!(
+    Chr,
+    chr,
+    code_point,
+    "converts the Unicode code point to a UTF8 character"
+);
 scalar_expr!(Digest, digest, input algorithm, "compute the binary hash of `input`, using the `algorithm`");
 scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
 scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
 scalar_expr!(Lower, lower, string, "convert the string to lower case");
-scalar_expr!(Ltrim, ltrim, string, "removes all characters, spaces by default, from the beginning of a string");
+scalar_expr!(
+    Ltrim,
+    ltrim,
+    string,
+    "removes all characters, spaces by default, from the beginning of a string"
+);
 scalar_expr!(MD5, md5, string, "returns the MD5 hash of a string");
-scalar_expr!(OctetLength, octet_length, string, "returns the number of bytes of a string");
+scalar_expr!(
+    OctetLength,
+    octet_length,
+    string,
+    "returns the number of bytes of a string"
+);
 scalar_expr!(Replace, replace, string from to, "replaces all occurrences of `from` with `to` in the `string`");
 scalar_expr!(Repeat, repeat, string n, "repeats the `string` to `n` times");
 scalar_expr!(Reverse, reverse, string, "reverses the `string`");
 scalar_expr!(Right, right, string n, "returns the last `n` characters in the `string`");
-scalar_expr!(Rtrim, rtrim, string, "removes all characters, spaces by default, from the end of a string");
+scalar_expr!(
+    Rtrim,
+    rtrim,
+    string,
+    "removes all characters, spaces by default, from the end of a string"
+);
 scalar_expr!(SHA224, sha224, string, "SHA-224 hash");
 scalar_expr!(SHA256, sha256, string, "SHA-256 hash");
 scalar_expr!(SHA384, sha384, string, "SHA-384 hash");
@@ -392,28 +427,81 @@ scalar_expr!(Strpos, strpos, string substring, "finds the position from where th
 scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
 scalar_expr!(Substr, substring, string position length, "substring from the `position` with `length` characters");
 scalar_expr!(Translate, translate, string from to, "replaces the characters in `from` with the counterpart in `to`");
-scalar_expr!(Trim, trim, string, "removes all characters, space by default from the string");
+scalar_expr!(
+    Trim,
+    trim,
+    string,
+    "removes all characters, space by default from the string"
+);
 scalar_expr!(Upper, upper, string, "converts the string to upper case");
 //use vec as parameter
-nary_scalar_expr!(Lpad, lpad, "fill up a string to the length by prepending the characters");
-nary_scalar_expr!(Rpad, rpad, "fill up a string to the length by appending the characters");
-nary_scalar_expr!(RegexpReplace, regexp_replace, "replace strings that match a regular expression");
-nary_scalar_expr!(RegexpMatch, regexp_match, "matches a regular expression against a string and returns matched substrings.");
-nary_scalar_expr!(Btrim, btrim, "removes all characters, spaces by default, from both sides of a string");
-nary_scalar_expr!(MakeArray, array, "returns an array of fixed size with each argument on it.");
+nary_scalar_expr!(
+    Lpad,
+    lpad,
+    "fill up a string to the length by prepending the characters"
+);
+nary_scalar_expr!(
+    Rpad,
+    rpad,
+    "fill up a string to the length by appending the characters"
+);
+nary_scalar_expr!(
+    RegexpReplace,
+    regexp_replace,
+    "replace strings that match a regular expression"
+);
+nary_scalar_expr!(
+    RegexpMatch,
+    regexp_match,
+    "matches a regular expression against a string and returns matched substrings."
+);
+nary_scalar_expr!(
+    Btrim,
+    btrim,
+    "removes all characters, spaces by default, from both sides of a string"
+);
+nary_scalar_expr!(
+    MakeArray,
+    array,
+    "returns an array of fixed size with each argument on it."
+);
 nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
 //there is a func concat_ws before, so use concat_ws_expr as name.c
-nary_scalar_expr!(ConcatWithSeparator, concat_ws_expr, "concatenates several strings, placing a seperator between each one");
+nary_scalar_expr!(
+    ConcatWithSeparator,
+    concat_ws_expr,
+    "concatenates several strings, placing a seperator between each one"
+);
 nary_scalar_expr!(Concat, concat_expr, "concatenates several strings");
 
 // date functions
 scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
 scalar_expr!(DateTrunc, date_trunc, part date, "truncates the date to a specified level of precision");
 scalar_expr!(DateBin, date_bin, stride source origin, "coerces an arbitrary timestamp to the start of the nearest specified interval");
-scalar_expr!(ToTimestampMillis, to_timestamp_millis, date, "converts a string to a `Timestamp(Milliseconds, None)`");
-scalar_expr!(ToTimestampMicros, to_timestamp_micros, date, "converts a string to a `Timestamp(Microseconds, None)`");
-scalar_expr!(ToTimestampSeconds, to_timestamp_seconds, date, "converts a string to a `Timestamp(Seconds, None)`");
-scalar_expr!(FromUnixtime, from_unixtime, unixtime, "returns the unix time in format");
+scalar_expr!(
+    ToTimestampMillis,
+    to_timestamp_millis,
+    date,
+    "converts a string to a `Timestamp(Milliseconds, None)`"
+);
+scalar_expr!(
+    ToTimestampMicros,
+    to_timestamp_micros,
+    date,
+    "converts a string to a `Timestamp(Microseconds, None)`"
+);
+scalar_expr!(
+    ToTimestampSeconds,
+    to_timestamp_seconds,
+    date,
+    "converts a string to a `Timestamp(Seconds, None)`"
+);
+scalar_expr!(
+    FromUnixtime,
+    from_unixtime,
+    unixtime,
+    "returns the unix time in format"
+);
 scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
 scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
 scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
