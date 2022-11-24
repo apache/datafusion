@@ -318,8 +318,8 @@ macro_rules! scalar_expr {
 }
 
 macro_rules! nary_scalar_expr {
-    ($ENUM:ident, $FUNC:ident) => {
-        #[doc = concat!("Scalar function definition for ", stringify!($FUNC) ) ]
+    ($ENUM:ident, $FUNC:ident, $DOC:expr) => {
+        #[doc = $DOC ]
         pub fn $FUNC(args: Vec<Expr>) -> Expr {
             Expr::ScalarFunction {
                 fun: built_in_function::BuiltinScalarFunction::$ENUM,
@@ -394,14 +394,14 @@ scalar_expr!(Translate, translate, string from to, "replaces the characters in `
 scalar_expr!(Trim, trim, string, "removes all characters, space by default from the string");
 scalar_expr!(Upper, upper, string, "converts the string to upper case");
 //use vec as parameter
-nary_scalar_expr!(Lpad, lpad);
-nary_scalar_expr!(Rpad, rpad);
-nary_scalar_expr!(RegexpReplace, regexp_replace);
-nary_scalar_expr!(RegexpMatch, regexp_match);
-nary_scalar_expr!(Btrim, btrim);
+nary_scalar_expr!(Lpad, lpad, "fill up a string to the length by prepending the characters");
+nary_scalar_expr!(Rpad, rpad, "fill up a string to the length by appending the characters");
+nary_scalar_expr!(RegexpReplace, regexp_replace, "replace strings that match a regular expression");
+nary_scalar_expr!(RegexpMatch, regexp_match, "matches a regular expression against a string and returns matched substrings.");
+nary_scalar_expr!(Btrim, btrim, "removes all characters, spaces by default, from both sides of a string");
 //there is a func concat_ws before, so use concat_ws_expr as name.c
-nary_scalar_expr!(ConcatWithSeparator, concat_ws_expr);
-nary_scalar_expr!(Concat, concat_expr);
+nary_scalar_expr!(ConcatWithSeparator, concat_ws_expr, "concatenates several strings, placing a seperator between each one");
+nary_scalar_expr!(Concat, concat_expr, "concatenates several strings");
 
 // date functions
 scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
