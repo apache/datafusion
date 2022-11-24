@@ -305,19 +305,6 @@ pub fn is_not_unknown(expr: Expr) -> Expr {
     Expr::IsNotUnknown(Box::new(expr))
 }
 
-/// Create an convenience function representing a unary scalar function
-macro_rules! unary_scalar_expr {
-    ($ENUM:ident, $FUNC:ident, $DOC:expr) => {
-        #[doc = $DOC ]
-        pub fn $FUNC(e: Expr) -> Expr {
-            Expr::ScalarFunction {
-                fun: built_in_function::BuiltinScalarFunction::$ENUM,
-                args: vec![e],
-            }
-        }
-    };
-}
-
 macro_rules! scalar_expr {
     ($ENUM:ident, $FUNC:ident, $($arg:ident)*, $DOC:expr) => {
         #[doc = $DOC ]
@@ -345,31 +332,33 @@ macro_rules! nary_scalar_expr {
 // generate methods for creating the supported unary/binary expressions
 
 // math functions
-unary_scalar_expr!(Sqrt, sqrt, "square root of a number");
-unary_scalar_expr!(Sin, sin, "sine");
-unary_scalar_expr!(Cos, cos, "cosine");
-unary_scalar_expr!(Tan, tan, "tangent");
-unary_scalar_expr!(Asin, asin, "inverse sine");
-unary_scalar_expr!(Acos, acos, "inverse cosine");
-unary_scalar_expr!(Atan, atan, "inverse tangent");
-unary_scalar_expr!(
+scalar_expr!(Sqrt, sqrt, num, "square root of a number");
+scalar_expr!(Sin, sin, num, "sine");
+scalar_expr!(Cos, cos, num, "cosine");
+scalar_expr!(Tan, tan, num, "tangent");
+scalar_expr!(Asin, asin, num, "inverse sine");
+scalar_expr!(Acos, acos, num, "inverse cosine");
+scalar_expr!(Atan, atan, num, "inverse tangent");
+scalar_expr!(
     Floor,
     floor,
+    num,
     "nearest integer less than or equal to argument"
 );
-unary_scalar_expr!(
+scalar_expr!(
     Ceil,
     ceil,
+    num,
     "nearest integer greater than or equal to argument"
 );
-unary_scalar_expr!(Round, round, "round to nearest integer");
-unary_scalar_expr!(Trunc, trunc, "truncate toward zero");
-unary_scalar_expr!(Abs, abs, "absolute value");
-unary_scalar_expr!(Signum, signum, "sign of the argument (-1, 0, +1) ");
-unary_scalar_expr!(Exp, exp, "exponential");
-unary_scalar_expr!(Log2, log2, "base 2 logarithm");
-unary_scalar_expr!(Log10, log10, "base 10 logarithm");
-unary_scalar_expr!(Ln, ln, "natural logarithm");
+scalar_expr!(Round, round, num, "round to nearest integer");
+scalar_expr!(Trunc, trunc, num, "truncate toward zero");
+scalar_expr!(Abs, abs, num, "absolute value");
+scalar_expr!(Signum, signum, num, "sign of the argument (-1, 0, +1) ");
+scalar_expr!(Exp, exp, num, "exponential");
+scalar_expr!(Log2, log2, num, "base 2 logarithm");
+scalar_expr!(Log10, log10, num, "base 10 logarithm");
+scalar_expr!(Ln, ln, num, "natural logarithm");
 scalar_expr!(NullIf, nullif, arg_1 arg_2, "returns NULL if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the COALESCE expression.");
 scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
 scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
@@ -423,7 +412,7 @@ scalar_expr!(ToTimestampMicros, to_timestamp_micros, date, "converts a string to
 scalar_expr!(ToTimestampSeconds, to_timestamp_seconds, date, "converts a string to a `Timestamp(Seconds, None)`");
 scalar_expr!(FromUnixtime, from_unixtime, unixtime, "returns the unix time in format");
 
-unary_scalar_expr!(ArrowTypeof, arrow_typeof, "data type");
+scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
 
 /// Returns an array of fixed size with each argument on it.
 pub fn array(args: Vec<Expr>) -> Expr {
