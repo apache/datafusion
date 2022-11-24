@@ -319,8 +319,8 @@ macro_rules! unary_scalar_expr {
 }
 
 macro_rules! scalar_expr {
-    ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
-        #[doc = concat!("Scalar function definition for ", stringify!($FUNC) ) ]
+    ($ENUM:ident, $FUNC:ident, $($arg:ident)*, $DOC:expr) => {
+        #[doc = $DOC ]
         pub fn $FUNC($($arg: Expr),*) -> Expr {
             Expr::ScalarFunction {
                 fun: built_in_function::BuiltinScalarFunction::$ENUM,
@@ -370,41 +370,40 @@ unary_scalar_expr!(Exp, exp, "exponential");
 unary_scalar_expr!(Log2, log2, "base 2 logarithm");
 unary_scalar_expr!(Log10, log10, "base 10 logarithm");
 unary_scalar_expr!(Ln, ln, "natural logarithm");
-scalar_expr!(NullIf, nullif, arg_1, arg_2);
-scalar_expr!(Power, power, base, exponent);
-scalar_expr!(Atan2, atan2, y, x);
+scalar_expr!(NullIf, nullif, arg_1 arg_2, "returns NULL if value1 equals value2; otherwise it returns value1. This can be used to perform the inverse operation of the COALESCE expression.");
+scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
+scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
+scalar_expr!(ToHex, to_hex, num, "returns the hexdecimal representation of an integer");
 
 // string functions
-scalar_expr!(Ascii, ascii, string);
-scalar_expr!(BitLength, bit_length, string);
-scalar_expr!(CharacterLength, character_length, string);
-scalar_expr!(CharacterLength, length, string);
-scalar_expr!(Chr, chr, string);
-scalar_expr!(Digest, digest, input, algorithm);
-scalar_expr!(InitCap, initcap, string);
-scalar_expr!(Left, left, string, count);
-scalar_expr!(Lower, lower, string);
-scalar_expr!(Ltrim, ltrim, string);
-scalar_expr!(MD5, md5, string);
-scalar_expr!(OctetLength, octet_length, string);
-scalar_expr!(Replace, replace, string, from, to);
-scalar_expr!(Repeat, repeat, string, count);
-scalar_expr!(Reverse, reverse, string);
-scalar_expr!(Right, right, string, count);
-scalar_expr!(Rtrim, rtrim, string);
-scalar_expr!(SHA224, sha224, string);
-scalar_expr!(SHA256, sha256, string);
-scalar_expr!(SHA384, sha384, string);
-scalar_expr!(SHA512, sha512, string);
-scalar_expr!(SplitPart, split_part, expr, delimiter, index);
-scalar_expr!(StartsWith, starts_with, string, characters);
-scalar_expr!(Strpos, strpos, string, substring);
-scalar_expr!(Substr, substr, string, position);
-scalar_expr!(Substr, substring, string, position, count);
-scalar_expr!(ToHex, to_hex, string);
-scalar_expr!(Translate, translate, string, from, to);
-scalar_expr!(Trim, trim, string);
-scalar_expr!(Upper, upper, string);
+scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
+scalar_expr!(BitLength, bit_length, string, "the number of bits in the `string`");
+scalar_expr!(CharacterLength, character_length, string, "the number of characters in the `string`");
+scalar_expr!(Chr, chr, code_point, "converts the Unicode code point to a UTF8 character");
+scalar_expr!(Digest, digest, input algorithm, "compute the binary hash of `input`, using the `algorithm`");
+scalar_expr!(InitCap, initcap, string, "converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase");
+scalar_expr!(Left, left, string n, "returns the first `n` characters in the `string`");
+scalar_expr!(Lower, lower, string, "convert the string to lower case");
+scalar_expr!(Ltrim, ltrim, string, "removes all characters, spaces by default, from the beginning of a string");
+scalar_expr!(MD5, md5, string, "returns the MD5 hash of a string");
+scalar_expr!(OctetLength, octet_length, string, "returns the number of bytes of a string");
+scalar_expr!(Replace, replace, string from to, "replaces all occurrences of `from` with `to` in the `string`");
+scalar_expr!(Repeat, repeat, string n, "repeats the `string` to `n` times");
+scalar_expr!(Reverse, reverse, string, "reverses the `string`");
+scalar_expr!(Right, right, string n, "returns the last `n` characters in the `string`");
+scalar_expr!(Rtrim, rtrim, string, "removes all characters, spaces by default, from the end of a string");
+scalar_expr!(SHA224, sha224, string, "SHA-224 hash");
+scalar_expr!(SHA256, sha256, string, "SHA-256 hash");
+scalar_expr!(SHA384, sha384, string, "SHA-384 hash");
+scalar_expr!(SHA512, sha512, string, "SHA-512 hash");
+scalar_expr!(SplitPart, split_part, string delimiter index, "splits a string based on a delimiter and picks out the desired field based on the index. ");
+scalar_expr!(StartsWith, starts_with, string prefix, "whether the `string` starts with the `prefix`");
+scalar_expr!(Strpos, strpos, string substring, "finds the position from where the `substring` matchs the `string`");
+scalar_expr!(Substr, substr, string position, "substring from the `position` to the end");
+scalar_expr!(Substr, substring, string position length, "substring from the `position` with `length` characters");
+scalar_expr!(Translate, translate, string from to, "replaces the characters in `from` with the counterpart in `to`");
+scalar_expr!(Trim, trim, string, "removes all characters, space by default from the string");
+scalar_expr!(Upper, upper, string, "converts the string to upper case");
 //use vec as parameter
 nary_scalar_expr!(Lpad, lpad);
 nary_scalar_expr!(Rpad, rpad);
@@ -416,13 +415,13 @@ nary_scalar_expr!(ConcatWithSeparator, concat_ws_expr);
 nary_scalar_expr!(Concat, concat_expr);
 
 // date functions
-scalar_expr!(DatePart, date_part, part, date);
-scalar_expr!(DateTrunc, date_trunc, part, date);
-scalar_expr!(DateBin, date_bin, stride, source, origin);
-scalar_expr!(ToTimestampMillis, to_timestamp_millis, date);
-scalar_expr!(ToTimestampMicros, to_timestamp_micros, date);
-scalar_expr!(ToTimestampSeconds, to_timestamp_seconds, date);
-scalar_expr!(FromUnixtime, from_unixtime, unixtime);
+scalar_expr!(DatePart, date_part, part date, "extracts a subfield from the date");
+scalar_expr!(DateTrunc, date_trunc, part date, "truncates the date to a specified level of precision");
+scalar_expr!(DateBin, date_bin, stride source origin, "coerces an arbitrary timestamp to the start of the nearest specified interval");
+scalar_expr!(ToTimestampMillis, to_timestamp_millis, date, "converts a string to a `Timestamp(Milliseconds, None)`");
+scalar_expr!(ToTimestampMicros, to_timestamp_micros, date, "converts a string to a `Timestamp(Microseconds, None)`");
+scalar_expr!(ToTimestampSeconds, to_timestamp_seconds, date, "converts a string to a `Timestamp(Seconds, None)`");
+scalar_expr!(FromUnixtime, from_unixtime, unixtime, "returns the unix time in format");
 
 unary_scalar_expr!(ArrowTypeof, arrow_typeof, "data type");
 
@@ -635,7 +634,6 @@ mod test {
         test_nary_scalar_expr!(Btrim, btrim, string);
         test_nary_scalar_expr!(Btrim, btrim, string, characters);
         test_scalar_expr!(CharacterLength, character_length, string);
-        test_scalar_expr!(CharacterLength, length, string);
         test_scalar_expr!(Chr, chr, string);
         test_scalar_expr!(Digest, digest, string, algorithm);
         test_scalar_expr!(InitCap, initcap, string);
