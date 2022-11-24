@@ -363,6 +363,7 @@ scalar_expr!(NullIf, nullif, arg_1 arg_2, "returns NULL if value1 equals value2;
 scalar_expr!(Power, power, base exponent, "`base` raised to the power of `exponent`");
 scalar_expr!(Atan2, atan2, y x, "inverse tangent of a division given in the argument");
 scalar_expr!(ToHex, to_hex, num, "returns the hexdecimal representation of an integer");
+scalar_expr!(Uuid, uuid, , "Returns uuid v4 as a string value");
 
 // string functions
 scalar_expr!(Ascii, ascii, chr, "ASCII code value of the character");
@@ -399,6 +400,8 @@ nary_scalar_expr!(Rpad, rpad, "fill up a string to the length by appending the c
 nary_scalar_expr!(RegexpReplace, regexp_replace, "replace strings that match a regular expression");
 nary_scalar_expr!(RegexpMatch, regexp_match, "matches a regular expression against a string and returns matched substrings.");
 nary_scalar_expr!(Btrim, btrim, "removes all characters, spaces by default, from both sides of a string");
+nary_scalar_expr!(MakeArray, array, "returns an array of fixed size with each argument on it.");
+nary_scalar_expr!(Coalesce, coalesce, "returns `coalesce(args...)`, which evaluates to the value of the first [Expr] which is not NULL");
 //there is a func concat_ws before, so use concat_ws_expr as name.c
 nary_scalar_expr!(ConcatWithSeparator, concat_ws_expr, "concatenates several strings, placing a seperator between each one");
 nary_scalar_expr!(Concat, concat_expr, "concatenates several strings");
@@ -411,58 +414,11 @@ scalar_expr!(ToTimestampMillis, to_timestamp_millis, date, "converts a string to
 scalar_expr!(ToTimestampMicros, to_timestamp_micros, date, "converts a string to a `Timestamp(Microseconds, None)`");
 scalar_expr!(ToTimestampSeconds, to_timestamp_seconds, date, "converts a string to a `Timestamp(Seconds, None)`");
 scalar_expr!(FromUnixtime, from_unixtime, unixtime, "returns the unix time in format");
+scalar_expr!(CurrentDate, current_date, ,"returns current UTC date as a [`DataType::Date32`] value");
+scalar_expr!(Now, now, ,"returns current timestamp in nanoseconds, using the same value for all instances of now() in same statement");
+scalar_expr!(CurrentTime, current_time, , "returns current UTC time as a [`DataType::Time64`] value");
 
 scalar_expr!(ArrowTypeof, arrow_typeof, val, "data type");
-
-/// Returns an array of fixed size with each argument on it.
-pub fn array(args: Vec<Expr>) -> Expr {
-    Expr::ScalarFunction {
-        fun: built_in_function::BuiltinScalarFunction::MakeArray,
-        args,
-    }
-}
-
-/// Returns `coalesce(args...)`, which evaluates to the value of the first [Expr]
-/// which is not NULL
-pub fn coalesce(args: Vec<Expr>) -> Expr {
-    Expr::ScalarFunction {
-        fun: BuiltinScalarFunction::Coalesce,
-        args,
-    }
-}
-
-/// Returns current timestamp in nanoseconds, using the same value for all instances of now() in
-/// same statement.
-pub fn now() -> Expr {
-    Expr::ScalarFunction {
-        fun: BuiltinScalarFunction::Now,
-        args: vec![],
-    }
-}
-
-/// Returns current UTC date as a [`DataType::Date32`] value
-pub fn current_date() -> Expr {
-    Expr::ScalarFunction {
-        fun: BuiltinScalarFunction::CurrentDate,
-        args: vec![],
-    }
-}
-
-/// Returns uuid v4 as a string value
-pub fn uuid() -> Expr {
-    Expr::ScalarFunction {
-        fun: BuiltinScalarFunction::Uuid,
-        args: vec![],
-    }
-}
-
-/// Returns current UTC time as a [`DataType::Time64`] value
-pub fn current_time() -> Expr {
-    Expr::ScalarFunction {
-        fun: BuiltinScalarFunction::CurrentTime,
-        args: vec![],
-    }
-}
 
 /// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
 pub fn case(expr: Expr) -> CaseBuilder {
