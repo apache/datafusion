@@ -716,6 +716,26 @@ fn build_batch(
         (left_indices, right_indices)
     };
 
+    let (left_filtered_indices, right_filtered_indices) = match join_type {
+        JoinType::RightAnti => {
+            // right bit map
+            let right_len = batch.num_rows();
+            let mut right_buffer = BooleanBufferBuilder::new(right_len);
+            right_buffer.append_n(right_len, false);
+            right_filtered_indices.iter().flatten().for_each(|idx| {
+                right_buffer.set_bit(idx as usize, true);
+            });
+
+            // get the result of unmatched row in the right side.
+            let right_filtered_indices = UInt32Array::from_iter_values(
+                (0..right_len)
+                    .filter_map(|v| (!right_buffer.get_bit(v)).then_some(v as u32)),
+            );
+            (left_filtered_indices, right_filtered_indices)
+        }
+        _ => (left_filtered_indices, right_filtered_indices),
+    };
+
     if matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti) {
         return Ok((
             RecordBatch::new_empty(Arc::new(schema.clone())),
@@ -884,32 +904,27 @@ fn build_join_indexes(
             for (row, hash_value) in hash_values.iter().enumerate() {
                 // Get the hash and find it in the build index
 
-                // For every item on the left and right we check if it doesn't match
+                // For every item on the left and right we check if it matches
                 // This possibly contains rows with hash collisions,
                 // So we have to check here whether rows are equal or not
-                // We only produce one row if there is no match
-                let matches = left.0.get(*hash_value, |(hash, _)| *hash_value == *hash);
-                let mut no_match = true;
-                match matches {
-                    Some((_, indices)) => {
-                        for &i in indices {
-                            // Check hash collisions
-                            if equal_rows(
-                                i as usize,
-                                row,
-                                &left_join_values,
-                                &keys_values,
-                                *null_equals_null,
-                            )? {
-                                no_match = false;
-                                break;
-                            }
+                // After get all matched right size and left size, it may be filtered by the join_filter
+                // After filter, use the bitmap and get the unmatched right size row
+                if let Some((_, indices)) =
+                    left.0.get(*hash_value, |(hash, _)| *hash_value == *hash)
+                {
+                    for &i in indices {
+                        // Check hash collisions
+                        if equal_rows(
+                            i as usize,
+                            row,
+                            &left_join_values,
+                            &keys_values,
+                            *null_equals_null,
+                        )? {
+                            left_indices.append(i);
+                            right_indices.append(row as u32);
                         }
                     }
-                    None => no_match = true,
-                };
-                if no_match {
-                    right_indices.append(row as u32);
                 }
             }
 
@@ -1323,11 +1338,11 @@ fn equal_rows(
                 }
             },
             DataType::Dictionary(key_type, value_type)
-                if *value_type.as_ref() == DataType::Utf8 =>
-            {
-                match key_type.as_ref() {
-                    DataType::Int8 => {
-                        equal_rows_elem_with_string_dict!(
+            if *value_type.as_ref() == DataType::Utf8 =>
+                {
+                    match key_type.as_ref() {
+                        DataType::Int8 => {
+                            equal_rows_elem_with_string_dict!(
                             Int8Type,
                             l,
                             r,
@@ -1335,9 +1350,9 @@ fn equal_rows(
                             right,
                             null_equals_null
                         )
-                    }
-                    DataType::Int16 => {
-                        equal_rows_elem_with_string_dict!(
+                        }
+                        DataType::Int16 => {
+                            equal_rows_elem_with_string_dict!(
                             Int16Type,
                             l,
                             r,
@@ -1345,9 +1360,9 @@ fn equal_rows(
                             right,
                             null_equals_null
                         )
-                    }
-                    DataType::Int32 => {
-                        equal_rows_elem_with_string_dict!(
+                        }
+                        DataType::Int32 => {
+                            equal_rows_elem_with_string_dict!(
                             Int32Type,
                             l,
                             r,
@@ -1355,9 +1370,9 @@ fn equal_rows(
                             right,
                             null_equals_null
                         )
-                    }
-                    DataType::Int64 => {
-                        equal_rows_elem_with_string_dict!(
+                        }
+                        DataType::Int64 => {
+                            equal_rows_elem_with_string_dict!(
                             Int64Type,
                             l,
                             r,
@@ -1365,9 +1380,9 @@ fn equal_rows(
                             right,
                             null_equals_null
                         )
-                    }
-                    DataType::UInt8 => {
-                        equal_rows_elem_with_string_dict!(
+                        }
+                        DataType::UInt8 => {
+                            equal_rows_elem_with_string_dict!(
                             UInt8Type,
                             l,
                             r,
@@ -1375,9 +1390,9 @@ fn equal_rows(
                             right,
                             null_equals_null
                         )
-                    }
-                    DataType::UInt16 => {
-                        equal_rows_elem_with_string_dict!(
+                        }
+                        DataType::UInt16 => {
+                            equal_rows_elem_with_string_dict!(
                             UInt16Type,
                             l,
                             r,
@@ -1385,9 +1400,9 @@ fn equal_rows(
                             right,
                             null_equals_null
                         )
-                    }
-                    DataType::UInt32 => {
-                        equal_rows_elem_with_string_dict!(
+                        }
+                        DataType::UInt32 => {
+                            equal_rows_elem_with_string_dict!(
                             UInt32Type,
                             l,
                             r,
@@ -1395,9 +1410,9 @@ fn equal_rows(
                             right,
                             null_equals_null
                         )
-                    }
-                    DataType::UInt64 => {
-                        equal_rows_elem_with_string_dict!(
+                        }
+                        DataType::UInt64 => {
+                            equal_rows_elem_with_string_dict!(
                             UInt64Type,
                             l,
                             r,
@@ -1405,16 +1420,16 @@ fn equal_rows(
                             right,
                             null_equals_null
                         )
-                    }
-                    _ => {
-                        // should not happen
-                        err = Some(Err(DataFusionError::Internal(
-                            "Unsupported data type in hasher".to_string(),
-                        )));
-                        false
+                        }
+                        _ => {
+                            // should not happen
+                            err = Some(Err(DataFusionError::Internal(
+                                "Unsupported data type in hasher".to_string(),
+                            )));
+                            false
+                        }
                     }
                 }
-            }
             other => {
                 // This is internal because we should have caught this before.
                 err = Some(Err(DataFusionError::Internal(format!(
@@ -2560,6 +2575,64 @@ mod tests {
             "+----+----+----+",
             "| a1 | b1 | c1 |",
             "+----+----+----+",
+            "| 3  | 7  | 9  |",
+            "| 5  | 7  | 11 |",
+            "+----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_anti_with_filter() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let right = build_table(
+            ("a1", &vec![1, 2, 2, 3, 5]),
+            ("b1", &vec![4, 5, 5, 7, 7]), // 7 does not exist on the right
+            ("c1", &vec![7, 8, 8, 9, 11]),
+        );
+        let left = build_table(
+            ("a2", &vec![10, 20, 30, 40]),
+            ("b2", &vec![4, 5, 6, 5]), // 5 is double on the right
+            ("c2", &vec![70, 80, 90, 100]),
+        );
+        let on = vec![(
+            Column::new_with_schema("b2", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
+        )];
+
+        // build filter left.b2 > 4
+        let column_indices = vec![ColumnIndex {
+            index: 1,
+            side: JoinSide::Left,
+        }];
+        let intermediate_schema =
+            Schema::new(vec![Field::new("x", DataType::Int32, true)]);
+
+        let filter_expression = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(4)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let filter =
+            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+
+        let join =
+            join_with_filter(left, right, on, filter, &JoinType::RightAnti, false)?;
+
+        let columns = columns(&join.schema());
+        assert_eq!(columns, vec!["a1", "b1", "c1"]);
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let expected = vec![
+            "+----+----+----+",
+            "| a1 | b1 | c1 |",
+            "+----+----+----+",
+            "| 1  | 4  | 7  |",
             "| 3  | 7  | 9  |",
             "| 5  | 7  | 11 |",
             "+----+----+----+",
