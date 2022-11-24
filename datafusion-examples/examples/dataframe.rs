@@ -51,7 +51,7 @@ async fn example_read_csv_file_with_inferred_schema() -> Arc<DataFrame> {
     // Create the data to put into the csv file with headers
     let content = "id,time,vote,unixtime,rating\na1,\"10 6, 2013\",3,1381017600,5.0\na2,\"08 9, 2013\",2,1376006400,4.5";
     // write the data
-    fs::write(path, content).expect("Problem with writting file!");
+    fs::write(path, content).expect("Problem with writing file!");
     // Create a session context and create a lazy
     let ctx = SessionContext::new();
     let df = ctx.read_csv(path, CsvReadOptions::default()).await.unwrap();
@@ -64,7 +64,7 @@ async fn example_read_csv_file_with_schema() -> Arc<DataFrame>{
     // Create the data to put into the csv file with headers
     let content = "id,time,vote,unixtime,rating\na1,\"10 6, 2013\",3,1381017600,5.0\na2,\"08 9, 2013\",2,1376006400,4.5";
     // write the data
-    fs::write(path, content).expect("Problem with writting file!");
+    fs::write(path, content).expect("Problem with writing file!");
     let ctx = SessionContext::new();
     let schema = Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
