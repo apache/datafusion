@@ -34,7 +34,7 @@ snmalloc = ["snmalloc-rs"]
 
 [dependencies]
 arrow = "27.0.0"
-datafusion = { path = "../datafusion/core", version = "14.0.0" }
+datafusion = { path = "../datafusion/core", version = "14.0.0" , features = ["scheduler"]}
 env_logger = "0.9"
 futures = "0.3"
 mimalloc = { version = "0.1", optional = true, default-features = false }
