@@ -17,8 +17,12 @@
 
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::Result;
-use datafusion_expr::{col, logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
+use datafusion_common::{Column, Result};
+use datafusion_expr::{
+    build_join_schema, col, expr_rewriter::normalize_cols,
+    logical_plan::builder::wrap_projection_for_join_if_necessary,
+    logical_plan::table_scan, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
+};
 use std::sync::Arc;
 
 pub mod user_defined;
@@ -45,6 +49,70 @@ pub fn scan_empty(
     projection: Option<Vec<usize>>,
 ) -> Result<LogicalPlanBuilder> {
     table_scan(name, table_schema, projection)
+}
+
+/// some join tests needs different data types.
+pub fn join_test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::UInt16, false),
+        Field::new("b", DataType::Int32, false),
+        Field::new("c", DataType::Int64, false),
+    ]);
+    table_scan(Some(name), &schema, None)?.build()
+}
+
+/// create join plan
+pub fn create_test_join_plan(
+    left: LogicalPlan,
+    right: LogicalPlan,
+    join_type: JoinType,
+    join_keys: (Vec<Expr>, Vec<Expr>),
+    filter: Option<Expr>,
+) -> Result<LogicalPlan> {
+    let left_keys = normalize_cols(join_keys.0, &left)?;
+    let right_keys = normalize_cols(join_keys.1, &right)?;
+    let join_schema = build_join_schema(left.schema(), right.schema(), &join_type)?;
+
+    // Wrap projection for left input if left join keys contain normal expression.
+    let (left_child, left_projected) =
+        wrap_projection_for_join_if_necessary(&left_keys, left)?;
+    let left_join_keys = left_keys
+        .iter()
+        .map(|key| {
+            key.try_into_col()
+                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // Wrap projection for right input if right join keys contains normal expression.
+    let (right_child, right_projected) =
+        wrap_projection_for_join_if_necessary(&right_keys, right)?;
+    let right_join_keys = right_keys
+        .iter()
+        .map(|key| {
+            key.try_into_col()
+                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let join_plan_builder = LogicalPlanBuilder::from(left_child).join(
+        &right_child,
+        join_type,
+        (left_join_keys, right_join_keys),
+        filter,
+    )?;
+
+    // Remove temporary projected columns if necessary.
+    if left_projected || right_projected {
+        let final_join_result = join_schema
+            .fields()
+            .iter()
+            .map(|field| Expr::Column(field.qualified_column()))
+            .collect::<Vec<_>>();
+        join_plan_builder.project(final_join_result)?.build()
+    } else {
+        join_plan_builder.build()
+    }
 }
 
 pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {

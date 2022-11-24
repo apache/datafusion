@@ -21,11 +21,12 @@ use crate::utils::rewrite_preserving_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::{
-    parse_interval, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    parse_interval, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Like};
-use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
-use datafusion_expr::logical_plan::Subquery;
+use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
+use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
+use datafusion_expr::logical_plan::{Join, Subquery};
 use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
 use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
@@ -35,8 +36,8 @@ use datafusion_expr::type_coercion::{is_date, is_numeric, is_timestamp};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     aggregate_function, function, is_false, is_not_false, is_not_true, is_not_unknown,
-    is_true, is_unknown, type_coercion, AggregateFunction, Expr, LogicalPlan, Operator,
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
+    is_true, is_unknown, type_coercion, AggregateFunction, Expr, JoinConstraint,
+    JoinType, LogicalPlan, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
 use std::sync::Arc;
@@ -104,7 +105,27 @@ fn optimize_internal(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    from_plan(plan, &new_expr, &new_inputs)
+    if let LogicalPlan::Join(Join {
+        join_type,
+        join_constraint,
+        on,
+        null_equals_null,
+        schema,
+        ..
+    }) = plan
+    {
+        optimize_join(
+            new_expr,
+            new_inputs,
+            *join_type,
+            on,
+            *join_constraint,
+            schema,
+            *null_equals_null,
+        )
+    } else {
+        from_plan(plan, &new_expr, &new_inputs)
+    }
 }
 
 pub(crate) struct TypeCoercionRewriter {
@@ -578,12 +599,170 @@ fn coerce_agg_exprs_for_signature(
         .collect::<Result<Vec<_>>>()
 }
 
+/// Optimize the join plan.
+/// If any join key need type coercion for one side, then add projection for the input plan of the side.
+fn optimize_join(
+    new_expr: Vec<Expr>,
+    mut inputs: Vec<LogicalPlan>,
+    join_type: JoinType,
+    on: &[(Column, Column)],
+    join_constraint: JoinConstraint,
+    schema: &DFSchemaRef,
+    null_equals_null: bool,
+) -> Result<LogicalPlan> {
+    assert!(
+        inputs.len() == 2,
+        "The count of join inputs should be 2, actual {}.",
+        inputs.len()
+    );
+
+    let left_input = inputs.remove(0);
+    let right_input = inputs.remove(0);
+
+    let left_schema = left_input.schema();
+    let right_schema = right_input.schema();
+
+    // Build type coercion rewriter
+    let mut on_schema = DFSchema::empty();
+    on_schema.merge(left_input.schema());
+    on_schema.merge(right_input.schema());
+    let mut expr_rewrite = TypeCoercionRewriter {
+        schema: Arc::new(on_schema),
+    };
+
+    // Get casted join keys
+    let mut left_casted_join_keys: Vec<Option<Expr>> = vec![];
+    let mut right_casted_join_keys: Vec<Option<Expr>> = vec![];
+    for ((idx, new_keys), (left_column, right_column)) in new_expr[0..on.len() * 2]
+        .chunks(2)
+        .enumerate()
+        .zip(on.iter())
+    {
+        let left_key = &new_keys[0];
+        let right_key = &&new_keys[1];
+        let eq_expr = Expr::eq((*left_key).clone(), (*right_key).clone());
+        let cast_eq_expr = eq_expr.rewrite(&mut expr_rewrite)?;
+        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = cast_eq_expr {
+            assert!(op == Operator::Eq);
+
+            // Save left casted join keys, if it doesn't need to add cast, save as None.
+            let left_on_key = Expr::Column(left_column.clone());
+            if left_on_key.get_type(left_schema)? != left.get_type(left_schema)? {
+                let alias = format!("{}#{}", left.display_name()?, idx);
+                left_casted_join_keys.push(Some(left.alias(alias)));
+            } else {
+                left_casted_join_keys.push(None);
+            };
+
+            // Save right casted join keys, if it doesn't need to add cast, save as None.
+            let right_on_key = Expr::Column(right_column.clone());
+            if right_on_key.get_type(right_schema)? != right.get_type(right_schema)? {
+                let alias = format!("{}#{}", right.display_name()?, idx);
+                right_casted_join_keys.push(Some(right.alias(alias)));
+            } else {
+                right_casted_join_keys.push(None);
+            };
+        } else {
+            return Err(DataFusionError::Internal(format!(
+                "The type coercion result of equality expression should also be an binary expression, actual:{}",
+                cast_eq_expr
+            )));
+        }
+    }
+
+    // Build new inputs
+    let left_need_cast = left_casted_join_keys.iter().any(|key| key.is_some());
+    let left_input = if left_need_cast {
+        add_casted_projection_for_join(left_input, &left_casted_join_keys)?
+    } else {
+        left_input
+    };
+
+    let right_need_cast = right_casted_join_keys.iter().any(|key| key.is_some());
+    let right_input = if right_need_cast {
+        add_casted_projection_for_join(right_input, &right_casted_join_keys)?
+    } else {
+        right_input
+    };
+
+    let new_on = build_join_on(left_casted_join_keys, right_casted_join_keys, on)?;
+    let filter_expr =
+        (new_expr.len() > on.len() * 2).then_some(new_expr[new_expr.len() - 1].clone());
+
+    Ok(LogicalPlan::Join(Join {
+        left: Arc::new(left_input),
+        right: Arc::new(right_input),
+        join_type,
+        join_constraint,
+        on: new_on,
+        filter: filter_expr,
+        schema: schema.clone(),
+        null_equals_null,
+    }))
+}
+
+fn add_casted_projection_for_join(
+    plan: LogicalPlan,
+    join_keys: &[Option<Expr>],
+) -> Result<LogicalPlan> {
+    // Original fields
+    let mut projection_items = plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| Expr::Column(field.qualified_column()))
+        .collect::<Vec<_>>();
+
+    // Additional casted join keys
+    join_keys.iter().for_each(|key| {
+        if let Some(key) = key {
+            projection_items.push(key.clone())
+        }
+    });
+
+    LogicalPlanBuilder::from(plan)
+        .project(projection_items)?
+        .build()
+}
+
+fn build_join_on(
+    left_casted_join_keys: Vec<Option<Expr>>,
+    right_casted_join_keys: Vec<Option<Expr>>,
+    original_on: &[(Column, Column)],
+) -> Result<Vec<(Column, Column)>> {
+    let new_on = left_casted_join_keys
+        .iter()
+        .zip(right_casted_join_keys.iter())
+        .zip(original_on.iter())
+        .map(
+            |((left_casted_key, right_casted_key), (left_on, right_on))| {
+                let left_column = if let Some(key) = left_casted_key {
+                    Column::from_name(key.display_name()?)
+                } else {
+                    left_on.clone()
+                };
+
+                let right_column = if let Some(key) = right_casted_key {
+                    Column::from_name(key.display_name()?)
+                } else {
+                    right_on.clone()
+                };
+
+                Ok((left_column, right_column))
+            },
+        )
+        .collect::<Result<Vec<(Column, Column)>>>()?;
+
+    Ok(new_on)
+}
+
 #[cfg(test)]
 mod test {
+    use crate::test::*;
     use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter};
     use crate::{OptimizerConfig, OptimizerRule};
     use arrow::datatypes::DataType;
-    use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
+    use datafusion_common::{Column, DFField, DFSchema, Result, ScalarValue};
     use datafusion_expr::expr::Like;
     use datafusion_expr::expr_rewriter::ExprRewritable;
     use datafusion_expr::{
@@ -593,7 +772,7 @@ mod test {
     };
     use datafusion_expr::{
         lit,
-        logical_plan::{EmptyRelation, Projection},
+        logical_plan::{EmptyRelation, JoinType, Projection},
         Expr, LogicalPlan, ReturnTypeFunction, ScalarFunctionImplementation, ScalarUDF,
         Signature, Volatility,
     };
@@ -1113,5 +1292,145 @@ mod test {
         assert_eq!(expected, result);
         Ok(())
         // TODO add more test for this
+    }
+
+    #[test]
+    fn test_column_join_with_different_data_types() -> Result<()> {
+        let t1 = join_test_table_scan_with_name("t1")?;
+        let t2 = join_test_table_scan_with_name("t2")?;
+
+        let join_plan = create_test_join_plan(
+            t1,
+            t2,
+            JoinType::Inner,
+            (vec![col("a")], vec![col("b")]),
+            None,
+        )?;
+
+        let expected = "Inner Join: t1.a#0 = t2.b\
+        \n  Projection: t1.a, t1.b, t1.c, CAST(t1.a AS Int32) AS t1.a#0\
+        \n    TableScan: t1\
+        \n  TableScan: t2";
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&join_plan, &mut config).unwrap();
+        assert_eq!(&format!("{:?}", plan), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_column_join_with_filter_and_type_coercion() -> Result<()> {
+        let t1 = join_test_table_scan_with_name("t1")?;
+        let t2 = join_test_table_scan_with_name("t2")?;
+
+        let join_plan = create_test_join_plan(
+            t1,
+            t2,
+            JoinType::Inner,
+            (vec![col("a")], vec![col("c")]),
+            Some(Expr::Column(Column::new("t1".into(), "a")).lt(lit(10i32))),
+        )?;
+
+        let expected =
+            "Inner Join: t1.a#0 = t2.c Filter: CAST(t1.a AS Int32) < Int32(10)\
+            \n  Projection: t1.a, t1.b, t1.c, CAST(t1.a AS Int64) AS t1.a#0\
+            \n    TableScan: t1\
+            \n  TableScan: t2";
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&join_plan, &mut config).unwrap();
+        assert_eq!(&format!("{:?}", plan), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_join_with_different_data_types() -> Result<()> {
+        let t1 = join_test_table_scan_with_name("t1")?;
+        let t2 = join_test_table_scan_with_name("t2")?;
+
+        let left_keys = vec![col("a") + lit(1)];
+        let right_keys = vec![col("c") * lit(2)];
+        let join_plan = create_test_join_plan(
+            t1,
+            t2,
+            JoinType::Inner,
+            (left_keys, right_keys),
+            None,
+        )?;
+
+        let expected = "Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c\
+        \n  Inner Join: t1.a + Int32(1)#0 = t2.c * Int32(2)\
+        \n    Projection: t1.a, t1.b, t1.c, t1.a + Int32(1), CAST(t1.a + Int32(1) AS Int64) AS t1.a + Int32(1)#0\
+        \n      Projection: t1.a, t1.b, t1.c, CAST(t1.a AS Int32) + Int32(1)\
+        \n        TableScan: t1\
+        \n    Projection: t2.a, t2.b, t2.c, t2.c * CAST(Int32(2) AS Int64)\
+        \n      TableScan: t2";
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&join_plan, &mut config).unwrap();
+        assert_eq!(&format!("{:?}", plan), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_multiple_keys_join_type_coercion() -> Result<()> {
+        let t1 = join_test_table_scan_with_name("t1")?;
+        let t2 = join_test_table_scan_with_name("t2")?;
+
+        let join_plan = create_test_join_plan(
+            t1,
+            t2,
+            JoinType::Inner,
+            (
+                vec![col("a"), col("b"), col("c")],
+                vec![col("b"), col("c"), col("a")],
+            ),
+            None,
+        )?;
+
+        let expected = "Inner Join: t1.a#0 = t2.b, t1.b#1 = t2.c, t1.c = t2.a#2\
+        \n  Projection: t1.a, t1.b, t1.c, CAST(t1.a AS Int32) AS t1.a#0, CAST(t1.b AS Int64) AS t1.b#1\
+        \n    TableScan: t1\
+        \n  Projection: t2.a, t2.b, t2.c, CAST(t2.a AS Int64) AS t2.a#2\
+        \n    TableScan: t2";
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&join_plan, &mut config).unwrap();
+        assert_eq!(&format!("{:?}", plan), expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_same_key_multiple_time_join() -> Result<()> {
+        let t1 = join_test_table_scan_with_name("t1")?;
+        let t2 = join_test_table_scan_with_name("t2")?;
+
+        let join_plan = create_test_join_plan(
+            t1,
+            t2,
+            JoinType::Inner,
+            (
+                vec![col("a") * lit(2u8), col("a") * lit(2u8)],
+                vec![col("b"), col("c")],
+            ),
+            None,
+        )?;
+
+        let expected = "Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c\
+        \n  Inner Join: t1.a * UInt8(2)#0 = t2.b, t1.a * UInt8(2)#1 = t2.c\
+        \n    Projection: t1.a, t1.b, t1.c, t1.a * UInt8(2), CAST(t1.a * UInt8(2) AS Int32) AS t1.a * UInt8(2)#0, CAST(t1.a * UInt8(2) AS Int64) AS t1.a * UInt8(2)#1\
+        \n      Projection: t1.a, t1.b, t1.c, t1.a * CAST(UInt8(2) AS UInt16)\
+        \n        TableScan: t1\
+        \n    TableScan: t2";
+        let rule = TypeCoercion::new();
+        let mut config = OptimizerConfig::default();
+        let plan = rule.optimize(&join_plan, &mut config).unwrap();
+        assert_eq!(&format!("{:?}", plan), expected);
+
+        Ok(())
     }
 }
