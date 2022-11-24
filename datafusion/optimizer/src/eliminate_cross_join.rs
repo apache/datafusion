@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to reduce cross join to inner join if join predicates are available in filters.
+//! Optimizer rule to eliminate cross join to inner join if join predicates are available in filters.
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
 use datafusion_expr::{
@@ -35,16 +35,16 @@ use datafusion_expr::logical_plan::JoinConstraint;
 use std::sync::Arc;
 
 #[derive(Default)]
-pub struct ReduceCrossJoin;
+pub struct EliminateCrossJoin;
 
-impl ReduceCrossJoin {
+impl EliminateCrossJoin {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-/// Attempt to reorder join tp reduce cross joins to inner joins.
+/// Attempt to reorder join tp eliminate cross joins to inner joins.
 /// for queries:
 /// 'select ... from a, b where a.x = b.y and b.xx = 100;'
 /// 'select ... from a, b where (a.x = b.y and b.xx = 100) or (a.x = b.y and b.xx = 200);'
@@ -54,7 +54,7 @@ impl ReduceCrossJoin {
 /// join nodes appropriately
 /// This fix helps to improve the performance of TPCH Q19. issue#78
 ///
-impl OptimizerRule for ReduceCrossJoin {
+impl OptimizerRule for EliminateCrossJoin {
     fn optimize(
         &self,
         plan: &LogicalPlan,
@@ -133,7 +133,7 @@ impl OptimizerRule for ReduceCrossJoin {
     }
 
     fn name(&self) -> &str {
-        "reduce_cross_join"
+        "eliminate_cross_join"
     }
 }
 
@@ -349,7 +349,7 @@ mod tests {
     };
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: Vec<&str>) {
-        let rule = ReduceCrossJoin::new();
+        let rule = EliminateCrossJoin::new();
         let optimized_plan = rule
             .optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
@@ -366,11 +366,11 @@ mod tests {
     }
 
     #[test]
-    fn reduce_cross_with_simple_and() -> Result<()> {
+    fn eliminate_cross_with_simple_and() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        // could reduce to inner join since filter has Join predicates
+        // could eliminate to inner join since filter has Join predicates
         let plan = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
@@ -393,11 +393,11 @@ mod tests {
     }
 
     #[test]
-    fn reduce_cross_with_simple_or() -> Result<()> {
+    fn eliminate_cross_with_simple_or() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        // could not reduce to inner join since filter OR expression and there is no common
+        // could not eliminate to inner join since filter OR expression and there is no common
         // Join predicates in left and right of OR expr.
         let plan = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
@@ -421,11 +421,11 @@ mod tests {
     }
 
     #[test]
-    fn reduce_cross_with_and() -> Result<()> {
+    fn eliminate_cross_with_and() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
@@ -448,11 +448,11 @@ mod tests {
     }
 
     #[test]
-    fn reduce_cross_with_or() -> Result<()> {
+    fn eliminate_cross_with_or() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        // could reduce to inner join since Or predicates have common Join predicates
+        // could eliminate to inner join since Or predicates have common Join predicates
         let plan = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
@@ -478,11 +478,11 @@ mod tests {
     }
 
     #[test]
-    fn reduce_cross_not_possible_simple() -> Result<()> {
+    fn eliminate_cross_not_possible_simple() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        // could not reduce to inner join
+        // could not eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
@@ -508,11 +508,11 @@ mod tests {
     }
 
     #[test]
-    fn reduce_cross_not_possible() -> Result<()> {
+    fn eliminate_cross_not_possible() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
-        // could not reduce to inner join
+        // could not eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
@@ -549,12 +549,12 @@ mod tests {
     ///   inner_join (ab)c and a.id = c.id
     ///     inner_join a b on a.id = b.id
     /// ```
-    fn reorder_join_to_reduce_cross_join_multi_tables() -> Result<()> {
+    fn reorder_join_to_eliminate_cross_join_multi_tables() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
         let t3 = test_table_scan_with_name("t3")?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .cross_join(&t3)?
@@ -581,13 +581,13 @@ mod tests {
     }
 
     #[test]
-    fn reduce_cross_join_multi_tables() -> Result<()> {
+    fn eliminate_cross_join_multi_tables() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
         let t3 = test_table_scan_with_name("t3")?;
         let t4 = test_table_scan_with_name("t4")?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan1 = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
@@ -658,13 +658,13 @@ mod tests {
     }
 
     #[test]
-    fn reduce_cross_join_multi_tables_1() -> Result<()> {
+    fn eliminate_cross_join_multi_tables_1() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
         let t3 = test_table_scan_with_name("t3")?;
         let t4 = test_table_scan_with_name("t4")?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan1 = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
@@ -678,7 +678,7 @@ mod tests {
             ))?
             .build()?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan2 = LogicalPlanBuilder::from(t3)
             .cross_join(&t4)?
             .filter(binary_expr(
@@ -704,7 +704,7 @@ mod tests {
             ))?
             .build()?;
 
-        // could not reduce to inner join
+        // could not eliminate to inner join
         let plan = LogicalPlanBuilder::from(plan1)
             .cross_join(&plan2)?
             .filter(binary_expr(
@@ -733,13 +733,13 @@ mod tests {
     }
 
     #[test]
-    fn reduce_cross_join_multi_tables_2() -> Result<()> {
+    fn eliminate_cross_join_multi_tables_2() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
         let t3 = test_table_scan_with_name("t3")?;
         let t4 = test_table_scan_with_name("t4")?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan1 = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
@@ -753,7 +753,7 @@ mod tests {
             ))?
             .build()?;
 
-        // could not reduce to inner join
+        // could not eliminate to inner join
         let plan2 = LogicalPlanBuilder::from(t3)
             .cross_join(&t4)?
             .filter(binary_expr(
@@ -775,7 +775,7 @@ mod tests {
             ))?
             .build()?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan = LogicalPlanBuilder::from(plan1)
             .cross_join(&plan2)?
             .filter(binary_expr(
@@ -808,13 +808,13 @@ mod tests {
     }
 
     #[test]
-    fn reduce_cross_join_multi_tables_3() -> Result<()> {
+    fn eliminate_cross_join_multi_tables_3() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
         let t3 = test_table_scan_with_name("t3")?;
         let t4 = test_table_scan_with_name("t4")?;
 
-        // could not reduce to inner join
+        // could not eliminate to inner join
         let plan1 = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
@@ -828,7 +828,7 @@ mod tests {
             ))?
             .build()?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan2 = LogicalPlanBuilder::from(t3)
             .cross_join(&t4)?
             .filter(binary_expr(
@@ -854,7 +854,7 @@ mod tests {
             ))?
             .build()?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan = LogicalPlanBuilder::from(plan1)
             .cross_join(&plan2)?
             .filter(binary_expr(
@@ -887,13 +887,13 @@ mod tests {
     }
 
     #[test]
-    fn reduce_cross_join_multi_tables_4() -> Result<()> {
+    fn eliminate_cross_join_multi_tables_4() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
         let t3 = test_table_scan_with_name("t3")?;
         let t4 = test_table_scan_with_name("t4")?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan1 = LogicalPlanBuilder::from(t1)
             .cross_join(&t2)?
             .filter(binary_expr(
@@ -907,10 +907,10 @@ mod tests {
             ))?
             .build()?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan2 = LogicalPlanBuilder::from(t3).cross_join(&t4)?.build()?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan = LogicalPlanBuilder::from(plan1)
             .cross_join(&plan2)?
             .filter(binary_expr(
@@ -970,19 +970,19 @@ mod tests {
     }
 
     #[test]
-    fn reduce_cross_join_multi_tables_5() -> Result<()> {
+    fn eliminate_cross_join_multi_tables_5() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
         let t3 = test_table_scan_with_name("t3")?;
         let t4 = test_table_scan_with_name("t4")?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan1 = LogicalPlanBuilder::from(t1).cross_join(&t2)?.build()?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan2 = LogicalPlanBuilder::from(t3).cross_join(&t4)?.build()?;
 
-        // could reduce to inner join
+        // could eliminate to inner join
         let plan = LogicalPlanBuilder::from(plan1)
             .cross_join(&plan2)?
             .filter(binary_expr(

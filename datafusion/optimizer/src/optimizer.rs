@@ -20,7 +20,7 @@
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_where_exists::DecorrelateWhereExists;
 use crate::decorrelate_where_in::DecorrelateWhereIn;
-use crate::eliminate_cross_join::ReduceCrossJoin;
+use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
@@ -174,7 +174,7 @@ impl Optimizer {
             // subqueries to joins
             Arc::new(SimplifyExpressions::new()),
             Arc::new(EliminateFilter::new()),
-            Arc::new(ReduceCrossJoin::new()),
+            Arc::new(EliminateCrossJoin::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
