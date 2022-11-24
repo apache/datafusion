@@ -645,7 +645,7 @@ fn optimize_join(
         if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = cast_eq_expr {
             assert!(op == Operator::Eq);
 
-            // Save left casted join keys, if it doesn't need to add cast, save as None.
+            // Save left casted join keys, and save None when no cast
             let left_on_key = Expr::Column(left_column.clone());
             if left_on_key.get_type(left_schema)? != left.get_type(left_schema)? {
                 let alias = format!("{}#{}", left.display_name()?, idx);
@@ -654,7 +654,7 @@ fn optimize_join(
                 left_casted_join_keys.push(None);
             };
 
-            // Save right casted join keys, if it doesn't need to add cast, save as None.
+            // Save right casted join keys, and save None when no cast
             let right_on_key = Expr::Column(right_column.clone());
             if right_on_key.get_type(right_schema)? != right.get_type(right_schema)? {
                 let alias = format!("{}#{}", right.display_name()?, idx);
@@ -1409,6 +1409,7 @@ mod test {
         let t1 = join_test_table_scan_with_name("t1")?;
         let t2 = join_test_table_scan_with_name("t2")?;
 
+        // a + 2 happen twice, and both need insert type coercion.
         let join_plan = create_test_join_plan(
             t1,
             t2,
