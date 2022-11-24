@@ -330,11 +330,7 @@ impl MemoryManager {
 
     fn max_mem_for_requesters(&self) -> usize {
         let trk_total = self.get_tracker_total();
-        if trk_total < self.pool_size {
-            self.pool_size - trk_total
-        } else {
-            0_usize
-        }
+        self.pool_size.saturating_sub(trk_total)
     }
 
     /// Grow memory attempt from a consumer, return if we could grant that much to it
