@@ -5957,10 +5957,10 @@ mod tests {
     }
 
     #[test]
-    fn test_ambiguous_coulmn_referece_in_on_join() {
-        let sql = "select p1.id, p1.age, p2.id 
-            from person as p1 
-            INNER JOIN person as p2 
+    fn test_ambiguous_column_references_in_on_join() {
+        let sql = "select p1.id, p1.age, p2.id
+            from person as p1
+            INNER JOIN person as p2
             ON id = 1";
 
         let expected =
@@ -5974,10 +5974,10 @@ mod tests {
     }
 
     #[test]
-    fn test_ambiguous_coulmn_referece_with_in_using_join() {
-        let sql = "select p1.id, p1.age, p2.id 
-            from person as p1 
-            INNER JOIN person as p2 
+    fn test_ambiguous_column_references_with_in_using_join() {
+        let sql = "select p1.id, p1.age, p2.id
+            from person as p1
+            INNER JOIN person as p2
             using(id)";
 
         let expected = "Projection: p1.id, p1.age, p2.id\
