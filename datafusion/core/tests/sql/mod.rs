@@ -25,6 +25,7 @@ use arrow::{
 use chrono::prelude::*;
 use chrono::Duration;
 
+use datafusion::config::OPT_PREFER_HASH_JOIN;
 use datafusion::datasource::TableProvider;
 use datafusion::from_slice::FromSlice;
 use datafusion::logical_expr::{Aggregate, LogicalPlan, Projection, TableScan};
@@ -178,8 +179,14 @@ fn create_case_context() -> Result<SessionContext> {
     Ok(ctx)
 }
 
-fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
+fn create_join_context(
+    column_left: &str,
+    column_right: &str,
+    repartition_joins: bool,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::with_config(
+        SessionConfig::new().with_repartition_joins(repartition_joins),
+    );
 
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new(column_left, DataType::UInt32, true),
@@ -420,6 +427,131 @@ fn create_join_context_with_nulls() -> Result<SessionContext> {
                 Some("w"),
                 Some("u"),
             ])),
+        ],
+    )?;
+    ctx.register_batch("t2", t2_data)?;
+
+    Ok(ctx)
+}
+
+fn create_sort_merge_join_context(
+    column_left: &str,
+    column_right: &str,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::with_config(
+        SessionConfig::new().set_bool(OPT_PREFER_HASH_JOIN, false),
+    );
+
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new(column_left, DataType::UInt32, true),
+        Field::new("t1_name", DataType::Utf8, true),
+        Field::new("t1_int", DataType::UInt32, true),
+    ]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema,
+        vec![
+            Arc::new(UInt32Array::from_slice([11, 22, 33, 44])),
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("d"),
+            ])),
+            Arc::new(UInt32Array::from_slice([1, 2, 3, 4])),
+        ],
+    )?;
+    ctx.register_batch("t1", t1_data)?;
+
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new(column_right, DataType::UInt32, true),
+        Field::new("t2_name", DataType::Utf8, true),
+        Field::new("t2_int", DataType::UInt32, true),
+    ]));
+    let t2_data = RecordBatch::try_new(
+        t2_schema,
+        vec![
+            Arc::new(UInt32Array::from_slice([11, 22, 44, 55])),
+            Arc::new(StringArray::from(vec![
+                Some("z"),
+                Some("y"),
+                Some("x"),
+                Some("w"),
+            ])),
+            Arc::new(UInt32Array::from_slice([3, 1, 3, 3])),
+        ],
+    )?;
+    ctx.register_batch("t2", t2_data)?;
+
+    Ok(ctx)
+}
+
+fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
+    let ctx = SessionContext::with_config(
+        SessionConfig::new()
+            .set_bool(OPT_PREFER_HASH_JOIN, false)
+            .with_target_partitions(2),
+    );
+
+    let t1_schema = Schema::new(vec![
+        Field::new("c1", DataType::Date32, true),
+        Field::new("c2", DataType::Date64, true),
+        Field::new("c3", DataType::Decimal128(5, 2), true),
+        Field::new(
+            "c4",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+    ]);
+    let dict1: DictionaryArray<Int32Type> =
+        vec!["abc", "def", "ghi", "jkl"].into_iter().collect();
+    let t1_data = RecordBatch::try_new(
+        Arc::new(t1_schema),
+        vec![
+            Arc::new(Date32Array::from(vec![Some(1), Some(2), None, Some(3)])),
+            Arc::new(Date64Array::from(vec![
+                Some(86400000),
+                Some(172800000),
+                Some(259200000),
+                None,
+            ])),
+            Arc::new(
+                Decimal128Array::from_iter_values([123, 45600, 78900, -12312])
+                    .with_precision_and_scale(5, 2)
+                    .unwrap(),
+            ),
+            Arc::new(dict1),
+        ],
+    )?;
+    ctx.register_batch("t1", t1_data)?;
+
+    let t2_schema = Schema::new(vec![
+        Field::new("c1", DataType::Date32, true),
+        Field::new("c2", DataType::Date64, true),
+        Field::new("c3", DataType::Decimal128(10, 2), true),
+        Field::new(
+            "c4",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        ),
+    ]);
+    let dict2: DictionaryArray<Int32Type> =
+        vec!["abc", "abcdefg", "qwerty", ""].into_iter().collect();
+    let t2_data = RecordBatch::try_new(
+        Arc::new(t2_schema),
+        vec![
+            Arc::new(Date32Array::from(vec![Some(1), None, None, Some(3)])),
+            Arc::new(Date64Array::from(vec![
+                Some(86400000),
+                None,
+                Some(259200000),
+                None,
+            ])),
+            Arc::new(
+                Decimal128Array::from_iter_values([-12312, 10000000, 0, 78900])
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ),
+            Arc::new(dict2),
         ],
     )?;
     ctx.register_batch("t2", t2_data)?;

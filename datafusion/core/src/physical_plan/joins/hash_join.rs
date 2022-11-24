@@ -296,6 +296,10 @@ impl ExecutionPlan for HashJoinExec {
                     Distribution::HashPartitioned(right_expr),
                 ]
             }
+            PartitionMode::Auto => vec![
+                Distribution::UnspecifiedDistribution,
+                Distribution::UnspecifiedDistribution,
+            ],
         }
     }
 
@@ -322,6 +326,9 @@ impl ExecutionPlan for HashJoinExec {
                 self.left.output_partitioning(),
                 self.right.output_partitioning(),
                 left_columns_len,
+            ),
+            PartitionMode::Auto => Partitioning::UnknownPartitioning(
+                self.right.output_partitioning().partition_count(),
             ),
         }
     }
@@ -387,6 +394,12 @@ impl ExecutionPlan for HashJoinExec {
                 on_left.clone(),
                 context.clone(),
             )),
+            PartitionMode::Auto => {
+                return Err(DataFusionError::Plan(format!(
+                    "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
+                    PartitionMode::Auto
+                )))
+            }
         };
 
         // we have the batches and the hash map with their keys. We can how create a stream
