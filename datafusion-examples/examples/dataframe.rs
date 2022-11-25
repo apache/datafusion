@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use std::sync::Arc;
 use std::fs;
+use std::sync::Arc;
 
 /// This example demonstrates executing a simple query against an Arrow data source (Parquet) and
 /// fetching results, using the DataFrame trait
@@ -59,7 +59,7 @@ async fn example_read_csv_file_with_inferred_schema() -> Arc<DataFrame> {
 }
 
 // Example to read csv file with a given csv file
-async fn example_read_csv_file_with_schema() -> Arc<DataFrame>{
+async fn example_read_csv_file_with_schema() -> Arc<DataFrame> {
     let path = "example.csv";
     // Create the data to put into the csv file with headers
     let content = "id,time,vote,unixtime,rating\na1,\"10 6, 2013\",3,1381017600,5.0\na2,\"08 9, 2013\",2,1376006400,4.5";
