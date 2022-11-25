@@ -35,7 +35,7 @@ snmalloc = ["snmalloc-rs"]
 [dependencies]
 arrow = "27.0.0"
 datafusion = { path = "../datafusion/core", version = "14.0.0" }
-env_logger = "0.9"
+env_logger = "0.10"
 futures = "0.3"
 mimalloc = { version = "0.1", optional = true, default-features = false }
 num_cpus = "1.13.0"
