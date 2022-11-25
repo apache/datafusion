@@ -270,7 +270,7 @@ All available configuration options can be seen using `SHOW ALL` as described ab
 
 You can change the configuration options using environment
 variables. `datafusion-cli` looks in the corresponding environment
-variable with an upper case name and all `.` is converted to `_`.
+variable with an upper case name and all `.` converted to `_`.
 
 For example, to set `datafusion.execution.batch_size` to `1024` you
 would set the `DATAFUSION_EXECUTION_BATCH_SIZE` environment variable
