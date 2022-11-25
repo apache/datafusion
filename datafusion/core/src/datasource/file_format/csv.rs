@@ -127,7 +127,7 @@ impl FileFormat for CsvFormat {
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-            let decoder = self.file_compression_type.convert_read(data.reader());
+            let decoder = self.file_compression_type.convert_read(data.reader())?;
             let (schema, records_read) = arrow::csv::reader::infer_reader_schema(
                 decoder,
                 self.delimiter,
