@@ -183,6 +183,20 @@ impl Accumulator for MedianAccumulator {
             )),
         }
     }
+
+    fn size(&self) -> usize {
+        // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
+        std::mem::align_of_val(self)
+            + (std::mem::size_of::<ArrayRef>() * self.all_values.capacity())
+            + self
+                .all_values
+                .iter()
+                .map(|array_ref| {
+                    std::mem::size_of_val(array_ref.as_ref())
+                        + array_ref.get_array_memory_size()
+                })
+                .sum::<usize>()
+    }
 }
 
 /// Create an empty array
