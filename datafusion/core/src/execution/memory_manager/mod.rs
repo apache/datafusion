@@ -330,7 +330,7 @@ impl MemoryManager {
 
     fn max_mem_for_requesters(&self) -> usize {
         let trk_total = self.get_tracker_total();
-        self.pool_size - trk_total
+        self.pool_size.saturating_sub(trk_total)
     }
 
     /// Grow memory attempt from a consumer, return if we could grant that much to it
@@ -650,5 +650,15 @@ mod tests {
 
         let config = MemoryManagerConfig::try_new_limit(100000, 0.1).unwrap();
         assert_eq!(config.pool_size(), 10000);
+    }
+
+    #[tokio::test]
+    async fn test_memory_manager_underflow() {
+        let config = MemoryManagerConfig::try_new_limit(100, 0.5).unwrap();
+        let manager = MemoryManager::new(config);
+        manager.grow_tracker_usage(100);
+
+        manager.register_requester(&MemoryConsumerId::new(1));
+        assert!(!manager.can_grow_directly(20, 0));
     }
 }
