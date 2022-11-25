@@ -244,4 +244,8 @@ impl Accumulator for FirstSelector {
         // same logic is needed as in update_batch
         self.update_batch(states)
     }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+    }
 }
