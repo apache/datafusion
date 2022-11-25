@@ -571,6 +571,10 @@ impl Accumulator for MaxAccumulator {
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(self.max.clone())
     }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.max) + self.max.size()
+    }
 }
 
 #[derive(Debug)]
@@ -734,6 +738,10 @@ impl Accumulator for MinAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(self.min.clone())
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.min) + self.min.size()
     }
 }
 

@@ -19,6 +19,7 @@
 
 use std::borrow::Borrow;
 use std::cmp::{max, Ordering};
+use std::collections::HashSet;
 use std::convert::{Infallible, TryInto};
 use std::ops::{Add, Sub};
 use std::str::FromStr;
@@ -2289,6 +2290,94 @@ impl ScalarValue {
             }
             ScalarValue::Null => array.data().is_null(index),
         }
+    }
+
+    /// Estimate size if bytes including `Self`. For values with internal containers such as `String`
+    /// includes the allocated size (`capacity`) rather than the current length (`len`)
+    pub fn size(&self) -> usize {
+        std::mem::size_of_val(&self)
+            + match self {
+                ScalarValue::Null
+                | ScalarValue::Boolean(_)
+                | ScalarValue::Float32(_)
+                | ScalarValue::Float64(_)
+                | ScalarValue::Decimal128(_, _, _)
+                | ScalarValue::Int8(_)
+                | ScalarValue::Int16(_)
+                | ScalarValue::Int32(_)
+                | ScalarValue::Int64(_)
+                | ScalarValue::UInt8(_)
+                | ScalarValue::UInt16(_)
+                | ScalarValue::UInt32(_)
+                | ScalarValue::UInt64(_)
+                | ScalarValue::Date32(_)
+                | ScalarValue::Date64(_)
+                | ScalarValue::Time32Second(_)
+                | ScalarValue::Time32Millisecond(_)
+                | ScalarValue::Time64Microsecond(_)
+                | ScalarValue::Time64Nanosecond(_)
+                | ScalarValue::IntervalYearMonth(_)
+                | ScalarValue::IntervalDayTime(_)
+                | ScalarValue::IntervalMonthDayNano(_) => 0,
+                ScalarValue::Utf8(s)
+                | ScalarValue::LargeUtf8(s)
+                | ScalarValue::TimestampSecond(_, s)
+                | ScalarValue::TimestampMillisecond(_, s)
+                | ScalarValue::TimestampMicrosecond(_, s)
+                | ScalarValue::TimestampNanosecond(_, s) => {
+                    s.as_ref().map(|s| s.capacity()).unwrap_or_default()
+                }
+                ScalarValue::Binary(b)
+                | ScalarValue::FixedSizeBinary(_, b)
+                | ScalarValue::LargeBinary(b) => {
+                    b.as_ref().map(|b| b.capacity()).unwrap_or_default()
+                }
+                // TODO(crepererum): `Field` is NOT fixed size, add `Field::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
+                ScalarValue::List(vals, field) => {
+                    vals.as_ref()
+                        .map(|vals| Self::size_of_vec(vals) - std::mem::size_of_val(vals))
+                        .unwrap_or_default()
+                        + std::mem::size_of_val(field)
+                }
+                // TODO(crepererum): `Field` is NOT fixed size, add `Field::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
+                ScalarValue::Struct(vals, fields) => {
+                    vals.as_ref()
+                        .map(|vals| {
+                            vals.iter()
+                                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                                .sum::<usize>()
+                                + (std::mem::size_of::<ScalarValue>() * vals.capacity())
+                        })
+                        .unwrap_or_default()
+                        + (std::mem::size_of::<Field>() * fields.capacity())
+                }
+                // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
+                ScalarValue::Dictionary(dt, sv) => {
+                    std::mem::size_of_val(dt.as_ref()) + sv.size()
+                }
+            }
+    }
+
+    /// Estimates [size](Self::size) of [`Vec`] in bytes.
+    ///
+    /// Includes the size of the [`Vec`] container itself.
+    pub fn size_of_vec(vec: &Vec<Self>) -> usize {
+        (std::mem::size_of::<ScalarValue>() * vec.capacity())
+            + vec
+                .iter()
+                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                .sum::<usize>()
+    }
+
+    /// Estimates [size](Self::size) of [`HashSet`] in bytes.
+    ///
+    /// Includes the size of the [`HashSet`] container itself.
+    pub fn size_of_hashset<S>(set: &HashSet<Self, S>) -> usize {
+        (std::mem::size_of::<ScalarValue>() * set.capacity())
+            + set
+                .iter()
+                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                .sum::<usize>()
     }
 }
 

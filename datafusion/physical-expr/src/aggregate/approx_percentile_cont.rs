@@ -355,6 +355,7 @@ impl ApproxPercentileAccumulator {
         }
     }
 }
+
 impl Accumulator for ApproxPercentileAccumulator {
     fn state(&self) -> Result<Vec<AggregateState>> {
         Ok(self
@@ -412,5 +413,10 @@ impl Accumulator for ApproxPercentileAccumulator {
         self.merge_digests(&states);
 
         Ok(())
+    }
+
+    fn size(&self) -> usize {
+        // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
+        std::mem::size_of_val(self) + self.digest.size()
     }
 }
