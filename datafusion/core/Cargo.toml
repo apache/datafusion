@@ -40,6 +40,7 @@ path = "src/lib.rs"
 [features]
 # Used to enable the avro format
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
+compression = ["xz2", "bzip2", "flate2", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions", "compression"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
@@ -47,7 +48,6 @@ force_hash_collisions = []
 # Used to enable JIT code generation
 jit = ["datafusion-jit", "datafusion-row/jit"]
 pyarrow = ["pyo3", "arrow/pyarrow", "datafusion-common/pyarrow"]
-compression = ["xz2", "bzip2", "flate2", "async-compression"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 # Used to enable scheduler
 scheduler = ["rayon"]
