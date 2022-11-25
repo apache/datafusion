@@ -235,7 +235,7 @@ Available commands inside DataFusion CLI are:
 - Search and describe function
 
 ```bash
-> \h function_table
+> \h function
 ```
 
 - Show configuration options
