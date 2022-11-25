@@ -165,32 +165,6 @@ async fn equijoin_left_and_not_null_condition_from_right() -> Result<()> {
 }
 
 #[tokio::test]
-async fn equijoin_left_with_error_right() -> Result<()> {
-    let test_repartition_joins = vec![true, false];
-    for repartition_joins in test_repartition_joins {
-        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
-        let sql =
-            "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name is not null ORDER BY t1_id";
-        let res = ctx.create_logical_plan(sql);
-        assert!(res.is_ok());
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+-------+---------+---------+",
-            "| t1_id | t1_name | t2_name |",
-            "+-------+---------+---------+",
-            "| 11    | a       | z       |",
-            "| 22    | b       | y       |",
-            "| 33    | c       |         |",
-            "| 44    | d       | x       |",
-            "+-------+---------+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn full_join_sub_query() -> Result<()> {
     let test_repartition_joins = vec![true, false];
     for repartition_joins in test_repartition_joins {
