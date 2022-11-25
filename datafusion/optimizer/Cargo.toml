@@ -49,4 +49,4 @@ log = "^0.4"
 [dev-dependencies]
 ctor = "0.1.22"
 datafusion-sql = { path = "../sql", version = "14.0.0" }
-env_logger = "0.9.0"
+env_logger = "0.10.0"
