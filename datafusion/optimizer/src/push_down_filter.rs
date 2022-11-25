@@ -24,7 +24,7 @@ use datafusion_expr::{
     logical_plan::{CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union},
     or,
     utils::from_plan,
-    BinaryExpr, Expr, Filter, Operator, Sort, TableProviderFilterPushDown,
+    BinaryExpr, Expr, Filter, Operator, TableProviderFilterPushDown,
 };
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
@@ -512,6 +512,7 @@ impl OptimizerRule for PushDownFilter {
     ) -> Result<LogicalPlan> {
         let filter = match plan {
             LogicalPlan::Filter(filter) => filter,
+            // we also need to pushdown filter in Join.
             LogicalPlan::Join(join) => {
                 let optimized_plan = push_down_join(plan, join, None)?;
                 return match optimized_plan {
@@ -524,7 +525,8 @@ impl OptimizerRule for PushDownFilter {
             _ => return utils::optimize_children(self, plan, optimizer_config),
         };
 
-        let new_plan = match &**filter.input() {
+        let child_plan = &**filter.input();
+        let new_plan = match child_plan {
             LogicalPlan::Filter(child_filter) => {
                 let new_predicate =
                     and(filter.predicate().clone(), child_filter.predicate().clone());
@@ -539,11 +541,7 @@ impl OptimizerRule for PushDownFilter {
                     filter.predicate().clone(),
                     sort.input.clone(),
                 )?);
-                LogicalPlan::Sort(Sort {
-                    expr: sort.expr.clone(),
-                    input: Arc::new(new_filter),
-                    fetch: sort.fetch,
-                })
+                child_plan.with_new_inputs(&[new_filter])?
             }
             LogicalPlan::Projection(projection) => {
                 // A projection is filter-commutable, but re-writes all predicate expressions
@@ -575,12 +573,7 @@ impl OptimizerRule for PushDownFilter {
                     projection.input.clone(),
                 )?);
 
-                // optimize inner
-                from_plan(
-                    filter.input(),
-                    &(**filter.input()).expressions(),
-                    &[new_filter],
-                )?
+                child_plan.with_new_inputs(&[new_filter])?
             }
             LogicalPlan::Union(union) => {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
@@ -1006,10 +999,7 @@ mod tests {
             \n      Projection: test.a AS b, test.c\
             \n        TableScan: test"
         );
-        // "Filter: SUM(test.c) > Int64(10) AND b > Int64(10)\
-        // \n  Aggregate: groupBy=[[b]], aggr=[[SUM(test.c)]]\
-        // \n    Projection: test.a AS b, test.c\
-        // \n      TableScan: test"
+
         // filter is before the projections
         let expected = "\
         Filter: SUM(test.c) > Int64(10)\
@@ -1107,13 +1097,13 @@ mod tests {
 
         // filter appears below Union
         let expected = "Union\
-        \n  SubqueryAlias: test2\
-        \n    Projection: test.a AS b\
-        \n      Filter: test.a = Int64(1)\
+        \n  Filter: b = Int64(1)\
+        \n    SubqueryAlias: test2\
+        \n      Projection: test.a AS b\
         \n        TableScan: test\
-        \n  SubqueryAlias: test2\
-        \n    Projection: test.a AS b\
-        \n      Filter: test.a = Int64(1)\
+        \n  Filter: b = Int64(1)\
+        \n    SubqueryAlias: test2\
+        \n      Projection: test.a AS b\
         \n        TableScan: test";
         assert_optimized_plan_eq(&plan, expected)
     }
@@ -1227,8 +1217,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_eq!(
             format!("{:?}", plan),
-            "\
-            Filter: test.a <= Int64(1)\
+            "Filter: test.a <= Int64(1)\
             \n  Inner Join: test.a = test2.a\
             \n    TableScan: test\
             \n    Projection: test2.a\
@@ -1267,8 +1256,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_eq!(
             format!("{:?}", plan),
-            "\
-            Filter: test.a <= Int64(1)\
+            "Filter: test.a <= Int64(1)\
             \n  Inner Join: Using test.a = test2.a\
             \n    TableScan: test\
             \n    Projection: test2.a\
@@ -1311,8 +1299,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_eq!(
             format!("{:?}", plan),
-            "\
-            Filter: test.c <= test2.b\
+            "Filter: test.c <= test2.b\
             \n  Inner Join: test.a = test2.a\
             \n    Projection: test.a, test.c\
             \n      TableScan: test\
@@ -1350,8 +1337,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_eq!(
             format!("{:?}", plan),
-            "\
-            Filter: test.b <= Int64(1)\
+            "Filter: test.b <= Int64(1)\
             \n  Inner Join: test.a = test2.a\
             \n    Projection: test.a, test.b\
             \n      TableScan: test\
@@ -1770,8 +1756,7 @@ mod tests {
         // not part of the test, just good to know:
         assert_eq!(
             format!("{:?}", plan),
-            "\
-            Full Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)\
+            "Full Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)\
             \n  Projection: test.a, test.b, test.c\
             \n    TableScan: test\
             \n  Projection: test2.a, test2.b, test2.c\
@@ -1962,8 +1947,7 @@ mod tests {
         // filter on col b
         assert_eq!(
             format!("{:?}", plan),
-            "\
-            Filter: b > Int64(10) AND test.c > Int64(10)\
+            "Filter: b > Int64(10) AND test.c > Int64(10)\
             \n  Projection: b, test.c\
             \n    Projection: test.a AS b, test.c\
             \n      TableScan: test\
@@ -1992,8 +1976,7 @@ mod tests {
         // filter on col b and d
         assert_eq!(
             format!("{:?}", plan),
-            "\
-            Filter: b > Int64(10) AND d > Int64(10)\
+            "Filter: b > Int64(10) AND d > Int64(10)\
             \n  Projection: test.a AS b, test.c AS d\
             \n    TableScan: test\
             "
@@ -2032,8 +2015,7 @@ mod tests {
 
         assert_eq!(
             format!("{:?}", plan),
-            "\
-            Inner Join: c = d Filter: c > UInt32(1)\
+            "Inner Join: c = d Filter: c > UInt32(1)\
             \n  Projection: test.a AS c\
             \n    TableScan: test\
             \n  Projection: test2.b AS d\
@@ -2067,8 +2049,7 @@ mod tests {
         // filter on col b
         assert_eq!(
             format!("{:?}", plan),
-            "\
-            Filter: b IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
+            "Filter: b IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
             \n  Projection: test.a AS b, test.c\
             \n    TableScan: test\
             "
@@ -2100,8 +2081,7 @@ mod tests {
         // filter on col b
         assert_eq!(
             format!("{:?}", plan),
-            "\
-            Filter: b IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
+            "Filter: b IN ([UInt32(1), UInt32(2), UInt32(3), UInt32(4)])\
             \n  Projection: b, test.c\
             \n    Projection: test.a AS b, test.c\
             \n      TableScan: test\
