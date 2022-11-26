@@ -25,7 +25,7 @@ use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_optimizer::utils::split_conjunction;
-use log::{debug, error, trace};
+use log::{debug, trace};
 use parquet::schema::types::ColumnDescriptor;
 use parquet::{
     arrow::arrow_reader::{RowSelection, RowSelector},
@@ -362,7 +362,7 @@ fn prune_pages_in_one_row_group(
             // stats filter array could not be built
             // return a result which will not filter out any pages
             Err(e) => {
-                error!("Error evaluating page index predicate values {}", e);
+                debug!("Error evaluating page index predicate values {}", e);
                 metrics.predicate_evaluation_errors.add(1);
                 return Ok(vec![RowSelector::select(group.num_rows() as usize)]);
             }
