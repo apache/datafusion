@@ -846,7 +846,7 @@ mod tests {
         let dict =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let field_dict_t = DFField::from(Field::new("f_dict", dict.clone(), true));
-        let field_dict_f = DFField::from(Field::new("f_dict", dict.clone(), false));
+        let field_dict_f = DFField::from(Field::new("f_dict", dict, false));
 
         let list_t = DFField::from(Field::new(
             "f_list",
