@@ -989,6 +989,7 @@ pub fn project_with_alias(
     }
 }
 
+/// Create a SubqueryAlias to wrap a LogicalPlan.
 pub fn with_alias(plan: LogicalPlan, alias: String) -> LogicalPlan {
     let plan_schema = &**plan.schema();
     let schema = (plan_schema.clone()).replace_qualifier(alias.as_str());
