@@ -362,7 +362,7 @@ mod test {
     }
 
     #[test]
-    fn multi_stage_limit_recurses_to_deeper_limit() -> Result<()> {
+    fn multi_stage_limit_recursive_to_deeper_limit() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
