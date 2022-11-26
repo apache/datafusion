@@ -23,7 +23,7 @@ use datafusion_expr::{
     logical_plan::{
         Join, JoinType, Limit, LogicalPlan, Projection, Sort, TableScan, Union,
     },
-    CrossJoin,
+    CrossJoin, SubqueryAlias,
 };
 use std::sync::Arc;
 
@@ -207,6 +207,20 @@ impl OptimizerRule for LimitPushDown {
                     ),
                 });
                 plan.with_new_inputs(&[new_sort])?
+            }
+
+            LogicalPlan::SubqueryAlias(subquery_alias) => {
+                // commute subquery and limit
+                let new_limit = LogicalPlan::Limit(Limit {
+                    skip: limit.skip,
+                    fetch: limit.fetch,
+                    input: subquery_alias.input.clone(),
+                });
+                LogicalPlan::SubqueryAlias(SubqueryAlias {
+                    input: Arc::new(new_limit),
+                    alias: subquery_alias.alias.clone(),
+                    schema: subquery_alias.schema.clone(),
+                })
             }
             _ => plan.clone(),
         };
