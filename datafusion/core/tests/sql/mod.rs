@@ -231,6 +231,133 @@ fn create_join_context(
     Ok(ctx)
 }
 
+fn create_left_semi_anti_join_context_with_null_ids(
+    column_left: &str,
+    column_right: &str,
+    repartition_joins: bool,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::with_config(
+        SessionConfig::new()
+            .with_repartition_joins(repartition_joins)
+            .with_target_partitions(2),
+    );
+
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new(column_left, DataType::UInt32, true),
+        Field::new("t1_name", DataType::Utf8, true),
+        Field::new("t1_int", DataType::UInt32, true),
+    ]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema,
+        vec![
+            Arc::new(UInt32Array::from(vec![
+                Some(11),
+                Some(11),
+                Some(22),
+                Some(33),
+                Some(44),
+                None,
+            ])),
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("d"),
+                Some("e"),
+            ])),
+            Arc::new(UInt32Array::from_slice([1, 1, 2, 3, 4, 0])),
+        ],
+    )?;
+    ctx.register_batch("t1", t1_data)?;
+
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new(column_right, DataType::UInt32, true),
+        Field::new("t2_name", DataType::Utf8, true),
+        Field::new("t2_int", DataType::UInt32, true),
+    ]));
+    let t2_data = RecordBatch::try_new(
+        t2_schema,
+        vec![
+            Arc::new(UInt32Array::from(vec![
+                Some(11),
+                Some(11),
+                Some(22),
+                Some(44),
+                Some(55),
+                None,
+            ])),
+            Arc::new(StringArray::from(vec![
+                Some("z"),
+                Some("z"),
+                Some("y"),
+                Some("x"),
+                Some("w"),
+                Some("v"),
+            ])),
+            Arc::new(UInt32Array::from_slice([3, 3, 1, 3, 3, 0])),
+        ],
+    )?;
+    ctx.register_batch("t2", t2_data)?;
+
+    Ok(ctx)
+}
+
+fn create_right_semi_anti_join_context_with_null_ids(
+    column_left: &str,
+    column_right: &str,
+    repartition_joins: bool,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::with_config(
+        SessionConfig::new()
+            .with_repartition_joins(repartition_joins)
+            .with_target_partitions(2),
+    );
+
+    let t1_schema = Arc::new(Schema::new(vec![
+        Field::new(column_left, DataType::UInt32, true),
+        Field::new("t1_name", DataType::Utf8, true),
+        Field::new("t1_int", DataType::UInt32, true),
+    ]));
+    let t1_data = RecordBatch::try_new(
+        t1_schema,
+        vec![
+            Arc::new(UInt32Array::from(vec![
+                Some(11),
+                Some(22),
+                Some(33),
+                Some(44),
+                None,
+            ])),
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+                Some("d"),
+                Some("e"),
+            ])),
+            Arc::new(UInt32Array::from_slice([1, 2, 3, 4, 0])),
+        ],
+    )?;
+    ctx.register_batch("t1", t1_data)?;
+
+    let t2_schema = Arc::new(Schema::new(vec![
+        Field::new(column_right, DataType::UInt32, true),
+        Field::new("t2_name", DataType::Utf8, true),
+    ]));
+    // t2 data size is smaller than t1
+    let t2_data = RecordBatch::try_new(
+        t2_schema,
+        vec![
+            Arc::new(UInt32Array::from(vec![Some(11), Some(11), None])),
+            Arc::new(StringArray::from(vec![Some("a"), Some("x"), None])),
+        ],
+    )?;
+    ctx.register_batch("t2", t2_data)?;
+
+    Ok(ctx)
+}
+
 fn create_join_context_qualified(
     left_name: &str,
     right_name: &str,
