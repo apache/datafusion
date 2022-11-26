@@ -990,6 +990,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    /// build schema for unqualifier column ambiguous check
+    fn build_schema_for_ambiguous_check(&self, plan: &LogicalPlan) -> Result<DFSchema> {
+        let mut fields = plan.schema().fields().clone();
+
+        let metadata = plan.schema().metadata().clone();
+        if let LogicalPlan::Join(HashJoin {
+            join_constraint: HashJoinConstraint::Using,
+            ref on,
+            ref left,
+            ..
+        }) = plan
+        {
+            // For query: select id from t1 join t2 using(id), this is legal.
+            // We should dedup the fields for cols in using clause.
+            for join_cols in on.iter() {
+                let left_field = left.schema().field_from_column(&join_cols.0)?;
+                fields.retain(|field| {
+                    field.unqualified_column().name
+                        != left_field.unqualified_column().name
+                });
+                fields.push(left_field.clone());
+            }
+        }
+
+        DFSchema::new_with_metadata(fields, metadata)
+    }
+
     /// Generate a logic plan from an SQL select
     fn select_to_plan(
         &self,
@@ -1016,32 +1043,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let plan = self.plan_from_tables(select.from, ctes, outer_query_schema)?;
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
         // build from schema for unqualifier column ambiguous check
-        // we should get only one field for this unqualifier column from schema.
-        let from_schema = {
-            let mut fields = plan.schema().fields().clone();
-
-            let metadata = plan.schema().metadata().clone();
-            if let LogicalPlan::Join(HashJoin {
-                join_constraint: HashJoinConstraint::Using,
-                ref on,
-                ref left,
-                ..
-            }) = plan
-            {
-                // For query: select id from t1 join t2 using(id), this is legal.
-                // We should dedup the fields for cols in using clause.
-                for join_cols in on.iter() {
-                    let left_field = left.schema().field_from_column(&join_cols.0)?;
-                    fields.retain(|field| {
-                        field.unqualified_column().name
-                            != left_field.unqualified_column().name
-                    });
-                    fields.push(left_field.clone());
-                }
-            }
-
-            DFSchema::new_with_metadata(fields, metadata)?
-        };
+        // we should get only one field for unqualifier column from schema.
+        let from_schema = self.build_schema_for_ambiguous_check(&plan)?;
 
         // process `where` clause
         let plan =
