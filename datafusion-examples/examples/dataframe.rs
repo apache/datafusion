@@ -80,10 +80,12 @@ async fn example_read_csv_file_with_schema() -> Arc<DataFrame> {
         Field::new("unixtime", DataType::Int64, false),
         Field::new("rating", DataType::Float32, true),
     ]);
-    // Create a csv option provider
-    let mut csv_read_option = CsvReadOptions::default();
-    // Update the option provider with the defined schema
-    csv_read_option.schema = Some(&schema);
+    // Create a csv option provider with the desired schema 
+    let csv_read_option = CsvReadOptions {
+      // Update the option provider with the defined schema
+      schema: Some(&schema),
+      ..default::Default()
+    };
     // Register a lazy DataFrame by using the context and option provider
     let df = ctx.read_csv(path, csv_read_option).await.unwrap();
     df
