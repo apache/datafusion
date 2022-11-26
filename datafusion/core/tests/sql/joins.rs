@@ -139,6 +139,32 @@ async fn equijoin_left_and_condition_from_right() -> Result<()> {
 }
 
 #[tokio::test]
+async fn equijoin_left_and_not_null_condition_from_right() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
+        let sql =
+            "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name is not null ORDER BY t1_id";
+        let res = ctx.create_logical_plan(sql);
+        assert!(res.is_ok());
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       | z       |",
+            "| 22    | b       | y       |",
+            "| 33    | c       |         |",
+            "| 44    | d       | x       |",
+            "+-------+---------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn full_join_sub_query() -> Result<()> {
     let test_repartition_joins = vec![true, false];
     for repartition_joins in test_repartition_joins {
@@ -1989,6 +2015,292 @@ async fn sort_merge_join_on_decimal() -> Result<()> {
 
     let results = execute_to_batches(&ctx, sql).await;
     assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_semi_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_left_semi_anti_join_context_with_null_ids(
+            "t1_id",
+            "t2_id",
+            repartition_joins,
+        )
+        .unwrap();
+
+        let sql = "SELECT t1_id, t1_name FROM t1 WHERE t1_id IN (SELECT t2_id FROM t2) ORDER BY t1_id";
+        let msg = format!("Creating logical plan for '{}'", sql);
+        let plan = ctx.create_logical_plan(sql).expect(&msg);
+        let state = ctx.state();
+        let logical_plan = state.optimize(&plan)?;
+        let physical_plan = state.create_physical_plan(&logical_plan).await?;
+        let expected = if repartition_joins {
+            vec![
+                "SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  CoalescePartitionsExec",
+                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
+                "      CoalesceBatchesExec: target_batch_size=4096",
+                "        HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "          CoalesceBatchesExec: target_batch_size=4096",
+                "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+                "          CoalesceBatchesExec: target_batch_size=4096",
+                "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2)",
+                "              ProjectionExec: expr=[t2_id@0 as t2_id]",
+                "                RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "                  MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        } else {
+            vec![
+                "SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  CoalescePartitionsExec",
+                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
+                "      CoalesceBatchesExec: target_batch_size=4096",
+                "        HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
+                "          MemoryExec: partitions=1, partition_sizes=[1]",
+                "          ProjectionExec: expr=[t2_id@0 as t2_id]",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+            expected, actual
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+",
+            "| t1_id | t1_name |",
+            "+-------+---------+",
+            "| 11    | a       |",
+            "| 11    | a       |",
+            "| 22    | b       |",
+            "| 44    | d       |",
+            "+-------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+
+        let sql = "SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE t1_id = t2_id) ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+",
+            "| t1_id | t1_name |",
+            "+-------+---------+",
+            "| 11    | a       |",
+            "| 11    | a       |",
+            "| 22    | b       |",
+            "| 44    | d       |",
+            "+-------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+
+        let sql = "SELECT t1_id FROM t1 INTERSECT SELECT t2_id FROM t2 ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+",
+            "| t1_id |",
+            "+-------+",
+            "| 11    |",
+            "| 22    |",
+            "| 44    |",
+            "|       |",
+            "+-------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_anti_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_left_semi_anti_join_context_with_null_ids(
+            "t1_id",
+            "t2_id",
+            repartition_joins,
+        )
+        .unwrap();
+
+        let sql = "SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t1_id = t2_id) ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+",
+            "| t1_id | t1_name |",
+            "+-------+---------+",
+            "| 33    | c       |",
+            "|       | e       |",
+            "+-------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+
+        let sql = "SELECT t1_id FROM t1 EXCEPT SELECT t2_id FROM t2 ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+",
+            "| t1_id |",
+            "+-------+",
+            "| 33    |",
+            "+-------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "Test ignored, will be enabled after fixing the anti join plan bug"]
+// https://github.com/apache/arrow-datafusion/issues/4366
+async fn error_left_anti_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_left_semi_anti_join_context_with_null_ids(
+            "t1_id",
+            "t2_id",
+            repartition_joins,
+        )
+        .unwrap();
+
+        let sql = "SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t1_id = t2_id and t1_id > 11) ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+",
+            "| t1_id | t1_name |",
+            "+-------+---------+",
+            "| 11    | a       |",
+            "| 11    | a       |",
+            "| 33    | c       |",
+            "|       | e       |",
+            "+-------+---------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "Test ignored, will be enabled after fixing the NAAJ bug"]
+// https://github.com/apache/arrow-datafusion/issues/4211
+async fn null_aware_left_anti_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_left_semi_anti_join_context_with_null_ids(
+            "t1_id",
+            "t2_id",
+            repartition_joins,
+        )
+        .unwrap();
+
+        let sql = "SELECT t1_id, t1_name FROM t1 WHERE t1_id NOT IN (SELECT t2_id FROM t2) ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec!["++", "++"];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "Test ignored, will be enabled after fixing right semi join bug"]
+// https://github.com/apache/arrow-datafusion/issues/4247
+async fn right_semi_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_right_semi_anti_join_context_with_null_ids(
+            "t1_id",
+            "t2_id",
+            repartition_joins,
+        )
+        .unwrap();
+
+        let sql = "SELECT t1_id, t1_name, t1_int FROM t1 WHERE EXISTS (SELECT * FROM t2 where t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id";
+        let msg = format!("Creating logical plan for '{}'", sql);
+        let plan = ctx.create_logical_plan(sql).expect(&msg);
+        let state = ctx.state();
+        let logical_plan = state.optimize(&plan)?;
+        let physical_plan = state.create_physical_plan(&logical_plan).await?;
+        let expected = if repartition_joins {
+            vec![ "SortExec: [t1_id@0 ASC NULLS LAST]",
+                  "  CoalescePartitionsExec",
+                  "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
+                  "      CoalesceBatchesExec: target_batch_size=4096",
+                  "        HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
+                  "          CoalesceBatchesExec: target_batch_size=4096",
+                  "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2)",
+                  "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                  "                MemoryExec: partitions=1, partition_sizes=[1]",
+                  "          CoalesceBatchesExec: target_batch_size=4096",
+                  "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
+                  "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                  "                MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        } else {
+            vec![
+                "SortExec: [t1_id@0 ASC NULLS LAST]",
+                "  CoalescePartitionsExec",
+                "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
+                "      CoalesceBatchesExec: target_batch_size=4096",
+                "        RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+            expected, actual
+        );
+
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+--------+",
+            "| t1_id | t1_name | t1_int |",
+            "+-------+---------+--------+",
+            "| 11    | a       | 1      |",
+            "+-------+---------+--------+",
+        ];
+        assert_batches_eq!(expected, &actual);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "Test ignored, will be enabled after fixing cross join bug"]
+// https://github.com/apache/arrow-datafusion/issues/4363
+async fn error_cross_join() -> Result<()> {
+    let test_repartition_joins = vec![true, false];
+    for repartition_joins in test_repartition_joins {
+        let ctx = create_join_context("t1_id", "t2_id", repartition_joins).unwrap();
+
+        let sql = "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON (t1_id != t2_id and t2_id >= 100) ORDER BY t1_id";
+        let actual = execute_to_batches(&ctx, sql).await;
+        let expected = vec![
+            "+-------+---------+---------+",
+            "| t1_id | t1_name | t2_name |",
+            "+-------+---------+---------+",
+            "| 11    | a       |         |",
+            "| 22    | b       |         |",
+            "| 33    | c       |         |",
+            "| 44    | d       |         |",
+            "+-------+---------+---------+",
+        ];
+
+        assert_batches_eq!(expected, &actual);
+    }
 
     Ok(())
 }

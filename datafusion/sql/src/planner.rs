@@ -767,7 +767,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let join_filter = filter.into_iter().reduce(Expr::and);
 
                 if left_keys.is_empty() {
-                    // When we don't have join keys, use cross join
+                    // TODO should not use cross join when the join_filter exists
+                    // https://github.com/apache/arrow-datafusion/issues/4363
                     let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
                     join_filter
                         .map(|filter| join.filter(filter))
