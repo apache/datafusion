@@ -239,7 +239,11 @@ impl Optimizer {
                     }
                     Ok(None) => {
                         observer(&new_plan, rule.as_ref());
-                        log_plan(rule.name(), &new_plan);
+                        debug!(
+                            "Plan unchanged by optimizer rule '{}' (pass {})",
+                            rule.name(),
+                            i
+                        );
                     }
                     Err(ref e) => {
                         if optimizer_config.skip_failing_rules {
