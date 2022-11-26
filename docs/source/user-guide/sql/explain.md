@@ -51,7 +51,7 @@ EXPLAIN SELECT SUM(x) FROM table GROUP BY b;
 
 ## EXPLAIN ANALYZE
 
-Shows the execution plan and metrics of a statment.
+Shows the execution plan and metrics of a statement.
 If you need more information output, try to use `EXPLAIN ANALYZE VERBOSE`.
 
 ```sql
