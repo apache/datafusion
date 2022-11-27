@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Int32Array, Int64Array, PrimitiveArray};
+use arrow::array::{Int32Array, Int64Array};
 use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
@@ -38,6 +38,7 @@ use datafusion::{
 };
 use datafusion::{error::Result, physical_plan::DisplayFormatType};
 
+use datafusion_common::cast::as_primitive_array;
 use futures::stream::Stream;
 use std::any::Any;
 use std::pin::Pin;
@@ -162,18 +163,10 @@ impl ExecutionPlan for CustomExecutionPlan {
                     .map(|i| ColumnStatistics {
                         null_count: Some(batch.column(*i).null_count()),
                         min_value: Some(ScalarValue::Int32(aggregate::min(
-                            batch
-                                .column(*i)
-                                .as_any()
-                                .downcast_ref::<PrimitiveArray<Int32Type>>()
-                                .unwrap(),
+                            as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
                         ))),
                         max_value: Some(ScalarValue::Int32(aggregate::max(
-                            batch
-                                .column(*i)
-                                .as_any()
-                                .downcast_ref::<PrimitiveArray<Int32Type>>()
-                                .unwrap(),
+                            as_primitive_array::<Int32Type>(batch.column(*i)).unwrap(),
                         ))),
                         ..Default::default()
                     })
