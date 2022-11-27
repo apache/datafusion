@@ -23,7 +23,7 @@ edition = "2021"
 # See more keys and their definitions at https:#doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
-datafusion = { path = "../../datafusion/core" }
 async-trait = "0.1.58"
+datafusion = { path = "../../datafusion/core" }
 sqllogictest = "0.8.0"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }

@@ -54,7 +54,7 @@ impl TestCategory {
     async fn register_test_tables(&self, ctx: &SessionContext) {
         println!("[{}] Registering tables", self.as_str());
         match self {
-            TestCategory::Aggregate => setup::register_aggregate_tables(&ctx).await,
+            TestCategory::Aggregate => setup::register_aggregate_tables(ctx).await,
             TestCategory::ArrowTypeOf => (),
         }
     }
@@ -109,12 +109,13 @@ fn format_batches(batches: &[RecordBatch]) -> Result<String> {
         }
     }
 
-    let formatted = String::from_utf8(bytes).unwrap().replace(",", " ");
+    let formatted = String::from_utf8(bytes).unwrap().replace(',', " ");
     Ok(formatted)
 }
 
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<String> {
     let df = ctx.sql(&sql.into()).await.unwrap();
     let results: Vec<RecordBatch> = df.collect().await.unwrap();
-    Ok(format_batches(&results)?)
+    let formatted_batches = format_batches(&results)?;
+    Ok(formatted_batches)
 }

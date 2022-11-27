@@ -531,8 +531,6 @@ jobs:
         RUSTFLAGS: "-C debuginfo=1"
     steps:
       - uses: actions/checkout@v3
-        with:
-          submodules: true
       - name: Cache Cargo
         uses: actions/cache@v3
         with:

@@ -33,11 +33,11 @@ use std::sync::Arc;
 use crate::utils;
 
 pub async fn register_aggregate_tables(ctx: &SessionContext) {
-    register_aggregate_csv_by_sql(&ctx).await;
-    register_aggregate_test_100(&ctx).await;
-    register_decimal_table(&ctx);
-    register_median_test_tables(&ctx);
-    register_test_data(&ctx);
+    register_aggregate_csv_by_sql(ctx).await;
+    register_aggregate_test_100(ctx).await;
+    register_decimal_table(ctx);
+    register_median_test_tables(ctx);
+    register_test_data(ctx);
 }
 
 fn register_median_test_tables(ctx: &SessionContext) {
@@ -157,7 +157,7 @@ fn register_test_data(ctx: &SessionContext) {
     ]));
 
     let data = RecordBatch::try_new(
-        schema.clone(),
+        schema,
         vec![
             Arc::new(Int64Array::from(vec![
                 Some(0),
