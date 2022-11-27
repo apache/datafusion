@@ -141,11 +141,10 @@ impl OptimizerRule for LimitPushDown {
                     input: Arc::new((*projection.input).clone()),
                 });
                 // Push down limit directly (projection doesn't change number of rows)
-                LogicalPlan::Projection(Projection::try_new_with_schema_alias(
+                LogicalPlan::Projection(Projection::try_new_with_schema(
                     projection.expr.clone(),
                     Arc::new(new_input),
                     projection.schema.clone(),
-                    projection.alias.clone(),
                 )?)
             }
 

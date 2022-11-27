@@ -328,7 +328,6 @@ impl LogicalPlanBuilder {
                 input,
                 mut expr,
                 schema: _,
-                alias,
             }) if missing_cols
                 .iter()
                 .all(|c| input.schema().field_from_column(c).is_ok()) =>
@@ -343,7 +342,7 @@ impl LogicalPlanBuilder {
                 // projected alias.
                 missing_exprs.retain(|e| !expr.contains(e));
                 expr.extend(missing_exprs);
-                Ok(project_with_alias((*input).clone(), expr, alias)?)
+                Ok(project_with_alias((*input).clone(), expr, None)?)
             }
             _ => {
                 let new_inputs = curr_plan
@@ -858,11 +857,10 @@ pub(crate) fn validate_unique_names<'a>(
     })
 }
 
-pub fn project_with_column_index_alias(
+pub fn project_with_column_index(
     expr: Vec<Expr>,
     input: Arc<LogicalPlan>,
     schema: DFSchemaRef,
-    alias: Option<String>,
 ) -> Result<LogicalPlan> {
     let alias_expr = expr
         .into_iter()
@@ -873,9 +871,9 @@ pub fn project_with_column_index_alias(
             x => x.alias(schema.field(i).name()),
         })
         .collect::<Vec<_>>();
-    Ok(LogicalPlan::Projection(
-        Projection::try_new_with_schema_alias(alias_expr, input, schema, alias)?,
-    ))
+    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+        alias_expr, input, schema,
+    )?))
 }
 
 /// Union two logical plans.
@@ -928,14 +926,13 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
         .map(|p| {
             let plan = coerce_plan_expr_for_schema(&p, &union_schema)?;
             match plan {
-                LogicalPlan::Projection(Projection {
-                    expr, input, alias, ..
-                }) => Ok(Arc::new(project_with_column_index_alias(
-                    expr.to_vec(),
-                    input,
-                    Arc::new(union_schema.clone()),
-                    alias,
-                )?)),
+                LogicalPlan::Projection(Projection { expr, input, .. }) => {
+                    Ok(Arc::new(project_with_column_index(
+                        expr.to_vec(),
+                        input,
+                        Arc::new(union_schema.clone()),
+                    )?))
+                }
                 x => Ok(Arc::new(x)),
             }
         })
@@ -980,19 +977,27 @@ pub fn project_with_alias(
         exprlist_to_fields(&projected_expr, &plan)?,
         plan.schema().metadata().clone(),
     )?;
-    let schema = match alias {
-        Some(ref alias) => input_schema.replace_qualifier(alias.as_str()),
-        None => input_schema,
-    };
 
-    Ok(LogicalPlan::Projection(
-        Projection::try_new_with_schema_alias(
-            projected_expr,
-            Arc::new(plan.clone()),
-            DFSchemaRef::new(schema),
-            alias,
-        )?,
-    ))
+    let projection = LogicalPlan::Projection(Projection::try_new_with_schema(
+        projected_expr,
+        Arc::new(plan.clone()),
+        DFSchemaRef::new(input_schema),
+    )?);
+    match alias {
+        Some(alias) => Ok(with_alias(projection, alias)),
+        None => Ok(projection),
+    }
+}
+
+/// Create a SubqueryAlias to wrap a LogicalPlan.
+pub fn with_alias(plan: LogicalPlan, alias: String) -> LogicalPlan {
+    let plan_schema = &**plan.schema();
+    let schema = (plan_schema.clone()).replace_qualifier(alias.as_str());
+    LogicalPlan::SubqueryAlias(SubqueryAlias {
+        input: Arc::new(plan),
+        alias,
+        schema: Arc::new(schema),
+    })
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
