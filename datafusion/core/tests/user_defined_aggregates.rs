@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use datafusion::{
     arrow::{
-        array::{as_primitive_array, ArrayRef, Float64Array, TimestampNanosecondArray},
+        array::{ArrayRef, Float64Array, TimestampNanosecondArray},
         datatypes::{DataType, Field, Float64Type, TimeUnit, TimestampNanosecondType},
         record_batch::RecordBatch,
     },
@@ -37,6 +37,7 @@ use datafusion::{
     prelude::SessionContext,
     scalar::ScalarValue,
 };
+use datafusion_common::cast::as_primitive_array;
 
 #[tokio::test]
 /// Basic query for with a udaf returning a structure
@@ -227,8 +228,8 @@ impl Accumulator for FirstSelector {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // cast argumets to the appropriate type (DataFusion will type
         // check these based on the declared allowed input types)
-        let v = as_primitive_array::<Float64Type>(&values[0]);
-        let t = as_primitive_array::<TimestampNanosecondType>(&values[1]);
+        let v = as_primitive_array::<Float64Type>(&values[0])?;
+        let t = as_primitive_array::<TimestampNanosecondType>(&values[1])?;
 
         // Update the actual values
         for (value, time) in v.iter().zip(t.iter()) {

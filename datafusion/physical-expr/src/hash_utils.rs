@@ -23,7 +23,9 @@ use arrow::datatypes::*;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use arrow_buffer::i256;
 use datafusion_common::{
-    cast::{as_boolean_array, as_string_array},
+    cast::{
+        as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array,
+    },
     DataFusionError, Result,
 };
 use std::sync::Arc;
@@ -217,18 +219,18 @@ pub fn create_hashes<'a>(
             DataType::Boolean => hash_array(as_boolean_array(array)?, random_state, hashes_buffer, multi_col),
             DataType::Utf8 => hash_array(as_string_array(array)?, random_state, hashes_buffer, multi_col),
             DataType::LargeUtf8 => hash_array(as_largestring_array(array), random_state, hashes_buffer, multi_col),
-            DataType::Binary => hash_array(as_generic_binary_array::<i32>(array), random_state, hashes_buffer, multi_col),
-            DataType::LargeBinary => hash_array(as_generic_binary_array::<i64>(array), random_state, hashes_buffer, multi_col),
+            DataType::Binary => hash_array(as_generic_binary_array::<i32>(array)?, random_state, hashes_buffer, multi_col),
+            DataType::LargeBinary => hash_array(as_generic_binary_array::<i64>(array)?, random_state, hashes_buffer, multi_col),
             DataType::FixedSizeBinary(_) => {
                 let array: &FixedSizeBinaryArray = array.as_any().downcast_ref().unwrap();
                 hash_array(array, random_state, hashes_buffer, multi_col)
             }
             DataType::Decimal128(_, _) => {
-                let array = as_primitive_array::<Decimal128Type>(array);
+                let array = as_primitive_array::<Decimal128Type>(array)?;
                 hash_array(array, random_state, hashes_buffer, multi_col)
             }
             DataType::Decimal256(_, _) => {
-                let array = as_primitive_array::<Decimal256Type>(array);
+                let array = as_primitive_array::<Decimal256Type>(array)?;
                 hash_array(array, random_state, hashes_buffer, multi_col)
             }
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
