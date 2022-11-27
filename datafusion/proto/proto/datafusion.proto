@@ -1129,6 +1129,7 @@ message AvroScanExecNode {
 enum PartitionMode {
   COLLECT_LEFT = 0;
   PARTITIONED = 1;
+  AUTO = 2;
 }
 
 message HashJoinExecNode {

@@ -2289,6 +2289,7 @@ impl UnionMode {
 pub enum PartitionMode {
     CollectLeft = 0,
     Partitioned = 1,
+    Auto = 2,
 }
 impl PartitionMode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2299,6 +2300,7 @@ impl PartitionMode {
         match self {
             PartitionMode::CollectLeft => "COLLECT_LEFT",
             PartitionMode::Partitioned => "PARTITIONED",
+            PartitionMode::Auto => "AUTO",
         }
     }
 }
