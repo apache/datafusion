@@ -62,10 +62,11 @@ async fn main() -> datafusion::error::Result<()> {
   let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 
   let df = df.filter(col("a").lt_eq(col("b")))?
-           .aggregate(vec![col("a")], vec![min(col("b"))])?;
+           .aggregate(vec![col("a")], vec![min(col("b"))])?
+           .limit(0, Some(100))?;
 
   // execute and print results
-  df.show_limit(100).await?;
+  df.show().await?;
   Ok(())
 }
 ```
@@ -118,10 +119,11 @@ async fn main() -> datafusion::error::Result<()> {
   let df = ctx.read_csv("tests/capitalized_example.csv", CsvReadOptions::new()).await?;
 
   let df = df.filter(col("A").lt_eq(col("c")))?
-           .aggregate(vec![col("A")], vec![min(col("b"))])?;
+           .aggregate(vec![col("A")], vec![min(col("b"))])?
+           .limit(0, Some(100))?;
 
   // execute and print results
-  df.show_limit(100).await?;
+  df.show().await?;
   Ok(())
 }
 ```
