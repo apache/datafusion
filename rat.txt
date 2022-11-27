@@ -1,0 +1,44 @@
+usage: java rat.report [options] [DIR|TARBALL]
+Options
+ -a,--addLicence                Add the default license header to any file
+                                with an unknown license that is not in the
+                                exclusion list. By default new files will
+                                be created with the license header, to
+                                force the modification of existing files
+                                use the --force option.
+ -A,--addLicense                Add the default license header to any file
+                                with an unknown license that is not in the
+                                exclusion list. By default new files will
+                                be created with the license header, to
+                                force the modification of existing files
+                                use the --force option.
+ -c,--copyright <arg>           The copyright message to use in the
+                                license headers, usually in the form of
+                                "Copyright 2008 Foo"
+ -d,--dir                       Used to indicate source when using
+                                --exclude
+ -e,--exclude <expression>      Excludes files matching wildcard
+                                <expression>. Note that --dir is required
+                                when using this parameter. Allows multiple
+                                arguments.
+ -E,--exclude-file <fileName>   Excludes files matching regular expression
+                                in <file> Note that --dir is required when
+                                using this parameter.
+ -f,--force                     Forces any changes in files to be written
+                                directly to the source files (i.e. new
+                                files are not created)
+ -h,--help                      Print help for the Rat command line
+                                interface and exit
+ -s,--stylesheet <arg>          XSLT stylesheet to use when creating the
+                                report.  Not compatible with -x
+ -x,--xml                       Output the report in raw XML format.  Not
+                                compatible with -s
+
+NOTE:
+Rat is really little more than a grep ATM
+Rat is also rather memory hungry ATM
+Rat is very basic ATM
+Rat highlights possible issues
+Rat reports require interpretation
+Rat often requires some tuning before it runs well against a project
+Rat relies on heuristics: it may miss issues
