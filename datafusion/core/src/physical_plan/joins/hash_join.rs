@@ -149,7 +149,9 @@ pub struct HashJoinExec {
 #[derive(Debug)]
 struct HashJoinMetrics {
     /// Total time for joining probe-side batches to the build-side batches
-    join_time: metrics::Time,
+    probe_time: metrics::Time,
+    /// Total time for building hashmap
+    build_time: metrics::Time,
     /// Number of batches consumed by this operator
     input_batches: metrics::Count,
     /// Number of rows consumed by this operator
@@ -162,7 +164,9 @@ struct HashJoinMetrics {
 
 impl HashJoinMetrics {
     pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
-        let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
+        let probe_time = MetricBuilder::new(metrics).subset_time("probe_time", partition);
+
+        let build_time = MetricBuilder::new(metrics).subset_time("build_time", partition);
 
         let input_batches =
             MetricBuilder::new(metrics).counter("input_batches", partition);
@@ -175,7 +179,8 @@ impl HashJoinMetrics {
         let output_rows = MetricBuilder::new(metrics).output_rows(partition);
 
         Self {
-            join_time,
+            probe_time,
+            build_time,
             input_batches,
             input_rows,
             output_batches,
@@ -376,7 +381,8 @@ impl ExecutionPlan for HashJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
-
+        let hashjoin_metrics = HashJoinMetrics::new(partition, &self.metrics);
+        let timer = hashjoin_metrics.build_time.timer();
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.once(|| {
                 collect_left_input(
@@ -400,6 +406,7 @@ impl ExecutionPlan for HashJoinExec {
                 )))
             }
         };
+        timer.done();
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
@@ -416,7 +423,7 @@ impl ExecutionPlan for HashJoinExec {
             right: right_stream,
             column_indices: self.column_indices.clone(),
             random_state: self.random_state.clone(),
-            join_metrics: HashJoinMetrics::new(partition, &self.metrics),
+            join_metrics: hashjoin_metrics,
             null_equals_null: self.null_equals_null,
             is_exhausted: false,
         }))
@@ -1516,7 +1523,7 @@ impl HashJoinStream {
             .poll_next_unpin(cx)
             .map(|maybe_batch| match maybe_batch {
                 Some(Ok(batch)) => {
-                    let timer = self.join_metrics.join_time.timer();
+                    let timer = self.join_metrics.probe_time.timer();
                     let result = build_batch(
                         &batch,
                         left_data,
@@ -1532,7 +1539,6 @@ impl HashJoinStream {
                     self.join_metrics.input_batches.add(1);
                     self.join_metrics.input_rows.add(batch.num_rows());
                     if let Ok((ref batch, ref left_side)) = result {
-                        timer.done();
                         self.join_metrics.output_batches.add(1);
                         self.join_metrics.output_rows.add(batch.num_rows());
 
@@ -1551,11 +1557,13 @@ impl HashJoinStream {
                             | JoinType::RightAnti => {}
                         }
                     }
-                    Some(result.map(|x| x.0))
+                    let final_result = Some(result.map(|x| x.0));
+                    timer.done();
+                    final_result
                 }
                 Some(err) => Some(err),
                 None => {
-                    let timer = self.join_metrics.join_time.timer();
+                    let timer = self.join_metrics.probe_time.timer();
                     // For the left join, produce rows for unmatched rows
                     match self.join_type {
                         JoinType::Left
