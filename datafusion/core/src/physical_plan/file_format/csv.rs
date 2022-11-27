@@ -218,13 +218,13 @@ impl FileOpener for CsvOpener {
         Ok(Box::pin(async move {
             match store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
-                    let decoder = file_compression_type.convert_read(file);
+                    let decoder = file_compression_type.convert_read(file)?;
                     Ok(futures::stream::iter(config.open(decoder, true)).boxed())
                 }
                 GetResult::Stream(s) => {
                     let mut first_chunk = true;
                     let s = s.map_err(Into::<DataFusionError>::into);
-                    let decoder = file_compression_type.convert_stream(s);
+                    let decoder = file_compression_type.convert_stream(s)?;
                     Ok(newline_delimited_stream(decoder)
                         .map_ok(move |bytes| {
                             let reader = config.open(bytes.reader(), first_chunk);
@@ -304,7 +304,8 @@ mod tests {
         file_compression_type,
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
-        case(FileCompressionType::BZIP2)
+        case(FileCompressionType::BZIP2),
+        case(FileCompressionType::XZ)
     )]
     #[tokio::test]
     async fn csv_exec_with_projection(
@@ -358,7 +359,8 @@ mod tests {
         file_compression_type,
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
-        case(FileCompressionType::BZIP2)
+        case(FileCompressionType::BZIP2),
+        case(FileCompressionType::XZ)
     )]
     #[tokio::test]
     async fn csv_exec_with_limit(
@@ -412,7 +414,8 @@ mod tests {
         file_compression_type,
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
-        case(FileCompressionType::BZIP2)
+        case(FileCompressionType::BZIP2),
+        case(FileCompressionType::XZ)
     )]
     #[tokio::test]
     async fn csv_exec_with_missing_column(
@@ -466,7 +469,8 @@ mod tests {
         file_compression_type,
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
-        case(FileCompressionType::BZIP2)
+        case(FileCompressionType::BZIP2),
+        case(FileCompressionType::XZ)
     )]
     #[tokio::test]
     async fn csv_exec_with_partition(
@@ -559,7 +563,8 @@ mod tests {
         file_compression_type,
         case(FileCompressionType::UNCOMPRESSED),
         case(FileCompressionType::GZIP),
-        case(FileCompressionType::BZIP2)
+        case(FileCompressionType::BZIP2),
+        case(FileCompressionType::XZ)
     )]
     #[tokio::test]
     async fn test_chunked(file_compression_type: FileCompressionType) {

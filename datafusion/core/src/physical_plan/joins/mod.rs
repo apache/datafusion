@@ -29,6 +29,9 @@ pub enum PartitionMode {
     Partitioned,
     /// Left side will collected into one partition
     CollectLeft,
+    /// When set to Auto, DataFusion optimizer will decide which PartitionMode mode(Partitioned/CollectLeft) is optimal based on statistics.
+    /// It will also consider swapping the left and right inputs for the Join
+    Auto,
 }
 
 pub use cross_join::CrossJoinExec;

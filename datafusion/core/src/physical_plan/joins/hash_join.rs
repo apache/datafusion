@@ -294,6 +294,10 @@ impl ExecutionPlan for HashJoinExec {
                     Distribution::HashPartitioned(right_expr),
                 ]
             }
+            PartitionMode::Auto => vec![
+                Distribution::UnspecifiedDistribution,
+                Distribution::UnspecifiedDistribution,
+            ],
         }
     }
 
@@ -320,6 +324,9 @@ impl ExecutionPlan for HashJoinExec {
                 self.left.output_partitioning(),
                 self.right.output_partitioning(),
                 left_columns_len,
+            ),
+            PartitionMode::Auto => Partitioning::UnknownPartitioning(
+                self.right.output_partitioning().partition_count(),
             ),
         }
     }
@@ -385,6 +392,12 @@ impl ExecutionPlan for HashJoinExec {
                 on_left.clone(),
                 context.clone(),
             )),
+            PartitionMode::Auto => {
+                return Err(DataFusionError::Plan(format!(
+                    "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
+                    PartitionMode::Auto
+                )))
+            }
         };
 
         // we have the batches and the hash map with their keys. We can how create a stream
@@ -1399,9 +1412,7 @@ impl HashJoinStream {
                         }
                     }
                 }
-                // the right side has been consumed
-                // TODO: Some(Err) case
-                other => {
+                None => {
                     let timer = self.join_metrics.join_time.timer();
                     if need_produce_result_in_final(self.join_type) && !self.is_exhausted
                     {
@@ -1432,9 +1443,10 @@ impl HashJoinStream {
                         Some(result)
                     } else {
                         // end of the join loop
-                        other
+                        None
                     }
                 }
+                Some(err) => Some(err),
             })
     }
 }
@@ -1458,10 +1470,12 @@ mod tests {
         physical_plan::{
             common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
         },
+        test::exec::MockExec,
         test::{build_table_i32, columns},
     };
     use arrow::array::UInt64Builder;
     use arrow::datatypes::Field;
+    use arrow::error::ArrowError;
     use datafusion_expr::Operator;
 
     use super::*;
@@ -3118,5 +3132,64 @@ mod tests {
         assert_batches_sorted_eq!(expected, &batches);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_with_error_right() {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]),
+            ("c1", &vec![7, 8, 9]),
+        );
+
+        // right input stream returns one good batch and then one error.
+        // The error should be returned.
+        let err = Err(ArrowError::ComputeError("bad data error".to_string()));
+        let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
+
+        let on = vec![(
+            Column::new_with_schema("b1", &left.schema()).unwrap(),
+            Column::new_with_schema("b1", &right.schema()).unwrap(),
+        )];
+        let schema = right.schema();
+        let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
+        let right_input = Arc::new(MockExec::new(vec![Ok(right), err], schema));
+
+        let join_types = vec![
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+        ];
+
+        for join_type in join_types {
+            let join = join(
+                left.clone(),
+                right_input.clone(),
+                on.clone(),
+                &join_type,
+                false,
+            )
+            .unwrap();
+            let session_ctx = SessionContext::new();
+            let task_ctx = session_ctx.task_ctx();
+
+            let stream = join.execute(0, task_ctx).unwrap();
+
+            // Expect that an error is returned
+            let result_string = crate::physical_plan::common::collect(stream)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(
+                result_string.contains("bad data error"),
+                "actual: {}",
+                result_string
+            );
+        }
     }
 }

@@ -156,6 +156,12 @@ impl Accumulator for DistinctArrayAggAccumulator {
             self.datatype.clone(),
         ))
     }
+
+    fn size(&self) -> usize {
+        // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
+        std::mem::size_of_val(self) + ScalarValue::size_of_hashset(&self.values)
+            - std::mem::size_of_val(&self.values)
+    }
 }
 
 #[cfg(test)]

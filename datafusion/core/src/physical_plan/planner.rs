@@ -23,7 +23,9 @@ use super::{
     aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
 };
-use crate::config::{OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY};
+use crate::config::{
+    OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY, OPT_PREFER_HASH_JOIN,
+};
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -44,6 +46,7 @@ use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::joins::CrossJoinExec;
 use crate::physical_plan::joins::HashJoinExec;
+use crate::physical_plan::joins::SortMergeJoinExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
@@ -930,17 +933,47 @@ impl DefaultPhysicalPlanner {
                         _ => None
                     };
 
+                    let prefer_hash_join = session_state.config.config_options()
+                        .read()
+                        .get_bool(OPT_PREFER_HASH_JOIN)
+                        .unwrap_or_default();
                     if session_state.config.target_partitions > 1
                         && session_state.config.repartition_joins
+                        && !prefer_hash_join
                     {
-                        // Use hash partition by default to parallelize hash joins
+                        // Use SortMergeJoin if hash join is not preferred
+                        // Sort-Merge join support currently is experimental
+                        if join_filter.is_some() {
+                            // TODO SortMergeJoinExec need to support join filter
+                            Err(DataFusionError::NotImplemented("SortMergeJoinExec does not support join_filter now.".to_string()))
+                        } else {
+                            let join_on_len = join_on.len();
+                            Ok(Arc::new(SortMergeJoinExec::try_new(
+                                physical_left,
+                                physical_right,
+                                join_on,
+                                *join_type,
+                                vec![SortOptions::default(); join_on_len],
+                                *null_equals_null,
+                            )?))
+                        }
+                    } else if session_state.config.target_partitions > 1
+                        && session_state.config.repartition_joins
+                        && prefer_hash_join {
+                         let partition_mode = {
+                            if session_state.config.collect_statistics {
+                                PartitionMode::Auto
+                            } else {
+                                PartitionMode::Partitioned
+                            }
+                         };
                         Ok(Arc::new(HashJoinExec::try_new(
                             physical_left,
                             physical_right,
                             join_on,
                             join_filter,
                             join_type,
-                            PartitionMode::Partitioned,
+                            partition_mode,
                             null_equals_null,
                         )?))
                     } else {

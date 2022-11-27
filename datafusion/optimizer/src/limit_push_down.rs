@@ -122,7 +122,7 @@ impl OptimizerRule for LimitPushDown {
 
         let plan = match &*limit.input {
             LogicalPlan::TableScan(scan) => {
-                let limit = fetch + skip;
+                let limit = if fetch != 0 { fetch + skip } else { 0 };
                 let new_input = LogicalPlan::TableScan(TableScan {
                     table_name: scan.table_name.clone(),
                     source: scan.source.clone(),
@@ -362,7 +362,7 @@ mod test {
     }
 
     #[test]
-    fn multi_stage_limit_recurses_to_deeper_limit() -> Result<()> {
+    fn multi_stage_limit_recursive_to_deeper_limit() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -756,7 +756,7 @@ mod test {
             .build()?;
 
         let expected = "Limit: skip=1000, fetch=0\
-        \n  TableScan: test, fetch=1000";
+        \n  TableScan: test, fetch=0";
 
         assert_optimized_plan_eq(&plan, expected)
     }
@@ -771,7 +771,7 @@ mod test {
             .build()?;
 
         let expected = "Limit: skip=1000, fetch=0\
-        \n  TableScan: test, fetch=1000";
+        \n  TableScan: test, fetch=0";
 
         assert_optimized_plan_eq(&plan, expected)
     }

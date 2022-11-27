@@ -543,16 +543,15 @@ impl TableProvider for ListingTable {
             .table_partition_cols
             .iter()
             .map(|col| {
-                (
+                Ok((
                     col.0.to_owned(),
                     self.table_schema
-                        .field_with_name(&col.0)
-                        .unwrap()
+                        .field_with_name(&col.0)?
                         .data_type()
                         .clone(),
-                )
+                ))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         // create the execution plan
         self.options

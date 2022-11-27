@@ -18,6 +18,7 @@
 //! Enforcement optimizer rules are used to make sure the plan's Distribution and Ordering
 //! requirements are met by inserting necessary [[RepartitionExec]] and [[SortExec]].
 //!
+use crate::config::OPT_TOP_DOWN_JOIN_KEY_REORDERING;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -72,7 +73,11 @@ impl PhysicalOptimizerRule for BasicEnforcement {
         config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let target_partitions = config.target_partitions;
-        let top_down_join_key_reordering = config.top_down_join_key_reordering;
+        let top_down_join_key_reordering = config
+            .config_options()
+            .read()
+            .get_bool(OPT_TOP_DOWN_JOIN_KEY_REORDERING)
+            .unwrap_or_default();
         let new_plan = if top_down_join_key_reordering {
             // Run a top-down process to adjust input key ordering recursively
             let plan_requirements = PlanWithKeyRequirements::new(plan);
@@ -208,6 +213,12 @@ fn adjust_input_keys_ordering(
                     required_key_ordering: vec![],
                     request_key_ordering: vec![None, new_right_request],
                 }))
+            }
+            PartitionMode::Auto => {
+                // Can not satisfy, clear the current requirements and generate new empty requirements
+                Ok(Some(PlanWithKeyRequirements::new(
+                    requirements.plan.clone(),
+                )))
             }
         }
     } else if let Some(CrossJoinExec { left, .. }) =

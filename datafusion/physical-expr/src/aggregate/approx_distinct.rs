@@ -239,6 +239,11 @@ macro_rules! default_accumulator_impl {
         fn evaluate(&self) -> Result<ScalarValue> {
             Ok(ScalarValue::UInt64(Some(self.hll.count() as u64)))
         }
+
+        fn size(&self) -> usize {
+            // HLL has static size
+            std::mem::size_of_val(self)
+        }
     };
 }
 

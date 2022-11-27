@@ -89,7 +89,7 @@ async fn select_non_alias_qualified_wildcard() -> Result<()> {
 
 #[tokio::test]
 async fn select_qualified_wildcard_join() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
     let sql =
         "SELECT tb1.*, tb2.* FROM t1 tb1 JOIN t2 tb2 ON t2_id = t1_id ORDER BY t1_id";
     let expected = vec![
@@ -111,7 +111,7 @@ async fn select_qualified_wildcard_join() -> Result<()> {
 
 #[tokio::test]
 async fn select_non_alias_qualified_wildcard_join() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
     let sql = "SELECT t1.*, tb2.* FROM t1 JOIN t2 tb2 ON t2_id = t1_id ORDER BY t1_id";
     let expected = vec![
         "+-------+---------+--------+-------+---------+--------+",

@@ -150,4 +150,10 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
 
         Ok(())
     }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+            - std::mem::size_of_val(&self.approx_percentile_cont_accumulator)
+            + self.approx_percentile_cont_accumulator.size()
+    }
 }
