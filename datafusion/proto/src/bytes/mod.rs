@@ -215,9 +215,9 @@ pub fn physical_plan_to_bytes(plan: Arc<dyn ExecutionPlan>) -> Result<Bytes> {
 /// Serialize a PhysicalPlan as json
 #[cfg(feature = "json")]
 pub fn physical_plan_to_json(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
-    let extension_codec = DefaultLogicalExtensionCodec {};
+    let extension_codec = DefaultPhysicalExtensionCodec {};
     let protobuf =
-        protobuf::LogicalPlanNode::try_from_physical_plan(plan, &extension_codec)
+        protobuf::PhysicalPlanNode::try_from_physical_plan(plan, &extension_codec)
             .map_err(|e| {
                 DataFusionError::Plan(format!("Error serializing plan: {}", e))
             })?;

@@ -1251,7 +1251,7 @@ mod roundtrip_tests {
             joins::{HashJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
             sorts::sort::SortExec,
-            AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
+            AggregateExpr, ExecutionPlan, PhysicalExpr, Statistics,
         },
         prelude::SessionContext,
         scalar::ScalarValue,
