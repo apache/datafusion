@@ -94,5 +94,4 @@ async fn main() -> Result<()> {
 
 ```
 
-
 [df]: https://crates.io/crates/datafusion
