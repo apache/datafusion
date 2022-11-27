@@ -11,7 +11,8 @@ mod setup;
 mod utils;
 
 const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files";
-const TEST_CATEGORIES: [TestCategory; 2] = [TestCategory::Aggregate, TestCategory::ArrowTypeOf];
+const TEST_CATEGORIES: [TestCategory; 2] =
+    [TestCategory::Aggregate, TestCategory::ArrowTypeOf];
 
 pub enum TestCategory {
     Aggregate,
@@ -29,7 +30,7 @@ impl TestCategory {
     fn test_filename(&self) -> &'static str {
         match self {
             TestCategory::Aggregate => "aggregate.slt",
-            TestCategory::ArrowTypeOf => "arrow_typeof.slt"
+            TestCategory::ArrowTypeOf => "arrow_typeof.slt",
         }
     }
 
@@ -52,7 +53,11 @@ impl sqllogictest::AsyncDB for DataFusion {
     type Error = TestError;
 
     async fn run(&mut self, sql: &str) -> Result<String> {
-        println!("[{}] Running query: \"{}\"", self.test_category.as_str(), sql);
+        println!(
+            "[{}] Running query: \"{}\"",
+            self.test_category.as_str(),
+            sql
+        );
         let result = run_query(&self.ctx, sql).await?;
         Ok(result)
     }
@@ -60,15 +65,18 @@ impl sqllogictest::AsyncDB for DataFusion {
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-
     for test_category in TEST_CATEGORIES {
-        let filename = PathBuf::from(format!("{}/{}", TEST_DIRECTORY, test_category.test_filename()));
+        let filename = PathBuf::from(format!(
+            "{}/{}",
+            TEST_DIRECTORY,
+            test_category.test_filename()
+        ));
         let ctx = SessionContext::new();
         test_category.register_test_tables(&ctx).await;
 
         let mut tester = sqllogictest::Runner::new(DataFusion { ctx, test_category });
         // TODO: use tester.run_parallel_async()
-        tester.run_file_async(filename).await.unwrap(); 
+        tester.run_file_async(filename).await.unwrap();
     }
 
     Ok(())
