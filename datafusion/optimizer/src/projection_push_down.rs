@@ -87,7 +87,6 @@ fn optimize_plan(
             input,
             expr,
             schema,
-            alias,
         }) => {
             // projection:
             // * remove any expression that is not required
@@ -139,16 +138,11 @@ fn optimize_plan(
                 Ok(new_input)
             } else {
                 let metadata = new_input.schema().metadata().clone();
-                Ok(LogicalPlan::Projection(
-                    Projection::try_new_with_schema_alias(
-                        new_expr,
-                        Arc::new(new_input),
-                        DFSchemaRef::new(DFSchema::new_with_metadata(
-                            new_fields, metadata,
-                        )?),
-                        alias.clone(),
-                    )?,
-                ))
+                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                    new_expr,
+                    Arc::new(new_input),
+                    DFSchemaRef::new(DFSchema::new_with_metadata(new_fields, metadata)?),
+                )?))
             }
         }
         LogicalPlan::Join(Join {
@@ -438,9 +432,7 @@ fn optimize_plan(
 }
 
 fn projection_equal(p: &Projection, p2: &Projection) -> bool {
-    p.expr.len() == p2.expr.len()
-        && p.alias == p2.alias
-        && p.expr.iter().zip(&p2.expr).all(|(l, r)| l == r)
+    p.expr.len() == p2.expr.len() && p.expr.iter().zip(&p2.expr).all(|(l, r)| l == r)
 }
 
 fn replace_alias(

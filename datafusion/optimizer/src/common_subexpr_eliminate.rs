@@ -101,7 +101,6 @@ impl OptimizerRule for CommonSubexprEliminate {
                 expr,
                 input,
                 schema,
-                alias,
             }) => {
                 let input_schema = Arc::clone(input.schema());
                 let arrays = to_arrays(expr, input_schema, &mut expr_set)?;
@@ -114,14 +113,11 @@ impl OptimizerRule for CommonSubexprEliminate {
                     optimizer_config,
                 )?;
 
-                Ok(LogicalPlan::Projection(
-                    Projection::try_new_with_schema_alias(
-                        pop_expr(&mut new_expr)?,
-                        Arc::new(new_input),
-                        schema.clone(),
-                        alias.clone(),
-                    )?,
-                ))
+                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                    pop_expr(&mut new_expr)?,
+                    Arc::new(new_input),
+                    schema.clone(),
+                )?))
             }
             LogicalPlan::Filter(filter) => {
                 let input = filter.input();

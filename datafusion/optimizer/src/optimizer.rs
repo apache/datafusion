@@ -370,7 +370,6 @@ mod tests {
             expr: vec![col("a"), col("b"), col("c")],
             input,
             schema: add_metadata_to_fields(input_schema.as_ref()),
-            alias: None,
         });
 
         // optimizing should be ok, but the schema will have changed  (no metadata)
