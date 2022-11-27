@@ -18,11 +18,14 @@
 //! DateTime expressions
 
 use arrow::{
-    array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait, PrimitiveArray},
+    array::{
+        Array, ArrayRef, GenericStringArray, Int32Array, OffsetSizeTrait, PrimitiveArray,
+    },
     compute::kernels::cast_utils::string_to_timestamp_nanos,
     datatypes::{
-        ArrowPrimitiveType, DataType, IntervalDayTimeType, TimestampMicrosecondType,
-        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+        ArrowNumericType, ArrowPrimitiveType, ArrowTemporalType, DataType,
+        IntervalDayTimeType, TimestampMicrosecondType, TimestampMillisecondType,
+        TimestampNanosecondType, TimestampSecondType,
     },
 };
 use arrow::{
@@ -36,7 +39,7 @@ use arrow::{
 };
 use chrono::prelude::*;
 use chrono::Duration;
-use datafusion_common::cast::as_date32_array;
+use datafusion_common::{cast::as_date32_array, from_slice::FromSlice};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_common::{ScalarType, ScalarValue};
 use datafusion_expr::ColumnarValue;
@@ -494,6 +497,9 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         "hour" => extract_date_part!(&array, temporal::hour),
         "minute" => extract_date_part!(&array, temporal::minute),
         "second" => extract_date_part!(&array, temporal::second),
+        "millisecond" => extract_date_part!(&array, millis),
+        "microsecond" => extract_date_part!(&array, micros),
+        "nanosecond" => extract_date_part!(&array, temporal::nanosecond),
         _ => Err(DataFusionError::Execution(format!(
             "Date part '{}' not supported",
             date_part
@@ -508,6 +514,34 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     } else {
         ColumnarValue::Array(Arc::new(arr))
     })
+}
+
+pub fn from_nanos<T>(array: &PrimitiveArray<T>, frac: i32) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    Ok(temporal::nanosecond(array).map(|op| {
+        let mut inner_values = op.values().to_vec();
+        inner_values.iter_mut().for_each(|x| *x /= frac);
+        Int32Array::from_slice(inner_values)
+    })?)
+}
+
+fn millis<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    from_nanos(array, 1_000_000)
+}
+
+fn micros<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    from_nanos(array, 1_000)
 }
 
 #[cfg(test)]
