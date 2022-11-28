@@ -45,31 +45,21 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// Example to read data from a csv file with inferred schema
-async fn example_read_csv_file_with_inferred_schema() -> Arc<DataFrame> {
-    let path = "example.csv";
+// Function to create an test CSV file
+fn create_csv_file(path: String) {
     // Create the data to put into the csv file with headers
     let content = r#"id,time,vote,unixtime,rating
-    a1,\"10 6, 2013\",3,1381017600,5.0
-    a2,\"08 9, 2013\",2,1376006400,4.5"#;
+a1,"10 6, 2013",3,1381017600,5.0
+a2,"08 9, 2013",2,1376006400,4.5"#;
     // write the data
     fs::write(path, content).expect("Problem with writing file!");
-    // Create a session context
-    let ctx = SessionContext::new();
-    // Register a lazy DataFrame using the context
-    let df = ctx.read_csv(path, CsvReadOptions::default()).await.unwrap();
-    df
 }
 
 // Example to read data from a csv file with inferred schema
 async fn example_read_csv_file_with_inferred_schema() -> Arc<DataFrame> {
     let path = "example.csv";
-    // Create the data to put into the csv file with headers
-    let content = r#"id,time,vote,unixtime,rating
-    a1,\"10 6, 2013\",3,1381017600,5.0
-    a2,\"08 9, 2013\",2,1376006400,4.5"#;
-    // write the data
-    fs::write(path, content).expect("Problem with writing file!");
+    // Create a csv file using the predefined function
+    create_csv_file(path.to_string());
     // Create a session context
     let ctx = SessionContext::new();
     // Register a lazy DataFrame using the context
@@ -80,12 +70,8 @@ async fn example_read_csv_file_with_inferred_schema() -> Arc<DataFrame> {
 // Example to read csv file with a given csv file
 async fn example_read_csv_file_with_schema() -> Arc<DataFrame> {
     let path = "example.csv";
-    // Create the data to put into the csv file with headers
-    let content = r#"id,time,vote,unixtime,rating
-    a1,\"10 6, 2013\",3,1381017600,5.0
-    a2,\"08 9, 2013\",2,1376006400,4.5"#;
-    // write the data
-    fs::write(path, content).expect("Problem with writing file!");
+    // Create a csv file using the predefined function
+    create_csv_file(path.to_string());
     // Create a session context
     let ctx = SessionContext::new();
     // Define the schema
@@ -106,4 +92,3 @@ async fn example_read_csv_file_with_schema() -> Arc<DataFrame> {
     let df = ctx.read_csv(path, csv_read_option).await.unwrap();
     df
 }
-
