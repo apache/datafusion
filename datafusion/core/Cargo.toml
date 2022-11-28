@@ -108,7 +108,7 @@ ctor = "0.1.22"
 doc-comment = "0.3"
 env_logger = "0.10"
 parquet-test-utils = { path = "../../parquet-test-utils" }
-rstest = "0.15.0"
+rstest = "0.16.0"
 test-utils = { path = "../../test-utils" }
 
 [[bench]]
