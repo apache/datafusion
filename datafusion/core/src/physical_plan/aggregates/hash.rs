@@ -401,22 +401,18 @@ fn group_aggregate_batch(
                                 .collect::<Vec<ArrayRef>>(),
                         )
                     })
-                    .try_for_each(|(accumulator, values)| match mode {
-                        AggregateMode::Partial => {
-                            let size_pre = accumulator.size();
-                            let res = accumulator.update_batch(&values);
-                            let size_post = accumulator.size();
-                            allocated += size_post.saturating_sub(size_pre);
-                            res
-                        }
-                        AggregateMode::FinalPartitioned | AggregateMode::Final => {
-                            // note: the aggregation here is over states, not values, thus the merge
-                            let size_pre = accumulator.size();
-                            let res = accumulator.merge_batch(&values);
-                            let size_post = accumulator.size();
-                            allocated += size_post.saturating_sub(size_pre);
-                            res
-                        }
+                    .try_for_each(|(accumulator, values)| {
+                        let size_pre = accumulator.size();
+                        let res = match mode {
+                            AggregateMode::Partial => accumulator.update_batch(&values),
+                            AggregateMode::FinalPartitioned | AggregateMode::Final => {
+                                // note: the aggregation here is over states, not values, thus the merge
+                                accumulator.merge_batch(&values)
+                            }
+                        };
+                        let size_post = accumulator.size();
+                        allocated += size_post.saturating_sub(size_pre);
+                        res
                     })
                     // 2.5
                     .and({
