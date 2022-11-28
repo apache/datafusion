@@ -527,7 +527,7 @@ pub(crate) fn make_decimal_type(
         || scale.unsigned_abs() > precision
     {
         Err(DataFusionError::Internal(format!(
-            "Decimal(precision = {}, scale = {}) should satisty `0 < precision <= 38`, and `scale <= precision`.",
+            "Decimal(precision = {}, scale = {}) should satisfy `-38 < precision <= 38`, and `scale <= precision`.",
             precision, scale
         )))
     } else {

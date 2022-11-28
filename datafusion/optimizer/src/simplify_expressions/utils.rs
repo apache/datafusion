@@ -17,6 +17,7 @@
 
 //! Utility functions for expression simplification
 
+use arrow::datatypes::DECIMAL128_MAX_PRECISION;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     expr::{Between, BinaryExpr},
@@ -107,7 +108,7 @@ pub fn is_one(s: &Expr) -> bool {
         Expr::Literal(ScalarValue::Float32(Some(v))) if *v == 1. => true,
         Expr::Literal(ScalarValue::Float64(Some(v))) if *v == 1. => true,
         Expr::Literal(ScalarValue::Decimal128(Some(v), _p, s)) => {
-            *s >= 0 && POWS_OF_TEN[*s as usize] == *v
+            *s >= 0 && *_s < DECIMAL128_MAX_PRECISION && POWS_OF_TEN[*s as usize] == *v
         }
         _ => false,
     }

@@ -3213,7 +3213,7 @@ mod tests {
             let sql = "SELECT CAST(10 AS DECIMAL(0))";
             let err = logical_plan(sql).expect_err("query should have failed");
             assert_eq!(
-                r##"Internal("Decimal(precision = 0, scale = 0) should satisty `0 < precision <= 38`, and `scale <= precision`.")"##,
+                r##"Internal("Decimal(precision = 0, scale = 0) should satisfy `-38 < precision <= 38`, and `scale <= precision`.")"##,
                 format!("{:?}", err)
             );
         }
@@ -3222,7 +3222,7 @@ mod tests {
             let sql = "SELECT CAST(10 AS DECIMAL(39))";
             let err = logical_plan(sql).expect_err("query should have failed");
             assert_eq!(
-                r##"Internal("Decimal(precision = 39, scale = 0) should satisty `0 < precision <= 38`, and `scale <= precision`.")"##,
+                r##"Internal("Decimal(precision = 39, scale = 0) should satisfy `-38 < precision <= 38`, and `scale <= precision`.")"##,
                 format!("{:?}", err)
             );
         }
@@ -3231,7 +3231,7 @@ mod tests {
             let sql = "SELECT CAST(10 AS DECIMAL(5, 10))";
             let err = logical_plan(sql).expect_err("query should have failed");
             assert_eq!(
-                r##"Internal("Decimal(precision = 5, scale = 10) should satisty `0 < precision <= 38`, and `scale <= precision`.")"##,
+                r##"Internal("Decimal(precision = 5, scale = 10) should satisfy `-38 < precision <= 38`, and `scale <= precision`.")"##,
                 format!("{:?}", err)
             );
         }
