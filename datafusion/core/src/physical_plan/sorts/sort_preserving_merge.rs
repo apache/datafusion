@@ -649,12 +649,12 @@ impl SortPreservingMergeStream {
                         (_, None) => false,
                         (Some(winner), Some(challenger)) => challenger < winner,
                     };
+
                 if challenger_win {
                     self.loser_tree[cmp_node] = winner;
                     winner = challenger;
-                } else {
-                    self.loser_tree[cmp_node] = challenger;
                 }
+
                 cmp_node /= 2;
             }
             self.loser_tree[cmp_node] = winner;
