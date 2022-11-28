@@ -1997,7 +1997,7 @@ mod tests {
                 nullable: false, \
                 dict_id: 0, \
                 dict_is_ordered: false, \
-                metadata: None } }\
+                metadata: {} } }\
         ], metadata: {} }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
@@ -2006,7 +2006,7 @@ mod tests {
                 nullable: false, \
                 dict_id: 0, \
                 dict_is_ordered: false, \
-                metadata: None }\
+                metadata: {} }\
         ], metadata: {} }";
         match plan {
             Ok(_) => panic!("Expected planning failure"),
