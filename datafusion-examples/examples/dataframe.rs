@@ -61,6 +61,22 @@ async fn example_read_csv_file_with_inferred_schema() -> Arc<DataFrame> {
     df
 }
 
+// Example to read data from a csv file with inferred schema
+async fn example_read_csv_file_with_inferred_schema() -> Arc<DataFrame> {
+    let path = "example.csv";
+    // Create the data to put into the csv file with headers
+    let content = r#"id,time,vote,unixtime,rating
+    a1,\"10 6, 2013\",3,1381017600,5.0
+    a2,\"08 9, 2013\",2,1376006400,4.5"#;
+    // write the data
+    fs::write(path, content).expect("Problem with writing file!");
+    // Create a session context
+    let ctx = SessionContext::new();
+    // Register a lazy DataFrame using the context
+    let df = ctx.read_csv(path, CsvReadOptions::default()).await.unwrap();
+    df
+}
+
 // Example to read csv file with a given csv file
 async fn example_read_csv_file_with_schema() -> Arc<DataFrame> {
     let path = "example.csv";
@@ -80,13 +96,14 @@ async fn example_read_csv_file_with_schema() -> Arc<DataFrame> {
         Field::new("unixtime", DataType::Int64, false),
         Field::new("rating", DataType::Float32, true),
     ]);
-    // Create a csv option provider with the desired schema 
+    // Create a csv option provider with the desired schema
     let csv_read_option = CsvReadOptions {
-      // Update the option provider with the defined schema
-      schema: Some(&schema),
-      ..default::Default()
+        // Update the option provider with the defined schema
+        schema: Some(&schema),
+        ..Default::default()
     };
     // Register a lazy DataFrame by using the context and option provider
     let df = ctx.read_csv(path, csv_read_option).await.unwrap();
     df
 }
+
