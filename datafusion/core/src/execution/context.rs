@@ -865,7 +865,7 @@ impl SessionContext {
         let state = self.state.read();
         let catalog = if information_schema {
             Arc::new(CatalogWithInformationSchema::new(
-                Arc::downgrade(&state.catalog_list),
+                name.clone(),
                 Arc::downgrade(&state.config.config_options),
                 catalog,
             ))
@@ -1484,7 +1484,7 @@ impl SessionState {
 
             let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema {
                 Arc::new(CatalogWithInformationSchema::new(
-                    Arc::downgrade(&catalog_list),
+                    config.default_catalog.clone(),
                     Arc::downgrade(&config.config_options),
                     Arc::new(default_catalog),
                 ))
