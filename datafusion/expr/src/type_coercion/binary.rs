@@ -287,8 +287,8 @@ fn get_wider_decimal_type(
         (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
             // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
             let s = *s1.max(s2);
-            let range = (p1 - s1).max(p2 - s2);
-            Some(create_decimal_type(range + s, s))
+            let range = (*p1 as i8 - s1).max(*p2 as i8 - s2);
+            Some(create_decimal_type((range + s) as u8, s))
         }
         (_, _) => None,
     }
@@ -377,7 +377,7 @@ fn mathematics_numerical_coercion(
     }
 }
 
-fn create_decimal_type(precision: u8, scale: u8) -> DataType {
+fn create_decimal_type(precision: u8, scale: i8) -> DataType {
     DataType::Decimal128(
         DECIMAL128_MAX_PRECISION.min(precision),
         DECIMAL128_MAX_SCALE.min(scale),
@@ -399,8 +399,9 @@ fn coercion_decimal_mathematics_type(
                     // max(s1, s2)
                     let result_scale = *s1.max(s2);
                     // max(s1, s2) + max(p1-s1, p2-s2) + 1
-                    let result_precision = result_scale + (*p1 - *s1).max(*p2 - *s2) + 1;
-                    Some(create_decimal_type(result_precision, result_scale))
+                    let result_precision =
+                        result_scale + (*p1 as i8 - *s1).max(*p2 as i8 - *s2) + 1;
+                    Some(create_decimal_type(result_precision as u8, result_scale))
                 }
                 Operator::Multiply => {
                     // s1 + s2
@@ -411,17 +412,18 @@ fn coercion_decimal_mathematics_type(
                 }
                 Operator::Divide => {
                     // max(6, s1 + p2 + 1)
-                    let result_scale = 6.max(*s1 + *p2 + 1);
+                    let result_scale = 6.max(*s1 + *p2 as i8 + 1);
                     // p1 - s1 + s2 + max(6, s1 + p2 + 1)
-                    let result_precision = result_scale + *p1 - *s1 + *s2;
-                    Some(create_decimal_type(result_precision, result_scale))
+                    let result_precision = result_scale + *p1 as i8 - *s1 + *s2;
+                    Some(create_decimal_type(result_precision as u8, result_scale))
                 }
                 Operator::Modulo => {
                     // max(s1, s2)
                     let result_scale = *s1.max(s2);
                     // min(p1-s1, p2-s2) + max(s1, s2)
-                    let result_precision = result_scale + (*p1 - *s1).min(*p2 - *s2);
-                    Some(create_decimal_type(result_precision, result_scale))
+                    let result_precision =
+                        result_scale + (*p1 as i8 - *s1).min(*p2 as i8 - *s2);
+                    Some(create_decimal_type(result_precision as u8, result_scale))
                 }
                 _ => None,
             }

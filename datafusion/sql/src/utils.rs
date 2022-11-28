@@ -511,7 +511,7 @@ pub(crate) fn make_decimal_type(
 ) -> Result<DataType> {
     // postgres like behavior
     let (precision, scale) = match (precision, scale) {
-        (Some(p), Some(s)) => (p as u8, s as u8),
+        (Some(p), Some(s)) => (p as u8, s as i8),
         (Some(p), None) => (p as u8, 0),
         (None, Some(_)) => {
             return Err(DataFusionError::Internal(
@@ -522,7 +522,10 @@ pub(crate) fn make_decimal_type(
     };
 
     // Arrow decimal is i128 meaning 38 maximum decimal digits
-    if precision == 0 || precision > DECIMAL128_MAX_PRECISION || scale > precision {
+    if precision == 0
+        || precision > DECIMAL128_MAX_PRECISION
+        || scale.unsigned_abs() > precision
+    {
         Err(DataFusionError::Internal(format!(
             "Decimal(precision = {}, scale = {}) should satisty `0 < precision <= 38`, and `scale <= precision`.",
             precision, scale

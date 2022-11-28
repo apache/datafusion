@@ -161,7 +161,7 @@ macro_rules! typed_sum_delta_batch {
 
 // TODO implement this in arrow-rs with simd
 // https://github.com/apache/arrow-rs/issues/1010
-fn sum_decimal_batch(values: &ArrayRef, precision: u8, scale: u8) -> Result<ScalarValue> {
+fn sum_decimal_batch(values: &ArrayRef, precision: u8, scale: i8) -> Result<ScalarValue> {
     let array = downcast_value!(values, Decimal128Array);
 
     if array.null_count() == array.len() {

@@ -2754,7 +2754,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(Expr::Literal(ScalarValue::Decimal128(
                     Some(n),
                     p as u8,
-                    s as u8,
+                    s as i8,
                 )))
             } else {
                 let number = n.parse::<i128>().map_err(|_| {

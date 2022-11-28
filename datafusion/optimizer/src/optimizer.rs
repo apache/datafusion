@@ -299,7 +299,6 @@ mod tests {
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError};
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, LogicalPlan, LogicalPlanBuilder, Projection};
-    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     #[test]
@@ -385,11 +384,11 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let metadata: BTreeMap<_, _> = [("key".into(), format!("value {}", i))]
+                let metadata = [("key".into(), format!("value {}", i))]
                     .into_iter()
                     .collect();
 
-                let new_arrow_field = f.field().clone().with_metadata(Some(metadata));
+                let new_arrow_field = f.field().clone().with_metadata(metadata);
                 if let Some(qualifier) = f.qualifier() {
                     DFField::from_qualified(qualifier, new_arrow_field)
                 } else {

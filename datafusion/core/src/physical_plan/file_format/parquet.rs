@@ -701,12 +701,12 @@ pub(crate) fn parquet_to_arrow_decimal_type(
     let type_ptr = parquet_column.self_type_ptr();
     match type_ptr.get_basic_info().logical_type() {
         Some(LogicalType::Decimal { scale, precision }) => {
-            Some(DataType::Decimal128(precision as u8, scale as u8))
+            Some(DataType::Decimal128(precision as u8, scale as i8))
         }
         _ => match type_ptr.get_basic_info().converted_type() {
             ConvertedType::DECIMAL => Some(DataType::Decimal128(
                 type_ptr.get_precision() as u8,
-                type_ptr.get_scale() as u8,
+                type_ptr.get_scale() as i8,
             )),
             _ => None,
         },

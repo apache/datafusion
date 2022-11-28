@@ -16,11 +16,7 @@
 // under the License.
 
 //! Tests for parquet schema handling
-use std::{
-    collections::{BTreeMap, HashMap},
-    fs,
-    path::Path,
-};
+use std::{collections::HashMap, fs, path::Path};
 
 use ::parquet::arrow::ArrowWriter;
 use tempfile::TempDir;
@@ -48,12 +44,12 @@ async fn schema_merge_ignores_metadata_by_default() {
         Schema::new(vec![f1.clone(), f2.clone()]),
         // field level metadata
         Schema::new(vec![
-            f1.clone().with_metadata(make_b_meta("blarg", "bar")),
+            f1.clone().with_metadata(make_meta("blarg", "bar")),
             f2.clone(),
         ]),
         // incompatible field level metadata
         Schema::new(vec![
-            f1.clone().with_metadata(make_b_meta("blarg", "baz")),
+            f1.clone().with_metadata(make_meta("blarg", "baz")),
             f2.clone(),
         ]),
         // schema with no meta
@@ -164,17 +160,6 @@ fn make_meta(k: impl Into<String>, v: impl Into<String>) -> HashMap<String, Stri
     let mut meta = HashMap::new();
     meta.insert(k.into(), v.into());
     meta
-}
-
-/// Make btree version (field and schema level metadata are
-/// different for some reason in Arrow :shrug:)
-fn make_b_meta(
-    k: impl Into<String>,
-    v: impl Into<String>,
-) -> Option<BTreeMap<String, String>> {
-    let mut meta = BTreeMap::new();
-    meta.insert(k.into(), v.into());
-    Some(meta)
 }
 
 /// Writes individual files with the specified schemas to temp_path)
