@@ -749,8 +749,8 @@ fn build_join_indices(
 // "| 9  | 8  | 90  | 8  | 8  | 80  |",
 // "+----+----+-----+----+----+-----+"
 // And the result of left and right indices
-// left indices:  5,6,6,4
-// right indices: 3,4,5,3
+// left indices:  5, 6, 6, 4
+// right indices: 3, 4, 5, 3
 fn build_equal_condition_join_indices(
     left_data: &JoinLeftData,
     right: &RecordBatch,
