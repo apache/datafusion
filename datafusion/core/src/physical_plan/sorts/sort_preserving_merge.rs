@@ -569,8 +569,6 @@ impl SortPreservingMergeStream {
         if self.aborted {
             return Poll::Ready(None);
         }
-        let num_streams = self.streams.num_streams();
-
         // try to initialize the loser tree
         if let Some(poll) = self.init_loser_tree(cx) {
             return poll;
@@ -582,35 +580,9 @@ impl SortPreservingMergeStream {
         let _timer = elapsed_compute.timer();
 
         loop {
-            // Adjust the loser tree if necessary
-            if !self.loser_tree_adjusted {
-                let mut winner = self.loser_tree[0];
-                match futures::ready!(self.maybe_poll_stream(cx, winner)) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        self.aborted = true;
-                        return Poll::Ready(Some(Err(e)));
-                    }
-                }
-
-                // Replace overall winner by walking tree of losers
-                let mut cmp_node = (num_streams + winner) / 2;
-                while cmp_node != 0 {
-                    let challenger = self.loser_tree[cmp_node];
-                    let challenger_win =
-                        match (&self.cursors[winner], &self.cursors[challenger]) {
-                            (None, _) => true,
-                            (_, None) => false,
-                            (Some(winner), Some(challenger)) => challenger < winner,
-                        };
-                    if challenger_win {
-                        self.loser_tree[cmp_node] = winner;
-                        winner = challenger;
-                    }
-                    cmp_node /= 2;
-                }
-                self.loser_tree[0] = winner;
-                self.loser_tree_adjusted = true;
+            // Adjust the loser tree if necessary, returning control if needed
+            if let Some(poll) = self.update_loser_tree(cx) {
+                return poll;
             }
 
             let min_cursor_idx = self.loser_tree[0];
@@ -643,6 +615,7 @@ impl SortPreservingMergeStream {
     ///
     /// Returns None on success, or Some(poll) if any of the inputs
     /// are not ready or errored
+    #[inline]
     fn init_loser_tree(
         self: &mut Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -690,6 +663,53 @@ impl SortPreservingMergeStream {
             self.loser_tree[cmp_node] = winner;
         }
         self.loser_tree_adjusted = true;
+        // Success
+        None
+    }
+
+    /// Attempts to updated the loser tree, if possible
+    ///
+    /// Returns None on success, or Some(poll) if the winning input
+    /// was not ready or errored
+    #[inline]
+    fn update_loser_tree(
+        self: &mut Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Option<Poll<Option<ArrowResult<RecordBatch>>>> {
+        if self.loser_tree_adjusted {
+            return None;
+        }
+
+        let num_streams = self.streams.num_streams();
+        let mut winner = self.loser_tree[0];
+        match self.maybe_poll_stream(cx, winner) {
+            Poll::Ready(Ok(_)) => {}
+            Poll::Ready(Err(e)) => {
+                self.aborted = true;
+                return Some(Poll::Ready(Some(Err(e))));
+            }
+            Poll::Pending => return Some(Poll::Pending),
+        }
+
+        // Replace overall winner by walking tree of losers
+        let mut cmp_node = (num_streams + winner) / 2;
+        while cmp_node != 0 {
+            let challenger = self.loser_tree[cmp_node];
+            let challenger_win = match (&self.cursors[winner], &self.cursors[challenger])
+            {
+                (None, _) => true,
+                (_, None) => false,
+                (Some(winner), Some(challenger)) => challenger < winner,
+            };
+            if challenger_win {
+                self.loser_tree[cmp_node] = winner;
+                winner = challenger;
+            }
+            cmp_node /= 2;
+        }
+        self.loser_tree[0] = winner;
+        self.loser_tree_adjusted = true;
+        // Success
         None
     }
 }
