@@ -571,44 +571,9 @@ impl SortPreservingMergeStream {
         }
         let num_streams = self.streams.num_streams();
 
-        // Init all cursors and the loser tree in the first poll
-        if self.loser_tree.is_empty() {
-            // Ensure all non-exhausted streams have a cursor from which
-            // rows can be pulled
-            for i in 0..num_streams {
-                match futures::ready!(self.maybe_poll_stream(cx, i)) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        self.aborted = true;
-                        return Poll::Ready(Some(Err(e)));
-                    }
-                }
-            }
-
-            // Init loser tree
-            self.loser_tree.resize(num_streams, usize::MAX);
-            for i in 0..num_streams {
-                let mut winner = i;
-                let mut cmp_node = (num_streams + i) / 2;
-                while cmp_node != 0 && self.loser_tree[cmp_node] != usize::MAX {
-                    let challenger = self.loser_tree[cmp_node];
-                    let challenger_win =
-                        match (&self.cursors[winner], &self.cursors[challenger]) {
-                            (None, _) => true,
-                            (_, None) => false,
-                            (Some(winner), Some(challenger)) => challenger < winner,
-                        };
-                    if challenger_win {
-                        self.loser_tree[cmp_node] = winner;
-                        winner = challenger;
-                    } else {
-                        self.loser_tree[cmp_node] = challenger;
-                    }
-                    cmp_node /= 2;
-                }
-                self.loser_tree[cmp_node] = winner;
-            }
-            self.loser_tree_adjusted = true;
+        // try to initialize the loser tree
+        if let Some(poll) = self.init_loser_tree(cx) {
+            return poll;
         }
 
         // NB timer records time taken on drop, so there are no
@@ -671,6 +636,61 @@ impl SortPreservingMergeStream {
                 return Poll::Ready(None);
             }
         }
+    }
+
+    /// Attempts to initialize the loser tree with one value from each
+    /// non exhausted input, if possible.
+    ///
+    /// Returns None on success, or Some(poll) if any of the inputs
+    /// are not ready or errored
+    fn init_loser_tree(
+        self: &mut Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Option<Poll<Option<ArrowResult<RecordBatch>>>> {
+        let num_streams = self.streams.num_streams();
+
+        if !self.loser_tree.is_empty() {
+            return None;
+        }
+
+        // Ensure all non-exhausted streams have a cursor from which
+        // rows can be pulled
+        for i in 0..num_streams {
+            match self.maybe_poll_stream(cx, i) {
+                Poll::Ready(Ok(_)) => {}
+                Poll::Ready(Err(e)) => {
+                    self.aborted = true;
+                    return Some(Poll::Ready(Some(Err(e))));
+                }
+                Poll::Pending => return Some(Poll::Pending),
+            }
+        }
+
+        // Init loser tree
+        self.loser_tree.resize(num_streams, usize::MAX);
+        for i in 0..num_streams {
+            let mut winner = i;
+            let mut cmp_node = (num_streams + i) / 2;
+            while cmp_node != 0 && self.loser_tree[cmp_node] != usize::MAX {
+                let challenger = self.loser_tree[cmp_node];
+                let challenger_win =
+                    match (&self.cursors[winner], &self.cursors[challenger]) {
+                        (None, _) => true,
+                        (_, None) => false,
+                        (Some(winner), Some(challenger)) => challenger < winner,
+                    };
+                if challenger_win {
+                    self.loser_tree[cmp_node] = winner;
+                    winner = challenger;
+                } else {
+                    self.loser_tree[cmp_node] = challenger;
+                }
+                cmp_node /= 2;
+            }
+            self.loser_tree[cmp_node] = winner;
+        }
+        self.loser_tree_adjusted = true;
+        None
     }
 }
 
