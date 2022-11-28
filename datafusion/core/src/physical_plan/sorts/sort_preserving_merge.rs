@@ -570,7 +570,7 @@ impl SortPreservingMergeStream {
             return Poll::Ready(None);
         }
         // try to initialize the loser tree
-        if let Some(poll) = self.init_loser_tree(cx) {
+        if let TreeUpdate::Incomplete(poll) = self.init_loser_tree(cx) {
             return poll;
         }
 
@@ -581,7 +581,7 @@ impl SortPreservingMergeStream {
 
         loop {
             // Adjust the loser tree if necessary, returning control if needed
-            if let Some(poll) = self.update_loser_tree(cx) {
+            if let TreeUpdate::Incomplete(poll) = self.update_loser_tree(cx) {
                 return poll;
             }
 
@@ -616,14 +616,11 @@ impl SortPreservingMergeStream {
     /// Returns None on success, or Some(poll) if any of the inputs
     /// are not ready or errored
     #[inline]
-    fn init_loser_tree(
-        self: &mut Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Option<Poll<Option<ArrowResult<RecordBatch>>>> {
+    fn init_loser_tree(self: &mut Pin<&mut Self>, cx: &mut Context<'_>) -> TreeUpdate {
         let num_streams = self.streams.num_streams();
 
         if !self.loser_tree.is_empty() {
-            return None;
+            return TreeUpdate::Complete;
         }
 
         // Ensure all non-exhausted streams have a cursor from which
@@ -633,9 +630,9 @@ impl SortPreservingMergeStream {
                 Poll::Ready(Ok(_)) => {}
                 Poll::Ready(Err(e)) => {
                     self.aborted = true;
-                    return Some(Poll::Ready(Some(Err(e))));
+                    return TreeUpdate::Incomplete(Poll::Ready(Some(Err(e))));
                 }
-                Poll::Pending => return Some(Poll::Pending),
+                Poll::Pending => return TreeUpdate::Incomplete(Poll::Pending),
             }
         }
 
@@ -663,8 +660,7 @@ impl SortPreservingMergeStream {
             self.loser_tree[cmp_node] = winner;
         }
         self.loser_tree_adjusted = true;
-        // Success
-        None
+        TreeUpdate::Complete
     }
 
     /// Attempts to updated the loser tree, if possible
@@ -672,12 +668,9 @@ impl SortPreservingMergeStream {
     /// Returns None on success, or Some(poll) if the winning input
     /// was not ready or errored
     #[inline]
-    fn update_loser_tree(
-        self: &mut Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Option<Poll<Option<ArrowResult<RecordBatch>>>> {
+    fn update_loser_tree(self: &mut Pin<&mut Self>, cx: &mut Context<'_>) -> TreeUpdate {
         if self.loser_tree_adjusted {
-            return None;
+            return TreeUpdate::Complete;
         }
 
         let num_streams = self.streams.num_streams();
@@ -686,9 +679,9 @@ impl SortPreservingMergeStream {
             Poll::Ready(Ok(_)) => {}
             Poll::Ready(Err(e)) => {
                 self.aborted = true;
-                return Some(Poll::Ready(Some(Err(e))));
+                return TreeUpdate::Incomplete(Poll::Ready(Some(Err(e))));
             }
-            Poll::Pending => return Some(Poll::Pending),
+            Poll::Pending => return TreeUpdate::Incomplete(Poll::Pending),
         }
 
         // Replace overall winner by walking tree of losers
@@ -709,9 +702,19 @@ impl SortPreservingMergeStream {
         }
         self.loser_tree[0] = winner;
         self.loser_tree_adjusted = true;
-        // Success
-        None
+        TreeUpdate::Complete
     }
+}
+
+/// The result of updating the loser tree. It is the same as an Option
+/// but with specific names for easier readability
+enum TreeUpdate {
+    /// The tree update could not be completed (e.g. the input was not
+    /// ready or had an error). The caller should return the `Poll`
+    /// result to its caller
+    Incomplete(Poll<Option<ArrowResult<RecordBatch>>>),
+    /// The operation was completed successfully and completely
+    Complete,
 }
 
 impl RecordBatchStream for SortPreservingMergeStream {
