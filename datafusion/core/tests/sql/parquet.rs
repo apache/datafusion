@@ -19,7 +19,7 @@ use std::{fs, path::Path};
 
 use ::parquet::arrow::ArrowWriter;
 use datafusion::datasource::listing::ListingOptions;
-use datafusion_common::cast::{as_list_array, as_string_array};
+use datafusion_common::cast::{as_list_array, as_primitive_array, as_string_array};
 use tempfile::TempDir;
 
 use super::*;
@@ -239,11 +239,7 @@ async fn parquet_list_columns() {
     let utf8_list_array = as_list_array(batch.column(1)).unwrap();
 
     assert_eq!(
-        int_list_array
-            .value(0)
-            .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
-            .unwrap(),
+        as_primitive_array::<Int64Type>(&int_list_array.value(0)).unwrap(),
         &PrimitiveArray::<Int64Type>::from(vec![Some(1), Some(2), Some(3),])
     );
 
@@ -253,22 +249,14 @@ async fn parquet_list_columns() {
     );
 
     assert_eq!(
-        int_list_array
-            .value(1)
-            .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
-            .unwrap(),
+        as_primitive_array::<Int64Type>(&int_list_array.value(1)).unwrap(),
         &PrimitiveArray::<Int64Type>::from(vec![None, Some(1),])
     );
 
     assert!(utf8_list_array.is_null(1));
 
     assert_eq!(
-        int_list_array
-            .value(2)
-            .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
-            .unwrap(),
+        as_primitive_array::<Int64Type>(&int_list_array.value(2)).unwrap(),
         &PrimitiveArray::<Int64Type>::from(vec![Some(4),])
     );
 

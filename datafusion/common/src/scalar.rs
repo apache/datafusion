@@ -25,7 +25,9 @@ use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
-use crate::cast::{as_decimal128_array, as_list_array, as_struct_array};
+use crate::cast::{
+    as_decimal128_array, as_dictionary_array, as_list_array, as_struct_array,
+};
 use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
 use arrow::{
@@ -721,7 +723,7 @@ fn get_dict_value<K: ArrowDictionaryKeyType>(
     array: &ArrayRef,
     index: usize,
 ) -> (&ArrayRef, Option<usize>) {
-    let dict_array = as_dictionary_array::<K>(array);
+    let dict_array = as_dictionary_array::<K>(array).unwrap();
     (dict_array.values(), dict_array.key(index))
 }
 
@@ -3212,7 +3214,7 @@ mod tests {
         ];
 
         let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
-        let array = as_dictionary_array::<Int32Type>(&array);
+        let array = as_dictionary_array::<Int32Type>(&array).unwrap();
         let values_array = as_string_array(array.values()).unwrap();
 
         let values = array

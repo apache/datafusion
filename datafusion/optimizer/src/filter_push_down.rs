@@ -550,7 +550,6 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             input,
             expr,
             schema,
-            alias: _,
         }) => {
             // A projection is filter-commutable, but re-writes all predicate expressions
             // collect projection.
@@ -1194,14 +1193,15 @@ mod tests {
             .build()?;
 
         // filter appears below Union
-        let expected = "\
-            Union\
-            \n  Projection: test.a AS b, alias=test2\
-            \n    Filter: test.a = Int64(1)\
-            \n      TableScan: test\
-            \n  Projection: test.a AS b, alias=test2\
-            \n    Filter: test.a = Int64(1)\
-            \n      TableScan: test";
+        let expected = "Union\
+        \n  SubqueryAlias: test2\
+        \n    Projection: test.a AS b\
+        \n      Filter: test.a = Int64(1)\
+        \n        TableScan: test\
+        \n  SubqueryAlias: test2\
+        \n    Projection: test.a AS b\
+        \n      Filter: test.a = Int64(1)\
+        \n        TableScan: test";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -2300,22 +2300,24 @@ mod tests {
             .project(vec![col("b.a")])?
             .build()?;
 
-        let expected_before = "\
-        Projection: b.a\
+        let expected_before = "Projection: b.a\
         \n  Filter: b.a = Int64(1)\
-        \n    Projection: b.a, alias=b\
-        \n      Projection: Int64(0) AS a, alias=b\
-        \n        EmptyRelation";
+        \n    SubqueryAlias: b\
+        \n      Projection: b.a\
+        \n        SubqueryAlias: b\
+        \n          Projection: Int64(0) AS a\
+        \n            EmptyRelation";
         assert_eq!(format!("{:?}", plan), expected_before);
 
         // Ensure that the predicate without any columns (0 = 1) is
         // still there.
-        let expected_after = "\
-        Projection: b.a\
-        \n  Projection: b.a, alias=b\
-        \n    Projection: Int64(0) AS a, alias=b\
-        \n      Filter: Int64(0) = Int64(1)\
-        \n        EmptyRelation";
+        let expected_after = "Projection: b.a\
+        \n  Filter: b.a = Int64(1)\
+        \n    SubqueryAlias: b\
+        \n      Projection: b.a\
+        \n        SubqueryAlias: b\
+        \n          Projection: Int64(0) AS a\
+        \n            EmptyRelation";
         assert_optimized_plan_eq(&plan, expected_after);
 
         Ok(())

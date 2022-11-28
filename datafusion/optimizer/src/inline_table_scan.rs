@@ -110,6 +110,7 @@ mod tests {
     pub struct CustomSource {
         plan: LogicalPlan,
     }
+
     impl CustomSource {
         fn new() -> Self {
             Self {
@@ -120,6 +121,7 @@ mod tests {
             }
         }
     }
+
     impl TableSource for CustomSource {
         fn as_any(&self) -> &dyn std::any::Any {
             self
@@ -156,10 +158,10 @@ mod tests {
             .optimize(&plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
-        let expected = "\
-        Filter: x.a = Int32(1)\
-        \n  Projection: y.a, alias=x\
-        \n    TableScan: y";
+        let expected = "Filter: x.a = Int32(1)\
+        \n  SubqueryAlias: x\
+        \n    Projection: y.a\
+        \n      TableScan: y";
 
         assert_eq!(formatted_plan, expected);
         assert_eq!(plan.schema(), optimized_plan.schema());

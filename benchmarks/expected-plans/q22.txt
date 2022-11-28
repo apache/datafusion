@@ -1,7 +1,7 @@
 Sort: custsale.cntrycode ASC NULLS LAST
   Projection: custsale.cntrycode, COUNT(UInt8(1)) AS numcust, SUM(custsale.c_acctbal) AS totacctbal
     Aggregate: groupBy=[[custsale.cntrycode]], aggr=[[COUNT(UInt8(1)), SUM(custsale.c_acctbal)]]
-      Projection: cntrycode, customer.c_acctbal, alias=custsale
+      SubqueryAlias: custsale
         Projection: substr(customer.c_phone, Int64(1), Int64(2)) AS cntrycode, customer.c_acctbal
           Filter: CAST(customer.c_acctbal AS Decimal128(19, 6)) > __sq_1.__value
             CrossJoin:
@@ -9,7 +9,8 @@ Sort: custsale.cntrycode ASC NULLS LAST
                 Filter: substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
                   TableScan: customer projection=[c_custkey, c_phone, c_acctbal]
                 TableScan: orders projection=[o_custkey]
-              Projection: AVG(customer.c_acctbal) AS __value, alias=__sq_1
-                Aggregate: groupBy=[[]], aggr=[[AVG(customer.c_acctbal)]]
-                  Filter: customer.c_acctbal > Decimal128(Some(0),15,2) AND substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
-                    TableScan: customer projection=[c_phone, c_acctbal]
+              SubqueryAlias: __sq_1
+                Projection: AVG(customer.c_acctbal) AS __value
+                  Aggregate: groupBy=[[]], aggr=[[AVG(customer.c_acctbal)]]
+                    Filter: customer.c_acctbal > Decimal128(Some(0),15,2) AND substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8("13"), Utf8("31"), Utf8("23"), Utf8("29"), Utf8("30"), Utf8("18"), Utf8("17")])
+                      TableScan: customer projection=[c_phone, c_acctbal]

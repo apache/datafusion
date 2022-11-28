@@ -8,6 +8,7 @@ Sort: supplier_cnt DESC NULLS FIRST, part.p_brand ASC NULLS LAST, part.p_type AS
               TableScan: partsupp projection=[ps_partkey, ps_suppkey]
               Filter: part.p_brand != Utf8("Brand#45") AND part.p_type NOT LIKE Utf8("MEDIUM POLISHED%") AND part.p_size IN ([Int32(49), Int32(14), Int32(23), Int32(45), Int32(19), Int32(3), Int32(36), Int32(9)])
                 TableScan: part projection=[p_partkey, p_brand, p_type, p_size]
-            Projection: supplier.s_suppkey AS s_suppkey, alias=__sq_1
-              Filter: supplier.s_comment LIKE Utf8("%Customer%Complaints%")
-                TableScan: supplier projection=[s_suppkey, s_comment]
+            SubqueryAlias: __sq_1
+              Projection: supplier.s_suppkey AS s_suppkey
+                Filter: supplier.s_comment LIKE Utf8("%Customer%Complaints%")
+                  TableScan: supplier projection=[s_suppkey, s_comment]

@@ -22,11 +22,11 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        as_dictionary_array, ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array,
-        Decimal128Array, DictionaryArray, LargeStringArray, PrimitiveArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
+        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+        DictionaryArray, LargeStringArray, PrimitiveArray, Time32MillisecondArray,
+        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
+        UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
     },
     compute,
     datatypes::{
@@ -53,7 +53,7 @@ use arrow::array::{
     UInt8Array,
 };
 
-use datafusion_common::cast::{as_boolean_array, as_string_array};
+use datafusion_common::cast::{as_boolean_array, as_dictionary_array, as_string_array};
 
 use hashbrown::raw::RawTable;
 
@@ -396,7 +396,7 @@ impl ExecutionPlan for HashJoinExec {
                 return Err(DataFusionError::Plan(format!(
                     "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
                     PartitionMode::Auto
-                )))
+                )));
             }
         };
 
@@ -686,7 +686,7 @@ fn build_batch_from_indices(
     RecordBatch::try_new(Arc::new(schema.clone()), columns)
 }
 
-// Get left and right indices which is satisfies the on condition in the Join
+// Get left and right indices which is satisfies the on condition (include equal_conditon and filter_in_join) in the Join
 #[allow(clippy::too_many_arguments)]
 fn build_join_indices(
     batch: &RecordBatch,
@@ -867,9 +867,9 @@ macro_rules! equal_rows_elem {
 macro_rules! equal_rows_elem_with_string_dict {
     ($key_array_type:ident, $l: ident, $r: ident, $left: ident, $right: ident, $null_equals_null: ident) => {{
         let left_array: &DictionaryArray<$key_array_type> =
-            as_dictionary_array::<$key_array_type>($l);
+            as_dictionary_array::<$key_array_type>($l).unwrap();
         let right_array: &DictionaryArray<$key_array_type> =
-            as_dictionary_array::<$key_array_type>($r);
+            as_dictionary_array::<$key_array_type>($r).unwrap();
 
         let (left_values, left_values_index) = {
             let keys_col = left_array.keys();
@@ -1202,9 +1202,10 @@ fn adjust_indices_by_join_type(
         JoinType::Right | JoinType::Full => {
             // matched
             // unmatched right row will be produced in this batch
-            let right_null_indices = get_anti_indices(count_right_batch, &right_indices);
+            let right_unmatched_indices =
+                get_anti_indices(count_right_batch, &right_indices);
             // combine the matched and unmatched right result together
-            append_right_indices(left_indices, right_indices, right_null_indices)
+            append_right_indices(left_indices, right_indices, right_unmatched_indices)
         }
         JoinType::RightSemi => {
             // need to remove the duplicated record in the right side
@@ -1221,6 +1222,8 @@ fn adjust_indices_by_join_type(
         }
         JoinType::LeftSemi | JoinType::LeftAnti => {
             // matched or unmatched left row will be produced in the end of loop
+            // TODO: left semi can be optimized.
+            // When visit the right batch, we can output the matched left row and don't need to wait the end of loop
             (
                 UInt64Array::from_iter_values(vec![]),
                 UInt32Array::from_iter_values(vec![]),
