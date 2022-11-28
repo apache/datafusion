@@ -28,7 +28,7 @@ use substrait::protobuf::{
     },
     AggregateRel, Expression, FetchRel, FilterRel, FunctionArgument, JoinRel, NamedStruct, ProjectRel, ReadRel, SortField, SortRel,
     PlanRel,
-    Plan, Rel, AggregateFunction,
+    Plan, Rel, RelRoot, AggregateFunction,
 };
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
@@ -38,7 +38,12 @@ pub fn to_substrait_plan(plan: &LogicalPlan) -> Result<Box<Plan>> {
     // Generate PlanRel(s)
     // Note: Only 1 relation tree is currently supported
     let plan_rels = vec![PlanRel {
-        rel_type: Some(plan_rel::RelType::Rel(*to_substrait_rel(plan, &mut extension_info)?))
+        rel_type: Some(plan_rel::RelType::Root(
+            RelRoot {
+                input: Some(*to_substrait_rel(plan, &mut extension_info)?),
+                names: plan.schema().field_names(),
+            }
+        ))
     }];
 
     let (function_extensions, _) = extension_info;
@@ -177,6 +182,24 @@ pub fn to_substrait_rel(plan: &LogicalPlan, extension_info: &mut (Vec<extensions
                     input: Some(input),
                     groupings: vec![Grouping { grouping_expressions: grouping }], //groupings, 
                     measures: measures,
+                    advanced_extension: None,
+                }))),
+            }))
+        }
+        LogicalPlan::Distinct(distinct) => {
+            // Use Substrait's AggregateRel with empty measures to represent `select distinct`
+            let input = to_substrait_rel(distinct.input.as_ref(), extension_info)?;
+            // Get grouping keys from the input relation's number of output fields
+            let grouping = (0..distinct.input.schema().fields().len())
+                .map(|x: usize| substrait_field_ref(x))
+                .collect::<Result<Vec<_>>>()?;
+
+            Ok(Box::new(Rel {
+                rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
+                    common: None,
+                    input: Some(input),
+                    groupings: vec![Grouping { grouping_expressions: grouping }],
+                    measures: vec![],
                     advanced_extension: None,
                 }))),
             }))

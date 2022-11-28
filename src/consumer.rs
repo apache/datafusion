@@ -91,9 +91,9 @@ pub async fn from_substrait_plan(ctx: &mut SessionContext, plan: &Plan) -> Resul
                     substrait::protobuf::plan_rel::RelType::Rel(rel) => {
                         Ok(from_substrait_rel(ctx, &rel, &function_extension).await?)
                     },
-                    substrait::protobuf::plan_rel::RelType::Root(_) => Err(DataFusionError::NotImplemented(
-                        "RootRel not supported".to_string()
-                    )),
+                    substrait::protobuf::plan_rel::RelType::Root(root) => {
+                        Ok(from_substrait_rel(ctx, &root.input.as_ref().unwrap(), &function_extension).await?)
+                    }
                 },
                 None => Err(DataFusionError::Internal("Cannot parse plan relation: None".to_string()))
             }
