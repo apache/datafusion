@@ -79,8 +79,8 @@ impl GlobalLimitExec {
     }
 
     /// Maximum number of rows to fetch
-    pub fn fetch(&self) -> Option<&usize> {
-        self.fetch.as_ref()
+    pub fn fetch(&self) -> Option<usize> {
+        self.fetch
     }
 }
 
@@ -365,30 +365,17 @@ impl ExecutionPlan for LocalLimitExec {
     }
 }
 
-/// Truncate a RecordBatch to maximum of n rows
-pub fn truncate_batch(batch: &RecordBatch, n: usize) -> RecordBatch {
-    let limited_columns: Vec<ArrayRef> = (0..batch.num_columns())
-        .map(|i| limit(batch.column(i), n))
-        .collect();
-
-    RecordBatch::try_new(batch.schema(), limited_columns).unwrap()
-}
-
 /// A Limit stream skips `skip` rows, and then fetch up to `fetch` rows.
 struct LimitStream {
-    /// The number of rows to skip
+    /// The remaining number of rows to skip
     skip: usize,
-    /// The maximum number of rows to produce, after `skip` are skipped
+    /// The remaining number of rows to produce
     fetch: usize,
     /// The input to read from. This is set to None once the limit is
     /// reached to enable early termination
     input: Option<SendableRecordBatchStream>,
     /// Copy of the input schema
     schema: SchemaRef,
-    /// Number of rows have already skipped
-    current_skipped: usize,
-    /// the current number of rows which have been produced
-    current_fetched: usize,
     /// Execution time metrics
     baseline_metrics: BaselineMetrics,
 }
@@ -406,8 +393,6 @@ impl LimitStream {
             fetch: fetch.unwrap_or(usize::MAX),
             input: Some(input),
             schema,
-            current_skipped: 0,
-            current_fetched: 0,
             baseline_metrics,
         }
     }
@@ -420,47 +405,52 @@ impl LimitStream {
         loop {
             let poll = input.poll_next_unpin(cx);
             let poll = poll.map_ok(|batch| {
-                if batch.num_rows() + self.current_skipped <= self.skip {
-                    self.current_skipped += batch.num_rows();
+                if batch.num_rows() <= self.skip {
+                    self.skip -= batch.num_rows();
                     RecordBatch::new_empty(input.schema())
                 } else {
-                    let offset = self.skip - self.current_skipped;
-                    let new_batch = batch.slice(offset, batch.num_rows() - offset);
-                    self.current_skipped = self.skip;
+                    let new_batch = batch.slice(self.skip, batch.num_rows() - self.skip);
+                    self.skip = 0;
                     new_batch
                 }
             });
 
             match &poll {
-                Poll::Ready(Some(Ok(batch)))
-                    if batch.num_rows() > 0 && self.current_skipped == self.skip =>
-                {
-                    break poll
+                Poll::Ready(Some(Ok(batch))) => {
+                    if batch.num_rows() > 0 && self.skip == 0 {
+                        break poll;
+                    } else {
+                        // continue to poll input stream
+                    }
                 }
                 Poll::Ready(Some(Err(_e))) => break poll,
                 Poll::Ready(None) => break poll,
                 Poll::Pending => break poll,
-                _ => {
-                    // continue to poll input stream
-                }
             }
         }
     }
 
+    /// fetches from the batch
     fn stream_limit(&mut self, batch: RecordBatch) -> Option<RecordBatch> {
         // records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
-        if self.current_fetched == self.fetch {
+        if self.fetch == 0 {
             self.input = None; // clear input so it can be dropped early
             None
-        } else if self.current_fetched + batch.num_rows() <= self.fetch {
-            self.current_fetched += batch.num_rows();
+        } else if batch.num_rows() <= self.fetch {
+            self.fetch -= batch.num_rows();
             Some(batch)
         } else {
-            let batch_rows = self.fetch - self.current_fetched;
-            self.current_fetched = self.fetch;
+            let batch_rows = self.fetch;
+            self.fetch = 0;
             self.input = None; // clear input so it can be dropped early
-            Some(truncate_batch(&batch, batch_rows))
+
+            let limited_columns: Vec<ArrayRef> = batch
+                .columns()
+                .iter()
+                .map(|col| limit(col, batch_rows))
+                .collect();
+            Some(RecordBatch::try_new(batch.schema(), limited_columns).unwrap())
         }
     }
 }
@@ -472,7 +462,7 @@ impl Stream for LimitStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let fetch_started = self.current_skipped == self.skip;
+        let fetch_started = self.skip == 0;
         let poll = match &mut self.input {
             Some(input) => {
                 let poll = if fetch_started {
