@@ -321,13 +321,24 @@ pub(crate) struct SortPreservingMergeStream {
     /// Vector that holds all [`SortKeyCursor`]s
     cursors: Vec<Option<SortKeyCursor>>,
 
-    /// The loser tree that always produces the minimum cursor
+    /// A loser tree that always produces the minimum cursor
     ///
     /// Node 0 stores the top winner, Nodes 1..num_streams store
     /// the loser nodes
+    ///
+    /// This implements a "Tournament Tree" (aka Loser Tree) to keep
+    /// track of the current smallest element at the top. When the top
+    /// record is taken, the tree structure is not modified, and only
+    /// the path from bottom to top is visited, keeping the number of
+    /// comparisons close to the theoretical limit of `log(S)`.
+    ///
+    /// reference: <https://en.wikipedia.org/wiki/K-way_merge_algorithm#Tournament_Tree>
     loser_tree: Vec<usize>,
 
-    /// Identify whether the loser tree is adjusted
+    /// If the most recently yielded overall winner has been replaced
+    /// within the loser tree. A value of `false` indicates that the
+    /// overall winner has been yielded but the loser tree has not
+    /// been updated
     loser_tree_adjusted: bool,
 
     /// target batch size
@@ -617,6 +628,7 @@ impl SortPreservingMergeStream {
                     }
                 }
 
+                // Replace overall winner by walking tree of losers
                 let mut cmp_node = (num_streams + winner) / 2;
                 while cmp_node != 0 {
                     let challenger = self.loser_tree[cmp_node];
