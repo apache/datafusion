@@ -381,8 +381,7 @@ impl ExecutionPlan for HashJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
-        let hashjoin_metrics = HashJoinMetrics::new(partition, &self.metrics);
-        let timer = hashjoin_metrics.build_time.timer();
+
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.once(|| {
                 collect_left_input(
@@ -406,7 +405,6 @@ impl ExecutionPlan for HashJoinExec {
                 )))
             }
         };
-        timer.done();
 
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
@@ -423,7 +421,7 @@ impl ExecutionPlan for HashJoinExec {
             right: right_stream,
             column_indices: self.column_indices.clone(),
             random_state: self.random_state.clone(),
-            join_metrics: hashjoin_metrics,
+            join_metrics: HashJoinMetrics::new(partition, &self.metrics),
             null_equals_null: self.null_equals_null,
             is_exhausted: false,
         }))
@@ -1494,10 +1492,12 @@ impl HashJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+        let build_timer = self.join_metrics.build_time.timer();
         let left_data = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
             Err(e) => return Poll::Ready(Some(Err(e))),
         };
+        build_timer.done();
 
         let visited_left_side = self.visited_left_side.get_or_insert_with(|| {
             let num_rows = left_data.1.num_rows();
