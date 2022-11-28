@@ -570,7 +570,7 @@ impl SortPreservingMergeStream {
             return Poll::Ready(None);
         }
         // try to initialize the loser tree
-        if let TreeUpdate::Incomplete(poll) = self.init_loser_tree(cx) {
+        if let Some(poll) = self.init_loser_tree(cx).into_poll() {
             return poll;
         }
 
@@ -581,7 +581,7 @@ impl SortPreservingMergeStream {
 
         loop {
             // Adjust the loser tree if necessary, returning control if needed
-            if let TreeUpdate::Incomplete(poll) = self.update_loser_tree(cx) {
+            if let Some(poll) = self.update_loser_tree(cx).into_poll() {
                 return poll;
             }
 
@@ -630,9 +630,9 @@ impl SortPreservingMergeStream {
                 Poll::Ready(Ok(_)) => {}
                 Poll::Ready(Err(e)) => {
                     self.aborted = true;
-                    return TreeUpdate::Incomplete(Poll::Ready(Some(Err(e))));
+                    return TreeUpdate::Error(e);
                 }
-                Poll::Pending => return TreeUpdate::Incomplete(Poll::Pending),
+                Poll::Pending => return TreeUpdate::Pending,
             }
         }
 
@@ -679,9 +679,9 @@ impl SortPreservingMergeStream {
             Poll::Ready(Ok(_)) => {}
             Poll::Ready(Err(e)) => {
                 self.aborted = true;
-                return TreeUpdate::Incomplete(Poll::Ready(Some(Err(e))));
+                return TreeUpdate::Error(e);
             }
-            Poll::Pending => return TreeUpdate::Incomplete(Poll::Pending),
+            Poll::Pending => return TreeUpdate::Pending,
         }
 
         // Replace overall winner by walking tree of losers
@@ -710,11 +710,26 @@ impl SortPreservingMergeStream {
 /// but with specific names for easier readability
 enum TreeUpdate {
     /// The tree update could not be completed (e.g. the input was not
-    /// ready or had an error). The caller should return the `Poll`
-    /// result to its caller
-    Incomplete(Poll<Option<ArrowResult<RecordBatch>>>),
+    /// ready)
+    Pending,
+
+    /// The tree update could not be completed because the input had an error
+    Error(ArrowError),
+
     /// The operation was completed successfully and completely
     Complete,
+}
+
+impl TreeUpdate {
+    /// Convert this update to a Poll, if the caller should return the
+    /// result to its caller
+    fn into_poll(self) -> Option<Poll<Option<ArrowResult<RecordBatch>>>> {
+        match self {
+            TreeUpdate::Pending => Some(Poll::Pending),
+            TreeUpdate::Error(e) => Some(Poll::Ready(Some(Err(e)))),
+            TreeUpdate::Complete => None,
+        }
+    }
 }
 
 impl RecordBatchStream for SortPreservingMergeStream {
