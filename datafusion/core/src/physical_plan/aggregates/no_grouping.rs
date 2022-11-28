@@ -73,7 +73,7 @@ impl AggregateStream {
         let aggregate_expressions = aggregate_expressions(&aggr_expr, &mode, 0)?;
         let accumulators = create_accumulators(&aggr_expr)?;
         let memory_consumer = MemoryConsumerProxy::new(
-            "AggregationState",
+            "GroupBy None Accumulators",
             MemoryConsumerId::new(partition),
             Arc::clone(&context.runtime_env().memory_manager),
         );

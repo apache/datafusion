@@ -144,7 +144,7 @@ impl GroupedHashAggregateStreamV2 {
 
         let aggr_state = AggregationState {
             memory_consumer: MemoryConsumerProxy::new(
-                "AggregationState",
+                "GroupBy Hash (Row) AggregationState",
                 MemoryConsumerId::new(partition),
                 Arc::clone(&context.runtime_env().memory_manager),
             ),
