@@ -295,6 +295,8 @@ impl AggregateExec {
                 self.aggr_expr.clone(),
                 input,
                 baseline_metrics,
+                context,
+                partition,
             )?))
         } else if self.row_aggregate_supported() {
             Ok(StreamType::GroupedHashAggregateStreamV2(
@@ -737,7 +739,7 @@ mod tests {
     use arrow::error::{ArrowError, Result as ArrowResult};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
-    use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count};
+    use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
     use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
     use futures::{FutureExt, Stream};
     use std::any::Any;
@@ -1131,11 +1133,19 @@ mod tests {
         );
         let task_ctx = session_ctx.task_ctx();
 
-        let groups = PhysicalGroupBy {
+        let groups_none = PhysicalGroupBy::default();
+        let groups_some = PhysicalGroupBy {
             expr: vec![(col("a", &input_schema)?, "a".to_string())],
             null_expr: vec![],
             groups: vec![vec![false]],
         };
+
+        // something that allocates within the aggregator
+        let aggregates_v0: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Median::new(
+            col("a", &input_schema)?,
+            "MEDIAN(a)".to_string(),
+            DataType::UInt32,
+        ))];
 
         // use slow-path in `hash.rs`
         let aggregates_v1: Vec<Arc<dyn AggregateExpr>> =
@@ -1152,10 +1162,14 @@ mod tests {
             DataType::Float64,
         ))];
 
-        for (version, aggregates) in [(1, aggregates_v1), (2, aggregates_v2)] {
+        for (version, groups, aggregates) in [
+            (0, groups_none, aggregates_v0),
+            (1, groups_some.clone(), aggregates_v1),
+            (2, groups_some, aggregates_v2),
+        ] {
             let partial_aggregate = Arc::new(AggregateExec::try_new(
                 AggregateMode::Partial,
-                groups.clone(),
+                groups,
                 aggregates,
                 input.clone(),
                 input_schema.clone(),
@@ -1165,6 +1179,9 @@ mod tests {
 
             // ensure that we really got the version we wanted
             match version {
+                0 => {
+                    assert!(matches!(stream, StreamType::AggregateStream(_)));
+                }
                 1 => {
                     assert!(matches!(stream, StreamType::GroupedHashAggregateStream(_)));
                 }
