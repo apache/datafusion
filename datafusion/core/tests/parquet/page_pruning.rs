@@ -49,7 +49,7 @@ async fn get_parquet_exec(filter: Expr, session_ctx: SessionContext) -> ParquetE
         size: metadata.len() as usize,
     };
 
-    let schema = ParquetFormat::default()
+    let schema = ParquetFormat::new(session_ctx.config_options())
         .infer_schema(&store, &[meta.clone()])
         .await
         .unwrap();
