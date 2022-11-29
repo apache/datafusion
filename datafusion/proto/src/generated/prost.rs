@@ -1417,17 +1417,6 @@ pub struct PhysicalNegativeNode {
     pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct UnresolvedShuffleExecNode {
-    #[prost(uint32, tag = "1")]
-    pub stage_id: u32,
-    #[prost(message, optional, tag = "2")]
-    pub schema: ::core::option::Option<Schema>,
-    #[prost(uint32, tag = "3")]
-    pub input_partition_count: u32,
-    #[prost(uint32, tag = "4")]
-    pub output_partition_count: u32,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FilterExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
@@ -1583,19 +1572,6 @@ pub struct AggregateExecNode {
     pub null_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(bool, repeated, tag = "9")]
     pub groups: ::prost::alloc::vec::Vec<bool>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ShuffleWriterExecNode {
-    /// TODO it seems redundant to provide job and stage id here since we also have them
-    /// in the TaskDefinition that wraps this plan
-    #[prost(string, tag = "1")]
-    pub job_id: ::prost::alloc::string::String,
-    #[prost(uint32, tag = "2")]
-    pub stage_id: u32,
-    #[prost(message, optional, tag = "3")]
-    pub input: ::core::option::Option<PhysicalPlanNode>,
-    #[prost(message, optional, tag = "4")]
-    pub output_partitioning: ::core::option::Option<PhysicalHashRepartition>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {

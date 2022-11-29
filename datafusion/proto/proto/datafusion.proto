@@ -1080,13 +1080,6 @@ message PhysicalNegativeNode {
   PhysicalExprNode expr = 1;
 }
 
-message UnresolvedShuffleExecNode {
-  uint32 stage_id = 1;
-  datafusion.Schema schema = 2;
-  uint32 input_partition_count = 3;
-  uint32 output_partition_count = 4;
-}
-
 message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
@@ -1202,15 +1195,6 @@ message AggregateExecNode {
   datafusion.Schema input_schema = 7;
   repeated PhysicalExprNode null_expr = 8;
   repeated bool groups = 9;
-}
-
-message ShuffleWriterExecNode {
-  //TODO it seems redundant to provide job and stage id here since we also have them
-  // in the TaskDefinition that wraps this plan
-  string job_id = 1;
-  uint32 stage_id = 2;
-  PhysicalPlanNode input = 3;
-  PhysicalHashRepartition output_partitioning = 4;
 }
 
 message GlobalLimitExecNode {
