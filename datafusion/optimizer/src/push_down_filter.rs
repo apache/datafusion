@@ -554,18 +554,14 @@ impl OptimizerRule for PushDownFilter {
                     .fields()
                     .iter()
                     .enumerate()
-                    .flat_map(|(i, field)| {
+                    .map(|(i, field)| {
                         // strip alias, as they should not be part of filters
                         let expr = match &projection.expr[i] {
                             Expr::Alias(expr, _) => expr.as_ref().clone(),
                             expr => expr.clone(),
                         };
 
-                        // Convert both qualified and unqualified fields
-                        [
-                            (field.name().clone(), expr.clone()),
-                            (field.qualified_name(), expr),
-                        ]
+                        (field.qualified_name(), expr)
                     })
                     .collect::<HashMap<_, _>>();
 
@@ -1074,7 +1070,7 @@ mod tests {
     #[test]
     fn union_all() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let table_scan2 = test_table_scan()?;
+        let table_scan2 = test_table_scan_with_name("test2")?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .union(LogicalPlanBuilder::from(table_scan2).build()?)?
             .filter(col("a").eq(lit(1i64)))?
@@ -1083,8 +1079,8 @@ mod tests {
         let expected = "Union\
         \n  Filter: test.a = Int64(1)\
         \n    TableScan: test\
-        \n  Filter: test.a = Int64(1)\
-        \n    TableScan: test";
+        \n  Filter: test2.a = Int64(1)\
+        \n    TableScan: test2";
         assert_optimized_plan_eq(&plan, expected)
     }
 
@@ -2199,6 +2195,35 @@ mod tests {
         \n        TableScan: test\
         \n    Projection: test1.a AS d, test1.a AS e\
         \n      TableScan: test1";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn test_project_same_name_different_qualifier() -> Result<()> {
+        // select * from test,test1 where (test.a = test1.a and test.b > 1) or (test.b = test1.b and test.c < 10);
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test1")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let filter = and(col("test.a").eq(lit(1)), col("test1.a").gt(lit(2)));
+        let plan = LogicalPlanBuilder::from(left)
+            .cross_join(&right)?
+            .project(vec![col("test.a"), col("test1.a")])?
+            .filter(filter)?
+            .build()?;
+
+        let expected = "Projection: test.a, test1.a\
+        \n  CrossJoin:\
+        \n    Projection: test.a, test.b, test.c\
+        \n      Filter: test.a = Int32(1)\
+        \n        TableScan: test\
+        \n    Projection: test1.a, test1.b, test1.c\
+        \n      Filter: test1.a > Int32(2)\
+        \n        TableScan: test1";
         assert_optimized_plan_eq(&plan, expected)
     }
 }
