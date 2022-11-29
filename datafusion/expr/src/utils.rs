@@ -19,7 +19,7 @@
 
 use crate::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
-use crate::logical_plan::builder::build_join_schema;
+use crate::logical_plan::builder::{build_join_schema, with_alias};
 use crate::logical_plan::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
     Limit, Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union,
@@ -506,14 +506,7 @@ pub fn from_plan(
             }))
         }
         LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
-            let schema = inputs[0].schema().as_ref().clone().into();
-            let schema =
-                DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
-            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
-                alias: alias.clone(),
-                input: Arc::new(inputs[0].clone()),
-                schema,
-            }))
+            Ok(with_alias(inputs[0].clone(), alias.clone()))
         }
         LogicalPlan::Limit(Limit { skip, fetch, .. }) => Ok(LogicalPlan::Limit(Limit {
             skip: *skip,

@@ -308,14 +308,7 @@ impl LogicalPlanBuilder {
 
     /// Apply an alias
     pub fn alias(&self, alias: &str) -> Result<Self> {
-        let schema: Schema = self.schema().as_ref().clone().into();
-        let schema =
-            DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
-        Ok(Self::from(LogicalPlan::SubqueryAlias(SubqueryAlias {
-            input: Arc::new(self.plan.clone()),
-            alias: alias.to_string(),
-            schema,
-        })))
+        Ok(Self::from(with_alias(self.plan.clone(), alias.to_string())))
     }
 
     /// Add missing sort columns to all downstream projection
@@ -991,13 +984,22 @@ pub fn project_with_alias(
 
 /// Create a SubqueryAlias to wrap a LogicalPlan.
 pub fn with_alias(plan: LogicalPlan, alias: String) -> LogicalPlan {
-    let plan_schema = &**plan.schema();
+    let plan_schema = plan.schema().as_ref();
     let schema = (plan_schema.clone()).replace_qualifier(alias.as_str());
-    LogicalPlan::SubqueryAlias(SubqueryAlias {
-        input: Arc::new(plan),
-        alias,
-        schema: Arc::new(schema),
-    })
+    match plan {
+        LogicalPlan::SubqueryAlias(subquery_alias) => {
+            LogicalPlan::SubqueryAlias(SubqueryAlias {
+                input: subquery_alias.input,
+                alias,
+                schema: Arc::new(schema),
+            })
+        }
+        _ => LogicalPlan::SubqueryAlias(SubqueryAlias {
+            input: Arc::new(plan),
+            alias,
+            schema: Arc::new(schema),
+        }),
+    }
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
