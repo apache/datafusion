@@ -208,6 +208,12 @@ impl OptimizerRule for LimitPushDown {
                         // push left
                         push_down_join(join, Some(limit), None)
                     }
+                    JoinType::RightSemi | JoinType::RightAnti
+                        if is_no_join_condition(join) =>
+                    {
+                        // push right
+                        push_down_join(join, None, Some(limit))
+                    }
                     JoinType::Left => push_down_join(join, Some(limit), None),
                     JoinType::Right => push_down_join(join, None, Some(limit)),
                     _ => push_down_join(join, None, None),
@@ -645,7 +651,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test2, fetch=1000";
 
-        assert_optimized_plan_eq(&plan, expected).unwrap();
+        assert_optimized_plan_eq(&plan, expected)?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
@@ -664,7 +670,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test2, fetch=1000";
 
-        assert_optimized_plan_eq(&plan, expected).unwrap();
+        assert_optimized_plan_eq(&plan, expected)?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
@@ -683,7 +689,7 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test2, fetch=1000";
 
-        assert_optimized_plan_eq(&plan, expected).unwrap();
+        assert_optimized_plan_eq(&plan, expected)?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
@@ -701,7 +707,7 @@ mod test {
         \n      TableScan: test, fetch=1000\
         \n    TableScan: test2";
 
-        assert_optimized_plan_eq(&plan, expected).unwrap();
+        assert_optimized_plan_eq(&plan, expected)?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
@@ -718,6 +724,42 @@ mod test {
         \n    Limit: skip=0, fetch=1000\
         \n      TableScan: test, fetch=1000\
         \n    TableScan: test2";
+
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let plan = LogicalPlanBuilder::from(table_scan_1.clone())
+            .join(
+                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                JoinType::RightSemi,
+                (left_keys.clone(), right_keys.clone()),
+                None,
+            )?
+            .limit(0, Some(1000))?
+            .build()?;
+
+        let expected = "Limit: skip=0, fetch=1000\
+        \n  RightSemi Join: \
+        \n    TableScan: test\
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test2, fetch=1000";
+
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let plan = LogicalPlanBuilder::from(table_scan_1)
+            .join(
+                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                JoinType::RightAnti,
+                (left_keys, right_keys),
+                None,
+            )?
+            .limit(0, Some(1000))?
+            .build()?;
+
+        let expected = "Limit: skip=0, fetch=1000\
+        \n  RightAnti Join: \
+        \n    TableScan: test\
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test2, fetch=1000";
 
         assert_optimized_plan_eq(&plan, expected)
     }
