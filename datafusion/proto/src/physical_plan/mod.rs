@@ -737,7 +737,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         input: Some(Box::new(input)),
                         skip: limit.skip() as u32,
                         fetch: match limit.fetch() {
-                            Some(n) => *n as i64,
+                            Some(n) => n as i64,
                             _ => -1, // no limit
                         },
                     },
