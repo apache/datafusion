@@ -20,6 +20,7 @@ use datafusion::arrow::csv::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use sqllogictest::TestError;
 pub type Result<T> = std::result::Result<T, TestError>;
@@ -78,6 +79,20 @@ impl sqllogictest::AsyncDB for DataFusion {
         let result = run_query(&self.ctx, sql).await?;
         Ok(result)
     }
+
+    /// Engine name of current database.
+    fn engine_name(&self) -> &str {
+        "DataFusion"
+    }
+    
+    /// [`Runner`] calls this function to perform sleep.
+    ///
+    /// The default implementation is `std::thread::sleep`, which is universial to any async runtime
+    /// but would block the current thread. If you are running in tokio runtime, you should override
+    /// this by `tokio::time::sleep`.
+    async fn sleep(dur: Duration) {
+       tokio::time::sleep(dur).await;
+    }
 }
 
 #[tokio::main]
@@ -93,7 +108,7 @@ pub async fn main() -> Result<()> {
 
         let mut tester = sqllogictest::Runner::new(DataFusion { ctx, test_category });
         // TODO: use tester.run_parallel_async()
-        tester.run_file_async(filename).await.unwrap();
+        tester.run_file_async(filename).await?;
     }
 
     Ok(())
@@ -102,15 +117,13 @@ pub async fn main() -> Result<()> {
 fn format_batches(batches: &[RecordBatch]) -> Result<String> {
     let mut bytes = vec![];
     {
-        let builder = WriterBuilder::new().has_headers(false).with_delimiter(b',');
+        let builder = WriterBuilder::new().has_headers(false).with_delimiter(b' ');
         let mut writer = builder.build(&mut bytes);
         for batch in batches {
             writer.write(batch).unwrap();
         }
     }
-
-    let formatted = String::from_utf8(bytes).unwrap().replace(',', " ");
-    Ok(formatted)
+    Ok(String::from_utf8(bytes).unwrap())
 }
 
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<String> {
