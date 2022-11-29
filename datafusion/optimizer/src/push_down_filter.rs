@@ -19,7 +19,7 @@ use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
 use datafusion_expr::utils::exprlist_to_columns;
 use datafusion_expr::{
-    and, col,
+    and,
     expr_rewriter::{replace_col, ExprRewritable, ExprRewriter},
     logical_plan::{CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union},
     or,
@@ -536,11 +536,14 @@ impl OptimizerRule for PushDownFilter {
                 )?);
                 return self.optimize(&new_plan, optimizer_config);
             }
-            LogicalPlan::Sort(sort) => {
-                let new_filter = LogicalPlan::Filter(Filter::try_new(
-                    filter.predicate().clone(),
-                    sort.input.clone(),
-                )?);
+            LogicalPlan::Repartition(_)
+            | LogicalPlan::Distinct(_)
+            | LogicalPlan::Sort(_) => {
+                // commutable
+                let new_filter =
+                    plan.with_new_inputs(&[
+                        (**(child_plan.inputs().get(0).unwrap())).clone()
+                    ])?;
                 child_plan.with_new_inputs(&[new_filter])?
             }
             LogicalPlan::Projection(projection) => {
@@ -578,12 +581,13 @@ impl OptimizerRule for PushDownFilter {
             LogicalPlan::Union(union) => {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
                 for input in &union.inputs {
-                    let replace_map = input
-                        .schema()
-                        .fields()
-                        .iter()
-                        .map(|field| (field.qualified_name(), col(field.name())))
-                        .collect::<HashMap<_, _>>();
+                    let mut replace_map = HashMap::new();
+                    for (i, field) in input.schema().fields().iter().enumerate() {
+                        replace_map.insert(
+                            union.schema.fields().get(i).unwrap().qualified_name(),
+                            Expr::Column(field.qualified_column()),
+                        );
+                    }
 
                     let push_predicate =
                         replace_cols_by_name(filter.predicate().clone(), &replace_map)?;
@@ -1070,17 +1074,17 @@ mod tests {
     #[test]
     fn union_all() -> Result<()> {
         let table_scan = test_table_scan()?;
-        let plan = LogicalPlanBuilder::from(table_scan.clone())
-            .union(LogicalPlanBuilder::from(table_scan).build()?)?
+        let table_scan2 = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .union(LogicalPlanBuilder::from(table_scan2).build()?)?
             .filter(col("a").eq(lit(1i64)))?
             .build()?;
         // filter appears below Union
-        let expected = "\
-            Union\
-            \n  Filter: a = Int64(1)\
-            \n    TableScan: test\
-            \n  Filter: a = Int64(1)\
-            \n    TableScan: test";
+        let expected = "Union\
+        \n  Filter: test.a = Int64(1)\
+        \n    TableScan: test\
+        \n  Filter: test.a = Int64(1)\
+        \n    TableScan: test";
         assert_optimized_plan_eq(&plan, expected)
     }
 
@@ -1097,11 +1101,11 @@ mod tests {
 
         // filter appears below Union
         let expected = "Union\
-        \n  Filter: b = Int64(1)\
+        \n  Filter: test2.b = Int64(1)\
         \n    SubqueryAlias: test2\
         \n      Projection: test.a AS b\
         \n        TableScan: test\
-        \n  Filter: b = Int64(1)\
+        \n  Filter: test2.b = Int64(1)\
         \n    SubqueryAlias: test2\
         \n      Projection: test.a AS b\
         \n        TableScan: test";
