@@ -544,9 +544,22 @@ where
     let result = integer_array
         .iter()
         .map(|integer| {
-            integer.map(|integer| format!("{:x}", integer.to_usize().unwrap()))
+            if let Some(value) = integer {
+                if let Some(value_usize) = value.to_usize() {
+                    Ok(Some(format!("{:x}", value_usize)))
+                } else if let Some(value_isize) = value.to_isize() {
+                    Ok(Some(format!("{:x}", value_isize)))
+                } else {
+                    Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {:?} for function to_hex",
+                        integer,
+                    )))
+                }
+            } else {
+                Ok(None)
+            }
         })
-        .collect::<GenericStringArray<i32>>();
+        .collect::<Result<GenericStringArray<i32>>>()?;
 
     Ok(Arc::new(result) as ArrayRef)
 }
