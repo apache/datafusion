@@ -135,7 +135,7 @@ impl GroupedHashAggregateStream {
             aggregate_expressions,
             accumulators: Accumulators {
                 memory_consumer: MemoryConsumerProxy::new(
-                    "Accumulators",
+                    "GroupBy Hash Accumulators",
                     MemoryConsumerId::new(partition),
                     Arc::clone(&context.runtime_env().memory_manager),
                 ),
