@@ -19,12 +19,13 @@
 
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
-use arrow::array::{Array, ArrayRef, PrimitiveArray, PrimitiveBuilder};
+use arrow::array::{Array, ArrayRef, PrimitiveBuilder};
 use arrow::compute::sort;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Field, Float32Type, Float64Type, Int16Type, Int32Type,
     Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
+use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Accumulator, AggregateState};
 use std::any::Any;
@@ -102,12 +103,7 @@ macro_rules! median {
             return Ok(ScalarValue::Null);
         }
         let sorted = sort(&combined, None)?;
-        let array = sorted
-            .as_any()
-            .downcast_ref::<PrimitiveArray<$TY>>()
-            .ok_or(DataFusionError::Internal(
-                "median! macro failed to cast array to expected type".to_string(),
-            ))?;
+        let array = as_primitive_array::<$TY>(&sorted)?;
         let len = sorted.len();
         let mid = len / 2;
         if len % 2 == 0 {
@@ -183,6 +179,20 @@ impl Accumulator for MedianAccumulator {
             )),
         }
     }
+
+    fn size(&self) -> usize {
+        // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
+        std::mem::align_of_val(self)
+            + (std::mem::size_of::<ArrayRef>() * self.all_values.capacity())
+            + self
+                .all_values
+                .iter()
+                .map(|array_ref| {
+                    std::mem::size_of_val(array_ref.as_ref())
+                        + array_ref.get_array_memory_size()
+                })
+                .sum::<usize>()
+    }
 }
 
 /// Create an empty array
@@ -195,14 +205,7 @@ fn combine_arrays<T: ArrowPrimitiveType>(arrays: &[ArrayRef]) -> Result<ArrayRef
     let len = arrays.iter().map(|a| a.len() - a.null_count()).sum();
     let mut builder: PrimitiveBuilder<T> = PrimitiveBuilder::with_capacity(len);
     for array in arrays {
-        let array = array
-            .as_any()
-            .downcast_ref::<PrimitiveArray<T>>()
-            .ok_or_else(|| {
-                DataFusionError::Internal(
-                    "combine_arrays failed to cast array to expected type".to_string(),
-                )
-            })?;
+        let array = as_primitive_array::<T>(array)?;
         for i in 0..array.len() {
             if !array.is_null(i) {
                 builder.append_value(array.value(i));

@@ -40,8 +40,9 @@ path = "src/lib.rs"
 [features]
 # Used to enable the avro format
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
+compression = ["xz2", "bzip2", "flate2", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
-default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
+default = ["crypto_expressions", "regex_expressions", "unicode_expressions", "compression"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 # Used to enable JIT code generation
@@ -57,10 +58,10 @@ unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 apache-avro = { version = "0.14", optional = true }
 arrow = { version = "27.0.0", features = ["prettyprint"] }
-async-compression = { version = "0.3.14", features = ["bzip2", "gzip", "futures-io", "tokio"] }
+async-compression = { version = "0.3.14", features = ["bzip2", "gzip", "xz", "futures-io", "tokio"], optional = true }
 async-trait = "0.1.41"
 bytes = "1.1"
-bzip2 = "0.4.3"
+bzip2 = { version = "0.4.3", optional = true }
 chrono = { version = "0.4.23", default-features = false }
 dashmap = "5.4.0"
 datafusion-common = { path = "../common", version = "14.0.0", features = ["parquet", "object_store"] }
@@ -70,7 +71,7 @@ datafusion-optimizer = { path = "../optimizer", version = "14.0.0" }
 datafusion-physical-expr = { path = "../physical-expr", version = "14.0.0" }
 datafusion-row = { path = "../row", version = "14.0.0" }
 datafusion-sql = { path = "../sql", version = "14.0.0" }
-flate2 = "1.0.24"
+flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
 glob = "0.3.0"
 hashbrown = { version = "0.13", features = ["raw"] }
@@ -96,6 +97,7 @@ tokio-stream = "0.1"
 tokio-util = { version = "0.7.4", features = ["io"] }
 url = "2.2"
 uuid = { version = "1.0", features = ["v4"] }
+xz2 = { version = "0.1", optional = true }
 
 [dev-dependencies]
 arrow = { version = "27.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
@@ -104,9 +106,9 @@ criterion = "0.4"
 csv = "1.1.6"
 ctor = "0.1.22"
 doc-comment = "0.3"
-env_logger = "0.9"
+env_logger = "0.10"
 parquet-test-utils = { path = "../../parquet-test-utils" }
-rstest = "0.15.0"
+rstest = "0.16.0"
 test-utils = { path = "../../test-utils" }
 
 [[bench]]

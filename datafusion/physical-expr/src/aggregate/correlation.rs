@@ -193,6 +193,15 @@ impl Accumulator for CorrelationAccumulator {
 
         Ok(ScalarValue::Float64(None))
     }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.covar)
+            + self.covar.size()
+            - std::mem::size_of_val(&self.stddev1)
+            + self.stddev1.size()
+            - std::mem::size_of_val(&self.stddev2)
+            + self.stddev2.size()
+    }
 }
 
 #[cfg(test)]

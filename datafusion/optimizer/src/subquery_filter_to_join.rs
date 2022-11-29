@@ -410,13 +410,15 @@ mod tests {
 
         let expected = "Projection: wrapped.b [b:UInt32]\
         \n  Filter: wrapped.b < UInt32(30) OR wrapped.c IN (<subquery>) [b:UInt32, c:UInt32]\
-        \n    Subquery: [c:UInt32]\n      Projection: sq_outer.c [c:UInt32]\
+        \n    Subquery: [c:UInt32]\
+        \n      Projection: sq_outer.c [c:UInt32]\
         \n        TableScan: sq_outer [a:UInt32, b:UInt32, c:UInt32]\
-        \n    Projection: test.b, test.c, alias=wrapped [b:UInt32, c:UInt32]\
-        \n      LeftSemi Join: test.c = sq_inner.c [a:UInt32, b:UInt32, c:UInt32]\
-        \n        TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-        \n        Projection: sq_inner.c [c:UInt32]\
-        \n          TableScan: sq_inner [a:UInt32, b:UInt32, c:UInt32]";
+        \n    SubqueryAlias: wrapped [b:UInt32, c:UInt32]\
+        \n      Projection: test.b, test.c [b:UInt32, c:UInt32]\
+        \n        LeftSemi Join: test.c = sq_inner.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n          TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n          Projection: sq_inner.c [c:UInt32]\
+        \n            TableScan: sq_inner [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())

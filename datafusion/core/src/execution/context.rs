@@ -26,8 +26,8 @@ use crate::{
     logical_expr::{PlanType, ToStringifiedPlan},
     optimizer::optimizer::Optimizer,
     physical_optimizer::{
-        aggregate_statistics::AggregateStatistics,
-        hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
+        aggregate_statistics::AggregateStatistics, join_selection::JoinSelection,
+        optimizer::PhysicalOptimizerRule,
     },
 };
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
@@ -1166,8 +1166,6 @@ pub struct SessionConfig {
     pub parquet_pruning: bool,
     /// Should DataFusion collect statistics after listing files
     pub collect_statistics: bool,
-    /// Should DataFusion optimizer run a top down process to reorder the join keys
-    pub top_down_join_key_reordering: bool,
     /// Configuration options
     pub config_options: Arc<RwLock<ConfigOptions>>,
     /// Opaque extensions.
@@ -1187,7 +1185,6 @@ impl Default for SessionConfig {
             repartition_windows: true,
             parquet_pruning: true,
             collect_statistics: false,
-            top_down_join_key_reordering: true,
             config_options: Arc::new(RwLock::new(ConfigOptions::new())),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
@@ -1508,7 +1505,7 @@ impl SessionState {
 
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
-            Arc::new(HashBuildProbeOrder::new()),
+            Arc::new(JoinSelection::new()),
         ];
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
         if config

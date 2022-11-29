@@ -52,7 +52,6 @@ use crate::{
 };
 use arrow::array::{new_null_array, UInt16BufferBuilder};
 use arrow::record_batch::RecordBatchOptions;
-use lazy_static::lazy_static;
 use log::{debug, info};
 use object_store::path::Path;
 use object_store::ObjectMeta;
@@ -65,9 +64,9 @@ use std::{
 
 use super::{ColumnStatistics, Statistics};
 
-lazy_static! {
-    /// The datatype used for all partitioning columns for now
-    pub static ref DEFAULT_PARTITION_COLUMN_DATATYPE: DataType = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8));
+/// convert logical type of partition column to physical type: Dictionary(UInt16, val_type)
+pub fn partition_type_wrap(val_type: DataType) -> DataType {
+    DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
 }
 
 /// The base configurations to provide when creating a physical plan for
@@ -99,8 +98,8 @@ pub struct FileScanConfig {
     /// The maximum number of records to read from this plan. If None,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
-    /// The partitioning column names
-    pub table_partition_cols: Vec<String>,
+    /// The partitioning columns
+    pub table_partition_cols: Vec<(String, DataType)>,
     /// The order in which the data is sorted, if known.
     pub output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Configuration options passed to the physical plans
@@ -134,8 +133,8 @@ impl FileScanConfig {
             } else {
                 let partition_idx = idx - self.file_schema.fields().len();
                 table_fields.push(Field::new(
-                    &self.table_partition_cols[partition_idx],
-                    DEFAULT_PARTITION_COLUMN_DATATYPE.clone(),
+                    &self.table_partition_cols[partition_idx].0,
+                    self.table_partition_cols[partition_idx].1.to_owned(),
                     false,
                 ));
                 // TODO provide accurate stat for partition column (#1186)
@@ -406,10 +405,7 @@ fn create_dict_array(
     };
 
     // create data type
-    let data_type =
-        DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val.get_datatype()));
-
-    debug_assert_eq!(data_type, *DEFAULT_PARTITION_COLUMN_DATATYPE);
+    let data_type = partition_type_wrap(val.get_datatype());
 
     // assemble pieces together
     let mut builder = ArrayData::builder(data_type)
@@ -539,7 +535,7 @@ mod tests {
             Arc::clone(&file_schema),
             None,
             Statistics::default(),
-            vec!["date".to_owned()],
+            vec![("date".to_owned(), partition_type_wrap(DataType::Utf8))],
         );
 
         let (proj_schema, proj_statistics) = conf.project();
@@ -585,7 +581,7 @@ mod tests {
                 ),
                 ..Default::default()
             },
-            vec!["date".to_owned()],
+            vec![("date".to_owned(), partition_type_wrap(DataType::Utf8))],
         );
 
         let (proj_schema, proj_statistics) = conf.project();
@@ -615,8 +611,11 @@ mod tests {
             ("b", &vec![-2, -1, 0]),
             ("c", &vec![10, 11, 12]),
         );
-        let partition_cols =
-            vec!["year".to_owned(), "month".to_owned(), "day".to_owned()];
+        let partition_cols = vec![
+            ("year".to_owned(), partition_type_wrap(DataType::Utf8)),
+            ("month".to_owned(), partition_type_wrap(DataType::Utf8)),
+            ("day".to_owned(), partition_type_wrap(DataType::Utf8)),
+        ];
         // create a projected schema
         let conf = config_for_projection(
             file_batch.schema(),
@@ -633,7 +632,13 @@ mod tests {
         );
         let (proj_schema, _) = conf.project();
         // created a projector for that projected schema
-        let mut proj = PartitionColumnProjector::new(proj_schema, &partition_cols);
+        let mut proj = PartitionColumnProjector::new(
+            proj_schema,
+            &partition_cols
+                .iter()
+                .map(|x| x.0.clone())
+                .collect::<Vec<_>>(),
+        );
 
         // project first batch
         let projected_batch = proj
@@ -777,7 +782,7 @@ mod tests {
         file_schema: SchemaRef,
         projection: Option<Vec<usize>>,
         statistics: Statistics,
-        table_partition_cols: Vec<String>,
+        table_partition_cols: Vec<(String, DataType)>,
     ) -> FileScanConfig {
         FileScanConfig {
             file_schema,

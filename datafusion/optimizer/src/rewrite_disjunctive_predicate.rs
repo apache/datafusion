@@ -50,7 +50,7 @@ use std::sync::Arc;
 /// main use is that it appears in TPCH Q19 and is required to avoid a
 /// CROSS JOIN.
 ///
-/// Specificially, Q19 has a WHERE clause that looks like
+/// Specifically, Q19 has a WHERE clause that looks like
 ///
 /// ```sql
 /// where
@@ -81,7 +81,7 @@ use std::sync::Arc;
 /// )
 /// ```
 ///
-/// Niavely planning this query will result in a CROSS join with that
+/// Naively planning this query will result in a CROSS join with that
 /// single large OR filter. However, rewriting it using the rewrite in
 /// this pass results in a proper join predicate, `p_partkey = l_partkey`:
 ///

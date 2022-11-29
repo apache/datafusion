@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{as_primitive_array, Int32Builder, Int64Array};
+use arrow::array::{Int32Builder, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -31,6 +31,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
+use datafusion_common::cast::as_primitive_array;
 use datafusion_common::DataFusionError;
 use datafusion_expr::expr::{BinaryExpr, Cast};
 use std::ops::Deref;
@@ -215,7 +216,7 @@ async fn assert_provider_row_count(value: i64, expected_count: i64) -> Result<()
         .aggregate(vec![], vec![count(col("flag"))])?;
 
     let results = df.collect().await?;
-    let result_col: &Int64Array = as_primitive_array(results[0].column(0));
+    let result_col: &Int64Array = as_primitive_array(results[0].column(0))?;
     assert_eq!(result_col.value(0), expected_count);
 
     ctx.register_table("data", Arc::new(provider))?;
@@ -225,7 +226,7 @@ async fn assert_provider_row_count(value: i64, expected_count: i64) -> Result<()
         .collect()
         .await?;
 
-    let sql_result_col: &Int64Array = as_primitive_array(sql_results[0].column(0));
+    let sql_result_col: &Int64Array = as_primitive_array(sql_results[0].column(0))?;
     assert_eq!(sql_result_col.value(0), expected_count);
 
     Ok(())

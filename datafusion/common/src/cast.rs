@@ -21,10 +21,14 @@
 //! kernels in arrow-rs such as `as_boolean_array` do.
 
 use crate::{downcast_value, DataFusionError};
-use arrow::array::{
-    Array, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
-    Int32Array, Int64Array, ListArray, StringArray, StructArray, UInt32Array,
-    UInt64Array,
+use arrow::{
+    array::{
+        Array, BooleanArray, Date32Array, Decimal128Array, DictionaryArray, Float32Array,
+        Float64Array, GenericBinaryArray, GenericListArray, Int32Array, Int64Array,
+        LargeListArray, ListArray, OffsetSizeTrait, PrimitiveArray, StringArray,
+        StructArray, UInt32Array, UInt64Array,
+    },
+    datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };
 
 // Downcast ArrayRef to Date32Array
@@ -87,4 +91,39 @@ pub fn as_boolean_array(array: &dyn Array) -> Result<&BooleanArray, DataFusionEr
 // Downcast ArrayRef to ListArray
 pub fn as_list_array(array: &dyn Array) -> Result<&ListArray, DataFusionError> {
     Ok(downcast_value!(array, ListArray))
+}
+
+// Downcast ArrayRef to DictionaryArray
+pub fn as_dictionary_array<T: ArrowDictionaryKeyType>(
+    array: &dyn Array,
+) -> Result<&DictionaryArray<T>, DataFusionError> {
+    Ok(downcast_value!(array, DictionaryArray, T))
+}
+
+// Downcast ArrayRef to GenericBinaryArray
+pub fn as_generic_binary_array<T: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<&GenericBinaryArray<T>, DataFusionError> {
+    Ok(downcast_value!(array, GenericBinaryArray, T))
+}
+
+// Downcast ArrayRef to GenericListArray
+pub fn as_generic_list_array<T: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<&GenericListArray<T>, DataFusionError> {
+    Ok(downcast_value!(array, GenericListArray, T))
+}
+
+// Downcast ArrayRef to LargeListArray
+pub fn as_large_list_array(
+    array: &dyn Array,
+) -> Result<&LargeListArray, DataFusionError> {
+    Ok(downcast_value!(array, LargeListArray))
+}
+
+// Downcast ArrayRef to PrimitiveArray
+pub fn as_primitive_array<T: ArrowPrimitiveType>(
+    array: &dyn Array,
+) -> Result<&PrimitiveArray<T>, DataFusionError> {
+    Ok(downcast_value!(array, PrimitiveArray, T))
 }

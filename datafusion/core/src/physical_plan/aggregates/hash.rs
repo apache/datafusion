@@ -22,12 +22,16 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use ahash::RandomState;
-use futures::{
-    ready,
-    stream::{Stream, StreamExt},
-};
+use datafusion_expr::Accumulator;
+use futures::stream::BoxStream;
+use futures::stream::{Stream, StreamExt};
 
 use crate::error::Result;
+use crate::execution::context::TaskContext;
+use crate::execution::memory_manager::proxy::{
+    MemoryConsumerProxy, RawTableAllocExt, VecAllocExt,
+};
+use crate::execution::MemoryConsumerId;
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, AccumulatorItem, AggregateMode, PhysicalGroupBy,
 };
@@ -74,6 +78,16 @@ Example: average
 * Finally, `get_value` returns an array with one entry computed from the state
 */
 pub(crate) struct GroupedHashAggregateStream {
+    stream: BoxStream<'static, ArrowResult<RecordBatch>>,
+    schema: SchemaRef,
+}
+
+/// Actual implementation of [`GroupedHashAggregateStream`].
+///
+/// This is wrapped into yet another struct because we need to interact with the async memory management subsystem
+/// during poll. To have as little code "weirdness" as possible, we chose to just use [`BoxStream`] together with
+/// [`futures::stream::unfold`]. The latter requires a state object, which is [`GroupedHashAggregateStreamV2`].
+struct GroupedHashAggregateStreamInner {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     mode: AggregateMode,
@@ -90,6 +104,7 @@ pub(crate) struct GroupedHashAggregateStream {
 
 impl GroupedHashAggregateStream {
     /// Create a new GroupedHashAggregateStream
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         mode: AggregateMode,
         schema: SchemaRef,
@@ -97,6 +112,8 @@ impl GroupedHashAggregateStream {
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
+        context: Arc<TaskContext>,
+        partition: usize,
     ) -> Result<Self> {
         let timer = baseline_metrics.elapsed_compute().timer();
 
@@ -108,18 +125,92 @@ impl GroupedHashAggregateStream {
 
         timer.done();
 
-        Ok(Self {
-            schema,
+        let inner = GroupedHashAggregateStreamInner {
+            schema: Arc::clone(&schema),
             mode,
             input,
             aggr_expr,
             group_by,
             baseline_metrics,
             aggregate_expressions,
-            accumulators: Default::default(),
+            accumulators: Accumulators {
+                memory_consumer: MemoryConsumerProxy::new(
+                    "Accumulators",
+                    MemoryConsumerId::new(partition),
+                    Arc::clone(&context.runtime_env().memory_manager),
+                ),
+                map: RawTable::with_capacity(0),
+                group_states: Vec::with_capacity(0),
+            },
             random_state: Default::default(),
             finished: false,
-        })
+        };
+
+        let stream = futures::stream::unfold(inner, |mut this| async move {
+            if this.finished {
+                return None;
+            }
+
+            let elapsed_compute = this.baseline_metrics.elapsed_compute();
+
+            loop {
+                let result = match this.input.next().await {
+                    Some(Ok(batch)) => {
+                        let timer = elapsed_compute.timer();
+                        let result = group_aggregate_batch(
+                            &this.mode,
+                            &this.random_state,
+                            &this.group_by,
+                            &this.aggr_expr,
+                            batch,
+                            &mut this.accumulators,
+                            &this.aggregate_expressions,
+                        );
+
+                        timer.done();
+
+                        // allocate memory
+                        // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
+                        // overshooting a bit. Also this means we either store the whole record batch or not.
+                        let result = match result {
+                            Ok(allocated) => {
+                                this.accumulators.memory_consumer.alloc(allocated).await
+                            }
+                            Err(e) => Err(e),
+                        };
+
+                        match result {
+                            Ok(()) => continue,
+                            Err(e) => Err(ArrowError::ExternalError(Box::new(e))),
+                        }
+                    }
+                    Some(Err(e)) => Err(e),
+                    None => {
+                        this.finished = true;
+                        let timer = this.baseline_metrics.elapsed_compute().timer();
+                        let result = create_batch_from_map(
+                            &this.mode,
+                            &this.accumulators,
+                            this.group_by.expr.len(),
+                            &this.schema,
+                        )
+                        .record_output(&this.baseline_metrics);
+
+                        timer.done();
+                        result
+                    }
+                };
+
+                this.finished = true;
+                return Some((result, this));
+            }
+        });
+
+        // seems like some consumers call this stream even after it returned `None`, so let's fuse the stream.
+        let stream = stream.fuse();
+        let stream = Box::pin(stream);
+
+        Ok(Self { schema, stream })
     }
 }
 
@@ -131,53 +222,7 @@ impl Stream for GroupedHashAggregateStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let this = &mut *self;
-        if this.finished {
-            return Poll::Ready(None);
-        }
-
-        let elapsed_compute = this.baseline_metrics.elapsed_compute();
-
-        loop {
-            let result = match ready!(this.input.poll_next_unpin(cx)) {
-                Some(Ok(batch)) => {
-                    let timer = elapsed_compute.timer();
-                    let result = group_aggregate_batch(
-                        &this.mode,
-                        &this.random_state,
-                        &this.group_by,
-                        &this.aggr_expr,
-                        batch,
-                        &mut this.accumulators,
-                        &this.aggregate_expressions,
-                    );
-
-                    timer.done();
-
-                    match result {
-                        Ok(_) => continue,
-                        Err(e) => Err(ArrowError::ExternalError(Box::new(e))),
-                    }
-                }
-                Some(Err(e)) => Err(e),
-                None => {
-                    this.finished = true;
-                    let timer = this.baseline_metrics.elapsed_compute().timer();
-                    let result = create_batch_from_map(
-                        &this.mode,
-                        &this.accumulators,
-                        this.group_by.expr.len(),
-                        &this.schema,
-                    )
-                    .record_output(&this.baseline_metrics);
-
-                    timer.done();
-                    result
-                }
-            };
-
-            this.finished = true;
-            return Poll::Ready(Some(result));
-        }
+        this.stream.poll_next_unpin(cx)
     }
 }
 
@@ -187,6 +232,10 @@ impl RecordBatchStream for GroupedHashAggregateStream {
     }
 }
 
+/// Perform group-by aggregation for the given [`RecordBatch`].
+///
+/// If successfull, this returns the additional number of bytes that were allocated during this process.
+///
 /// TODO: Make this a member function of [`GroupedHashAggregateStream`]
 fn group_aggregate_batch(
     mode: &AggregateMode,
@@ -196,7 +245,7 @@ fn group_aggregate_batch(
     batch: RecordBatch,
     accumulators: &mut Accumulators,
     aggregate_expressions: &[Vec<Arc<dyn PhysicalExpr>>],
-) -> Result<()> {
+) -> Result<usize> {
     // evaluate the grouping expressions
     let group_by_values = evaluate_group_by(group_by, &batch)?;
 
@@ -204,6 +253,9 @@ fn group_aggregate_batch(
     // We could evaluate them after the `take`, but since we need to evaluate all
     // of them anyways, it is more performant to do it while they are together.
     let aggr_input_values = evaluate_many(aggregate_expressions, &batch)?;
+
+    // track memory allocations
+    let mut allocated = 0usize;
 
     for grouping_set_values in group_by_values {
         // 1.1 construct the key from the group values
@@ -218,7 +270,9 @@ fn group_aggregate_batch(
         create_hashes(&grouping_set_values, random_state, &mut batch_hashes)?;
 
         for (row, hash) in batch_hashes.into_iter().enumerate() {
-            let Accumulators { map, group_states } = accumulators;
+            let Accumulators {
+                map, group_states, ..
+            } = accumulators;
 
             let entry = map.get_mut(hash, |(_hash, group_idx)| {
                 // verify that a group that we are inserting with hash is
@@ -239,7 +293,9 @@ fn group_aggregate_batch(
                     if group_state.indices.is_empty() {
                         groups_with_rows.push(*group_idx);
                     };
-                    group_state.indices.push(row as u32); // remember this row
+                    group_state
+                        .indices
+                        .push_accounted(row as u32, &mut allocated); // remember this row
                 }
                 //  1.2 Need to create new entry
                 None => {
@@ -257,12 +313,32 @@ fn group_aggregate_batch(
                         accumulator_set,
                         indices: vec![row as u32], // 1.3
                     };
+                    // NOTE: do NOT include the `GroupState` struct size in here because this is captured by
+                    // `group_states` (see allocation down below)
+                    allocated += group_state
+                        .group_by_values
+                        .iter()
+                        .map(|sv| sv.size())
+                        .sum::<usize>()
+                        + (std::mem::size_of::<Box<dyn Accumulator>>()
+                            * group_state.accumulator_set.capacity())
+                        + group_state
+                            .accumulator_set
+                            .iter()
+                            .map(|accu| accu.size())
+                            .sum::<usize>()
+                        + (std::mem::size_of::<u32>() * group_state.indices.capacity());
+
                     let group_idx = group_states.len();
-                    group_states.push(group_state);
+                    group_states.push_accounted(group_state, &mut allocated);
                     groups_with_rows.push(group_idx);
 
                     // for hasher function, use precomputed hash value
-                    map.insert(hash, (hash, group_idx), |(hash, _group_idx)| *hash);
+                    map.insert_accounted(
+                        (hash, group_idx),
+                        |(hash, _group_idx)| *hash,
+                        &mut allocated,
+                    );
                 }
             };
         }
@@ -325,12 +401,18 @@ fn group_aggregate_batch(
                                 .collect::<Vec<ArrayRef>>(),
                         )
                     })
-                    .try_for_each(|(accumulator, values)| match mode {
-                        AggregateMode::Partial => accumulator.update_batch(&values),
-                        AggregateMode::FinalPartitioned | AggregateMode::Final => {
-                            // note: the aggregation here is over states, not values, thus the merge
-                            accumulator.merge_batch(&values)
-                        }
+                    .try_for_each(|(accumulator, values)| {
+                        let size_pre = accumulator.size();
+                        let res = match mode {
+                            AggregateMode::Partial => accumulator.update_batch(&values),
+                            AggregateMode::FinalPartitioned | AggregateMode::Final => {
+                                // note: the aggregation here is over states, not values, thus the merge
+                                accumulator.merge_batch(&values)
+                            }
+                        };
+                        let size_post = accumulator.size();
+                        allocated += size_post.saturating_sub(size_pre);
+                        res
                     })
                     // 2.5
                     .and({
@@ -340,7 +422,7 @@ fn group_aggregate_batch(
             })?;
     }
 
-    Ok(())
+    Ok(allocated)
 }
 
 /// The state that is built for each output group.
@@ -358,8 +440,9 @@ struct GroupState {
 }
 
 /// The state of all the groups
-#[derive(Default)]
 struct Accumulators {
+    memory_consumer: MemoryConsumerProxy,
+
     /// Logically maps group values to an index in `group_states`
     ///
     /// Uses the raw API of hashbrown to avoid actually storing the

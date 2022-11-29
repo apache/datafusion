@@ -1226,6 +1226,10 @@ mod roundtrip_tests {
             fn evaluate(&self) -> datafusion::error::Result<ScalarValue> {
                 Ok(ScalarValue::Float64(None))
             }
+
+            fn size(&self) -> usize {
+                std::mem::size_of_val(self)
+            }
         }
 
         let dummy_agg = create_udaf(

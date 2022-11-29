@@ -16,8 +16,9 @@
 // under the License.
 
 //! Defines the Sort-Merge join execution plan.
-//! A sort-merge join plan consumes two sorted children plan and produces
+//! A Sort-Merge join plan consumes two sorted children plan and produces
 //! joined output by given join type and other options.
+//! Sort-Merge join feature is currently experimental.
 
 use std::any::Any;
 use std::cmp::Ordering;
@@ -44,7 +45,7 @@ use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
     build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
-    partitioned_join_output_partitioning, JoinOn,
+    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::physical_plan::{
@@ -349,7 +350,15 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn statistics(&self) -> Statistics {
-        todo!()
+        // TODO stats: it is not possible in general to know the output size of joins
+        // There are some special cases though, for example:
+        // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
+        estimate_join_statistics(
+            self.left.clone(),
+            self.right.clone(),
+            self.on.clone(),
+            &self.join_type,
+        )
     }
 }
 

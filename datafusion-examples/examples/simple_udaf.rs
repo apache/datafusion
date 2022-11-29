@@ -153,6 +153,10 @@ impl Accumulator for GeometricMean {
             self.merge(&v)
         })
     }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+    }
 }
 
 #[tokio::main]

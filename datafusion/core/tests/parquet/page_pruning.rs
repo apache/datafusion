@@ -418,7 +418,6 @@ async fn prune_int32_eq() {
     .await;
 }
 #[tokio::test]
-#[ignore]
 async fn prune_int32_scalar_fun_and_eq() {
     test_prune(
         Scenario::Int32,
@@ -431,7 +430,6 @@ async fn prune_int32_scalar_fun_and_eq() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn prune_int32_scalar_fun() {
     test_prune(
         Scenario::Int32,
@@ -444,7 +442,6 @@ async fn prune_int32_scalar_fun() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn prune_int32_complex_expr() {
     test_prune(
         Scenario::Int32,
@@ -457,7 +454,6 @@ async fn prune_int32_complex_expr() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn prune_int32_complex_expr_subtract() {
     test_prune(
         Scenario::Int32,
@@ -495,7 +491,6 @@ async fn prune_f64_lt() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn prune_f64_scalar_fun_and_gt() {
     // result of sql "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1"
     // only use "f >= 0" to prune
@@ -503,14 +498,13 @@ async fn prune_f64_scalar_fun_and_gt() {
         Scenario::Float64,
         "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1",
         Some(0),
-        Some(2),
+        Some(10),
         1,
     )
     .await;
 }
 
 #[tokio::test]
-#[ignore]
 async fn prune_f64_scalar_fun() {
     // result of sql "SELECT * FROM t where abs(f-1) <= 0.000001" is not supported
     test_prune(
@@ -524,7 +518,6 @@ async fn prune_f64_scalar_fun() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn prune_f64_complex_expr() {
     // result of sql "SELECT * FROM t where f+1 > 1.1"" is not supported
     test_prune(
@@ -538,7 +531,6 @@ async fn prune_f64_complex_expr() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn prune_f64_complex_expr_subtract() {
     // result of sql "SELECT * FROM t where 1-f > 1" is not supported
     test_prune(

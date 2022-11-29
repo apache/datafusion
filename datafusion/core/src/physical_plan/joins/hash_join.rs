@@ -22,12 +22,11 @@ use ahash::RandomState;
 
 use arrow::{
     array::{
-        as_dictionary_array, ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array,
-        Decimal128Array, DictionaryArray, LargeStringArray, PrimitiveArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampSecondArray, UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder,
-        UInt64Builder,
+        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+        DictionaryArray, LargeStringArray, PrimitiveArray, Time32MillisecondArray,
+        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
+        UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder, UInt64Builder,
     },
     compute,
     datatypes::{
@@ -54,7 +53,7 @@ use arrow::array::{
     UInt8Array,
 };
 
-use datafusion_common::cast::{as_boolean_array, as_string_array};
+use datafusion_common::cast::{as_boolean_array, as_dictionary_array, as_string_array};
 
 use hashbrown::raw::RawTable;
 
@@ -296,6 +295,10 @@ impl ExecutionPlan for HashJoinExec {
                     Distribution::HashPartitioned(right_expr),
                 ]
             }
+            PartitionMode::Auto => vec![
+                Distribution::UnspecifiedDistribution,
+                Distribution::UnspecifiedDistribution,
+            ],
         }
     }
 
@@ -322,6 +325,9 @@ impl ExecutionPlan for HashJoinExec {
                 self.left.output_partitioning(),
                 self.right.output_partitioning(),
                 left_columns_len,
+            ),
+            PartitionMode::Auto => Partitioning::UnknownPartitioning(
+                self.right.output_partitioning().partition_count(),
             ),
         }
     }
@@ -387,6 +393,12 @@ impl ExecutionPlan for HashJoinExec {
                 on_left.clone(),
                 context.clone(),
             )),
+            PartitionMode::Auto => {
+                return Err(DataFusionError::Plan(format!(
+                    "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
+                    PartitionMode::Auto
+                )))
+            }
         };
 
         // we have the batches and the hash map with their keys. We can how create a stream
@@ -1114,9 +1126,9 @@ macro_rules! equal_rows_elem {
 macro_rules! equal_rows_elem_with_string_dict {
     ($key_array_type:ident, $l: ident, $r: ident, $left: ident, $right: ident, $null_equals_null: ident) => {{
         let left_array: &DictionaryArray<$key_array_type> =
-            as_dictionary_array::<$key_array_type>($l);
+            as_dictionary_array::<$key_array_type>($l).unwrap();
         let right_array: &DictionaryArray<$key_array_type> =
-            as_dictionary_array::<$key_array_type>($r);
+            as_dictionary_array::<$key_array_type>($r).unwrap();
 
         let (left_values, left_values_index) = {
             let keys_col = left_array.keys();
@@ -1541,7 +1553,8 @@ impl HashJoinStream {
                     }
                     Some(result.map(|x| x.0))
                 }
-                other => {
+                Some(err) => Some(err),
+                None => {
                     let timer = self.join_metrics.join_time.timer();
                     // For the left join, produce rows for unmatched rows
                     match self.join_type {
@@ -1580,7 +1593,7 @@ impl HashJoinStream {
                         | JoinType::Right => {}
                     }
 
-                    other
+                    None
                 }
             })
     }
@@ -1605,9 +1618,11 @@ mod tests {
         physical_plan::{
             common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
         },
+        test::exec::MockExec,
         test::{build_table_i32, columns},
     };
     use arrow::datatypes::Field;
+    use arrow::error::ArrowError;
     use datafusion_expr::Operator;
 
     use super::*;
@@ -3081,5 +3096,64 @@ mod tests {
         assert_batches_sorted_eq!(expected, &batches);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_with_error_right() {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 7]),
+            ("c1", &vec![7, 8, 9]),
+        );
+
+        // right input stream returns one good batch and then one error.
+        // The error should be returned.
+        let err = Err(ArrowError::ComputeError("bad data error".to_string()));
+        let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
+
+        let on = vec![(
+            Column::new_with_schema("b1", &left.schema()).unwrap(),
+            Column::new_with_schema("b1", &right.schema()).unwrap(),
+        )];
+        let schema = right.schema();
+        let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
+        let right_input = Arc::new(MockExec::new(vec![Ok(right), err], schema));
+
+        let join_types = vec![
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+        ];
+
+        for join_type in join_types {
+            let join = join(
+                left.clone(),
+                right_input.clone(),
+                on.clone(),
+                &join_type,
+                false,
+            )
+            .unwrap();
+            let session_ctx = SessionContext::new();
+            let task_ctx = session_ctx.task_ctx();
+
+            let stream = join.execute(0, task_ctx).unwrap();
+
+            // Expect that an error is returned
+            let result_string = crate::physical_plan::common::collect(stream)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(
+                result_string.contains("bad data error"),
+                "actual: {}",
+                result_string
+            );
+        }
     }
 }

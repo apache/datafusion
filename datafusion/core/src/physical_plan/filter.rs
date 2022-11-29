@@ -185,6 +185,9 @@ impl ExecutionPlan for FilterExec {
                 num_rows: input_stats
                     .num_rows
                     .map(|num_rows| (num_rows as f64 * selectivity).ceil() as usize),
+                total_byte_size: input_stats.total_byte_size.map(|total_byte_size| {
+                    (total_byte_size as f64 * selectivity).ceil() as usize
+                }),
                 ..Default::default()
             },
             None => Statistics::default(),
@@ -408,10 +411,12 @@ mod tests {
     async fn test_filter_statistics_basic_expr() -> Result<()> {
         // Table:
         //      a: min=1, max=100
+        let bytes_per_row = 4;
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Some(100),
+                total_byte_size: Some(100 * bytes_per_row),
                 column_statistics: Some(vec![ColumnStatistics {
                     min_value: Some(ScalarValue::Int32(Some(1))),
                     max_value: Some(ScalarValue::Int32(Some(100))),
@@ -432,6 +437,7 @@ mod tests {
 
         let statistics = filter.statistics();
         assert_eq!(statistics.num_rows, Some(25));
+        assert_eq!(statistics.total_byte_size, Some(25 * bytes_per_row));
 
         Ok(())
     }

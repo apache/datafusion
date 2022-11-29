@@ -7,7 +7,8 @@ Sort: orders.o_totalprice DESC NULLS FIRST, orders.o_orderdate ASC NULLS LAST
             TableScan: customer projection=[c_custkey, c_name]
             TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice, o_orderdate]
           TableScan: lineitem projection=[l_orderkey, l_quantity]
-        Projection: lineitem.l_orderkey AS l_orderkey, alias=__sq_1
-          Filter: SUM(lineitem.l_quantity) > Decimal128(Some(30000),25,2)
-            Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_quantity)]]
-              TableScan: lineitem projection=[l_orderkey, l_quantity]
+        SubqueryAlias: __sq_1
+          Projection: lineitem.l_orderkey AS l_orderkey
+            Filter: SUM(lineitem.l_quantity) > Decimal128(Some(30000),25,2)
+              Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_quantity)]]
+                TableScan: lineitem projection=[l_orderkey, l_quantity]

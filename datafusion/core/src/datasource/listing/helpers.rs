@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use arrow::array::new_empty_array;
 use arrow::{
     array::{
         Array, ArrayBuilder, ArrayRef, Date64Array, Date64Builder, StringBuilder,
@@ -176,7 +177,7 @@ pub async fn pruned_partition_list<'a>(
     table_path: &'a ListingTableUrl,
     filters: &'a [Expr],
     file_extension: &'a str,
-    table_partition_cols: &'a [String],
+    table_partition_cols: &'a [(String, DataType)],
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
     let list = table_path.list_all_files(store, file_extension);
 
@@ -187,7 +188,15 @@ pub async fn pruned_partition_list<'a>(
 
     let applicable_filters: Vec<_> = filters
         .iter()
-        .filter(|f| expr_applicable_for_cols(table_partition_cols, f))
+        .filter(|f| {
+            expr_applicable_for_cols(
+                &table_partition_cols
+                    .iter()
+                    .map(|x| x.0.clone())
+                    .collect::<Vec<_>>(),
+                f,
+            )
+        })
         .collect();
 
     if applicable_filters.is_empty() {
@@ -200,11 +209,26 @@ pub async fn pruned_partition_list<'a>(
                 let parsed_path = parse_partitions_for_path(
                     table_path,
                     &object_meta.location,
-                    table_partition_cols,
+                    &table_partition_cols
+                        .iter()
+                        .map(|x| x.0.clone())
+                        .collect::<Vec<_>>(),
                 )
                 .map(|p| {
                     p.iter()
-                        .map(|&pn| ScalarValue::Utf8(Some(pn.to_owned())))
+                        .zip(table_partition_cols)
+                        .map(|(&part_value, part_column)| {
+                            ScalarValue::try_from_string(
+                                part_value.to_string(),
+                                &part_column.1,
+                            )
+                            .unwrap_or_else(|_| {
+                                panic!(
+                                    "Failed to cast str {} to type {}",
+                                    part_value, part_column.1
+                                )
+                            })
+                        })
                         .collect()
                 });
 
@@ -221,6 +245,7 @@ pub async fn pruned_partition_list<'a>(
         let metas: Vec<_> = list.try_collect().await?;
         let batch = paths_to_batch(table_partition_cols, table_path, &metas)?;
         let mem_table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+        debug!("get mem_table: {:?}", mem_table);
 
         // Filter the partitions using a local datafusion context
         // TODO having the external context would allow us to resolve `Volatility::Stable`
@@ -245,28 +270,35 @@ pub async fn pruned_partition_list<'a>(
 ///
 /// Note: For the last modified date, this looses precisions higher than millisecond.
 fn paths_to_batch(
-    table_partition_cols: &[String],
+    table_partition_cols: &[(String, DataType)],
     table_path: &ListingTableUrl,
     metas: &[ObjectMeta],
 ) -> Result<RecordBatch> {
     let mut key_builder = StringBuilder::with_capacity(metas.len(), 1024);
     let mut length_builder = UInt64Builder::with_capacity(metas.len());
     let mut modified_builder = Date64Builder::with_capacity(metas.len());
-    let mut partition_builders = table_partition_cols
+    let mut partition_scalar_values = table_partition_cols
         .iter()
-        .map(|_| StringBuilder::with_capacity(metas.len(), 1024))
+        .map(|_| Vec::new())
         .collect::<Vec<_>>();
     for file_meta in metas {
         if let Some(partition_values) = parse_partitions_for_path(
             table_path,
             &file_meta.location,
-            table_partition_cols,
+            &table_partition_cols
+                .iter()
+                .map(|x| x.0.clone())
+                .collect::<Vec<_>>(),
         ) {
             key_builder.append_value(file_meta.location.as_ref());
             length_builder.append_value(file_meta.size as u64);
             modified_builder.append_value(file_meta.last_modified.timestamp_millis());
             for (i, part_val) in partition_values.iter().enumerate() {
-                partition_builders[i].append_value(part_val);
+                let scalar_val = ScalarValue::try_from_string(
+                    part_val.to_string(),
+                    &table_partition_cols[i].1,
+                )?;
+                partition_scalar_values[i].push(scalar_val);
             }
         } else {
             debug!("No partitioning for path {}", file_meta.location);
@@ -279,8 +311,13 @@ fn paths_to_batch(
         ArrayBuilder::finish(&mut length_builder),
         ArrayBuilder::finish(&mut modified_builder),
     ];
-    for mut partition_builder in partition_builders {
-        col_arrays.push(ArrayBuilder::finish(&mut partition_builder));
+    for (i, part_scalar_val) in partition_scalar_values.into_iter().enumerate() {
+        if part_scalar_val.is_empty() {
+            col_arrays.push(new_empty_array(&table_partition_cols[i].1));
+        } else {
+            let partition_val_array = ScalarValue::iter_to_array(part_scalar_val)?;
+            col_arrays.push(partition_val_array);
+        }
     }
 
     // put the schema together
@@ -289,8 +326,8 @@ fn paths_to_batch(
         Field::new(FILE_SIZE_COLUMN_NAME, DataType::UInt64, false),
         Field::new(FILE_MODIFIED_COLUMN_NAME, DataType::Date64, true),
     ];
-    for pn in table_partition_cols {
-        fields.push(Field::new(pn, DataType::Utf8, false));
+    for part_col in table_partition_cols {
+        fields.push(Field::new(&part_col.0, part_col.1.to_owned(), false));
     }
 
     let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), col_arrays)?;
@@ -366,9 +403,10 @@ fn parse_partitions_for_path<'a>(
 
 #[cfg(test)]
 mod tests {
+    use futures::StreamExt;
+
     use crate::logical_expr::{case, col, lit};
     use crate::test::object_store::make_test_store;
-    use futures::StreamExt;
 
     use super::*;
 
@@ -424,7 +462,7 @@ mod tests {
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter],
             ".parquet",
-            &[String::from("mypartition")],
+            &[(String::from("mypartition"), DataType::Utf8)],
         )
         .await
         .expect("partition pruning failed")
@@ -447,7 +485,7 @@ mod tests {
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter],
             ".parquet",
-            &[String::from("mypartition")],
+            &[(String::from("mypartition"), DataType::Utf8)],
         )
         .await
         .expect("partition pruning failed")
@@ -494,7 +532,10 @@ mod tests {
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter1, filter2, filter3],
             ".parquet",
-            &[String::from("part1"), String::from("part2")],
+            &[
+                (String::from("part1"), DataType::Utf8),
+                (String::from("part2"), DataType::Utf8),
+            ],
         )
         .await
         .expect("partition pruning failed")
@@ -645,7 +686,7 @@ mod tests {
         ];
 
         let batches = paths_to_batch(
-            &[String::from("part1")],
+            &[(String::from("part1"), DataType::Utf8)],
             &ListingTableUrl::parse("file:///mybucket/tablepath").unwrap(),
             &files,
         )

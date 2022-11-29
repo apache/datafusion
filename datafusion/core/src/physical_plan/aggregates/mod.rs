@@ -150,6 +150,22 @@ impl PhysicalGroupBy {
     }
 }
 
+enum StreamType {
+    AggregateStream(AggregateStream),
+    GroupedHashAggregateStreamV2(GroupedHashAggregateStreamV2),
+    GroupedHashAggregateStream(GroupedHashAggregateStream),
+}
+
+impl From<StreamType> for SendableRecordBatchStream {
+    fn from(stream: StreamType) -> Self {
+        match stream {
+            StreamType::AggregateStream(stream) => Box::pin(stream),
+            StreamType::GroupedHashAggregateStreamV2(stream) => Box::pin(stream),
+            StreamType::GroupedHashAggregateStream(stream) => Box::pin(stream),
+        }
+    }
+}
+
 /// Hash aggregate execution plan
 #[derive(Debug)]
 pub struct AggregateExec {
@@ -261,6 +277,56 @@ impl AggregateExec {
         row_supported(&group_schema, RowType::Compact)
             && accumulator_v2_supported(&self.aggr_expr)
     }
+
+    fn execute_typed(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<StreamType> {
+        let batch_size = context.session_config().batch_size();
+        let input = self.input.execute(partition, Arc::clone(&context))?;
+
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+
+        if self.group_by.expr.is_empty() {
+            Ok(StreamType::AggregateStream(AggregateStream::new(
+                self.mode,
+                self.schema.clone(),
+                self.aggr_expr.clone(),
+                input,
+                baseline_metrics,
+                context,
+                partition,
+            )?))
+        } else if self.row_aggregate_supported() {
+            Ok(StreamType::GroupedHashAggregateStreamV2(
+                GroupedHashAggregateStreamV2::new(
+                    self.mode,
+                    self.schema.clone(),
+                    self.group_by.clone(),
+                    self.aggr_expr.clone(),
+                    input,
+                    baseline_metrics,
+                    batch_size,
+                    context,
+                    partition,
+                )?,
+            ))
+        } else {
+            Ok(StreamType::GroupedHashAggregateStream(
+                GroupedHashAggregateStream::new(
+                    self.mode,
+                    self.schema.clone(),
+                    self.group_by.clone(),
+                    self.aggr_expr.clone(),
+                    input,
+                    baseline_metrics,
+                    context,
+                    partition,
+                )?,
+            ))
+        }
+    }
 }
 
 impl ExecutionPlan for AggregateExec {
@@ -347,41 +413,8 @@ impl ExecutionPlan for AggregateExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let batch_size = context.session_config().batch_size();
-        let input = self.input.execute(partition, Arc::clone(&context))?;
-
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-
-        if self.group_by.expr.is_empty() {
-            Ok(Box::pin(AggregateStream::new(
-                self.mode,
-                self.schema.clone(),
-                self.aggr_expr.clone(),
-                input,
-                baseline_metrics,
-            )?))
-        } else if self.row_aggregate_supported() {
-            Ok(Box::pin(GroupedHashAggregateStreamV2::new(
-                self.mode,
-                self.schema.clone(),
-                self.group_by.clone(),
-                self.aggr_expr.clone(),
-                input,
-                baseline_metrics,
-                batch_size,
-                context,
-                partition,
-            )?))
-        } else {
-            Ok(Box::pin(GroupedHashAggregateStream::new(
-                self.mode,
-                self.schema.clone(),
-                self.group_by.clone(),
-                self.aggr_expr.clone(),
-                input,
-                baseline_metrics,
-            )?))
-        }
+        self.execute_typed(partition, context)
+            .map(|stream| stream.into())
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -706,13 +739,14 @@ mod tests {
     use arrow::error::{ArrowError, Result as ArrowResult};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
-    use datafusion_physical_expr::expressions::{lit, Count};
+    use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
     use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
     use futures::{FutureExt, Stream};
     use std::any::Any;
     use std::sync::Arc;
     use std::task::{Context, Poll};
 
+    use super::StreamType;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::{
         ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
@@ -1099,43 +1133,84 @@ mod tests {
         );
         let task_ctx = session_ctx.task_ctx();
 
-        let groups = PhysicalGroupBy {
+        let groups_none = PhysicalGroupBy::default();
+        let groups_some = PhysicalGroupBy {
             expr: vec![(col("a", &input_schema)?, "a".to_string())],
             null_expr: vec![],
             groups: vec![vec![false]],
         };
 
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
+        // something that allocates within the aggregator
+        let aggregates_v0: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Median::new(
+            col("a", &input_schema)?,
+            "MEDIAN(a)".to_string(),
+            DataType::UInt32,
+        ))];
+
+        // use slow-path in `hash.rs`
+        let aggregates_v1: Vec<Arc<dyn AggregateExpr>> =
+            vec![Arc::new(ApproxDistinct::new(
+                col("a", &input_schema)?,
+                "APPROX_DISTINCT(a)".to_string(),
+                DataType::UInt32,
+            ))];
+
+        // use fast-path in `row_hash.rs`.
+        let aggregates_v2: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("b", &input_schema)?,
             "AVG(b)".to_string(),
             DataType::Float64,
         ))];
 
-        let partial_aggregate = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            groups,
-            aggregates,
-            input,
-            input_schema.clone(),
-        )?);
+        for (version, groups, aggregates) in [
+            (0, groups_none, aggregates_v0),
+            (1, groups_some.clone(), aggregates_v1),
+            (2, groups_some, aggregates_v2),
+        ] {
+            let partial_aggregate = Arc::new(AggregateExec::try_new(
+                AggregateMode::Partial,
+                groups,
+                aggregates,
+                input.clone(),
+                input_schema.clone(),
+            )?);
 
-        let err = common::collect(partial_aggregate.execute(0, task_ctx.clone())?)
-            .await
-            .unwrap_err();
+            let stream = partial_aggregate.execute_typed(0, task_ctx.clone())?;
 
-        // error root cause traversal is a bit complicated, see #4172.
-        if let DataFusionError::ArrowError(ArrowError::ExternalError(err)) = err {
-            if let Some(err) = err.downcast_ref::<DataFusionError>() {
-                assert!(
-                    matches!(err, DataFusionError::ResourcesExhausted(_)),
-                    "Wrong inner error type: {}",
-                    err,
-                );
-            } else {
-                panic!("Wrong arrow error type: {err}")
+            // ensure that we really got the version we wanted
+            match version {
+                0 => {
+                    assert!(matches!(stream, StreamType::AggregateStream(_)));
+                }
+                1 => {
+                    assert!(matches!(stream, StreamType::GroupedHashAggregateStream(_)));
+                }
+                2 => {
+                    assert!(matches!(
+                        stream,
+                        StreamType::GroupedHashAggregateStreamV2(_)
+                    ));
+                }
+                _ => panic!("Unknown version: {version}"),
             }
-        } else {
-            panic!("Wrong outer error type: {err}")
+
+            let stream: SendableRecordBatchStream = stream.into();
+            let err = common::collect(stream).await.unwrap_err();
+
+            // error root cause traversal is a bit complicated, see #4172.
+            if let DataFusionError::ArrowError(ArrowError::ExternalError(err)) = err {
+                if let Some(err) = err.downcast_ref::<DataFusionError>() {
+                    assert!(
+                        matches!(err, DataFusionError::ResourcesExhausted(_)),
+                        "Wrong inner error type: {}",
+                        err,
+                    );
+                } else {
+                    panic!("Wrong arrow error type: {err}")
+                }
+            } else {
+                panic!("Wrong outer error type: {err}")
+            }
         }
 
         Ok(())
