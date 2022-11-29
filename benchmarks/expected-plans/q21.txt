@@ -7,8 +7,8 @@ Sort: numwait DESC NULLS FIRST, supplier.s_name ASC NULLS LAST
             Inner Join: l1.l_orderkey = orders.o_orderkey
               Inner Join: supplier.s_suppkey = l1.l_suppkey
                 TableScan: supplier projection=[s_suppkey, s_name, s_nationkey]
-                Filter: l1.l_receiptdate > l1.l_commitdate
-                  SubqueryAlias: l1
+                SubqueryAlias: l1
+                  Filter: lineitem.l_receiptdate > lineitem.l_commitdate
                     TableScan: lineitem projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate]
               Filter: orders.o_orderstatus = Utf8("F")
                 TableScan: orders projection=[o_orderkey, o_orderstatus]
@@ -16,6 +16,6 @@ Sort: numwait DESC NULLS FIRST, supplier.s_name ASC NULLS LAST
               TableScan: nation projection=[n_nationkey, n_name]
           SubqueryAlias: l2
             TableScan: lineitem projection=[l_orderkey, l_suppkey]
-        Filter: l3.l_receiptdate > l3.l_commitdate
-          SubqueryAlias: l3
+        SubqueryAlias: l3
+          Filter: lineitem.l_receiptdate > lineitem.l_commitdate
             TableScan: lineitem projection=[l_orderkey, l_suppkey, l_commitdate, l_receiptdate]

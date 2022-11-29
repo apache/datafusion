@@ -546,6 +546,29 @@ impl OptimizerRule for PushDownFilter {
                     ])?;
                 child_plan.with_new_inputs(&[new_filter])?
             }
+            LogicalPlan::SubqueryAlias(subquery_alias) => {
+                let mut replace_map = HashMap::new();
+                for (i, field) in
+                    subquery_alias.input.schema().fields().iter().enumerate()
+                {
+                    replace_map.insert(
+                        subquery_alias
+                            .schema
+                            .fields()
+                            .get(i)
+                            .unwrap()
+                            .qualified_name(),
+                        Expr::Column(field.qualified_column()),
+                    );
+                }
+                let new_predicate =
+                    replace_cols_by_name(filter.predicate().clone(), &replace_map)?;
+                let new_filter = LogicalPlan::Filter(Filter::try_new(
+                    new_predicate,
+                    subquery_alias.input.clone(),
+                )?);
+                child_plan.with_new_inputs(&[new_filter])?
+            }
             LogicalPlan::Projection(projection) => {
                 // A projection is filter-commutable, but re-writes all predicate expressions
                 // collect projection.
@@ -1110,14 +1133,13 @@ mod tests {
             .build()?;
 
         // filter appears below Union
-        let expected = "Union\
-        \n  Filter: test2.b = Int64(1)\
-        \n    SubqueryAlias: test2\
-        \n      Projection: test.a AS b\
+        let expected = "Union\n  SubqueryAlias: test2\
+        \n    Projection: test.a AS b\
+        \n      Filter: test.a = Int64(1)\
         \n        TableScan: test\
-        \n  Filter: test2.b = Int64(1)\
-        \n    SubqueryAlias: test2\
-        \n      Projection: test.a AS b\
+        \n  SubqueryAlias: test2\
+        \n    Projection: test.a AS b\
+        \n      Filter: test.a = Int64(1)\
         \n        TableScan: test";
         assert_optimized_plan_eq(&plan, expected)
     }
@@ -2233,11 +2255,11 @@ mod tests {
         // Ensure that the predicate without any columns (0 = 1) is
         // still there.
         let expected_after = "Projection: b.a\
-        \n  Filter: b.a = Int64(1)\
-        \n    SubqueryAlias: b\
-        \n      Projection: b.a\
-        \n        SubqueryAlias: b\
-        \n          Projection: Int64(0) AS a\
+        \n  SubqueryAlias: b\
+        \n    Projection: b.a\
+        \n      SubqueryAlias: b\
+        \n        Projection: Int64(0) AS a\
+        \n          Filter: Int64(0) = Int64(1)\
         \n            EmptyRelation";
         assert_optimized_plan_eq(&plan, expected_after)
     }
