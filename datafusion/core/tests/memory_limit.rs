@@ -71,7 +71,7 @@ async fn group_by_hash() {
     .await
 }
 
-/// 100K memory limit
+/// 50 byte memory limit
 const MEMORY_LIMIT_BYTES: usize = 50;
 const MEMORY_FRACTION: f64 = 0.95;
 
