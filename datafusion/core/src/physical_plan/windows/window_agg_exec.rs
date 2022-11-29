@@ -24,10 +24,11 @@ use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::{
-    common, ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
+    ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
+use arrow::compute::concat_batches;
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
@@ -274,8 +275,8 @@ impl WindowAggStream {
         // record compute time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
-        let batch = common::combine_batches(&self.batches, self.input.schema())?;
-        if let Some(batch) = batch {
+        let batch = concat_batches(&self.input.schema(), &self.batches);
+        if let Ok(batch) = batch {
             // calculate window cols
             let mut columns = compute_window_aggregates(&self.window_expr, &batch)
                 .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
