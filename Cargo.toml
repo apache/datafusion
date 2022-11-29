@@ -50,10 +50,3 @@ opt-level = 3
 overflow-checks = false
 panic = 'unwind'
 rpath = false
-
-[patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "eb91dac6e99b0bcbcbd8057b03233059089bbf27"}
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "eb91dac6e99b0bcbcbd8057b03233059089bbf27"}
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "eb91dac6e99b0bcbcbd8057b03233059089bbf27"}
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "eb91dac6e99b0bcbcbd8057b03233059089bbf27"}
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "eb91dac6e99b0bcbcbd8057b03233059089bbf27"}
