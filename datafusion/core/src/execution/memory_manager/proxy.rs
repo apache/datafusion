@@ -88,9 +88,10 @@ impl MemoryConsumer for MemoryConsumerProxy {
     }
 
     async fn spill(&self) -> Result<usize, DataFusionError> {
-        Err(DataFusionError::ResourcesExhausted(
-            "Cannot spill AggregationState".to_owned(),
-        ))
+        Err(DataFusionError::ResourcesExhausted(format!(
+            "Cannot spill {}",
+            self.name
+        )))
     }
 
     fn mem_used(&self) -> usize {
