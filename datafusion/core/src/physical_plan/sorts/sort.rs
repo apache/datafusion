@@ -916,7 +916,7 @@ async fn do_sort(
         schema.clone(),
         expr,
         metrics_set,
-        Arc::new(context.session_config()),
+        Arc::new(context.session_config().clone()),
         context.runtime_env(),
         fetch,
     );
