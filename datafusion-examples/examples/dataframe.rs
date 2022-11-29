@@ -42,6 +42,14 @@ async fn main() -> Result<()> {
     // print the results
     df.show().await?;
 
+    // Reading CSV file with inferred schema example
+    let csv_df = example_read_csv_file_with_inferred_schema().await;
+    csv_df.show().await?;
+
+    // Reading CSV file with defined schema
+    let csv_df = example_read_csv_file_with_schema().await;
+    csv_df.show().await?;
+
     Ok(())
 }
 
@@ -66,7 +74,7 @@ async fn example_read_csv_file_with_inferred_schema() -> Arc<DataFrame> {
     ctx.read_csv(path, CsvReadOptions::default()).await.unwrap()
 }
 
-// Example to read csv file with a given csv file
+// Example to read csv file with a defined schema for the csv file
 async fn example_read_csv_file_with_schema() -> Arc<DataFrame> {
     let path = "example.csv";
     // Create a csv file using the predefined function
