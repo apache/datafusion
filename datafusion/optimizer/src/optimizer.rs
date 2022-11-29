@@ -184,7 +184,7 @@ impl Optimizer {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
         rules.push(Arc::new(EliminateOuterJoin::new()));
-        // Filter can't pushdown Limit, we should do PushDownFilter after LimitPushDown
+        // Filters can't be pushed down past Limits, we should do PushDownFilter after LimitPushDown
         rules.push(Arc::new(LimitPushDown::new()));
         rules.push(Arc::new(PushDownFilter::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
