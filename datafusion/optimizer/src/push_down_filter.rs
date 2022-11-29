@@ -749,9 +749,10 @@ fn replace_cols_by_name(e: Expr, replace_map: &HashMap<String, Expr>) -> Result<
 mod tests {
     use super::*;
     use crate::test::*;
-    use arrow::datatypes::SchemaRef;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use async_trait::async_trait;
     use datafusion_common::DFSchema;
+    use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, col, in_list, in_subquery, lit, logical_plan::JoinType, or, sum, BinaryExpr,
         Expr, LogicalPlanBuilder, Operator, TableSource, TableType,
@@ -841,6 +842,19 @@ mod tests {
             Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b) AS total_salary]]\
             \n  Filter: test.a > Int64(10)\
             \n    TableScan: test";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn filter_complex_group_by() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![add(col("b"), col("a"))], vec![sum(col("a")), col("b")])?
+            .filter(col("b").gt(lit(10i64)))?
+            .build()?;
+        let expected = "Filter: test.b > Int64(10)\
+        \n  Aggregate: groupBy=[[test.b + test.a]], aggr=[[SUM(test.a), test.b]]\
+        \n    TableScan: test";
         assert_optimized_plan_eq(&plan, expected)
     }
 
@@ -1105,6 +1119,67 @@ mod tests {
         \n    SubqueryAlias: test2\
         \n      Projection: test.a AS b\
         \n        TableScan: test";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn test_union_different_schema() -> Result<()> {
+        let left = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+
+        let schema = Schema::new(vec![
+            Field::new("d", DataType::UInt32, false),
+            Field::new("e", DataType::UInt32, false),
+            Field::new("f", DataType::UInt32, false),
+        ]);
+        let right = table_scan(Some("test1"), &schema, None)?
+            .project(vec![col("d"), col("e"), col("f")])?
+            .build()?;
+        let filter = and(col("test.a").eq(lit(1)), col("test1.d").gt(lit(2)));
+        let plan = LogicalPlanBuilder::from(left)
+            .cross_join(&right)?
+            .project(vec![col("test.a"), col("test1.d")])?
+            .filter(filter)?
+            .build()?;
+
+        let expected = "Projection: test.a, test1.d\
+        \n  CrossJoin:\
+        \n    Projection: test.a, test.b, test.c\
+        \n      Filter: test.a = Int32(1)\
+        \n        TableScan: test\
+        \n    Projection: test1.d, test1.e, test1.f\
+        \n      Filter: test1.d > Int32(2)\
+        \n        TableScan: test1";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn test_project_same_name_different_qualifier() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test1")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let filter = and(col("test.a").eq(lit(1)), col("test1.a").gt(lit(2)));
+        let plan = LogicalPlanBuilder::from(left)
+            .cross_join(&right)?
+            .project(vec![col("test.a"), col("test1.a")])?
+            .filter(filter)?
+            .build()?;
+
+        let expected = "Projection: test.a, test1.a\
+        \n  CrossJoin:\
+        \n    Projection: test.a, test.b, test.c\
+        \n      Filter: test.a = Int32(1)\
+        \n        TableScan: test\
+        \n    Projection: test1.a, test1.b, test1.c\
+        \n      Filter: test1.a > Int32(2)\
+        \n        TableScan: test1";
         assert_optimized_plan_eq(&plan, expected)
     }
 
@@ -2195,35 +2270,6 @@ mod tests {
         \n        TableScan: test\
         \n    Projection: test1.a AS d, test1.a AS e\
         \n      TableScan: test1";
-        assert_optimized_plan_eq(&plan, expected)
-    }
-
-    #[test]
-    fn test_project_same_name_different_qualifier() -> Result<()> {
-        // select * from test,test1 where (test.a = test1.a and test.b > 1) or (test.b = test1.b and test.c < 10);
-        let table_scan = test_table_scan()?;
-        let left = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a"), col("b"), col("c")])?
-            .build()?;
-        let right_table_scan = test_table_scan_with_name("test1")?;
-        let right = LogicalPlanBuilder::from(right_table_scan)
-            .project(vec![col("a"), col("b"), col("c")])?
-            .build()?;
-        let filter = and(col("test.a").eq(lit(1)), col("test1.a").gt(lit(2)));
-        let plan = LogicalPlanBuilder::from(left)
-            .cross_join(&right)?
-            .project(vec![col("test.a"), col("test1.a")])?
-            .filter(filter)?
-            .build()?;
-
-        let expected = "Projection: test.a, test1.a\
-        \n  CrossJoin:\
-        \n    Projection: test.a, test.b, test.c\
-        \n      Filter: test.a = Int32(1)\
-        \n        TableScan: test\
-        \n    Projection: test1.a, test1.b, test1.c\
-        \n      Filter: test1.a > Int32(2)\
-        \n        TableScan: test1";
         assert_optimized_plan_eq(&plan, expected)
     }
 }
