@@ -63,8 +63,7 @@ async fn example_read_csv_file_with_inferred_schema() -> Arc<DataFrame> {
     // Create a session context
     let ctx = SessionContext::new();
     // Register a lazy DataFrame using the context
-    let df = ctx.read_csv(path, CsvReadOptions::default()).await.unwrap();
-    df
+    ctx.read_csv(path, CsvReadOptions::default()).await.unwrap()
 }
 
 // Example to read csv file with a given csv file
@@ -89,6 +88,5 @@ async fn example_read_csv_file_with_schema() -> Arc<DataFrame> {
         ..Default::default()
     };
     // Register a lazy DataFrame by using the context and option provider
-    let df = ctx.read_csv(path, csv_read_option).await.unwrap();
-    df
+    ctx.read_csv(path, csv_read_option).await.unwrap()
 }
