@@ -26,7 +26,6 @@ pub mod filter_null_join_keys;
 pub mod filter_push_down;
 pub mod inline_table_scan;
 pub mod limit_push_down;
-pub mod merge_subquery_alias;
 pub mod optimizer;
 pub mod projection_push_down;
 pub mod propagate_empty_relation;
