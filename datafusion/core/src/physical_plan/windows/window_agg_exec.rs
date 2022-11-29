@@ -275,20 +275,21 @@ impl WindowAggStream {
         // record compute time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
-        let batch = concat_batches(&self.input.schema(), &self.batches);
-        if let Ok(batch) = batch {
-            // calculate window cols
-            let mut columns = compute_window_aggregates(&self.window_expr, &batch)
-                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
-
-            // combine with the original cols
-            // note the setup of window aggregates is that they newly calculated window
-            // expressions are always prepended to the columns
-            columns.extend_from_slice(batch.columns());
-            RecordBatch::try_new(self.schema.clone(), columns)
-        } else {
-            Ok(RecordBatch::new_empty(self.schema.clone()))
+        if self.batches.is_empty() {
+            return Ok(RecordBatch::new_empty(self.schema.clone()));
         }
+
+        let batch = concat_batches(&self.input.schema(), &self.batches)?;
+
+        // calculate window cols
+        let mut columns = compute_window_aggregates(&self.window_expr, &batch)
+            .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+
+        // combine with the original cols
+        // note the setup of window aggregates is that they newly calculated window
+        // expressions are always prepended to the columns
+        columns.extend_from_slice(batch.columns());
+        RecordBatch::try_new(self.schema.clone(), columns)
     }
 }
 
