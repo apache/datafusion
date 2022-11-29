@@ -28,6 +28,7 @@ use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::filter_push_down::FilterPushDown;
 use crate::inline_table_scan::InlineTableScan;
 use crate::limit_push_down::LimitPushDown;
+use crate::merge_subquery_alias::MergeSubqueryAlias;
 use crate::projection_push_down::ProjectionPushDown;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
@@ -178,6 +179,7 @@ impl Optimizer {
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
+            Arc::new(MergeSubqueryAlias::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
         ];
         if config.filter_null_keys {
