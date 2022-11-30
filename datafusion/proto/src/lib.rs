@@ -20,9 +20,11 @@
 use datafusion_common::DataFusionError;
 
 pub mod bytes;
+mod common;
 pub mod from_proto;
 pub mod generated;
 pub mod logical_plan;
+pub mod physical_plan;
 pub mod to_proto;
 
 pub use generated::datafusion as protobuf;
