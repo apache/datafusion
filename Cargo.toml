@@ -31,7 +31,6 @@ members = [
     "test-utils",
     "parquet-test-utils",
     "benchmarks",
-    "tests/sqllogictests",
 ]
 
 [profile.release]

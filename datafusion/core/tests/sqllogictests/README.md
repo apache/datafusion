@@ -4,7 +4,7 @@ This is the Datafusion implementation of [sqllogictest](https://www.sqlite.org/s
 
 #### Running tests
 
-`cargo run -p datafusion-sqllogictests`
+`cargo test -p datafusion --test sqllogictests`
 
 #### Setup
 
