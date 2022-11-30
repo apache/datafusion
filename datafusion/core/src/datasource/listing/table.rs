@@ -258,11 +258,15 @@ impl ListingOptions {
     /// Set file extension on [`ListingOptions`] and returns self.
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::SessionContext;
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_file_extension(".parquet");
+    /// let ctx = SessionContext::new();
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::new(ctx.config_options())
+    ///   ))
+    ///   .with_file_extension(".parquet");
     ///
     /// assert_eq!(listing_options.file_extension, ".parquet");
     /// ```
@@ -274,13 +278,17 @@ impl ListingOptions {
     /// Set table partition column names on [`ListingOptions`] and returns self.
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use arrow::datatypes::DataType;
-    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::DataType;
+    /// # use datafusion::prelude::{col, SessionContext};
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_table_partition_cols(vec![("col_a".to_string(), DataType::Utf8),
-    ///         ("col_b".to_string(), DataType::Utf8)]);
+    /// let ctx = SessionContext::new();
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::new(ctx.config_options())
+    ///   ))
+    ///   .with_table_partition_cols(vec![("col_a".to_string(), DataType::Utf8),
+    ///       ("col_b".to_string(), DataType::Utf8)]);
     ///
     /// assert_eq!(listing_options.table_partition_cols, vec![("col_a".to_string(), DataType::Utf8),
     ///     ("col_b".to_string(), DataType::Utf8)]);
@@ -296,12 +304,15 @@ impl ListingOptions {
     /// Set stat collection on [`ListingOptions`] and returns self.
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::SessionContext;
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// // Enable stat collection
-    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_collect_stat(true);
+    /// let ctx = SessionContext::new();
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::new(ctx.config_options())
+    ///   ))
+    ///   .with_collect_stat(true);
     ///
     /// assert_eq!(listing_options.collect_stat, true);
     /// ```
@@ -313,11 +324,15 @@ impl ListingOptions {
     /// Set number of target partitions on [`ListingOptions`] and returns self.
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::SessionContext;
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_target_partitions(8);
+    /// let ctx = SessionContext::new();
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::new(ctx.config_options())
+    ///   ))
+    ///   .with_target_partitions(8);
     ///
     /// assert_eq!(listing_options.target_partitions, 8);
     /// ```
@@ -329,18 +344,20 @@ impl ListingOptions {
     /// Set file sort order on [`ListingOptions`] and returns self.
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use datafusion::prelude::{Expr, col};
-    /// use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
-    ///
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::{col, SessionContext};
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     ///  // Tell datafusion that the files are sorted by column "a"
     ///  let file_sort_order = Some(vec![
     ///    col("a").sort(true, true)
     ///  ]);
     ///
-    /// let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()))
-    ///     .with_file_sort_order(file_sort_order.clone());
+    /// let ctx = SessionContext::new();
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     ParquetFormat::new(ctx.config_options())
+    ///   ))
+    ///   .with_file_sort_order(file_sort_order.clone());
     ///
     /// assert_eq!(listing_options.file_sort_order, file_sort_order);
     /// ```
