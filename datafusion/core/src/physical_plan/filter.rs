@@ -245,6 +245,7 @@ impl Stream for FilterExecStream {
                     Some(Ok(batch)) => {
                         let timer = self.baseline_metrics.elapsed_compute().timer();
                         let filtered_batch = batch_filter(&batch, &self.predicate)?;
+                        // skip entirely filtered batches
                         if filtered_batch.num_rows() == 0 {
                             continue;
                         }
