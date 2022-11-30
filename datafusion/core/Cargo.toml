@@ -157,6 +157,6 @@ harness = false
 name = "merge"
 
 [[test]]
+harness = false
 name = "sqllogictests"
 path = "tests/sqllogictests/src/main.rs"
-harness = false

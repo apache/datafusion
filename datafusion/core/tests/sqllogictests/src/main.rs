@@ -84,14 +84,14 @@ impl sqllogictest::AsyncDB for DataFusion {
     fn engine_name(&self) -> &str {
         "DataFusion"
     }
-    
+
     /// [`Runner`] calls this function to perform sleep.
     ///
     /// The default implementation is `std::thread::sleep`, which is universial to any async runtime
     /// but would block the current thread. If you are running in tokio runtime, you should override
     /// this by `tokio::time::sleep`.
     async fn sleep(dur: Duration) {
-       tokio::time::sleep(dur).await;
+        tokio::time::sleep(dur).await;
     }
 }
 
