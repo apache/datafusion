@@ -342,6 +342,10 @@ pub fn to_substrait_agg_measure(expr: &Expr, schema: &DFSchemaRef, extension_inf
 fn _register_function(function_name: String, extension_info: &mut (Vec<extensions::SimpleExtensionDeclaration>, HashMap<String, u32>)) -> u32 {
     let (function_extensions, function_set) = extension_info;
     let function_name = function_name.to_lowercase();
+    // To prevent ambiguous references between ScalarFunctions and AggregateFunctions,
+    // a plan-relative identifier starting from 0 is used as the function_anchor.
+    // The consumer is responsible for correctly registering <function_anchor,function_name>
+    // mapping info stored in the extensions by the producer.
     let function_anchor = match function_set.get(&function_name) {
         Some(function_anchor) => {
             // Function has been registered
@@ -370,9 +374,53 @@ fn _register_function(function_name: String, extension_info: &mut (Vec<extension
 
 }
 
+/// Return Substrait scalar function with two arguments
+pub fn make_binary_op_scalar_func(lhs: &Expression, rhs: &Expression, op: Operator, extension_info: &mut (Vec<extensions::SimpleExtensionDeclaration>, HashMap<String, u32>)) -> Expression {
+    let function_name = operator_to_name(op).to_string().to_lowercase();
+    let function_anchor = _register_function(function_name, extension_info);
+    Expression {
+        rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+            function_reference: function_anchor,
+            arguments: vec![
+                FunctionArgument {
+                    arg_type: Some(ArgType::Value(lhs.clone())),
+                },
+                FunctionArgument {
+                    arg_type: Some(ArgType::Value(rhs.clone())),
+                },
+            ],
+            output_type: None,
+            args: vec![],
+        })),
+    }
+}
+
 /// Convert DataFusion Expr to Substrait Rex
 pub fn to_substrait_rex(expr: &Expr, schema: &DFSchemaRef, extension_info: &mut (Vec<extensions::SimpleExtensionDeclaration>, HashMap<String, u32>)) -> Result<Expression> {
     match expr {
+        Expr::Between { expr, negated, low, high } => {
+            if *negated {
+                // `expr NOT BETWEEN low AND high` can be translated into (expr < low OR high < expr)
+                let substrait_expr = to_substrait_rex(expr, schema, extension_info)?;
+                let substrait_low = to_substrait_rex(low, schema, extension_info)?;
+                let substrait_high = to_substrait_rex(high, schema, extension_info)?;
+
+                let l_expr = make_binary_op_scalar_func(&substrait_expr, &substrait_low, Operator::Lt, extension_info);
+                let r_expr = make_binary_op_scalar_func(&substrait_high, &substrait_expr, Operator::Lt, extension_info);
+
+                Ok(make_binary_op_scalar_func(&l_expr, &r_expr, Operator::Or, extension_info))
+            } else {
+                // `expr BETWEEN low AND high` can be translated into (low <= expr AND expr <= high)
+                let substrait_expr = to_substrait_rex(expr, schema, extension_info)?;
+                let substrait_low = to_substrait_rex(low, schema, extension_info)?;
+                let substrait_high = to_substrait_rex(high, schema, extension_info)?;
+
+                let l_expr = make_binary_op_scalar_func(&substrait_low, &substrait_expr, Operator::LtEq, extension_info);
+                let r_expr = make_binary_op_scalar_func(&substrait_expr, &substrait_high, Operator::LtEq, extension_info);
+
+                Ok(make_binary_op_scalar_func(&l_expr, &r_expr, Operator::And, extension_info))
+            }
+        }
         Expr::Column(col) => {
             let index = schema.index_of_column(&col)?;
             substrait_field_ref(index)
@@ -380,27 +428,8 @@ pub fn to_substrait_rex(expr: &Expr, schema: &DFSchemaRef, extension_info: &mut 
         Expr::BinaryExpr { left, op, right } => {
             let l = to_substrait_rex(left, schema, extension_info)?;
             let r = to_substrait_rex(right, schema, extension_info)?;
-            let function_name = operator_to_name(*op).to_string().to_lowercase();
-            // To prevent ambiguous references between ScalarFunctions and AggregateFunctions,
-            // a plan-relative identifier starting from 0 is used as the function_anchor.
-            // The consumer is responsible for correctly registering <function_anchor,function_name>
-            // mapping info stored in the extensions by the producer.
-            let function_anchor = _register_function(function_name, extension_info);
-            Ok(Expression {
-                rex_type: Some(RexType::ScalarFunction(ScalarFunction {
-                    function_reference: function_anchor,
-                    arguments: vec![
-                        FunctionArgument {
-                            arg_type: Some(ArgType::Value(l)),
-                        },
-                        FunctionArgument {
-                            arg_type: Some(ArgType::Value(r)),
-                        },
-                    ],
-                    output_type: None,
-                    args: vec![],
-                })),
-            })
+
+            Ok(make_binary_op_scalar_func(&l, &r, *op, extension_info))
         }
         Expr::Literal(value) => {
             let literal_type = match value {

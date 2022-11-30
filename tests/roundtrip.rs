@@ -108,6 +108,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn between_integers() -> Result<()> {
+        test_alias(
+            "SELECT * FROM data WHERE a BETWEEN 2 AND 6",
+            "SELECT * FROM data WHERE a >= 2 AND a <= 6"
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn not_between_integers() -> Result<()> {
+        test_alias(
+            "SELECT * FROM data WHERE a NOT BETWEEN 2 AND 6",
+            "SELECT * FROM data WHERE a < 2 OR a > 6"
+        )
+        .await
+    }
+
+    #[tokio::test]
     async fn roundtrip_inner_join() -> Result<()> {
         roundtrip("SELECT data.a FROM data JOIN data2 ON data.a = data2.a").await
     }
