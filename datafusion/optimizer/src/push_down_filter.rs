@@ -654,7 +654,17 @@ impl OptimizerRule for PushDownFilter {
                     }
                 }
 
-                let child = match conjunction(push_predicates) {
+                let mut replace_map = HashMap::new();
+                for expr in &agg.group_expr {
+                    replace_map.insert(expr.display_name()?, expr.clone());
+                }
+
+                let replaced_push_predicates = push_predicates
+                    .iter()
+                    .map(|expr| replace_cols_by_name(expr.clone(), &replace_map))
+                    .collect::<Result<Vec<_>>>()?;
+
+                let child = match conjunction(replaced_push_predicates) {
                     Some(predicate) => LogicalPlan::Filter(Filter::try_new(
                         predicate,
                         Arc::new((*agg.input).clone()),
