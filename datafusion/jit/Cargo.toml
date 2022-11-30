@@ -37,7 +37,7 @@ jit = []
 
 [dependencies]
 arrow = { version = "28.0.0", default-features = false }
-cranelift = "0.89.0"
+cranelift = "0.90.0"
 cranelift-jit = "0.89.0"
 cranelift-module = "0.89.0"
 cranelift-native = "0.89.0"
