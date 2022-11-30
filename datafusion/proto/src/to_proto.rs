@@ -209,9 +209,9 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     value: Some(Box::new(value_type.as_ref().try_into()?)),
                 }))
             }
-            DataType::Decimal128(whole, fractional) => Self::Decimal(protobuf::Decimal {
-                whole: *whole as u64,
-                fractional: *fractional as u64,
+            DataType::Decimal128(precision, scale) => Self::Decimal(protobuf::Decimal {
+                precision: *precision as u32,
+                scale: *scale as i32,
             }),
             DataType::Decimal256(_, _) => {
                 return Err(Error::General("Proto serialization error: The Decimal256 data type is not yet supported".to_owned()))

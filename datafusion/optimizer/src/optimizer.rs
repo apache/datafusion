@@ -299,7 +299,6 @@ mod tests {
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError};
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, LogicalPlan, LogicalPlanBuilder, Projection};
-    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     #[test]
@@ -345,9 +344,9 @@ mod tests {
             "Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
              original schema: DFSchema { fields: [], metadata: {} }, \
              new schema: DFSchema { fields: [\
-             DFField { qualifier: Some(\"test\"), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None } }, \
-             DFField { qualifier: Some(\"test\"), field: Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None } }, \
-             DFField { qualifier: Some(\"test\"), field: Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None } }], \
+             DFField { qualifier: Some(\"test\"), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
+             DFField { qualifier: Some(\"test\"), field: Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
+             DFField { qualifier: Some(\"test\"), field: Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }], \
              metadata: {} }. \
              This was likely caused by a bug in DataFusion's code \
              and we would welcome that you file an bug report in our issue tracker",
@@ -385,11 +384,11 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let metadata: BTreeMap<_, _> = [("key".into(), format!("value {}", i))]
+                let metadata = [("key".into(), format!("value {}", i))]
                     .into_iter()
                     .collect();
 
-                let new_arrow_field = f.field().clone().with_metadata(Some(metadata));
+                let new_arrow_field = f.field().clone().with_metadata(metadata);
                 if let Some(qualifier) = f.qualifier() {
                     DFField::from_qualified(qualifier, new_arrow_field)
                 } else {

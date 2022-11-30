@@ -20,9 +20,11 @@
 use datafusion_common::DataFusionError;
 
 pub mod bytes;
+mod common;
 pub mod from_proto;
 pub mod generated;
 pub mod logical_plan;
+pub mod physical_plan;
 pub mod to_proto;
 
 pub use generated::datafusion as protobuf;
@@ -812,7 +814,7 @@ mod roundtrip_tests {
             DataType::LargeBinary,
             DataType::Utf8,
             DataType::LargeUtf8,
-            DataType::Decimal128(123, 234),
+            DataType::Decimal128(7, 12),
             // Recursive list tests
             DataType::List(new_box_field("Level1", DataType::Binary, true)),
             DataType::List(new_box_field(

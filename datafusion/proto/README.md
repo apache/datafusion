@@ -46,9 +46,9 @@ fn main() -> Result<()> {
 }
 ```
 
-## Serializing Plans
+## Serializing Logical Plans
 
-Based on [examples/plan_serde.rs](examples/plan_serde.rs)
+Based on [examples/logical_plan_serde.rs](examples/logical_plan_serde.rs)
 
 ```rust
 use datafusion::prelude::*;
@@ -67,6 +67,31 @@ async fn main() -> Result<()> {
     assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
     Ok(())
 }
+```
+
+## Serializing Physical Plans
+
+Based on [examples/physical_plan_serde.rs](examples/physical_plan_serde.rs)
+
+```rust
+use datafusion::prelude::*;
+use datafusion_common::Result;
+use datafusion_proto::bytes::{physical_plan_from_bytes,physical_plan_to_bytes};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+        .await
+        ?;
+    let logical_plan = ctx.table("t1")?.to_logical_plan()?;
+    let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
+    let bytes = physical_plan_to_bytes(physical_plan.clone())?;
+    let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{:?}", physical_plan), format!("{:?}", physical_round_trip));
+    Ok(())
+}
+
 ```
 
 [df]: https://crates.io/crates/datafusion

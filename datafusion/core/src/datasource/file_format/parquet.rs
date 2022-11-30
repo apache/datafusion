@@ -147,7 +147,7 @@ fn clear_metadata(
             .fields()
             .iter()
             .map(|field| {
-                field.clone().with_metadata(None) // clear meta
+                field.clone().with_metadata(Default::default()) // clear meta
             })
             .collect::<Vec<_>>();
         Schema::new(fields)

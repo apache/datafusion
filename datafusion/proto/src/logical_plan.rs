@@ -27,8 +27,6 @@ use crate::{
 };
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion::datasource::TableProvider;
-use datafusion::execution::FunctionRegistry;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::{
     datasource::{
         file_format::{
@@ -96,21 +94,6 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
     ) -> Result<Self, DataFusionError>
     where
         Self: Sized;
-}
-
-pub trait PhysicalExtensionCodec: Debug + Send + Sync {
-    fn try_decode(
-        &self,
-        buf: &[u8],
-        inputs: &[Arc<dyn ExecutionPlan>],
-        registry: &dyn FunctionRegistry,
-    ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError>;
-
-    fn try_encode(
-        &self,
-        node: Arc<dyn ExecutionPlan>,
-        buf: &mut Vec<u8>,
-    ) -> Result<(), DataFusionError>;
 }
 
 pub trait LogicalExtensionCodec: Debug + Send + Sync {
