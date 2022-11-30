@@ -625,14 +625,14 @@ impl OptimizerRule for PushDownFilter {
                 // * the aggregation columns themselves
 
                 // construct set of columns that `aggr_expr` depends on
-                let mut used_columns = HashSet::new();
-                exprlist_to_columns(&agg.aggr_expr, &mut used_columns)?;
+                let mut aggr_expr_columns = HashSet::new();
+                exprlist_to_columns(&agg.aggr_expr, &mut aggr_expr_columns)?;
                 let agg_columns = agg
                     .aggr_expr
                     .iter()
                     .map(|x| Ok(Column::from_name(x.display_name()?)))
                     .collect::<Result<HashSet<_>>>()?;
-                used_columns.extend(agg_columns);
+                aggr_expr_columns.extend(agg_columns);
 
                 let predicates = utils::split_conjunction_owned(utils::cnf_rewrite(
                     filter.predicate().clone(),
@@ -643,10 +643,7 @@ impl OptimizerRule for PushDownFilter {
                 for expr in predicates {
                     let columns = expr.to_columns()?;
                     if columns.is_empty()
-                        || !columns
-                            .intersection(&used_columns)
-                            .collect::<HashSet<_>>()
-                            .is_empty()
+                        || columns.intersection(&aggr_expr_columns).next().is_some()
                     {
                         keep_predicates.push(expr);
                     } else {
