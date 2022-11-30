@@ -266,20 +266,17 @@ async fn single_file_small_data_pages() {
     // page 3:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: djzdyiecnumrsrcbizwlqzdhnpoiqdh, max: fktdcgtmzvoedpwhfevcvvrtaurzgex, num_nulls not defined] CRC:[none] SZ:7 VC:9216
     // page 4:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: fktdcgtmzvoedpwhfevcvvrtaurzgex, max: fwtdpgtxwqkkgtgvthhwycrvjiizdifyp, num_nulls not defined] CRC:[none] SZ:7 VC:9216
     // page 5:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: fwtdpgtxwqkkgtgvthhwycrvjiizdifyp, max: iadnalqpdzthpifrvewossmpqibgtsuin, num_nulls not defined] CRC:[none] SZ:7 VC:7739
-    //
-    // This test currently fails due to https://github.com/apache/arrow-datafusion/issues/3833
-    // (page index pruning not implemented for byte array)
 
-    // TestCase::new(&test_parquet_file)
-    //     .with_name("selective")
-    //     // predicate is chosen carefully to prune pages 0, 1, 2, 3, 4
-    //     // pod = 'iadnalqpdzthpifrvewossmpqibgtsuin'
-    //     .with_filter(col("pod").eq(lit("iadnalqpdzthpifrvewossmpqibgtsuin")))
-    //     .with_pushdown_expected(PushdownExpected::Some)
-    //     .with_page_index_filtering_expected(PageIndexFilteringExpected::Some)
-    //     .with_expected_rows(2574)
-    //     .run()
-    //     .await;
+    TestCase::new(&test_parquet_file)
+        .with_name("selective")
+        // predicate is chosen carefully to prune pages 0, 1, 2, 3, 4
+        // pod = 'iadnalqpdzthpifrvewossmpqibgtsuin'
+        .with_filter(col("pod").eq(lit("iadnalqpdzthpifrvewossmpqibgtsuin")))
+        .with_pushdown_expected(PushdownExpected::Some)
+        .with_page_index_filtering_expected(PageIndexFilteringExpected::Some)
+        .with_expected_rows(2574)
+        .run()
+        .await;
 
     // time TV=53819 RL=0 DL=0 DS:                7092 DE:PLAIN
     // --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -297,6 +294,34 @@ async fn single_file_small_data_pages() {
         .with_pushdown_expected(PushdownExpected::Some)
         .with_page_index_filtering_expected(PageIndexFilteringExpected::Some)
         .with_expected_rows(9745)
+        .run()
+        .await;
+
+    // decimal_price TV=53819 RL=0 DL=0
+    // ----------------------------------------------------------------------------
+    // row group 0:
+    //     column index for column decimal_price:
+    //     Boudary order: UNORDERED
+    //                       null count  min                                       max
+    // page-0                         0  1                                         9216
+    // page-1                         0  9217                                      18432
+    // page-2                         0  18433                                     27648
+    // page-3                         0  27649                                     36864
+    // page-4                         0  36865                                     46080
+    // page-5                         0  46081                                     53819
+    //
+    // offset index for column decimal_price:
+    //                            offset   compressed size       first row index
+    // page-0                   5581636            147517                     0
+    // page-1                   5729153            147517                  9216
+    TestCase::new(&test_parquet_file)
+        .with_name("selective_on_decimal")
+        // predicate is chosen carefully to prune pages 1, 2, 3, 4, and 5
+        // decimal_price < 9200
+        .with_filter(col("decimal_price").lt_eq(lit(9200)))
+        .with_pushdown_expected(PushdownExpected::Some)
+        .with_page_index_filtering_expected(PageIndexFilteringExpected::Some)
+        .with_expected_rows(9200)
         .run()
         .await;
 }

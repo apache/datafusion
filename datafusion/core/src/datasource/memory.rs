@@ -37,6 +37,7 @@ use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
 
 /// In-memory table
+#[derive(Debug)]
 pub struct MemTable {
     schema: SchemaRef,
     batches: Vec<Vec<RecordBatch>>,

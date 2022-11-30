@@ -19,7 +19,7 @@
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_int32_array;
 use rand::prelude::StdRng;
-use rand::Rng;
+use rand::{Rng, SeedableRng};
 
 mod data_gen;
 
@@ -50,10 +50,7 @@ pub fn partitions_to_sorted_vec(partitions: &[Vec<RecordBatch>]) -> Vec<Option<i
 }
 
 /// Adds a random number of empty record batches into the stream
-pub fn add_empty_batches(
-    batches: Vec<RecordBatch>,
-    rng: &mut StdRng,
-) -> Vec<RecordBatch> {
+fn add_empty_batches(batches: Vec<RecordBatch>, rng: &mut StdRng) -> Vec<RecordBatch> {
     let schema = batches[0].schema();
 
     batches
@@ -67,4 +64,29 @@ pub fn add_empty_batches(
                 .chain(std::iter::repeat(empty_batch).take(rng.gen_range(0..2)))
         })
         .collect()
+}
+
+/// "stagger" batches: split the batches into random sized batches
+pub fn stagger_batch(batch: RecordBatch) -> Vec<RecordBatch> {
+    let seed = 42;
+    stagger_batch_with_seed(batch, seed)
+}
+
+/// "stagger" batches: split the batches into random sized batches
+/// using the specified value for a rng seed
+pub fn stagger_batch_with_seed(batch: RecordBatch, seed: u64) -> Vec<RecordBatch> {
+    let mut batches = vec![];
+
+    // use a random number generator to pick a random sized output
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    let mut remainder = batch;
+    while remainder.num_rows() > 0 {
+        let batch_size = rng.gen_range(0..remainder.num_rows() + 1);
+
+        batches.push(remainder.slice(0, batch_size));
+        remainder = remainder.slice(batch_size, remainder.num_rows() - batch_size);
+    }
+
+    add_empty_batches(batches, &mut rng)
 }

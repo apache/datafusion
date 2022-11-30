@@ -19,7 +19,6 @@
 
 use crate::PhysicalExpr;
 use arrow::array::Array;
-use arrow::array::ListArray;
 use arrow::compute::concat;
 
 use crate::physical_expr::down_cast_any_ref;
@@ -27,7 +26,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::cast::as_struct_array;
+use datafusion_common::cast::{as_list_array, as_struct_array};
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
@@ -91,8 +90,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                 Ok(ColumnarValue::Scalar(scalar_null))
             }
             (DataType::List(_), ScalarValue::Int64(Some(i))) => {
-                let as_list_array =
-                    array.as_any().downcast_ref::<ListArray>().unwrap();
+                let as_list_array = as_list_array(&array)?;
 
                 if *i < 1 || as_list_array.is_empty() {
                     let scalar_null: ScalarValue = array.data_type().try_into()?;
@@ -349,10 +347,7 @@ mod tests {
         let get_list_expr =
             Arc::new(GetIndexedFieldExpr::new(struct_col_expr, list_field_key));
         let result = get_list_expr.evaluate(&batch)?.into_array(batch.num_rows());
-        let result = result
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap_or_else(|| panic!("failed to downcast to ListArray : {:?}", result));
+        let result = as_list_array(&result)?;
         let expected =
             &build_utf8_lists(list_of_tuples.into_iter().map(|t| t.1).collect());
         assert_eq!(expected, result);

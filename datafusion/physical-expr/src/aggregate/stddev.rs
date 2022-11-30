@@ -211,6 +211,11 @@ impl Accumulator for StddevAccumulator {
             )),
         }
     }
+
+    fn size(&self) -> usize {
+        std::mem::align_of_val(self) - std::mem::align_of_val(&self.variance)
+            + self.variance.size()
+    }
 }
 
 #[cfg(test)]

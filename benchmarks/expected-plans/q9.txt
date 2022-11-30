@@ -1,17 +1,18 @@
 Sort: profit.nation ASC NULLS LAST, profit.o_year DESC NULLS FIRST
   Projection: profit.nation, profit.o_year, SUM(profit.amount) AS sum_profit
     Aggregate: groupBy=[[profit.nation, profit.o_year]], aggr=[[SUM(profit.amount)]]
-      Projection: nation, o_year, amount, alias=profit
+      SubqueryAlias: profit
         Projection: nation.n_name AS nation, datepart(Utf8("YEAR"), orders.o_orderdate) AS o_year, CAST(lineitem.l_extendedprice AS Decimal128(38, 4)) * CAST(Decimal128(Some(100),23,2) - CAST(lineitem.l_discount AS Decimal128(23, 2)) AS Decimal128(38, 4)) - CAST(partsupp.ps_supplycost * lineitem.l_quantity AS Decimal128(38, 4)) AS amount
-          Inner Join: supplier.s_nationkey = nation.n_nationkey
-            Inner Join: lineitem.l_orderkey = orders.o_orderkey
-              Inner Join: lineitem.l_suppkey = partsupp.ps_suppkey, lineitem.l_partkey = partsupp.ps_partkey
-                Inner Join: lineitem.l_suppkey = supplier.s_suppkey
-                  Inner Join: part.p_partkey = lineitem.l_partkey
-                    Filter: part.p_name LIKE Utf8("%green%")
-                      TableScan: part projection=[p_partkey, p_name]
-                    TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey, l_quantity, l_extendedprice, l_discount]
-                  TableScan: supplier projection=[s_suppkey, s_nationkey]
-                TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
-              TableScan: orders projection=[o_orderkey, o_orderdate]
-            TableScan: nation projection=[n_nationkey, n_name]
+          Projection: lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, partsupp.ps_supplycost, orders.o_orderdate, nation.n_name
+            Inner Join: supplier.s_nationkey = nation.n_nationkey
+              Inner Join: lineitem.l_orderkey = orders.o_orderkey
+                Inner Join: lineitem.l_suppkey = partsupp.ps_suppkey, lineitem.l_partkey = partsupp.ps_partkey
+                  Inner Join: lineitem.l_suppkey = supplier.s_suppkey
+                    Inner Join: part.p_partkey = lineitem.l_partkey
+                      Filter: part.p_name LIKE Utf8("%green%")
+                        TableScan: part projection=[p_partkey, p_name]
+                      TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey, l_quantity, l_extendedprice, l_discount]
+                    TableScan: supplier projection=[s_suppkey, s_nationkey]
+                  TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
+                TableScan: orders projection=[o_orderkey, o_orderdate]
+              TableScan: nation projection=[n_nationkey, n_name]

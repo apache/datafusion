@@ -97,7 +97,8 @@ impl ExecutionPlan for CoalesceBatchesExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        // The coalesce batches operator does not make any changes to the sorting of its input
+        self.input.output_ordering()
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {

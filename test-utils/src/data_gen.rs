@@ -19,8 +19,8 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::{
-    Int32Builder, StringBuilder, StringDictionaryBuilder, TimestampNanosecondBuilder,
-    UInt16Builder,
+    Decimal128Builder, Int32Builder, StringBuilder, StringDictionaryBuilder,
+    TimestampNanosecondBuilder, UInt16Builder,
 };
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
@@ -43,6 +43,7 @@ struct BatchBuilder {
     request_bytes: Int32Builder,
     response_bytes: Int32Builder,
     response_status: UInt16Builder,
+    prices_status: Decimal128Builder,
 
     /// optional  number of rows produced
     row_limit: Option<usize>,
@@ -73,6 +74,7 @@ impl BatchBuilder {
             Field::new("request_bytes", DataType::Int32, true),
             Field::new("response_bytes", DataType::Int32, true),
             Field::new("response_status", DataType::UInt16, false),
+            Field::new("decimal_price", DataType::Decimal128(38, 0), false),
         ]))
     }
 
@@ -146,6 +148,7 @@ impl BatchBuilder {
             .append_option(rng.gen_bool(0.9).then(|| rng.gen()));
         self.response_status
             .append_value(status[rng.gen_range(0..status.len())]);
+        self.prices_status.append_value(self.row_count as i128);
     }
 
     fn finish(mut self, schema: SchemaRef) -> RecordBatch {
@@ -166,6 +169,12 @@ impl BatchBuilder {
                 Arc::new(self.request_bytes.finish()),
                 Arc::new(self.response_bytes.finish()),
                 Arc::new(self.response_status.finish()),
+                Arc::new(
+                    self.prices_status
+                        .finish()
+                        .with_precision_and_scale(38, 0)
+                        .unwrap(),
+                ),
             ],
         )
         .unwrap()

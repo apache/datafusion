@@ -49,7 +49,7 @@ df.show();
 
 The DataFrame API is well documented in the [API reference on docs.rs](https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html).
 
-Refer to the [Expressions Refence](expressions) for available functions for building logical expressions for use with the
+Refer to the [Expressions Reference](expressions) for available functions for building logical expressions for use with the
 DataFrame API.
 
 ## DataFrame Transformations

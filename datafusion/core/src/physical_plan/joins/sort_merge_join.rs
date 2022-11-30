@@ -16,8 +16,9 @@
 // under the License.
 
 //! Defines the Sort-Merge join execution plan.
-//! A sort-merge join plan consumes two sorted children plan and produces
+//! A Sort-Merge join plan consumes two sorted children plan and produces
 //! joined output by given join type and other options.
+//! Sort-Merge join feature is currently experimental.
 
 use std::any::Any;
 use std::cmp::Ordering;
@@ -29,7 +30,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::array::*;
-use arrow::compute::{take, SortOptions};
+use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
@@ -39,12 +40,11 @@ use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::logical_expr::JoinType;
-use crate::physical_plan::common::combine_batches;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
     build_join_schema, check_join_is_valid, combine_join_equivalence_properties,
-    partitioned_join_output_partitioning, JoinOn,
+    estimate_join_statistics, partitioned_join_output_partitioning, JoinOn,
 };
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::physical_plan::{
@@ -153,31 +153,32 @@ impl SortMergeJoinExec {
                 .map(|sort_exprs| sort_exprs.to_vec()),
             JoinType::Right => {
                 let left_columns_len = left.schema().fields.len();
-                right.output_ordering().map(|sort_exprs| {
-                    sort_exprs
-                        .iter()
-                        .map(|e| {
-                            let new_expr = e
-                                .expr
-                                .clone()
-                                .transform_down(&|e| match e
-                                    .as_any()
-                                    .downcast_ref::<Column>()
-                                {
-                                    Some(col) => Some(Arc::new(Column::new(
-                                        col.name(),
-                                        left_columns_len + col.index(),
-                                    ))),
-                                    None => None,
+                right
+                    .output_ordering()
+                    .map(|sort_exprs| {
+                        let new_sort_exprs: Result<Vec<PhysicalSortExpr>> = sort_exprs
+                            .iter()
+                            .map(|e| {
+                                let new_expr =
+                                    e.expr.clone().transform_down(&|e| match e
+                                        .as_any()
+                                        .downcast_ref::<Column>(
+                                    ) {
+                                        Some(col) => Ok(Some(Arc::new(Column::new(
+                                            col.name(),
+                                            left_columns_len + col.index(),
+                                        )))),
+                                        None => Ok(None),
+                                    });
+                                Ok(PhysicalSortExpr {
+                                    expr: new_expr?,
+                                    options: e.options,
                                 })
-                                .unwrap();
-                            PhysicalSortExpr {
-                                expr: new_expr,
-                                options: e.options,
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                })
+                            })
+                            .collect();
+                        new_sort_exprs
+                    })
+                    .map_or(Ok(None), |v| v.map(Some))?
             }
             JoinType::Full => None,
         };
@@ -348,7 +349,15 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn statistics(&self) -> Statistics {
-        todo!()
+        // TODO stats: it is not possible in general to know the output size of joins
+        // There are some special cases though, for example:
+        // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
+        estimate_join_statistics(
+            self.left.clone(),
+            self.right.clone(),
+            self.on.clone(),
+            &self.join_type,
+        )
     }
 }
 
@@ -1075,8 +1084,7 @@ impl SMJStream {
     }
 
     fn output_record_batch_and_reset(&mut self) -> ArrowResult<RecordBatch> {
-        let record_batch =
-            combine_batches(&self.output_record_batches, self.schema.clone())?.unwrap();
+        let record_batch = concat_batches(&self.schema, &self.output_record_batches)?;
         self.join_metrics.output_batches.add(1);
         self.join_metrics.output_rows.add(record_batch.num_rows());
         self.output_size -= record_batch.num_rows();

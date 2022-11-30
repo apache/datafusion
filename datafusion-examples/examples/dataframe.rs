@@ -15,8 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use std::fs;
+use std::sync::Arc;
 
 /// This example demonstrates executing a simple query against an Arrow data source (Parquet) and
 /// fetching results, using the DataFrame trait
@@ -39,5 +42,59 @@ async fn main() -> Result<()> {
     // print the results
     df.show().await?;
 
+    // Reading CSV file with inferred schema example
+    let csv_df = example_read_csv_file_with_inferred_schema().await;
+    csv_df.show().await?;
+
+    // Reading CSV file with defined schema
+    let csv_df = example_read_csv_file_with_schema().await;
+    csv_df.show().await?;
+
     Ok(())
+}
+
+// Function to create an test CSV file
+fn create_csv_file(path: String) {
+    // Create the data to put into the csv file with headers
+    let content = r#"id,time,vote,unixtime,rating
+a1,"10 6, 2013",3,1381017600,5.0
+a2,"08 9, 2013",2,1376006400,4.5"#;
+    // write the data
+    fs::write(path, content).expect("Problem with writing file!");
+}
+
+// Example to read data from a csv file with inferred schema
+async fn example_read_csv_file_with_inferred_schema() -> Arc<DataFrame> {
+    let path = "example.csv";
+    // Create a csv file using the predefined function
+    create_csv_file(path.to_string());
+    // Create a session context
+    let ctx = SessionContext::new();
+    // Register a lazy DataFrame using the context
+    ctx.read_csv(path, CsvReadOptions::default()).await.unwrap()
+}
+
+// Example to read csv file with a defined schema for the csv file
+async fn example_read_csv_file_with_schema() -> Arc<DataFrame> {
+    let path = "example.csv";
+    // Create a csv file using the predefined function
+    create_csv_file(path.to_string());
+    // Create a session context
+    let ctx = SessionContext::new();
+    // Define the schema
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("time", DataType::Utf8, false),
+        Field::new("vote", DataType::Int32, true),
+        Field::new("unixtime", DataType::Int64, false),
+        Field::new("rating", DataType::Float32, true),
+    ]);
+    // Create a csv option provider with the desired schema
+    let csv_read_option = CsvReadOptions {
+        // Update the option provider with the defined schema
+        schema: Some(&schema),
+        ..Default::default()
+    };
+    // Register a lazy DataFrame by using the context and option provider
+    ctx.read_csv(path, csv_read_option).await.unwrap()
 }

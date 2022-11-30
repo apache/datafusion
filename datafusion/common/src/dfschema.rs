@@ -338,6 +338,24 @@ impl DFSchema {
             })
     }
 
+    /// Returns true if the two schemas have the same qualified named
+    /// fields with the same data types. Returns false otherwise.
+    ///
+    /// This is a specialized version of Eq that ignores differences
+    /// in nullability and metadata.
+    pub fn equivalent_names_and_types(&self, other: &Self) -> bool {
+        if self.fields().len() != other.fields().len() {
+            return false;
+        }
+        let self_fields = self.fields().iter();
+        let other_fields = other.fields().iter();
+        self_fields.zip(other_fields).all(|(f1, f2)| {
+            f1.qualifier() == f2.qualifier()
+                && f1.data_type() == f2.data_type()
+                && f1.name() == f2.name()
+        })
+    }
+
     /// Strip all field qualifier in schema
     pub fn strip_qualifiers(self) -> Self {
         DFSchema {
@@ -774,6 +792,114 @@ mod tests {
     }
 
     #[test]
+    fn equivalent_names_and_types() {
+        let field1_i16_t = DFField::from(Field::new("f1", DataType::Int16, true));
+        let field1_i16_t_meta = DFField::from(
+            field1_i16_t
+                .field()
+                .clone()
+                .with_metadata(Some(test_bmetadata_n(2))),
+        );
+        let field1_i16_t_qualified =
+            DFField::from_qualified("foo", field1_i16_t.field().clone());
+        let field1_i16_f = DFField::from(Field::new("f1", DataType::Int16, false));
+        let field1_i32_t = DFField::from(Field::new("f1", DataType::Int32, true));
+        let field2_i16_t = DFField::from(Field::new("f2", DataType::Int16, true));
+        let field3_i16_t = DFField::from(Field::new("f3", DataType::Int16, true));
+
+        // same
+        TestCase {
+            fields1: vec![&field1_i16_t],
+            fields2: vec![&field1_i16_t],
+            expected: true,
+        }
+        .run();
+
+        // same but metadata is different, should still be true
+        TestCase {
+            fields1: vec![&field1_i16_t_meta],
+            fields2: vec![&field1_i16_t],
+            expected: true,
+        }
+        .run();
+
+        // different name
+        TestCase {
+            fields1: vec![&field1_i16_t],
+            fields2: vec![&field2_i16_t],
+            expected: false,
+        }
+        .run();
+
+        // different type
+        TestCase {
+            fields1: vec![&field1_i16_t],
+            fields2: vec![&field1_i32_t],
+            expected: false,
+        }
+        .run();
+
+        // different nullability
+        TestCase {
+            fields1: vec![&field1_i16_t],
+            fields2: vec![&field1_i16_f],
+            expected: true,
+        }
+        .run();
+
+        // different qualifier
+        TestCase {
+            fields1: vec![&field1_i16_t],
+            fields2: vec![&field1_i16_t_qualified],
+            expected: false,
+        }
+        .run();
+
+        // different name after first
+        TestCase {
+            fields1: vec![&field2_i16_t, &field1_i16_t],
+            fields2: vec![&field2_i16_t, &field3_i16_t],
+            expected: false,
+        }
+        .run();
+
+        // different number
+        TestCase {
+            fields1: vec![&field1_i16_t, &field2_i16_t],
+            fields2: vec![&field1_i16_t],
+            expected: false,
+        }
+        .run();
+
+        #[derive(Debug)]
+        struct TestCase<'a> {
+            fields1: Vec<&'a DFField>,
+            fields2: Vec<&'a DFField>,
+            expected: bool,
+        }
+
+        impl<'a> TestCase<'a> {
+            fn run(self) {
+                println!("Running {:#?}", self);
+                let schema1 = to_df_schema(self.fields1);
+                let schema2 = to_df_schema(self.fields2);
+                assert_eq!(
+                    schema1.equivalent_names_and_types(&schema2),
+                    self.expected,
+                    "schema1:\n\n{:#?}\n\nschema2:\n\n{:#?}",
+                    schema1,
+                    schema2
+                );
+            }
+        }
+
+        fn to_df_schema(fields: Vec<&DFField>) -> DFSchema {
+            let fields = fields.into_iter().cloned().collect();
+            DFSchema::new_with_metadata(fields, HashMap::new()).unwrap()
+        }
+    }
+
+    #[test]
     fn into() {
         // Demonstrate how to convert back and forth between Schema, SchemaRef, DFSchema, and DFSchemaRef
         let metadata = test_metadata();
@@ -845,9 +971,20 @@ mod tests {
     }
 
     fn test_metadata() -> HashMap<String, String> {
-        vec![("k1", "v1"), ("k2", "v2")]
+        test_metadata_n(2)
+    }
+
+    fn test_metadata_n(n: usize) -> HashMap<String, String> {
+        (0..n)
             .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect::<HashMap<_, _>>()
+            .map(|i| (format!("k{}", i), format!("v{}", i)))
+            .collect()
+    }
+
+    fn test_bmetadata_n(n: usize) -> BTreeMap<String, String> {
+        (0..n)
+            .into_iter()
+            .map(|i| (format!("k{}", i), format!("v{}", i)))
+            .collect()
     }
 }

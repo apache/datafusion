@@ -20,132 +20,110 @@
 //! but provide an error message rather than a panic, as the corresponding
 //! kernels in arrow-rs such as `as_boolean_array` do.
 
-use crate::DataFusionError;
-use arrow::array::{
-    Array, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
-    Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
+use crate::{downcast_value, DataFusionError};
+use arrow::{
+    array::{
+        Array, BooleanArray, Date32Array, Decimal128Array, DictionaryArray, Float32Array,
+        Float64Array, GenericBinaryArray, GenericListArray, Int32Array, Int64Array,
+        LargeListArray, ListArray, OffsetSizeTrait, PrimitiveArray, StringArray,
+        StructArray, UInt32Array, UInt64Array,
+    },
+    datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };
 
 // Downcast ArrayRef to Date32Array
 pub fn as_date32_array(array: &dyn Array) -> Result<&Date32Array, DataFusionError> {
-    array.as_any().downcast_ref::<Date32Array>().ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "Expected a Date32Array, got: {}",
-            array.data_type()
-        ))
-    })
+    Ok(downcast_value!(array, Date32Array))
 }
 
 // Downcast ArrayRef to StructArray
 pub fn as_struct_array(array: &dyn Array) -> Result<&StructArray, DataFusionError> {
-    array.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "Expected a StructArray, got: {}",
-            array.data_type()
-        ))
-    })
+    Ok(downcast_value!(array, StructArray))
 }
 
 // Downcast ArrayRef to Int32Array
 pub fn as_int32_array(array: &dyn Array) -> Result<&Int32Array, DataFusionError> {
-    array.as_any().downcast_ref::<Int32Array>().ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "Expected a Int32Array, got: {}",
-            array.data_type()
-        ))
-    })
+    Ok(downcast_value!(array, Int32Array))
 }
 
 // Downcast ArrayRef to Int64Array
 pub fn as_int64_array(array: &dyn Array) -> Result<&Int64Array, DataFusionError> {
-    array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "Expected a Int64Array, got: {}",
-            array.data_type()
-        ))
-    })
+    Ok(downcast_value!(array, Int64Array))
 }
 
 // Downcast ArrayRef to Decimal128Array
 pub fn as_decimal128_array(
     array: &dyn Array,
 ) -> Result<&Decimal128Array, DataFusionError> {
-    array
-        .as_any()
-        .downcast_ref::<Decimal128Array>()
-        .ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "Expected a Decimal128Array, got: {}",
-                array.data_type()
-            ))
-        })
+    Ok(downcast_value!(array, Decimal128Array))
 }
 
 // Downcast ArrayRef to Float32Array
 pub fn as_float32_array(array: &dyn Array) -> Result<&Float32Array, DataFusionError> {
-    array
-        .as_any()
-        .downcast_ref::<Float32Array>()
-        .ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "Expected a Float32Array, got: {}",
-                array.data_type()
-            ))
-        })
+    Ok(downcast_value!(array, Float32Array))
 }
 
 // Downcast ArrayRef to Float64Array
 pub fn as_float64_array(array: &dyn Array) -> Result<&Float64Array, DataFusionError> {
-    array
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "Expected a Float64Array, got: {}",
-                array.data_type()
-            ))
-        })
+    Ok(downcast_value!(array, Float64Array))
 }
 
 // Downcast ArrayRef to StringArray
 pub fn as_string_array(array: &dyn Array) -> Result<&StringArray, DataFusionError> {
-    array.as_any().downcast_ref::<StringArray>().ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "Expected a StringArray, got: {}",
-            array.data_type()
-        ))
-    })
+    Ok(downcast_value!(array, StringArray))
 }
 
 // Downcast ArrayRef to UInt32Array
 pub fn as_uint32_array(array: &dyn Array) -> Result<&UInt32Array, DataFusionError> {
-    array.as_any().downcast_ref::<UInt32Array>().ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "Expected a UInt32Array, got: {}",
-            array.data_type()
-        ))
-    })
+    Ok(downcast_value!(array, UInt32Array))
 }
 
 // Downcast ArrayRef to UInt64Array
 pub fn as_uint64_array(array: &dyn Array) -> Result<&UInt64Array, DataFusionError> {
-    array.as_any().downcast_ref::<UInt64Array>().ok_or_else(|| {
-        DataFusionError::Internal(format!(
-            "Expected a UInt64Array, got: {}",
-            array.data_type()
-        ))
-    })
+    Ok(downcast_value!(array, UInt64Array))
 }
 
 // Downcast ArrayRef to BooleanArray
 pub fn as_boolean_array(array: &dyn Array) -> Result<&BooleanArray, DataFusionError> {
-    array
-        .as_any()
-        .downcast_ref::<BooleanArray>()
-        .ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "Expected a BooleanArray, got: {}",
-                array.data_type()
-            ))
-        })
+    Ok(downcast_value!(array, BooleanArray))
+}
+
+// Downcast ArrayRef to ListArray
+pub fn as_list_array(array: &dyn Array) -> Result<&ListArray, DataFusionError> {
+    Ok(downcast_value!(array, ListArray))
+}
+
+// Downcast ArrayRef to DictionaryArray
+pub fn as_dictionary_array<T: ArrowDictionaryKeyType>(
+    array: &dyn Array,
+) -> Result<&DictionaryArray<T>, DataFusionError> {
+    Ok(downcast_value!(array, DictionaryArray, T))
+}
+
+// Downcast ArrayRef to GenericBinaryArray
+pub fn as_generic_binary_array<T: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<&GenericBinaryArray<T>, DataFusionError> {
+    Ok(downcast_value!(array, GenericBinaryArray, T))
+}
+
+// Downcast ArrayRef to GenericListArray
+pub fn as_generic_list_array<T: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<&GenericListArray<T>, DataFusionError> {
+    Ok(downcast_value!(array, GenericListArray, T))
+}
+
+// Downcast ArrayRef to LargeListArray
+pub fn as_large_list_array(
+    array: &dyn Array,
+) -> Result<&LargeListArray, DataFusionError> {
+    Ok(downcast_value!(array, LargeListArray))
+}
+
+// Downcast ArrayRef to PrimitiveArray
+pub fn as_primitive_array<T: ArrowPrimitiveType>(
+    array: &dyn Array,
+) -> Result<&PrimitiveArray<T>, DataFusionError> {
+    Ok(downcast_value!(array, PrimitiveArray, T))
 }

@@ -17,11 +17,16 @@
 
 //! Contains code to filter entire pages
 
-use arrow::array::{BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array};
+use arrow::array::{
+    BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array,
+    StringArray,
+};
+use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::SchemaRef, error::ArrowError};
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_optimizer::utils::split_conjunction;
-use log::{debug, error, trace};
+use log::{debug, trace};
+use parquet::schema::types::ColumnDescriptor;
 use parquet::{
     arrow::arrow_reader::{RowSelection, RowSelector},
     errors::ParquetError,
@@ -35,6 +40,9 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use crate::physical_plan::file_format::parquet::{
+    from_bytes_to_i128, parquet_to_arrow_decimal_type,
+};
 
 use super::metrics::ParquetFileMetrics;
 
@@ -118,45 +126,50 @@ pub(crate) fn build_page_filter(
         let mut row_selections = VecDeque::with_capacity(page_index_predicates.len());
         for predicate in page_index_predicates {
             // `extract_page_index_push_down_predicates` only return predicate with one col.
-            let col_id = *predicate.need_input_columns_ids().iter().next().unwrap();
-            let mut selectors = Vec::with_capacity(row_groups.len());
-            for r in row_groups.iter() {
-                let rg_offset_indexes = file_offset_indexes.get(*r);
-                let rg_page_indexes = file_page_indexes.get(*r);
-                if let (Some(rg_page_indexes), Some(rg_offset_indexes)) =
-                    (rg_page_indexes, rg_offset_indexes)
-                {
-                    selectors.extend(
-                        prune_pages_in_one_row_group(
-                            &groups[*r],
-                            &predicate,
-                            rg_offset_indexes.get(col_id),
-                            rg_page_indexes.get(col_id),
-                            file_metrics,
-                        )
-                        .map_err(|e| {
-                            ArrowError::ParquetError(format!(
-                                "Fail in prune_pages_in_one_row_group: {}",
-                                e
-                            ))
-                        }),
-                    );
-                } else {
-                    trace!(
+            //  when building `PruningPredicate`, some single column filter like `abs(i) = 1`
+            //  will be rewrite to `lit(true)`, so may have an empty required_columns.
+            if let Some(&col_id) = predicate.need_input_columns_ids().iter().next() {
+                let mut selectors = Vec::with_capacity(row_groups.len());
+                for r in row_groups.iter() {
+                    let rg_offset_indexes = file_offset_indexes.get(*r);
+                    let rg_page_indexes = file_page_indexes.get(*r);
+                    if let (Some(rg_page_indexes), Some(rg_offset_indexes)) =
+                        (rg_page_indexes, rg_offset_indexes)
+                    {
+                        selectors.extend(
+                            prune_pages_in_one_row_group(
+                                &groups[*r],
+                                &predicate,
+                                rg_offset_indexes.get(col_id),
+                                rg_page_indexes.get(col_id),
+                                groups[*r].column(col_id).column_descr(),
+                                file_metrics,
+                            )
+                            .map_err(|e| {
+                                ArrowError::ParquetError(format!(
+                                    "Fail in prune_pages_in_one_row_group: {}",
+                                    e
+                                ))
+                            }),
+                        );
+                    } else {
+                        trace!(
                         "Did not have enough metadata to prune with page indexes, falling back, falling back to all rows",
                     );
-                    // fallback select all rows
-                    let all_selected =
-                        vec![RowSelector::select(groups[*r].num_rows() as usize)];
-                    selectors.push(all_selected);
+                        // fallback select all rows
+                        let all_selected =
+                            vec![RowSelector::select(groups[*r].num_rows() as usize)];
+                        selectors.push(all_selected);
+                    }
                 }
-            }
-            debug!(
+                debug!(
                 "Use filter and page index create RowSelection {:?} from predicate: {:?}",
                 &selectors,
                 predicate.predicate_expr(),
             );
-            row_selections.push_back(selectors.into_iter().flatten().collect::<Vec<_>>());
+                row_selections
+                    .push_back(selectors.into_iter().flatten().collect::<Vec<_>>());
+            }
         }
         let final_selection = combine_multi_col_selection(row_selections);
         let total_skip =
@@ -305,15 +318,18 @@ fn prune_pages_in_one_row_group(
     predicate: &PruningPredicate,
     col_offset_indexes: Option<&Vec<PageLocation>>,
     col_page_indexes: Option<&Index>,
+    col_desc: &ColumnDescriptor,
     metrics: &ParquetFileMetrics,
 ) -> Result<Vec<RowSelector>> {
     let num_rows = group.num_rows() as usize;
     if let (Some(col_offset_indexes), Some(col_page_indexes)) =
         (col_offset_indexes, col_page_indexes)
     {
+        let target_type = parquet_to_arrow_decimal_type(col_desc);
         let pruning_stats = PagesPruningStatistics {
             col_page_indexes,
             col_offset_indexes,
+            target_type: &target_type,
         };
 
         match predicate.prune(&pruning_stats) {
@@ -350,7 +366,7 @@ fn prune_pages_in_one_row_group(
             // stats filter array could not be built
             // return a result which will not filter out any pages
             Err(e) => {
-                error!("Error evaluating page index predicate values {}", e);
+                debug!("Error evaluating page index predicate values {}", e);
                 metrics.predicate_evaluation_errors.add(1);
                 return Ok(vec![RowSelector::select(group.num_rows() as usize)]);
             }
@@ -382,6 +398,9 @@ fn create_row_count_in_each_page(
 struct PagesPruningStatistics<'a> {
     col_page_indexes: &'a Index,
     col_offset_indexes: &'a Vec<PageLocation>,
+    // target_type means the logical type in schema: like 'DECIMAL' is the logical type, but the
+    // real physical type in parquet file may be `INT32, INT64, FIXED_LEN_BYTE_ARRAY`
+    target_type: &'a Option<DataType>,
 }
 
 // Extract the min or max value calling `func` from page idex
@@ -390,16 +409,48 @@ macro_rules! get_min_max_values_for_page_index {
         match $self.col_page_indexes {
             Index::NONE => None,
             Index::INT32(index) => {
-                let vec = &index.indexes;
-                Some(Arc::new(Int32Array::from_iter(
-                    vec.iter().map(|x| x.$func().cloned()),
-                )))
+                match $self.target_type {
+                    // int32 to decimal with the precision and scale
+                    Some(DataType::Decimal128(precision, scale)) => {
+                        let vec = &index.indexes;
+                        let vec: Vec<Option<i128>> = vec
+                            .iter()
+                            .map(|x| x.$func().and_then(|x| Some(*x as i128)))
+                            .collect();
+                        Decimal128Array::from(vec)
+                            .with_precision_and_scale(*precision, *scale)
+                            .ok()
+                            .map(|arr| Arc::new(arr) as ArrayRef)
+                    }
+                    _ => {
+                        let vec = &index.indexes;
+                        Some(Arc::new(Int32Array::from_iter(
+                            vec.iter().map(|x| x.$func().cloned()),
+                        )))
+                    }
+                }
             }
             Index::INT64(index) => {
-                let vec = &index.indexes;
-                Some(Arc::new(Int64Array::from_iter(
-                    vec.iter().map(|x| x.$func().cloned()),
-                )))
+                match $self.target_type {
+                    // int64 to decimal with the precision and scale
+                    Some(DataType::Decimal128(precision, scale)) => {
+                        let vec = &index.indexes;
+                        let vec: Vec<Option<i128>> = vec
+                            .iter()
+                            .map(|x| x.$func().and_then(|x| Some(*x as i128)))
+                            .collect();
+                        Decimal128Array::from(vec)
+                            .with_precision_and_scale(*precision, *scale)
+                            .ok()
+                            .map(|arr| Arc::new(arr) as ArrayRef)
+                    }
+                    _ => {
+                        let vec = &index.indexes;
+                        Some(Arc::new(Int64Array::from_iter(
+                            vec.iter().map(|x| x.$func().cloned()),
+                        )))
+                    }
+                }
             }
             Index::FLOAT(index) => {
                 let vec = &index.indexes;
@@ -419,10 +470,33 @@ macro_rules! get_min_max_values_for_page_index {
                     vec.iter().map(|x| x.$func().cloned()),
                 )))
             }
-            Index::INT96(_) | Index::BYTE_ARRAY(_) | Index::FIXED_LEN_BYTE_ARRAY(_) => {
+            Index::BYTE_ARRAY(index) => {
+                let vec = &index.indexes;
+                let array: StringArray = vec
+                    .iter()
+                    .map(|x| x.$func())
+                    .map(|x| x.and_then(|x| std::str::from_utf8(x).ok()))
+                    .collect();
+                Some(Arc::new(array))
+            }
+            Index::INT96(_) => {
                 //Todo support these type
                 None
             }
+            Index::FIXED_LEN_BYTE_ARRAY(index) => match $self.target_type {
+                Some(DataType::Decimal128(precision, scale)) => {
+                    let vec = &index.indexes;
+                    Decimal128Array::from(
+                        vec.iter()
+                            .map(|x| x.$func().and_then(|x| Some(from_bytes_to_i128(x))))
+                            .collect::<Vec<Option<i128>>>(),
+                    )
+                    .with_precision_and_scale(*precision, *scale)
+                    .ok()
+                    .map(|arr| Arc::new(arr) as ArrayRef)
+                }
+                _ => None,
+            },
         }
     }};
 }

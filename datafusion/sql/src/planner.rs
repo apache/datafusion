@@ -45,7 +45,9 @@ use datafusion_common::{
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::builder::project_with_alias;
+use datafusion_expr::logical_plan::builder::{project_with_alias, with_alias};
+use datafusion_expr::logical_plan::Join as HashJoin;
+use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
@@ -55,12 +57,12 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use datafusion_expr::utils::{
     can_hash, check_all_column_from_schema, expand_qualified_wildcard, expand_wildcard,
-    expr_as_column_expr, find_aggregate_exprs, find_column_exprs, find_window_exprs,
-    COUNT_STAR_EXPANSION,
+    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_column_exprs,
+    find_window_exprs, COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
-    and, cast, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable,
+    cast, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable,
     GetIndexedField, Operator, ScalarUDF, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
@@ -505,16 +507,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         statement: DescribeTable,
     ) -> Result<LogicalPlan> {
-        let table_name = statement.table_name;
+        let table_name = statement.table_name.to_string();
         let table_ref: TableReference = table_name.as_str().into();
 
         // check if table_name exists
         let _ = self.schema_provider.get_table_provider(table_ref)?;
 
+        let where_clause = object_name_to_qualifier(&statement.table_name);
+
         if self.has_table("information_schema", "tables") {
-            let sql = format!("SELECT column_name, data_type, is_nullable \
-                                FROM information_schema.columns WHERE table_name = '{table_name}';");
-            let mut rewrite = DFParser::parse_sql(&sql[..])?;
+            let sql = format!(
+                "SELECT column_name, data_type, is_nullable \
+                                FROM information_schema.columns WHERE {where_clause};"
+            );
+            let mut rewrite = DFParser::parse_sql(&sql)?;
             self.statement_to_plan(rewrite.pop_front().unwrap())
         } else {
             Err(DataFusionError::Plan(
@@ -626,16 +632,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn plan_from_tables(
         &self,
-        from: Vec<TableWithJoins>,
+        mut from: Vec<TableWithJoins>,
         ctes: &mut HashMap<String, LogicalPlan>,
         outer_query_schema: Option<&DFSchema>,
-    ) -> Result<Vec<LogicalPlan>> {
+    ) -> Result<LogicalPlan> {
         match from.len() {
-            0 => Ok(vec![LogicalPlanBuilder::empty(true).build()?]),
-            _ => from
-                .into_iter()
-                .map(|t| self.plan_table_with_joins(t, ctes, outer_query_schema))
-                .collect::<Result<Vec<_>>>(),
+            0 => Ok(LogicalPlanBuilder::empty(true).build()?),
+            1 => {
+                let from = from.remove(0);
+                self.plan_table_with_joins(from, ctes, outer_query_schema)
+            }
+            _ => {
+                let plans = from
+                    .into_iter()
+                    .map(|t| self.plan_table_with_joins(t, ctes, outer_query_schema))
+                    .collect::<Result<Vec<_>>>()?;
+                let mut left = plans[0].clone();
+                for right in plans.iter().skip(1) {
+                    left = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+                }
+                Ok(left)
+            }
         }
     }
 
@@ -750,7 +767,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let join_filter = filter.into_iter().reduce(Expr::and);
 
                 if left_keys.is_empty() {
-                    // When we don't have join keys, use cross join
+                    // TODO should not use cross join when the join_filter exists
+                    // https://github.com/apache/arrow-datafusion/issues/4363
                     let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
                     join_filter
                         .map(|filter| join.filter(filter))
@@ -839,11 +857,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 (
                     match (cte, self.schema_provider.get_table_provider(table_ref)) {
                         (Some(cte_plan), _) => match table_alias {
-                            Some(cte_alias) => project_with_alias(
-                                cte_plan.clone(),
-                                vec![Expr::Wildcard],
-                                Some(cte_alias),
-                            ),
+                            Some(cte_alias) => {
+                                Ok(with_alias(cte_plan.clone(), cte_alias))
+                            }
                             _ => Ok(cte_plan.clone()),
                         },
                         (_, Ok(provider)) => {
@@ -870,18 +886,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     ctes,
                     outer_query_schema,
                 )?;
-                (
-                    project_with_alias(
-                        logical_plan.clone(),
-                        logical_plan
-                            .schema()
-                            .fields()
-                            .iter()
-                            .map(|field| col(field.name())),
-                        normalized_alias,
-                    )?,
-                    alias,
-                )
+
+                let plan = match normalized_alias {
+                    Some(alias) => with_alias(logical_plan, alias),
+                    _ => logical_plan,
+                };
+                (plan, alias)
             }
             TableFactor::NestedJoin {
                 table_with_joins,
@@ -938,171 +948,66 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn plan_selection(
         &self,
         selection: Option<SQLExpr>,
-        plans: Vec<LogicalPlan>,
+        plan: LogicalPlan,
         outer_query_schema: Option<&DFSchema>,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
         match selection {
             Some(predicate_expr) => {
-                // build join schema
-                let mut fields = vec![];
-                let mut metadata = std::collections::HashMap::new();
-                for plan in &plans {
-                    fields.extend_from_slice(plan.schema().fields());
-                    metadata.extend(plan.schema().metadata().clone());
+                let mut join_schema = (**plan.schema()).clone();
+                let mut all_schemas: Vec<DFSchemaRef> = vec![];
+                for schema in plan.all_schemas() {
+                    all_schemas.push(schema.clone());
                 }
-                let mut join_schema = DFSchema::new_with_metadata(fields, metadata)?;
                 if let Some(outer) = outer_query_schema {
+                    all_schemas.push(Arc::new(outer.clone()));
                     join_schema.merge(outer);
                 }
+                let x: Vec<&DFSchemaRef> = all_schemas.iter().collect();
 
                 let filter_expr = self.sql_to_rex(predicate_expr, &join_schema, ctes)?;
+                let mut using_columns = HashSet::new();
+                expr_to_columns(&filter_expr, &mut using_columns)?;
+                let filter_expr = normalize_col_with_schemas(
+                    filter_expr,
+                    x.as_slice(),
+                    &[using_columns],
+                )?;
 
-                // look for expressions of the form `<column> = <column>`
-                let mut possible_join_keys = vec![];
-                extract_possible_join_keys(&filter_expr, &mut possible_join_keys)?;
-
-                let mut all_join_keys = HashSet::new();
-
-                let orig_plans = plans.clone();
-                let mut plans = plans.into_iter();
-                let mut left = plans.next().unwrap(); // have at least one plan
-
-                // List of the plans that have not yet been joined
-                let mut remaining_plans: Vec<Option<LogicalPlan>> =
-                    plans.into_iter().map(Some).collect();
-
-                // Take from the list of remaining plans,
-                loop {
-                    let mut join_keys = vec![];
-
-                    // Search all remaining plans for the next to
-                    // join. Prefer the first one that has a join
-                    // predicate in the predicate lists
-                    let plan_with_idx =
-                        remaining_plans.iter().enumerate().find(|(_idx, plan)| {
-                            // skip plans that have been joined already
-                            let plan = if let Some(plan) = plan {
-                                plan
-                            } else {
-                                return false;
-                            };
-
-                            // can we find a match?
-                            let left_schema = left.schema();
-                            let right_schema = plan.schema();
-                            for (l, r) in &possible_join_keys {
-                                if left_schema.field_from_column(l).is_ok()
-                                    && right_schema.field_from_column(r).is_ok()
-                                    && can_hash(
-                                        left_schema
-                                            .field_from_column(l)
-                                            .unwrap() // the result must be OK
-                                            .data_type(),
-                                    )
-                                {
-                                    join_keys.push((l.clone(), r.clone()));
-                                } else if left_schema.field_from_column(r).is_ok()
-                                    && right_schema.field_from_column(l).is_ok()
-                                    && can_hash(
-                                        left_schema
-                                            .field_from_column(r)
-                                            .unwrap() // the result must be OK
-                                            .data_type(),
-                                    )
-                                {
-                                    join_keys.push((r.clone(), l.clone()));
-                                }
-                            }
-                            // stop if we found join keys
-                            !join_keys.is_empty()
-                        });
-
-                    // If we did not find join keys, either there are
-                    // no more plans, or we can't find any plans that
-                    // can be joined with predicates
-                    if join_keys.is_empty() {
-                        assert!(plan_with_idx.is_none());
-
-                        // pick the first non null plan to join
-                        let plan_with_idx = remaining_plans
-                            .iter()
-                            .enumerate()
-                            .find(|(_idx, plan)| plan.is_some());
-                        if let Some((idx, _)) = plan_with_idx {
-                            let plan = std::mem::take(&mut remaining_plans[idx]).unwrap();
-                            left = LogicalPlanBuilder::from(left)
-                                .cross_join(&plan)?
-                                .build()?;
-                        } else {
-                            // no more plans to join
-                            break;
-                        }
-                    } else {
-                        // have a plan
-                        let (idx, _) = plan_with_idx.expect("found plan node");
-                        let plan = std::mem::take(&mut remaining_plans[idx]).unwrap();
-
-                        let left_keys: Vec<Column> =
-                            join_keys.iter().map(|(l, _)| l.clone()).collect();
-                        let right_keys: Vec<Column> =
-                            join_keys.iter().map(|(_, r)| r.clone()).collect();
-                        let builder = LogicalPlanBuilder::from(left);
-                        left = builder
-                            .join(&plan, JoinType::Inner, (left_keys, right_keys), None)?
-                            .build()?;
-                    }
-
-                    all_join_keys.extend(join_keys);
-                }
-
-                // remove join expressions from filter
-                match remove_join_expressions(&filter_expr, &all_join_keys)? {
-                    Some(filter_expr) => {
-                        // this logic is adapted from [`LogicalPlanBuilder::filter`] to take
-                        // the query outer schema into account so that joins in subqueries
-                        // can reference outer query fields.
-                        let mut all_schemas: Vec<DFSchemaRef> = vec![];
-                        for plan in orig_plans {
-                            for schema in plan.all_schemas() {
-                                all_schemas.push(schema.clone());
-                            }
-                        }
-                        if let Some(outer_query_schema) = outer_query_schema {
-                            all_schemas.push(Arc::new(outer_query_schema.clone()));
-                        }
-                        let mut join_columns = HashSet::new();
-                        for (l, r) in &all_join_keys {
-                            join_columns.insert(l.clone());
-                            join_columns.insert(r.clone());
-                        }
-                        let x: Vec<&DFSchemaRef> = all_schemas.iter().collect();
-                        let filter_expr = normalize_col_with_schemas(
-                            filter_expr,
-                            x.as_slice(),
-                            &[join_columns],
-                        )?;
-                        Ok(LogicalPlan::Filter(Filter::try_new(
-                            filter_expr,
-                            Arc::new(left),
-                        )?))
-                    }
-                    _ => Ok(left),
-                }
+                Ok(LogicalPlan::Filter(Filter::try_new(
+                    filter_expr,
+                    Arc::new(plan),
+                )?))
             }
-            None => {
-                if plans.len() == 1 {
-                    Ok(plans[0].clone())
-                } else {
-                    let mut left = plans[0].clone();
-                    for right in plans.iter().skip(1) {
-                        left =
-                            LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
-                    }
-                    Ok(left)
-                }
+            None => Ok(plan),
+        }
+    }
+
+    /// build schema for unqualifier column ambiguous check
+    fn build_schema_for_ambiguous_check(&self, plan: &LogicalPlan) -> Result<DFSchema> {
+        let mut fields = plan.schema().fields().clone();
+
+        let metadata = plan.schema().metadata().clone();
+        if let LogicalPlan::Join(HashJoin {
+            join_constraint: HashJoinConstraint::Using,
+            ref on,
+            ref left,
+            ..
+        }) = plan
+        {
+            // For query: select id from t1 join t2 using(id), this is legal.
+            // We should dedup the fields for cols in using clause.
+            for join_cols in on.iter() {
+                let left_field = left.schema().field_from_column(&join_cols.0)?;
+                fields.retain(|field| {
+                    field.unqualified_column().name
+                        != left_field.unqualified_column().name
+                });
+                fields.push(left_field.clone());
             }
         }
+
+        DFSchema::new_with_metadata(fields, metadata)
     }
 
     /// Generate a logic plan from an SQL select
@@ -1128,12 +1033,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         // process `from` clause
-        let plans = self.plan_from_tables(select.from, ctes, outer_query_schema)?;
-        let empty_from = matches!(plans.first(), Some(LogicalPlan::EmptyRelation(_)));
+        let plan = self.plan_from_tables(select.from, ctes, outer_query_schema)?;
+        let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
+        // build from schema for unqualifier column ambiguous check
+        // we should get only one field for unqualifier column from schema.
+        let from_schema = self.build_schema_for_ambiguous_check(&plan)?;
 
         // process `where` clause
         let plan =
-            self.plan_selection(select.selection, plans, outer_query_schema, ctes)?;
+            self.plan_selection(select.selection, plan, outer_query_schema, ctes)?;
 
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
@@ -1142,6 +1050,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             empty_from,
             outer_query_schema,
             ctes,
+            &from_schema,
         )?;
 
         // having and group by clause may reference aliases defined in select projection
@@ -1303,11 +1212,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         empty_from: bool,
         outer_query_schema: Option<&DFSchema>,
         ctes: &mut HashMap<String, LogicalPlan>,
+        from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
         projection
             .into_iter()
             .map(|expr| {
-                self.sql_select_to_rex(expr, plan, empty_from, outer_query_schema, ctes)
+                self.sql_select_to_rex(
+                    expr,
+                    plan,
+                    empty_from,
+                    outer_query_schema,
+                    ctes,
+                    from_schema,
+                )
             })
             .flat_map(|result| match result {
                 Ok(vec) => vec.into_iter().map(Ok).collect(),
@@ -1579,6 +1496,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
     }
 
+    /// ambiguous check for unqualifier column
+    fn column_reference_ambiguous_check(
+        &self,
+        schema: &DFSchema,
+        exprs: &[Expr],
+    ) -> Result<()> {
+        find_column_exprs(exprs)
+            .iter()
+            .try_for_each(|col| match col {
+                Expr::Column(col) => match &col.relation {
+                    None => {
+                        // should get only one field in from_schema.
+                        if schema.fields_with_unqualified_name(&col.name).len() != 1 {
+                            Err(DataFusionError::Internal(format!(
+                                "column reference {} is ambiguous",
+                                col.name
+                            )))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    _ => Ok(()),
+                },
+                _ => Ok(()),
+            })
+    }
+
     /// Generate a relational expression from a select SQL expression
     fn sql_select_to_rex(
         &self,
@@ -1587,6 +1531,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         empty_from: bool,
         outer_query_schema: Option<&DFSchema>,
         ctes: &mut HashMap<String, LogicalPlan>,
+        from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
         let input_schema = match outer_query_schema {
             Some(x) => {
@@ -1600,13 +1545,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         match sql {
             SelectItem::UnnamedExpr(expr) => {
                 let expr = self.sql_to_rex(expr, &input_schema, ctes)?;
+                self.column_reference_ambiguous_check(from_schema, &[expr.clone()])?;
                 Ok(vec![normalize_col(expr, plan)?])
             }
             SelectItem::ExprWithAlias { expr, alias } => {
-                let expr = Alias(
-                    Box::new(self.sql_to_rex(expr, &input_schema, ctes)?),
-                    normalize_ident(&alias),
-                );
+                let select_expr = self.sql_to_rex(expr, &input_schema, ctes)?;
+                self.column_reference_ambiguous_check(
+                    from_schema,
+                    &[select_expr.clone()],
+                )?;
+                let expr = Alias(Box::new(select_expr), normalize_ident(&alias));
                 Ok(vec![normalize_col(expr, plan)?])
             }
             SelectItem::Wildcard => {
@@ -2628,7 +2576,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 | Value::Null
                 | Value::Placeholder(_) => {
                     return Err(DataFusionError::Plan(format!(
-                        "Unspported Value {}",
+                        "Unsupported Value {}",
                         value[0]
                     )))
                 }
@@ -2639,14 +2587,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 UnaryOperator::Minus => format!("-{}", expr),
                 _ => {
                     return Err(DataFusionError::Plan(format!(
-                        "Unspported Value {}",
+                        "Unsupported Value {}",
                         value[0]
                     )))
                 }
             },
             _ => {
                 return Err(DataFusionError::Plan(format!(
-                    "Unspported Value {}",
+                    "Unsupported Value {}",
                     value[0]
                 )))
             }
@@ -2684,17 +2632,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let _ = self.schema_provider.get_table_provider(table_ref)?;
 
         // Figure out the where clause
-        let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
-        let where_clause = sql_table_name
-            .0
-            .iter()
-            .rev()
-            .zip(columns)
-            .map(|(ident, column_name)| {
-                format!(r#"{} = '{}'"#, column_name, normalize_ident(ident))
-            })
-            .collect::<Vec<_>>()
-            .join(" AND ");
+        let where_clause = object_name_to_qualifier(sql_table_name);
 
         // treat both FULL and EXTENDED as the same
         let select_list = if full || extended {
@@ -2729,17 +2667,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let _ = self.schema_provider.get_table_provider(table_ref)?;
 
         // Figure out the where clause
-        let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
-        let where_clause = sql_table_name
-            .0
-            .iter()
-            .rev()
-            .zip(columns)
-            .map(|(ident, column_name)| {
-                format!(r#"{} = '{}'"#, column_name, normalize_ident(ident))
-            })
-            .collect::<Vec<_>>()
-            .join(" AND ");
+        let where_clause = object_name_to_qualifier(sql_table_name);
 
         let query = format!(
             "SELECT table_catalog, table_schema, table_name, definition FROM information_schema.views WHERE {}",
@@ -2979,39 +2907,20 @@ fn normalize_sql_object_name(sql_object_name: &ObjectName) -> String {
         .join(".")
 }
 
-/// Remove join expressions from a filter expression
-fn remove_join_expressions(
-    expr: &Expr,
-    join_columns: &HashSet<(Column, Column)>,
-) -> Result<Option<Expr>> {
-    match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
-            Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(l), Expr::Column(r)) => {
-                    if join_columns.contains(&(l.clone(), r.clone()))
-                        || join_columns.contains(&(r.clone(), l.clone()))
-                    {
-                        Ok(None)
-                    } else {
-                        Ok(Some(expr.clone()))
-                    }
-                }
-                _ => Ok(Some(expr.clone())),
-            },
-            Operator::And => {
-                let l = remove_join_expressions(left, join_columns)?;
-                let r = remove_join_expressions(right, join_columns)?;
-                match (l, r) {
-                    (Some(ll), Some(rr)) => Ok(Some(and(ll, rr))),
-                    (Some(ll), _) => Ok(Some(ll)),
-                    (_, Some(rr)) => Ok(Some(rr)),
-                    _ => Ok(None),
-                }
-            }
-            _ => Ok(Some(expr.clone())),
-        },
-        _ => Ok(Some(expr.clone())),
-    }
+/// Construct a WHERE qualifier suitable for e.g. information_schema filtering
+/// from the provided object identifiers (catalog, schema and table names).
+pub fn object_name_to_qualifier(sql_table_name: &ObjectName) -> String {
+    let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
+    sql_table_name
+        .0
+        .iter()
+        .rev()
+        .zip(columns)
+        .map(|(ident, column_name)| {
+            format!(r#"{} = '{}'"#, column_name, normalize_ident(ident))
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ")
 }
 
 /// Extracts equijoin ON condition be a single Eq or multiple conjunctive Eqs
@@ -3119,30 +3028,6 @@ fn extract_join_keys(
     }
 
     Ok(())
-}
-
-/// Extract join keys from a WHERE clause
-fn extract_possible_join_keys(
-    expr: &Expr,
-    accum: &mut Vec<(Column, Column)>,
-) -> Result<()> {
-    match expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
-            Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                (Expr::Column(l), Expr::Column(r)) => {
-                    accum.push((l.clone(), r.clone()));
-                    Ok(())
-                }
-                _ => Ok(()),
-            },
-            Operator::And => {
-                extract_possible_join_keys(left, accum)?;
-                extract_possible_join_keys(right, accum)
-            }
-            _ => Ok(()),
-        },
-        _ => Ok(()),
-    }
 }
 
 /// Wrap projection for a plan, if the join keys contains normal expression.
@@ -3316,9 +3201,8 @@ mod tests {
         quick_test(
             "SELECT CAST (a AS FLOAT) FROM (SELECT 1 AS a)",
             "Projection: CAST(a AS Float32)\
-             \n  Projection: a\
-             \n    Projection: Int64(1) AS a\
-             \n      EmptyRelation",
+            \n  Projection: Int64(1) AS a\
+            \n    EmptyRelation",
         );
     }
 
@@ -3518,11 +3402,11 @@ mod tests {
                      ) AS a
                    ) AS b";
         let expected = "Projection: b.fn2, b.last_name\
-                        \n  Projection: fn2, a.last_name, a.birth_date, alias=b\
-                        \n    Projection: a.fn1 AS fn2, a.last_name, a.birth_date\
-                        \n      Projection: fn1, person.last_name, person.birth_date, person.age, alias=a\
-                        \n        Projection: person.first_name AS fn1, person.last_name, person.birth_date, person.age\
-                        \n          TableScan: person";
+        \n  SubqueryAlias: b\
+        \n    Projection: a.fn1 AS fn2, a.last_name, a.birth_date\
+        \n      SubqueryAlias: a\
+        \n        Projection: person.first_name AS fn1, person.last_name, person.birth_date, person.age\
+        \n          TableScan: person";
         quick_test(sql, expected);
     }
 
@@ -3537,11 +3421,11 @@ mod tests {
                    WHERE fn1 = 'X' AND age < 30";
 
         let expected = "Projection: a.fn1, a.age\
-                        \n  Filter: a.fn1 = Utf8(\"X\") AND a.age < Int64(30)\
-                        \n    Projection: fn1, person.age, alias=a\
-                        \n      Projection: person.first_name AS fn1, person.age\
-                        \n        Filter: person.age > Int64(20)\
-                        \n          TableScan: person";
+        \n  Filter: a.fn1 = Utf8(\"X\") AND a.age < Int64(30)\
+        \n    SubqueryAlias: a\
+        \n      Projection: person.first_name AS fn1, person.age\
+        \n        Filter: person.age > Int64(20)\
+        \n          TableScan: person";
 
         quick_test(sql, expected);
     }
@@ -3551,9 +3435,10 @@ mod tests {
         let sql = "SELECT a, b, c
                    FROM lineitem l (a, b, c)";
         let expected = "Projection: l.a, l.b, l.c\
-                        \n  Projection: l.l_item_id AS a, l.l_description AS b, l.price AS c, alias=l\
-                        \n    SubqueryAlias: l\
-                        \n      TableScan: lineitem";
+        \n  SubqueryAlias: l\
+        \n    Projection: l.l_item_id AS a, l.l_description AS b, l.price AS c\
+        \n      SubqueryAlias: l\
+        \n        TableScan: lineitem";
         quick_test(sql, expected);
     }
 
@@ -3566,6 +3451,29 @@ mod tests {
             "Plan(\"Source table contains 3 columns but only 2 names given as column alias\")",
             format!("{:?}", err)
         );
+    }
+
+    #[test]
+    fn select_with_ambiguous_column() {
+        let sql = "SELECT id FROM person a, person b";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Internal(\"column reference id is ambiguous\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn join_with_ambiguous_column() {
+        // This is legal.
+        let sql = "SELECT id FROM person a join person b using(id)";
+        let expected = "Projection: a.id\
+                        \n  Inner Join: Using a.id = b.id\
+                        \n    SubqueryAlias: a\
+                        \n      TableScan: person\
+                        \n    SubqueryAlias: b\
+                        \n      TableScan: person";
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3888,10 +3796,10 @@ mod tests {
         quick_test(
             "SELECT * FROM (SELECT first_name, last_name FROM person) AS a GROUP BY first_name, last_name",
             "Projection: a.first_name, a.last_name\
-             \n  Aggregate: groupBy=[[a.first_name, a.last_name]], aggr=[[]]\
-             \n    Projection: person.first_name, person.last_name, alias=a\
-             \n      Projection: person.first_name, person.last_name\
-             \n        TableScan: person",
+            \n  Aggregate: groupBy=[[a.first_name, a.last_name]], aggr=[[]]\
+            \n    SubqueryAlias: a\
+            \n      Projection: person.first_name, person.last_name\
+            \n        TableScan: person",
         );
     }
 
@@ -3957,9 +3865,10 @@ mod tests {
         quick_test(
             "SELECT col1, col2 FROM (VALUES (TIMESTAMP '2021-06-10 17:01:00Z', DATE '2004-04-09')) as t (col1, col2)",
             "Projection: t.col1, t.col2\
-            \n  Projection: t.column1 AS col1, t.column2 AS col2, alias=t\
-            \n    Projection: column1, column2, alias=t\
-            \n      Values: (CAST(Utf8(\"2021-06-10 17:01:00Z\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2004-04-09\") AS Date32))",
+            \n  SubqueryAlias: t\
+            \n    Projection: t.column1 AS col1, t.column2 AS col2\
+            \n      SubqueryAlias: t\
+            \n        Values: (CAST(Utf8(\"2021-06-10 17:01:00Z\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2004-04-09\") AS Date32))",
         );
     }
 
@@ -4795,17 +4704,17 @@ mod tests {
     fn sorted_union_with_different_types_and_group_by() {
         let sql = "SELECT a FROM (select 1 a) x GROUP BY 1 UNION ALL (SELECT a FROM (select 1.1 a) x GROUP BY 1) ORDER BY 1";
         let expected = "Sort: a ASC NULLS LAST\
-            \n  Union\
-            \n    Projection: CAST(x.a AS Float64) AS a\
-            \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n        Projection: a, alias=x\
-            \n          Projection: Int64(1) AS a\
-            \n            EmptyRelation\
-            \n    Projection: x.a\
-            \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n        Projection: a, alias=x\
-            \n          Projection: Float64(1.1) AS a\
-            \n            EmptyRelation";
+        \n  Union\
+        \n    Projection: CAST(x.a AS Float64) AS a\
+        \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
+        \n        SubqueryAlias: x\
+        \n          Projection: Int64(1) AS a\
+        \n            EmptyRelation\
+        \n    Projection: x.a\
+        \n      Aggregate: groupBy=[[x.a]], aggr=[[]]\
+        \n        SubqueryAlias: x\
+        \n          Projection: Float64(1.1) AS a\
+        \n            EmptyRelation";
         quick_test(sql, expected);
     }
 
@@ -4813,16 +4722,16 @@ mod tests {
     fn union_with_binary_expr_and_cast() {
         let sql = "SELECT cast(0.0 + a as integer) FROM (select 1 a) x GROUP BY 1 UNION ALL (SELECT 2.1 + a FROM (select 1 a) x GROUP BY 1)";
         let expected = "Union\
-            \n  Projection: CAST(Float64(0) + x.a AS Float64) AS Float64(0) + x.a\
-            \n    Aggregate: groupBy=[[CAST(Float64(0) + x.a AS Int32)]], aggr=[[]]\
-            \n      Projection: a, alias=x\
-            \n        Projection: Int64(1) AS a\
-            \n          EmptyRelation\
-            \n  Projection: Float64(2.1) + x.a\
-            \n    Aggregate: groupBy=[[Float64(2.1) + x.a]], aggr=[[]]\
-            \n      Projection: a, alias=x\
-            \n        Projection: Int64(1) AS a\
-            \n          EmptyRelation";
+        \n  Projection: CAST(Float64(0) + x.a AS Float64) AS Float64(0) + x.a\
+        \n    Aggregate: groupBy=[[CAST(Float64(0) + x.a AS Int32)]], aggr=[[]]\
+        \n      SubqueryAlias: x\
+        \n        Projection: Int64(1) AS a\
+        \n          EmptyRelation\
+        \n  Projection: Float64(2.1) + x.a\
+        \n    Aggregate: groupBy=[[Float64(2.1) + x.a]], aggr=[[]]\
+        \n      SubqueryAlias: x\
+        \n        Projection: Int64(1) AS a\
+        \n          EmptyRelation";
         quick_test(sql, expected);
     }
 
@@ -4830,16 +4739,16 @@ mod tests {
     fn union_with_aliases() {
         let sql = "SELECT a as a1 FROM (select 1 a) x GROUP BY 1 UNION ALL (SELECT a as a1 FROM (select 1.1 a) x GROUP BY 1)";
         let expected = "Union\
-            \n  Projection: CAST(x.a AS Float64) AS a1\
-            \n    Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n      Projection: a, alias=x\
-            \n        Projection: Int64(1) AS a\
-            \n          EmptyRelation\
-            \n  Projection: x.a AS a1\
-            \n    Aggregate: groupBy=[[x.a]], aggr=[[]]\
-            \n      Projection: a, alias=x\
-            \n        Projection: Float64(1.1) AS a\
-            \n          EmptyRelation";
+        \n  Projection: CAST(x.a AS Float64) AS a1\
+        \n    Aggregate: groupBy=[[x.a]], aggr=[[]]\
+        \n      SubqueryAlias: x\
+        \n        Projection: Int64(1) AS a\
+        \n          EmptyRelation\
+        \n  Projection: x.a AS a1\
+        \n    Aggregate: groupBy=[[x.a]], aggr=[[]]\
+        \n      SubqueryAlias: x\
+        \n        Projection: Float64(1.1) AS a\
+        \n          EmptyRelation";
         quick_test(sql, expected);
     }
 
@@ -5389,18 +5298,6 @@ mod tests {
     }
 
     #[test]
-    fn cross_join_to_inner_join() {
-        let sql = "select person.id from person, orders, lineitem where person.id = lineitem.l_item_id and orders.o_item_id = lineitem.l_description;";
-        let expected = "Projection: person.id\
-                                 \n  Inner Join: lineitem.l_description = orders.o_item_id\
-                                 \n    Inner Join: person.id = lineitem.l_item_id\
-                                 \n      TableScan: person\
-                                 \n      TableScan: lineitem\
-                                 \n    TableScan: orders";
-        quick_test(sql, expected);
-    }
-
-    #[test]
     fn cross_join_not_to_inner_join() {
         let sql = "select person.id from person, orders, lineitem where person.id = person.age;";
         let expected = "Projection: person.id\
@@ -5430,7 +5327,7 @@ mod tests {
         let sql = "with a as (select * from person), a as (select * from orders) select * from a;";
         let expected = "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
         let result = logical_plan(sql).err().unwrap();
-        assert_eq!(expected, format!("{}", result));
+        assert_eq!(result.to_string(), expected);
     }
 
     #[test]
@@ -5483,15 +5380,15 @@ mod tests {
             AND person.state = p.state)";
 
         let expected = "Projection: person.id\
-        \n  Filter: EXISTS (<subquery>)\
+        \n  Filter: person.id = p.id AND EXISTS (<subquery>)\
         \n    Subquery:\
         \n      Projection: person.first_name\
-        \n        Filter: person.last_name = p.last_name AND person.state = p.state\
-        \n          Inner Join: person.id = p2.id\
+        \n        Filter: person.id = p2.id AND person.last_name = p.last_name AND person.state = p.state\
+        \n          CrossJoin:\
         \n            TableScan: person\
         \n            SubqueryAlias: p2\
         \n              TableScan: person\
-        \n    Inner Join: person.id = p.id\
+        \n    CrossJoin:\
         \n      TableScan: person\
         \n      SubqueryAlias: p\
         \n        TableScan: person";
@@ -5577,8 +5474,8 @@ mod tests {
         \n    Subquery:\
         \n      Projection: COUNT(UInt8(1))\
         \n        Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-        \n          Filter: j2.j2_id = j1.j1_id\
-        \n            Inner Join: j1.j1_id = j3.j3_id\
+        \n          Filter: j2.j2_id = j1.j1_id AND j1.j1_id = j3.j3_id\
+        \n            CrossJoin:\
         \n              TableScan: j1\
         \n              TableScan: j3\
         \n    CrossJoin:\
@@ -5599,8 +5496,9 @@ mod tests {
         \n    Subquery:\
         \n      Projection: cte.id, cte.first_name, cte.last_name, cte.age, cte.state, cte.salary, cte.birth_date, cte.😀\
         \n        Filter: cte.id = person.id\
-        \n          Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, alias=cte\
-        \n            TableScan: person\
+        \n          SubqueryAlias: cte\
+        \n            Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀\
+        \n              TableScan: person\
         \n    TableScan: person";
 
         quick_test(sql, expected)
@@ -5615,8 +5513,9 @@ mod tests {
         SELECT * FROM numbers;";
 
         let expected = "Projection: numbers.a, numbers.b, numbers.c\
-        \n  Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c, alias=numbers\
-        \n    EmptyRelation";
+        \n  SubqueryAlias: numbers\
+        \n    Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c\
+        \n      EmptyRelation";
 
         quick_test(sql, expected)
     }
@@ -5630,9 +5529,11 @@ mod tests {
         SELECT * FROM numbers;";
 
         let expected = "Projection: numbers.a, numbers.b, numbers.c\
-        \n  Projection: numbers.Int64(1) AS a, numbers.Int64(2) AS b, numbers.Int64(3) AS c, alias=numbers\
-        \n    Projection: Int64(1), Int64(2), Int64(3), alias=numbers\
-        \n      EmptyRelation";
+        \n  SubqueryAlias: numbers\
+        \n    Projection: numbers.Int64(1) AS a, numbers.Int64(2) AS b, numbers.Int64(3) AS c\
+        \n      SubqueryAlias: numbers\
+        \n        Projection: Int64(1), Int64(2), Int64(3)\
+        \n          EmptyRelation";
 
         quick_test(sql, expected)
     }
@@ -5647,9 +5548,11 @@ mod tests {
         SELECT * FROM numbers;";
 
         let expected = "Projection: numbers.a, numbers.b, numbers.c\
-        \n  Projection: numbers.x AS a, numbers.y AS b, numbers.z AS c, alias=numbers\
-        \n    Projection: Int64(1) AS x, Int64(2) AS y, Int64(3) AS z, alias=numbers\
-        \n      EmptyRelation";
+        \n  SubqueryAlias: numbers\
+        \n    Projection: numbers.x AS a, numbers.y AS b, numbers.z AS c\
+        \n      SubqueryAlias: numbers\
+        \n        Projection: Int64(1) AS x, Int64(2) AS y, Int64(3) AS z\
+        \n          EmptyRelation";
 
         quick_test(sql, expected)
     }
@@ -5664,7 +5567,7 @@ mod tests {
 
         let expected = "Error during planning: Source table contains 3 columns but only 1 names given as column alias";
         let result = logical_plan(sql).err().unwrap();
-        assert_eq!(expected, format!("{}", result));
+        assert_eq!(result.to_string(), expected);
     }
 
     #[test]
@@ -5767,7 +5670,7 @@ mod tests {
         let expected = "Projection: SUM(person.age) FILTER (WHERE age > Int64(4))\
         \n  Aggregate: groupBy=[[]], aggr=[[SUM(person.age) FILTER (WHERE age > Int64(4))]]\
         \n    TableScan: person".to_string();
-        assert_eq!(expected, format!("{}", plan.display_indent()));
+        assert_eq!(plan.display_indent().to_string(), expected);
         Ok(())
     }
 
@@ -5992,8 +5895,8 @@ mod tests {
     #[test]
     fn test_select_join_key_inner_join() {
         let sql = "SELECT  orders.customer_id * 2,  person.id + 10
-            FROM person 
-            INNER JOIN orders 
+            FROM person
+            INNER JOIN orders
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: orders.customer_id * Int64(2), person.id + Int64(10)\
@@ -6009,9 +5912,9 @@ mod tests {
     #[test]
     fn test_non_projetion_after_inner_join() {
         // There's no need to add projection for left and right, so does adding projection after join.
-        let sql = "SELECT  person.id, person.age 
-            FROM person 
-            INNER JOIN orders 
+        let sql = "SELECT  person.id, person.age
+            FROM person
+            INNER JOIN orders
             ON orders.customer_id = person.id";
 
         let expected = "Projection: person.id, person.age\
@@ -6024,9 +5927,9 @@ mod tests {
     #[test]
     fn test_duplicated_left_join_key_inner_join() {
         //  person.id * 2 happen twice in left side.
-        let sql = "SELECT person.id, person.age 
-            FROM person 
-            INNER JOIN orders 
+        let sql = "SELECT person.id, person.age
+            FROM person
+            INNER JOIN orders
             ON person.id * 2 = orders.customer_id + 10 and person.id * 2 = orders.order_id";
 
         let expected = "Projection: person.id, person.age\
@@ -6042,9 +5945,9 @@ mod tests {
     #[test]
     fn test_duplicated_right_join_key_inner_join() {
         //  orders.customer_id + 10 happen twice in right side.
-        let sql = "SELECT person.id, person.age 
-            FROM person 
-            INNER JOIN orders 
+        let sql = "SELECT person.id, person.age
+            FROM person
+            INNER JOIN orders
             ON person.id * 2 = orders.customer_id + 10 and person.id =  orders.customer_id + 10";
 
         let expected = "Projection: person.id, person.age\
@@ -6057,10 +5960,10 @@ mod tests {
     }
 
     #[test]
-    fn test_ambiguous_coulmn_referece_in_join() {
-        let sql = "select p1.id, p1.age, p2.id 
-            from person as p1 
-            INNER JOIN person as p2 
+    fn test_ambiguous_column_references_in_on_join() {
+        let sql = "select p1.id, p1.age, p2.id
+            from person as p1
+            INNER JOIN person as p2
             ON id = 1";
 
         let expected =
@@ -6070,7 +5973,23 @@ mod tests {
         let result = logical_plan(sql);
         assert!(result.is_err());
         let err = result.err().unwrap();
-        assert_eq!(format!("{}", err), expected);
+        assert_eq!(err.to_string(), expected);
+    }
+
+    #[test]
+    fn test_ambiguous_column_references_with_in_using_join() {
+        let sql = "select p1.id, p1.age, p2.id
+            from person as p1
+            INNER JOIN person as p2
+            using(id)";
+
+        let expected = "Projection: p1.id, p1.age, p2.id\
+            \n  Inner Join: Using p1.id = p2.id\
+            \n    SubqueryAlias: p1\
+            \n      TableScan: person\
+            \n    SubqueryAlias: p2\
+            \n      TableScan: person";
+        quick_test(sql, expected);
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {

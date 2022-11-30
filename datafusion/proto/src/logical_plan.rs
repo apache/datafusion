@@ -461,7 +461,21 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let options = ListingOptions::new(file_format)
                     .with_file_extension(scan.file_extension.clone())
-                    .with_table_partition_cols(scan.table_partition_cols.clone())
+                    .with_table_partition_cols(
+                        scan.table_partition_cols
+                            .iter()
+                            .map(|col| {
+                                (
+                                    col.clone(),
+                                    schema
+                                        .field_with_name(col)
+                                        .unwrap()
+                                        .data_type()
+                                        .clone(),
+                                )
+                            })
+                            .collect(),
+                    )
                     .with_collect_stat(scan.collect_stat)
                     .with_target_partitions(scan.target_partitions as usize)
                     .with_file_sort_order(file_sort_order);
@@ -876,7 +890,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         FileFormatType::Avro(protobuf::AvroFormat {})
                     } else {
                         return Err(proto_error(format!(
-                            "Error converting file format, {:?} is invalid as a datafusion foramt.",
+                            "Error converting file format, {:?} is invalid as a datafusion format.",
                             listing_table.options().format
                         )));
                     };
@@ -901,7 +915,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 file_extension: options.file_extension.clone(),
                                 table_partition_cols: options
                                     .table_partition_cols
-                                    .clone(),
+                                    .iter()
+                                    .map(|x| x.0.clone())
+                                    .collect::<Vec<_>>(),
                                 paths: listing_table
                                     .table_paths()
                                     .iter()
@@ -953,28 +969,25 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Ok(node)
                 }
             }
-            LogicalPlan::Projection(Projection {
-                expr, input, alias, ..
-            }) => Ok(protobuf::LogicalPlanNode {
-                logical_plan_type: Some(LogicalPlanType::Projection(Box::new(
-                    protobuf::ProjectionNode {
-                        input: Some(Box::new(
-                            protobuf::LogicalPlanNode::try_from_logical_plan(
-                                input.as_ref(),
-                                extension_codec,
-                            )?,
-                        )),
-                        expr: expr.iter().map(|expr| expr.try_into()).collect::<Result<
-                            Vec<_>,
-                            to_proto::Error,
-                        >>(
-                        )?,
-                        optional_alias: alias
-                            .clone()
-                            .map(protobuf::projection_node::OptionalAlias::Alias),
-                    },
-                ))),
-            }),
+            LogicalPlan::Projection(Projection { expr, input, .. }) => {
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Projection(Box::new(
+                        protobuf::ProjectionNode {
+                            input: Some(Box::new(
+                                protobuf::LogicalPlanNode::try_from_logical_plan(
+                                    input.as_ref(),
+                                    extension_codec,
+                                )?,
+                            )),
+                            expr: expr
+                                .iter()
+                                .map(|expr| expr.try_into())
+                                .collect::<Result<Vec<_>, to_proto::Error>>()?,
+                            optional_alias: None,
+                        },
+                    ))),
+                })
+            }
             LogicalPlan::Filter(filter) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(

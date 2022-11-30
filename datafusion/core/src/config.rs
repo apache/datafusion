@@ -74,6 +74,17 @@ pub const OPT_CATALOG_LOCATION: &str = "datafusion.catalog.location";
 /// Type of `TableProvider` to use when loading `default` schema
 pub const OPT_CATALOG_TYPE: &str = "datafusion.catalog.type";
 
+/// Configuration option "datafusion.optimizer.top_down_join_key_reordering"
+pub const OPT_TOP_DOWN_JOIN_KEY_REORDERING: &str =
+    "datafusion.optimizer.top_down_join_key_reordering";
+
+/// Configuration option "datafusion.optimizer.prefer_hash_join"
+pub const OPT_PREFER_HASH_JOIN: &str = "datafusion.optimizer.prefer_hash_join";
+
+/// Configuration option "atafusion.optimizer.hash_join_single_partition_threshold"
+pub const OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD: &str =
+    "datafusion.optimizer.hash_join_single_partition_threshold";
+
 /// Definition of a configuration option
 pub struct ConfigDefinition {
     /// key used to identifier this configuration option
@@ -266,6 +277,22 @@ impl BuiltInConfigs {
                 "Type of `TableProvider` to use when loading `default` schema. Defaults to None",
                 None,
             ),
+             ConfigDefinition::new_bool(
+                 OPT_TOP_DOWN_JOIN_KEY_REORDERING,
+                 "When set to true, the physical plan optimizer will run a top down process to reorder the join keys. Defaults to true",
+                 true,
+             ),
+             ConfigDefinition::new_bool(
+                 OPT_PREFER_HASH_JOIN,
+                 "When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin. HashJoin can work more efficiently\
+                 than SortMergeJoin but consumes more memory. Defaults to true",
+                 true,
+             ),
+             ConfigDefinition::new_u64(
+                 OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD,
+                 "The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition",
+                 1024 * 1024,
+             ),
             ]
         }
     }

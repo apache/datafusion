@@ -445,7 +445,7 @@ mod tests {
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
             .to_string();
-        assert!(formatted.contains("predicate=id_min@0 <= 1 AND 1 <= id_max@1"));
+        assert!(formatted.contains("FilterExec: id@0 = 1"));
         Ok(())
     }
 
@@ -474,7 +474,8 @@ mod tests {
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
             .to_string();
-        assert!(formatted.contains("ParquetExec: limit=Some(10)"));
+        // TODO: limit_push_down support SubqueryAlias
+        assert!(formatted.contains("GlobalLimitExec: skip=0, fetch=10"));
         Ok(())
     }
 

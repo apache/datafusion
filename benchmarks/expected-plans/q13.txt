@@ -1,11 +1,12 @@
 Sort: custdist DESC NULLS FIRST, c_orders.c_count DESC NULLS FIRST
   Projection: c_orders.c_count, COUNT(UInt8(1)) AS custdist
     Aggregate: groupBy=[[c_orders.c_count]], aggr=[[COUNT(UInt8(1))]]
-      Projection: c_orders.COUNT(orders.o_orderkey) AS c_count, alias=c_orders
-        Projection: COUNT(orders.o_orderkey), alias=c_orders
-          Projection: COUNT(orders.o_orderkey)
-            Aggregate: groupBy=[[customer.c_custkey]], aggr=[[COUNT(orders.o_orderkey)]]
-              Left Join: customer.c_custkey = orders.o_custkey
-                TableScan: customer projection=[c_custkey]
-                Filter: orders.o_comment NOT LIKE Utf8("%special%requests%")
-                  TableScan: orders projection=[o_orderkey, o_custkey, o_comment]
+      SubqueryAlias: c_orders
+        Projection: c_orders.COUNT(orders.o_orderkey) AS c_count
+          SubqueryAlias: c_orders
+            Projection: COUNT(orders.o_orderkey)
+              Aggregate: groupBy=[[customer.c_custkey]], aggr=[[COUNT(orders.o_orderkey)]]
+                Left Join: customer.c_custkey = orders.o_custkey
+                  TableScan: customer projection=[c_custkey]
+                  Filter: orders.o_comment NOT LIKE Utf8("%special%requests%")
+                    TableScan: orders projection=[o_orderkey, o_custkey, o_comment]

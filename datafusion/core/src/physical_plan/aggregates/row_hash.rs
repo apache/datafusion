@@ -22,14 +22,15 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use ahash::RandomState;
-use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::stream::{Stream, StreamExt};
 
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::execution::memory_manager::ConsumerType;
-use crate::execution::{MemoryConsumer, MemoryConsumerId, MemoryManager};
+use crate::execution::memory_manager::proxy::{
+    MemoryConsumerProxy, RawTableAllocExt, VecAllocExt,
+};
+use crate::execution::MemoryConsumerId;
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, group_schema, AccumulatorItemV2, AggregateMode,
     PhysicalGroupBy,
@@ -47,13 +48,13 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
 };
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::ScalarValue;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
 use datafusion_row::reader::{read_row, RowReader};
 use datafusion_row::writer::{write_row, RowWriter};
 use datafusion_row::{MutableRecordBatch, RowType};
-use hashbrown::raw::{Bucket, RawTable};
+use hashbrown::raw::RawTable;
 
 /// Grouping aggregate with row-format aggregation states inside.
 ///
@@ -142,17 +143,14 @@ impl GroupedHashAggregateStreamV2 {
         let aggr_layout = Arc::new(RowLayout::new(&aggr_schema, RowType::WordAligned));
 
         let aggr_state = AggregationState {
-            memory_consumer: AggregationStateMemoryConsumer {
-                id: MemoryConsumerId::new(partition),
-                memory_manager: Arc::clone(&context.runtime_env().memory_manager),
-                used: 0,
-            },
+            memory_consumer: MemoryConsumerProxy::new(
+                "GroupBy Hash (Row) AggregationState",
+                MemoryConsumerId::new(partition),
+                Arc::clone(&context.runtime_env().memory_manager),
+            ),
             map: RawTable::with_capacity(0),
             group_states: Vec::with_capacity(0),
         };
-        context
-            .runtime_env()
-            .register_requester(aggr_state.memory_consumer.id());
 
         timer.done();
 
@@ -467,7 +465,7 @@ struct RowGroupState {
 
 /// The state of all the groups
 struct AggregationState {
-    memory_consumer: AggregationStateMemoryConsumer,
+    memory_consumer: MemoryConsumerProxy,
 
     /// Logically maps group values to an index in `group_states`
     ///
@@ -490,130 +488,6 @@ impl std::fmt::Debug for AggregationState {
             .field("map", &map_string)
             .field("group_states", &self.group_states)
             .finish()
-    }
-}
-
-/// Accounting data structure for memory usage.
-struct AggregationStateMemoryConsumer {
-    /// Consumer ID.
-    id: MemoryConsumerId,
-
-    /// Linked memory manager.
-    memory_manager: Arc<MemoryManager>,
-
-    /// Currently used size in bytes.
-    used: usize,
-}
-
-#[async_trait]
-impl MemoryConsumer for AggregationStateMemoryConsumer {
-    fn name(&self) -> String {
-        "AggregationState".to_owned()
-    }
-
-    fn id(&self) -> &crate::execution::MemoryConsumerId {
-        &self.id
-    }
-
-    fn memory_manager(&self) -> Arc<MemoryManager> {
-        Arc::clone(&self.memory_manager)
-    }
-
-    fn type_(&self) -> &ConsumerType {
-        &ConsumerType::Tracking
-    }
-
-    async fn spill(&self) -> Result<usize> {
-        Err(DataFusionError::ResourcesExhausted(
-            "Cannot spill AggregationState".to_owned(),
-        ))
-    }
-
-    fn mem_used(&self) -> usize {
-        self.used
-    }
-}
-
-impl AggregationStateMemoryConsumer {
-    async fn alloc(&mut self, bytes: usize) -> Result<()> {
-        self.try_grow(bytes).await?;
-        self.used = self.used.checked_add(bytes).expect("overflow");
-        Ok(())
-    }
-}
-
-impl Drop for AggregationStateMemoryConsumer {
-    fn drop(&mut self) {
-        self.memory_manager
-            .drop_consumer(self.id(), self.mem_used());
-    }
-}
-
-trait VecAllocExt {
-    type T;
-
-    fn push_accounted(&mut self, x: Self::T, accounting: &mut usize);
-}
-
-impl<T> VecAllocExt for Vec<T> {
-    type T = T;
-
-    fn push_accounted(&mut self, x: Self::T, accounting: &mut usize) {
-        if self.capacity() == self.len() {
-            // allocate more
-
-            // growth factor: 2, but at least 2 elements
-            let bump_elements = (self.capacity() * 2).max(2);
-            let bump_size = std::mem::size_of::<u32>() * bump_elements;
-            self.reserve(bump_elements);
-            *accounting = (*accounting).checked_add(bump_size).expect("overflow");
-        }
-
-        self.push(x);
-    }
-}
-
-trait RawTableAllocExt {
-    type T;
-
-    fn insert_accounted(
-        &mut self,
-        x: Self::T,
-        hasher: impl Fn(&Self::T) -> u64,
-        accounting: &mut usize,
-    ) -> Bucket<Self::T>;
-}
-
-impl<T> RawTableAllocExt for RawTable<T> {
-    type T = T;
-
-    fn insert_accounted(
-        &mut self,
-        x: Self::T,
-        hasher: impl Fn(&Self::T) -> u64,
-        accounting: &mut usize,
-    ) -> Bucket<Self::T> {
-        let hash = hasher(&x);
-
-        match self.try_insert_no_grow(hash, x) {
-            Ok(bucket) => bucket,
-            Err(x) => {
-                // need to request more memory
-
-                let bump_elements = (self.capacity() * 2).max(16);
-                let bump_size = bump_elements * std::mem::size_of::<T>();
-                *accounting = (*accounting).checked_add(bump_size).expect("overflow");
-
-                self.reserve(bump_elements, hasher);
-
-                // still need to insert the element since first try failed
-                // Note: cannot use `.expect` here because `T` may not implement `Debug`
-                match self.try_insert_no_grow(hash, x) {
-                    Ok(bucket) => bucket,
-                    Err(_) => panic!("just grew the container"),
-                }
-            }
-        }
     }
 }
 

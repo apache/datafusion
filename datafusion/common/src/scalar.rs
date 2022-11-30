@@ -19,12 +19,15 @@
 
 use std::borrow::Borrow;
 use std::cmp::{max, Ordering};
+use std::collections::HashSet;
 use std::convert::{Infallible, TryInto};
 use std::ops::{Add, Sub};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
-use crate::cast::{as_decimal128_array, as_struct_array};
+use crate::cast::{
+    as_decimal128_array, as_dictionary_array, as_list_array, as_struct_array,
+};
 use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
 use arrow::{
@@ -720,7 +723,7 @@ fn get_dict_value<K: ArrowDictionaryKeyType>(
     array: &ArrayRef,
     index: usize,
 ) -> (&ArrayRef, Option<usize>) {
-    let dict_array = as_dictionary_array::<K>(array);
+    let dict_array = as_dictionary_array::<K>(array).unwrap();
     (dict_array.values(), dict_array.key(index))
 }
 
@@ -2001,12 +2004,7 @@ impl ScalarValue {
             DataType::Utf8 => typed_cast!(array, index, StringArray, Utf8),
             DataType::LargeUtf8 => typed_cast!(array, index, LargeStringArray, LargeUtf8),
             DataType::List(nested_type) => {
-                let list_array =
-                    array.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "Failed to downcast ListArray".to_string(),
-                        )
-                    })?;
+                let list_array = as_list_array(array)?;
                 let value = match list_array.is_null(index) {
                     true => None,
                     false => {
@@ -2294,6 +2292,96 @@ impl ScalarValue {
             }
             ScalarValue::Null => array.data().is_null(index),
         }
+    }
+
+    /// Estimate size if bytes including `Self`. For values with internal containers such as `String`
+    /// includes the allocated size (`capacity`) rather than the current length (`len`)
+    pub fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + match self {
+                ScalarValue::Null
+                | ScalarValue::Boolean(_)
+                | ScalarValue::Float32(_)
+                | ScalarValue::Float64(_)
+                | ScalarValue::Decimal128(_, _, _)
+                | ScalarValue::Int8(_)
+                | ScalarValue::Int16(_)
+                | ScalarValue::Int32(_)
+                | ScalarValue::Int64(_)
+                | ScalarValue::UInt8(_)
+                | ScalarValue::UInt16(_)
+                | ScalarValue::UInt32(_)
+                | ScalarValue::UInt64(_)
+                | ScalarValue::Date32(_)
+                | ScalarValue::Date64(_)
+                | ScalarValue::Time32Second(_)
+                | ScalarValue::Time32Millisecond(_)
+                | ScalarValue::Time64Microsecond(_)
+                | ScalarValue::Time64Nanosecond(_)
+                | ScalarValue::IntervalYearMonth(_)
+                | ScalarValue::IntervalDayTime(_)
+                | ScalarValue::IntervalMonthDayNano(_) => 0,
+                ScalarValue::Utf8(s)
+                | ScalarValue::LargeUtf8(s)
+                | ScalarValue::TimestampSecond(_, s)
+                | ScalarValue::TimestampMillisecond(_, s)
+                | ScalarValue::TimestampMicrosecond(_, s)
+                | ScalarValue::TimestampNanosecond(_, s) => {
+                    s.as_ref().map(|s| s.capacity()).unwrap_or_default()
+                }
+                ScalarValue::Binary(b)
+                | ScalarValue::FixedSizeBinary(_, b)
+                | ScalarValue::LargeBinary(b) => {
+                    b.as_ref().map(|b| b.capacity()).unwrap_or_default()
+                }
+                // TODO(crepererum): `Field` is NOT fixed size, add `Field::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
+                ScalarValue::List(vals, field) => {
+                    vals.as_ref()
+                        .map(|vals| Self::size_of_vec(vals) - std::mem::size_of_val(vals))
+                        .unwrap_or_default()
+                        + std::mem::size_of_val(field)
+                }
+                // TODO(crepererum): `Field` is NOT fixed size, add `Field::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
+                ScalarValue::Struct(vals, fields) => {
+                    vals.as_ref()
+                        .map(|vals| {
+                            vals.iter()
+                                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                                .sum::<usize>()
+                                + (std::mem::size_of::<ScalarValue>() * vals.capacity())
+                        })
+                        .unwrap_or_default()
+                        + (std::mem::size_of::<Field>() * fields.capacity())
+                }
+                // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
+                ScalarValue::Dictionary(dt, sv) => {
+                    std::mem::size_of_val(dt.as_ref()) + sv.size()
+                }
+            }
+    }
+
+    /// Estimates [size](Self::size) of [`Vec`] in bytes.
+    ///
+    /// Includes the size of the [`Vec`] container itself.
+    pub fn size_of_vec(vec: &Vec<Self>) -> usize {
+        std::mem::size_of_val(vec)
+            + (std::mem::size_of::<ScalarValue>() * vec.capacity())
+            + vec
+                .iter()
+                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                .sum::<usize>()
+    }
+
+    /// Estimates [size](Self::size) of [`HashSet`] in bytes.
+    ///
+    /// Includes the size of the [`HashSet`] container itself.
+    pub fn size_of_hashset<S>(set: &HashSet<Self, S>) -> usize {
+        std::mem::size_of_val(set)
+            + (std::mem::size_of::<ScalarValue>() * set.capacity())
+            + set
+                .iter()
+                .map(|sv| sv.size() - std::mem::size_of_val(sv))
+                .sum::<usize>()
     }
 }
 
@@ -2940,7 +3028,7 @@ mod tests {
             Box::new(Field::new("item", DataType::UInt64, false)),
         )
         .to_array();
-        let list_array = list_array_ref.as_any().downcast_ref::<ListArray>().unwrap();
+        let list_array = as_list_array(&list_array_ref).unwrap();
 
         assert!(list_array.is_null(0));
         assert_eq!(list_array.len(), 1);
@@ -2959,7 +3047,7 @@ mod tests {
         )
         .to_array();
 
-        let list_array = list_array_ref.as_any().downcast_ref::<ListArray>().unwrap();
+        let list_array = as_list_array(&list_array_ref)?;
         assert_eq!(list_array.len(), 1);
         assert_eq!(list_array.values().len(), 3);
 
@@ -3128,7 +3216,7 @@ mod tests {
         ];
 
         let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
-        let array = as_dictionary_array::<Int32Type>(&array);
+        let array = as_dictionary_array::<Int32Type>(&array).unwrap();
         let values_array = as_string_array(array.values()).unwrap();
 
         let values = array
@@ -3193,6 +3281,36 @@ mod tests {
         // thus the size of the enum appears to as as well
 
         assert_eq!(std::mem::size_of::<ScalarValue>(), 48);
+    }
+
+    #[test]
+    fn memory_size() {
+        let sv = ScalarValue::Binary(Some(Vec::with_capacity(10)));
+        assert_eq!(sv.size(), std::mem::size_of::<ScalarValue>() + 10,);
+        let sv_size = sv.size();
+
+        let mut v = Vec::with_capacity(10);
+        // do NOT clone `sv` here because this may shrink the vector capacity
+        v.push(sv);
+        assert_eq!(v.capacity(), 10);
+        assert_eq!(
+            ScalarValue::size_of_vec(&v),
+            std::mem::size_of::<Vec<ScalarValue>>()
+                + (9 * std::mem::size_of::<ScalarValue>())
+                + sv_size,
+        );
+
+        let mut s = HashSet::with_capacity(0);
+        // do NOT clone `sv` here because this may shrink the vector capacity
+        s.insert(v.pop().unwrap());
+        // hashsets may easily grow during insert, so capacity is dynamic
+        let s_capacity = s.capacity();
+        assert_eq!(
+            ScalarValue::size_of_hashset(&s),
+            std::mem::size_of::<HashSet<ScalarValue>>()
+                + ((s_capacity - 1) * std::mem::size_of::<ScalarValue>())
+                + sv_size,
+        );
     }
 
     #[test]
@@ -3758,7 +3876,7 @@ mod tests {
         let nl2 = ScalarValue::new_list(Some(vec![s1]), s0.get_datatype());
         // iter_to_array for list-of-struct
         let array = ScalarValue::iter_to_array(vec![nl0, nl1, nl2]).unwrap();
-        let array = array.as_any().downcast_ref::<ListArray>().unwrap();
+        let array = as_list_array(&array).unwrap();
 
         // Construct expected array with array builders
         let field_a_builder = StringBuilder::with_capacity(4, 1024);
@@ -3922,7 +4040,7 @@ mod tests {
         );
 
         let array = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();
-        let array = array.as_any().downcast_ref::<ListArray>().unwrap();
+        let array = as_list_array(&array).unwrap();
 
         // Construct expected array with array builders
         let inner_builder = Int32Array::builder(8);

@@ -19,13 +19,13 @@
 
 use arrow::{
     array::{
-        Array, ArrayRef, BinaryArray, GenericBinaryArray, GenericStringArray,
-        OffsetSizeTrait, StringArray,
+        Array, ArrayRef, BinaryArray, GenericStringArray, OffsetSizeTrait, StringArray,
     },
     datatypes::DataType,
 };
 use blake2::{Blake2b512, Blake2s256, Digest};
 use blake3::Hasher as Blake3;
+use datafusion_common::cast::as_generic_binary_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -134,15 +134,7 @@ impl DigestAlgorithm {
     where
         T: OffsetSizeTrait,
     {
-        let input_value = value
-            .as_any()
-            .downcast_ref::<GenericBinaryArray<T>>()
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "could not cast value to {}",
-                    type_name::<GenericBinaryArray<T>>()
-                ))
-            })?;
+        let input_value = as_generic_binary_array::<T>(value)?;
         let array: ArrayRef = match self {
             Self::Md5 => digest_to_array!(Md5, input_value),
             Self::Sha224 => digest_to_array!(Sha224, input_value),

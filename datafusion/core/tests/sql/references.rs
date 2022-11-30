@@ -122,7 +122,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
 
 #[tokio::test]
 async fn test_partial_qualified_name() -> Result<()> {
-    let ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id", true)?;
     let sql = "SELECT t1.t1_id, t1_name FROM public.t1";
     let expected = vec![
         "+-------+---------+",

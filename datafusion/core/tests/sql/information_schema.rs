@@ -26,6 +26,8 @@ use datafusion::{
 };
 use datafusion_expr::Expr;
 
+use rstest::rstest;
+
 use super::*;
 
 #[tokio::test]
@@ -240,16 +242,20 @@ async fn information_schema_show_tables_no_information_schema() {
     assert_eq!(err.to_string(), "Error during planning: SHOW TABLES is not supported unless information_schema is enabled");
 }
 
+#[rstest]
+#[case("datafusion.public.some_table")]
+#[case("public.some_table")]
+#[case("some_table")]
 #[tokio::test]
-async fn information_schema_describe_table() {
+async fn information_schema_describe_table(#[case] table_name: &str) {
     let ctx =
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
-    let sql = "CREATE OR REPLACE TABLE y AS VALUES (1,2),(3,4);";
-    ctx.sql(sql).await.unwrap();
+    let sql = format!("CREATE OR REPLACE TABLE {table_name} AS VALUES (1,2),(3,4);");
+    ctx.sql(sql.as_str()).await.unwrap();
 
-    let sql_all = "describe y;";
-    let results_all = execute_to_batches(&ctx, sql_all).await;
+    let sql_all = format!("DESCRIBE {table_name};");
+    let results_all = execute_to_batches(&ctx, sql_all.as_str()).await;
 
     let expected = vec![
         "+-------------+-----------+-------------+",
@@ -692,24 +698,27 @@ async fn show_all() {
 
     // Has all the default values, should be in order by name
     let expected = vec![
-        "+-------------------------------------------------+---------+",
-        "| name                                            | setting |",
-        "+-------------------------------------------------+---------+",
-        "| datafusion.catalog.location                     | NULL    |",
-        "| datafusion.catalog.type                         | NULL    |",
-        "| datafusion.execution.batch_size                 | 8192    |",
-        "| datafusion.execution.coalesce_batches           | true    |",
-        "| datafusion.execution.coalesce_target_batch_size | 4096    |",
-        "| datafusion.execution.parquet.enable_page_index  | false   |",
-        "| datafusion.execution.parquet.pushdown_filters   | false   |",
-        "| datafusion.execution.parquet.reorder_filters    | false   |",
-        "| datafusion.execution.time_zone                  | +00:00  |",
-        "| datafusion.explain.logical_plan_only            | false   |",
-        "| datafusion.explain.physical_plan_only           | false   |",
-        "| datafusion.optimizer.filter_null_join_keys      | false   |",
-        "| datafusion.optimizer.max_passes                 | 3       |",
-        "| datafusion.optimizer.skip_failed_rules          | true    |",
-        "+-------------------------------------------------+---------+",
+        "+-----------------------------------------------------------+---------+",
+        "| name                                                      | setting |",
+        "+-----------------------------------------------------------+---------+",
+        "| datafusion.catalog.location                               | NULL    |",
+        "| datafusion.catalog.type                                   | NULL    |",
+        "| datafusion.execution.batch_size                           | 8192    |",
+        "| datafusion.execution.coalesce_batches                     | true    |",
+        "| datafusion.execution.coalesce_target_batch_size           | 4096    |",
+        "| datafusion.execution.parquet.enable_page_index            | false   |",
+        "| datafusion.execution.parquet.pushdown_filters             | false   |",
+        "| datafusion.execution.parquet.reorder_filters              | false   |",
+        "| datafusion.execution.time_zone                            | +00:00  |",
+        "| datafusion.explain.logical_plan_only                      | false   |",
+        "| datafusion.explain.physical_plan_only                     | false   |",
+        "| datafusion.optimizer.filter_null_join_keys                | false   |",
+        "| datafusion.optimizer.hash_join_single_partition_threshold | 1048576 |",
+        "| datafusion.optimizer.max_passes                           | 3       |",
+        "| datafusion.optimizer.prefer_hash_join                     | true    |",
+        "| datafusion.optimizer.skip_failed_rules                    | true    |",
+        "| datafusion.optimizer.top_down_join_key_reordering         | true    |",
+        "+-----------------------------------------------------------+---------+",
     ];
 
     assert_batches_eq!(expected, &results);

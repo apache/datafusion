@@ -20,7 +20,10 @@
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
 use sqlparser::{
-    ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
+    ast::{
+        ColumnDef, ColumnOptionDef, ObjectName, Statement as SQLStatement,
+        TableConstraint,
+    },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
@@ -62,7 +65,7 @@ pub struct CreateExternalTable {
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
-    /// File compression type (GZIP, BZIP2)
+    /// File compression type (GZIP, BZIP2, XZ)
     pub file_compression_type: String,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
@@ -84,7 +87,7 @@ impl fmt::Display for CreateExternalTable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DescribeTable {
     /// Table name
-    pub table_name: String,
+    pub table_name: ObjectName,
 }
 
 /// DataFusion Statement representations.
@@ -200,11 +203,7 @@ impl<'a> DFParser<'a> {
 
     pub fn parse_describe(&mut self) -> Result<Statement, ParserError> {
         let table_name = self.parser.parse_object_name()?;
-
-        let des = DescribeTable {
-            table_name: table_name.to_string(),
-        };
-        Ok(Statement::DescribeTable(des))
+        Ok(Statement::DescribeTable(DescribeTable { table_name }))
     }
 
     /// Parse a SQL CREATE statement
@@ -387,7 +386,7 @@ impl<'a> DFParser<'a> {
     fn parse_file_compression_type(&mut self) -> Result<String, ParserError> {
         match self.parser.next_token() {
             Token::Word(w) => parse_file_compression_type(&w.value),
-            unexpected => self.expected("one of GZIP, BZIP2", unexpected),
+            unexpected => self.expected("one of GZIP, BZIP2, XZ", unexpected),
         }
     }
 
@@ -586,6 +585,7 @@ mod tests {
         let sqls = vec![
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE GZIP LOCATION 'foo.csv'", "GZIP"),
             ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE BZIP2 LOCATION 'foo.csv'", "BZIP2"),
+            ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV COMPRESSION TYPE XZ LOCATION 'foo.csv'", "XZ"),
         ];
         for (sql, file_compression_type) in sqls {
             let expected = Statement::CreateExternalTable(CreateExternalTable {

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fs::create_dir_all;
 use std::io::Write;
 
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
@@ -339,6 +340,73 @@ async fn create_external_table_with_timestamps() {
         "+--------+-------------------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
+}
+
+#[tokio::test]
+async fn create_partitioned_external_table() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let data0 = "Jorge,2018-12-13T12:12:10.011Z";
+    let data1 = "Andrew,2018-11-13T17:11:10.011Z";
+
+    let tmp_dir = TempDir::new().unwrap();
+
+    // scope to ensure the file is closed and written
+    {
+        let part0 = tmp_dir.path().join("c_date=2018-12-13");
+        let file_path0 = part0.join("timestamps.csv");
+        create_dir_all(part0).expect("creating part dir");
+        File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&file_path0)
+            .expect("creating temp file")
+            .write_all(data0.as_bytes())
+            .expect("writing data");
+
+        let part1 = tmp_dir.path().join("c_date=2018-11-13");
+        let file_path1 = part1.join("timestamps.csv");
+        create_dir_all(part1).expect("creating part dir");
+        File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&file_path1)
+            .expect("creating temp file")
+            .write_all(data1.as_bytes())
+            .expect("writing data");
+    }
+
+    let sql = format!(
+        "CREATE EXTERNAL TABLE csv_with_timestamps (
+                  name VARCHAR,
+                  ts TIMESTAMP,
+                  c_date DATE,
+              )
+              STORED AS CSV
+              PARTITIONED BY (c_date)
+              LOCATION '{}'
+              ",
+        tmp_dir.path().to_str().expect("path is utf8")
+    );
+
+    plan_and_collect(&ctx, &sql)
+        .await
+        .expect("Executing CREATE EXTERNAL TABLE");
+
+    let sql = "SELECT * from csv_with_timestamps where c_date='2018-11-13'";
+    let result = plan_and_collect(&ctx, sql).await.unwrap();
+    let expected = vec![
+        "+--------+-------------------------+------------+",
+        "| name   | ts                      | c_date     |",
+        "+--------+-------------------------+------------+",
+        "| Andrew | 2018-11-13T17:11:10.011 | 2018-11-13 |",
+        "+--------+-------------------------+------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result);
+
+    Ok(())
 }
 
 #[tokio::test]
