@@ -339,7 +339,6 @@ fn push_down_all_join(
 
     // Extract from OR clause, generate new predicates for both side of join if possible.
     // We only track the unpushable predicates above.
-    // TODO: we just get, but don't remove them from origin expr.
     let or_to_left = extract_or_clauses_for_join(
         &keep_predicates.iter().collect::<Vec<_>>(),
         left.schema(),
