@@ -61,8 +61,8 @@ impl ViewTable {
     }
 
     /// Get definition ref
-    pub fn definition(&self) -> &Option<String> {
-        &self.definition
+    pub fn definition(&self) -> Option<&String> {
+        self.definition.as_ref()
     }
 
     /// Get logical_plan ref

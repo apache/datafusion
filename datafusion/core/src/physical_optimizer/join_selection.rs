@@ -181,8 +181,8 @@ fn swap_reverting_projection(
 }
 
 /// Swaps join sides for filter column indices and produces new JoinFilter
-fn swap_join_filter(filter: &Option<JoinFilter>) -> Option<JoinFilter> {
-    filter.as_ref().map(|filter| {
+fn swap_join_filter(filter: Option<&JoinFilter>) -> Option<JoinFilter> {
+    filter.map(|filter| {
         let column_indices = filter
             .column_indices()
             .iter()
@@ -334,7 +334,7 @@ fn try_collect_left(
                     Arc::clone(left),
                     Arc::clone(right),
                     hash_join.on().to_vec(),
-                    hash_join.filter().clone(),
+                    hash_join.filter().cloned(),
                     hash_join.join_type(),
                     PartitionMode::CollectLeft,
                     hash_join.null_equals_null(),
@@ -345,7 +345,7 @@ fn try_collect_left(
             Arc::clone(left),
             Arc::clone(right),
             hash_join.on().to_vec(),
-            hash_join.filter().clone(),
+            hash_join.filter().cloned(),
             hash_join.join_type(),
             PartitionMode::CollectLeft,
             hash_join.null_equals_null(),
@@ -377,7 +377,7 @@ fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPl
             Arc::clone(left),
             Arc::clone(right),
             hash_join.on().to_vec(),
-            hash_join.filter().clone(),
+            hash_join.filter().cloned(),
             hash_join.join_type(),
             PartitionMode::Partitioned,
             hash_join.null_equals_null(),
