@@ -39,8 +39,8 @@ use log::debug;
 use std::time::Instant;
 
 use super::utils::{
-    adjust_right_output_partitioning, check_join_is_valid,
-    cross_join_equivalence_properties, OnceAsync, OnceFut,
+    adjust_right_output_partitioning, cross_join_equivalence_properties, OnceAsync,
+    OnceFut,
 };
 
 /// Data of the left side
@@ -61,21 +61,11 @@ pub struct CrossJoinExec {
 }
 
 impl CrossJoinExec {
-    /// Tries to create a new [CrossJoinExec].
-    /// # Error
-    /// This function errors when left and right schema's can't be combined
-    pub fn try_new(
-        left: Arc<dyn ExecutionPlan>,
-        right: Arc<dyn ExecutionPlan>,
-    ) -> Result<Self> {
-        let left_schema = left.schema();
-        let right_schema = right.schema();
-        check_join_is_valid(&left_schema, &right_schema, &[])?;
-
+    /// Create a new [CrossJoinExec].
+    pub fn new(left: Arc<dyn ExecutionPlan>, right: Arc<dyn ExecutionPlan>) -> Self {
         let left_schema = left.schema();
         let left_fields = left_schema.fields().iter();
         let right_schema = right.schema();
-
         let right_fields = right_schema.fields().iter();
 
         // left then right
@@ -83,12 +73,12 @@ impl CrossJoinExec {
 
         let schema = Arc::new(Schema::new(all_columns));
 
-        Ok(CrossJoinExec {
+        CrossJoinExec {
             left,
             right,
             schema,
             left_fut: Default::default(),
-        })
+        }
     }
 
     /// left (build) side which gets loaded in memory
@@ -156,10 +146,10 @@ impl ExecutionPlan for CrossJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(CrossJoinExec::try_new(
+        Ok(Arc::new(CrossJoinExec::new(
             children[0].clone(),
             children[1].clone(),
-        )?))
+        )))
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

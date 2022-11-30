@@ -991,7 +991,7 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                     let left = self.create_initial_plan(left, session_state).await?;
                     let right = self.create_initial_plan(right, session_state).await?;
-                    Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
+                    Ok(Arc::new(CrossJoinExec::new(left, right)))
                 }
                 LogicalPlan::Subquery(_) => todo!(),
                 LogicalPlan::EmptyRelation(EmptyRelation {
