@@ -45,7 +45,9 @@ use datafusion_common::{
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::builder::{project_with_alias, with_alias};
+use datafusion_expr::logical_plan::builder::{
+    project_with_alias, with_alias, wrap_projection_for_join_if_necessary,
+};
 use datafusion_expr::logical_plan::Join as HashJoin;
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
@@ -3028,32 +3030,6 @@ fn extract_join_keys(
     }
 
     Ok(())
-}
-
-/// Wrap projection for a plan, if the join keys contains normal expression.
-fn wrap_projection_for_join_if_necessary(
-    join_keys: &[Expr],
-    input: LogicalPlan,
-) -> Result<(LogicalPlan, bool)> {
-    let expr_join_keys = join_keys
-        .iter()
-        .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))
-        .cloned()
-        .collect::<HashSet<Expr>>();
-
-    let need_project = !expr_join_keys.is_empty();
-    let plan = if need_project {
-        let mut projection = vec![Expr::Wildcard];
-        projection.extend(expr_join_keys.into_iter());
-
-        LogicalPlanBuilder::from(input)
-            .project(projection)?
-            .build()?
-    } else {
-        input
-    };
-
-    Ok((plan, need_project))
 }
 
 /// Ensure any column reference of the expression is unambiguous.

@@ -42,8 +42,9 @@ use datafusion_common::{
     ToDFSchema,
 };
 use std::any::Any;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -1010,6 +1011,32 @@ pub fn table_scan(
     let table_schema = Arc::new(table_schema.clone());
     let table_source = Arc::new(LogicalTableSource { table_schema });
     LogicalPlanBuilder::scan(name.unwrap_or(UNNAMED_TABLE), table_source, projection)
+}
+
+/// Wrap projection for a plan, if the join keys contains normal expression.
+pub fn wrap_projection_for_join_if_necessary(
+    join_keys: &[Expr],
+    input: LogicalPlan,
+) -> Result<(LogicalPlan, bool)> {
+    let expr_join_keys = join_keys
+        .iter()
+        .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))
+        .cloned()
+        .collect::<HashSet<Expr>>();
+
+    let need_project = !expr_join_keys.is_empty();
+    let plan = if need_project {
+        let mut projection = vec![Expr::Wildcard];
+        projection.extend(expr_join_keys.into_iter());
+
+        LogicalPlanBuilder::from(input)
+            .project(projection)?
+            .build()?
+    } else {
+        input
+    };
+
+    Ok((plan, need_project))
 }
 
 /// Basic TableSource implementation intended for use in tests and documentation. It is expected
