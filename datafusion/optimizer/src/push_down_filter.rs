@@ -2294,4 +2294,41 @@ mod tests {
         \n      TableScan: test1";
         assert_optimized_plan_eq(&plan, expected)
     }
+
+    #[test]
+    // Originally global state which can help to avoid duplicate Filters been generated and pushed down.
+    // Now the global state is removed. Need to double confirm that avoid duplicate Filters.
+    fn test_extract_twice_or_clause() -> Result<()> {
+        // select * from test,test1 where (test.a = test1.a and test.b > 1) or (test.b = test1.b and test.c < 10);
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test1")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a").alias("d"), col("a").alias("e")])?
+            .build()?;
+        let filter = or(
+            and(col("a").eq(col("d")), col("b").gt(lit(1u32))),
+            and(col("b").eq(col("e")), col("c").lt(lit(10u32))),
+        );
+        let plan = LogicalPlanBuilder::from(left)
+            .cross_join(&right)?
+            .filter(filter)?
+            .build()?;
+
+        let optimized_plan = PushDownFilter::new()
+            .optimize(&plan, &mut OptimizerConfig::new())
+            .expect("failed to optimize plan");
+
+        let expected = "\
+        Filter: (test.a = d OR test.b = e) AND (test.a = d OR test.c < UInt32(10)) AND (test.b > UInt32(1) OR test.b = e)\
+        \n  CrossJoin:\
+        \n    Projection: test.a, test.b, test.c\
+        \n      Filter: test.b > UInt32(1) OR test.c < UInt32(10)\
+        \n        TableScan: test\
+        \n    Projection: test1.a AS d, test1.a AS e\
+        \n      TableScan: test1";
+        assert_optimized_plan_eq(&optimized_plan, expected)
+    }
 }
