@@ -63,13 +63,14 @@ pub struct CrossJoinExec {
 impl CrossJoinExec {
     /// Create a new [CrossJoinExec].
     pub fn new(left: Arc<dyn ExecutionPlan>, right: Arc<dyn ExecutionPlan>) -> Self {
-        let left_schema = left.schema();
-        let left_fields = left_schema.fields().iter();
-        let right_schema = right.schema();
-        let right_fields = right_schema.fields().iter();
-
         // left then right
-        let all_columns = left_fields.chain(right_fields).cloned().collect();
+        let all_columns = {
+            let left_schema = left.schema();
+            let right_schema = right.schema();
+            let left_fields = left_schema.fields().iter();
+            let right_fields = right_schema.fields().iter();
+            left_fields.chain(right_fields).cloned().collect()
+        };
 
         let schema = Arc::new(Schema::new(all_columns));
 
