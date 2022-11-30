@@ -1027,7 +1027,9 @@ impl TreeNodeRewritable for PlanWithKeyRequirements {
 
 #[cfg(test)]
 mod tests {
+    use crate::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use crate::physical_plan::filter::FilterExec;
+    use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_expr::logical_plan::JoinType;
@@ -1064,6 +1066,12 @@ mod tests {
     }
 
     fn parquet_exec() -> Arc<ParquetExec> {
+        parquet_exec_with_sort(None)
+    }
+
+    fn parquet_exec_with_sort(
+        output_ordering: Option<Vec<PhysicalSortExpr>>,
+    ) -> Arc<ParquetExec> {
         Arc::new(ParquetExec::new(
             FileScanConfig {
                 object_store_url: ObjectStoreUrl::parse("test:///").unwrap(),
@@ -1074,7 +1082,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
-                output_ordering: None,
+                output_ordering,
             },
             None,
             None,
@@ -2137,6 +2145,35 @@ mod tests {
             "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, join);
+        Ok(())
+    }
+
+    #[test]
+    fn merge_does_not_need_sort() -> Result<()> {
+        // see https://github.com/apache/arrow-datafusion/issues/4331
+        let schema = schema();
+        let sort_key = vec![PhysicalSortExpr {
+            expr: col("a", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+
+        // Scan some sorted parquet files
+        let exec = parquet_exec_with_sort(Some(sort_key.clone()));
+
+        // CoalesceBatchesExec to mimic behavior after a filter
+        let exec = Arc::new(CoalesceBatchesExec::new(exec, 4096));
+
+        // Merge from multiple parquet files and keep the data sorted
+        let exec = Arc::new(SortPreservingMergeExec::new(sort_key, exec));
+
+        // The optimizer should not add an additional SortExec as the
+        // data is already sorted
+        let expected = &[
+            "SortPreservingMergeExec: [a@0 ASC]",
+            "CoalesceBatchesExec: target_batch_size=4096",
+            "ParquetExec: limit=None, partitions=[x], output_ordering=[a@0 ASC], projection=[a, b, c, d, e]",
+        ];
+        assert_optimized!(expected, exec);
         Ok(())
     }
 }

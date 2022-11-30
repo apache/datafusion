@@ -148,7 +148,9 @@ pub struct HashJoinExec {
 #[derive(Debug)]
 struct HashJoinMetrics {
     /// Total time for joining probe-side batches to the build-side batches
-    join_time: metrics::Time,
+    probe_time: metrics::Time,
+    /// Total time for building hashmap
+    build_time: metrics::Time,
     /// Number of batches consumed by this operator
     input_batches: metrics::Count,
     /// Number of rows consumed by this operator
@@ -161,7 +163,9 @@ struct HashJoinMetrics {
 
 impl HashJoinMetrics {
     pub fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
-        let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
+        let probe_time = MetricBuilder::new(metrics).subset_time("probe_time", partition);
+
+        let build_time = MetricBuilder::new(metrics).subset_time("build_time", partition);
 
         let input_batches =
             MetricBuilder::new(metrics).counter("input_batches", partition);
@@ -174,7 +178,8 @@ impl HashJoinMetrics {
         let output_rows = MetricBuilder::new(metrics).output_rows(partition);
 
         Self {
-            join_time,
+            probe_time,
+            build_time,
             input_batches,
             input_rows,
             output_batches,
@@ -1320,10 +1325,12 @@ impl HashJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+        let build_timer = self.join_metrics.build_time.timer();
         let left_data = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
             Err(e) => return Poll::Ready(Some(Err(e))),
         };
+        build_timer.done();
 
         let visited_left_side = self.visited_left_side.get_or_insert_with(|| {
             let num_rows = left_data.1.num_rows();
@@ -1348,7 +1355,7 @@ impl HashJoinStream {
                 Some(Ok(batch)) => {
                     self.join_metrics.input_batches.add(1);
                     self.join_metrics.input_rows.add(batch.num_rows());
-                    let timer = self.join_metrics.join_time.timer();
+                    let timer = self.join_metrics.probe_time.timer();
 
                     // get the matched two indices for the on condition
                     let left_right_indices = build_join_indices(
@@ -1361,10 +1368,8 @@ impl HashJoinStream {
                         &self.null_equals_null,
                     );
 
-                    match left_right_indices {
+                    let result = match left_right_indices {
                         Ok((left_side, right_side)) => {
-                            timer.done();
-
                             // set the left bitmap
                             // and only left, full, left semi, left anti need the left bitmap
                             if need_produce_result_in_final(self.join_type) {
@@ -1399,10 +1404,12 @@ impl HashJoinStream {
                                 "Build left right indices error".to_string(),
                             )))
                         }
-                    }
+                    };
+                    timer.done();
+                    result
                 }
                 None => {
-                    let timer = self.join_metrics.join_time.timer();
+                    let timer = self.join_metrics.probe_time.timer();
                     if need_produce_result_in_final(self.join_type) && !self.is_exhausted
                     {
                         // use the global left bitmap to produce the left indices and right indices

@@ -21,7 +21,7 @@ use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::utils::{
-    exprlist_to_fields, grouping_set_expr_count, grouping_set_to_exprlist,
+    exprlist_to_fields, from_plan, grouping_set_expr_count, grouping_set_to_exprlist,
 };
 use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -348,6 +348,13 @@ impl LogicalPlan {
         };
         self.accept(&mut visitor)?;
         Ok(visitor.using_columns)
+    }
+
+    pub fn with_new_inputs(
+        &self,
+        inputs: &[LogicalPlan],
+    ) -> Result<LogicalPlan, DataFusionError> {
+        from_plan(self, &self.expressions(), inputs)
     }
 }
 

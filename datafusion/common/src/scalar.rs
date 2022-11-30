@@ -2297,7 +2297,7 @@ impl ScalarValue {
     /// Estimate size if bytes including `Self`. For values with internal containers such as `String`
     /// includes the allocated size (`capacity`) rather than the current length (`len`)
     pub fn size(&self) -> usize {
-        std::mem::size_of_val(&self)
+        std::mem::size_of_val(self)
             + match self {
                 ScalarValue::Null
                 | ScalarValue::Boolean(_)
@@ -2364,7 +2364,8 @@ impl ScalarValue {
     ///
     /// Includes the size of the [`Vec`] container itself.
     pub fn size_of_vec(vec: &Vec<Self>) -> usize {
-        (std::mem::size_of::<ScalarValue>() * vec.capacity())
+        std::mem::size_of_val(vec)
+            + (std::mem::size_of::<ScalarValue>() * vec.capacity())
             + vec
                 .iter()
                 .map(|sv| sv.size() - std::mem::size_of_val(sv))
@@ -2375,7 +2376,8 @@ impl ScalarValue {
     ///
     /// Includes the size of the [`HashSet`] container itself.
     pub fn size_of_hashset<S>(set: &HashSet<Self, S>) -> usize {
-        (std::mem::size_of::<ScalarValue>() * set.capacity())
+        std::mem::size_of_val(set)
+            + (std::mem::size_of::<ScalarValue>() * set.capacity())
             + set
                 .iter()
                 .map(|sv| sv.size() - std::mem::size_of_val(sv))
@@ -3279,6 +3281,36 @@ mod tests {
         // thus the size of the enum appears to as as well
 
         assert_eq!(std::mem::size_of::<ScalarValue>(), 48);
+    }
+
+    #[test]
+    fn memory_size() {
+        let sv = ScalarValue::Binary(Some(Vec::with_capacity(10)));
+        assert_eq!(sv.size(), std::mem::size_of::<ScalarValue>() + 10,);
+        let sv_size = sv.size();
+
+        let mut v = Vec::with_capacity(10);
+        // do NOT clone `sv` here because this may shrink the vector capacity
+        v.push(sv);
+        assert_eq!(v.capacity(), 10);
+        assert_eq!(
+            ScalarValue::size_of_vec(&v),
+            std::mem::size_of::<Vec<ScalarValue>>()
+                + (9 * std::mem::size_of::<ScalarValue>())
+                + sv_size,
+        );
+
+        let mut s = HashSet::with_capacity(0);
+        // do NOT clone `sv` here because this may shrink the vector capacity
+        s.insert(v.pop().unwrap());
+        // hashsets may easily grow during insert, so capacity is dynamic
+        let s_capacity = s.capacity();
+        assert_eq!(
+            ScalarValue::size_of_hashset(&s),
+            std::mem::size_of::<HashSet<ScalarValue>>()
+                + ((s_capacity - 1) * std::mem::size_of::<ScalarValue>())
+                + sv_size,
+        );
     }
 
     #[test]

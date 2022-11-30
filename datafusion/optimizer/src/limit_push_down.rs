@@ -19,7 +19,6 @@
 //! It will push down through projection, limits (taking the smaller limit)
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
-use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
     logical_plan::{
         Join, JoinType, Limit, LogicalPlan, Projection, Sort, TableScan, Union,
@@ -131,7 +130,7 @@ impl OptimizerRule for LimitPushDown {
                     fetch: scan.fetch.map(|x| std::cmp::min(x, limit)).or(Some(limit)),
                     projected_schema: scan.projected_schema.clone(),
                 });
-                from_plan(plan, &plan.expressions(), &[new_input])?
+                plan.with_new_inputs(&[new_input])?
             }
 
             LogicalPlan::Projection(projection) => {
@@ -164,7 +163,7 @@ impl OptimizerRule for LimitPushDown {
                     inputs: new_inputs,
                     schema: union.schema.clone(),
                 });
-                from_plan(plan, &plan.expressions(), &[union])?
+                plan.with_new_inputs(&[union])?
             }
 
             LogicalPlan::CrossJoin(cross_join) => {
@@ -180,12 +179,12 @@ impl OptimizerRule for LimitPushDown {
                     fetch: Some(fetch + skip),
                     input: Arc::new(right.clone()),
                 });
-                let new_input = LogicalPlan::CrossJoin(CrossJoin {
+                let new_cross_join = LogicalPlan::CrossJoin(CrossJoin {
                     left: Arc::new(new_left),
                     right: Arc::new(new_right),
                     schema: plan.schema().clone(),
                 });
-                from_plan(plan, &plan.expressions(), &[new_input])?
+                plan.with_new_inputs(&[new_cross_join])?
             }
 
             LogicalPlan::Join(join) => {
@@ -195,19 +194,19 @@ impl OptimizerRule for LimitPushDown {
                     JoinType::Right => push_down_join(join, None, Some(limit)),
                     _ => push_down_join(join, None, None),
                 };
-                from_plan(plan, &plan.expressions(), &[new_join])?
+                plan.with_new_inputs(&[new_join])?
             }
 
             LogicalPlan::Sort(sort) => {
                 let sort_fetch = skip + fetch;
-                let new_input = LogicalPlan::Sort(Sort {
+                let new_sort = LogicalPlan::Sort(Sort {
                     expr: sort.expr.clone(),
                     input: Arc::new((*sort.input).clone()),
                     fetch: Some(
                         sort.fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch),
                     ),
                 });
-                from_plan(plan, &plan.expressions(), &[new_input])?
+                plan.with_new_inputs(&[new_sort])?
             }
             _ => plan.clone(),
         };
