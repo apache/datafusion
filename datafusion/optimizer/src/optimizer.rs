@@ -25,11 +25,11 @@ use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
-use crate::filter_push_down::FilterPushDown;
 use crate::inline_table_scan::InlineTableScan;
 use crate::limit_push_down::LimitPushDown;
 use crate::projection_push_down::ProjectionPushDown;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
+use crate::push_down_filter::PushDownFilter;
 use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
@@ -184,8 +184,9 @@ impl Optimizer {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
         rules.push(Arc::new(EliminateOuterJoin::new()));
-        rules.push(Arc::new(FilterPushDown::new()));
+        // Filters can't be pushed down past Limits, we should do PushDownFilter after LimitPushDown
         rules.push(Arc::new(LimitPushDown::new()));
+        rules.push(Arc::new(PushDownFilter::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
 
         // The previous optimizations added expressions and projections,
