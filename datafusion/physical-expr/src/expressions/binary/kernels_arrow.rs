@@ -377,7 +377,7 @@ mod tests {
     fn create_decimal_array(
         array: &[Option<i128>],
         precision: u8,
-        scale: u8,
+        scale: i8,
     ) -> Decimal128Array {
         let mut decimal_builder = Decimal128Builder::with_capacity(array.len());
 

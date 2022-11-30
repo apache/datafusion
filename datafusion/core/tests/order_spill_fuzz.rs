@@ -29,10 +29,9 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::{SessionConfig, SessionContext};
-use rand::prelude::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::Rng;
 use std::sync::Arc;
-use test_utils::{add_empty_batches, batches_to_vec, partitions_to_sorted_vec};
+use test_utils::{batches_to_vec, partitions_to_sorted_vec, stagger_batch_with_seed};
 
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
@@ -116,19 +115,7 @@ fn make_staggered_batches(len: usize) -> Vec<RecordBatch> {
     let input = Int32Array::from_iter_values(input.into_iter());
 
     // split into several record batches
-    let mut remainder =
+    let batch =
         RecordBatch::try_from_iter(vec![("x", Arc::new(input) as ArrayRef)]).unwrap();
-
-    let mut batches = vec![];
-
-    // use a random number generator to pick a random sized output
-    let mut rng = StdRng::seed_from_u64(42);
-    while remainder.num_rows() > 0 {
-        let batch_size = rng.gen_range(0..remainder.num_rows() + 1);
-
-        batches.push(remainder.slice(0, batch_size));
-        remainder = remainder.slice(batch_size, remainder.num_rows() - batch_size);
-    }
-
-    add_empty_batches(batches, &mut rng)
+    stagger_batch_with_seed(batch, 42)
 }

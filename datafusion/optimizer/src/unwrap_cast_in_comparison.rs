@@ -752,7 +752,7 @@ mod tests {
         lit(ScalarValue::Int64(None))
     }
 
-    fn lit_decimal(value: i128, precision: u8, scale: u8) -> Expr {
+    fn lit_decimal(value: i128, precision: u8, scale: i8) -> Expr {
         lit(ScalarValue::Decimal128(Some(value), precision, scale))
     }
 
@@ -765,7 +765,7 @@ mod tests {
         lit(ScalarValue::TimestampNanosecond(Some(ts), utc))
     }
 
-    fn null_decimal(precision: u8, scale: u8) -> Expr {
+    fn null_decimal(precision: u8, scale: i8) -> Expr {
         lit(ScalarValue::Decimal128(None, precision, scale))
     }
 

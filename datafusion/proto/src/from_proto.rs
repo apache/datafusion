@@ -265,9 +265,9 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 protobuf::IntervalUnit::try_from(interval_unit)?.into(),
             ),
             arrow_type::ArrowTypeEnum::Decimal(protobuf::Decimal {
-                whole,
-                fractional,
-            }) => DataType::Decimal128(*whole as u8, *fractional as u8),
+                precision,
+                scale,
+            }) => DataType::Decimal128(*precision as u8, *scale as i8),
             arrow_type::ArrowTypeEnum::List(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
@@ -579,7 +579,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 Self::Decimal128(
                     Some(i128::from_be_bytes(array)),
                     val.p as u8,
-                    val.s as u8,
+                    val.s as i8,
                 )
             }
             Value::Date64Value(v) => Self::Date64(Some(*v)),

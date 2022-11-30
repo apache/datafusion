@@ -705,8 +705,9 @@ enum IntervalUnit{
 }
 
 message Decimal{
-    uint64 whole = 1;
-    uint64 fractional = 2;
+  reserved 1, 2;
+  uint32 precision = 3;
+  int32 scale = 4;
 }
 
 message List{

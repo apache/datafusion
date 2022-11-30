@@ -118,6 +118,7 @@ impl ExternalSorter {
     ) -> Result<()> {
         if input.num_rows() > 0 {
             let size = batch_byte_size(&input);
+            debug!("Inserting {} rows of {} bytes", input.num_rows(), size);
             self.try_grow(size).await?;
             self.metrics.mem_used().add(size);
             let mut in_mem_batches = self.in_mem_batches.lock().await;
@@ -272,6 +273,13 @@ impl MemoryConsumer for ExternalSorter {
     }
 
     async fn spill(&self) -> Result<usize> {
+        let partition = self.partition_id();
+        let mut in_mem_batches = self.in_mem_batches.lock().await;
+        // we could always get a chance to free some memory as long as we are holding some
+        if in_mem_batches.len() == 0 {
+            return Ok(0);
+        }
+
         debug!(
             "{}[{}] spilling sort data of {} to disk while inserting ({} time(s) so far)",
             self.name(),
@@ -279,13 +287,6 @@ impl MemoryConsumer for ExternalSorter {
             self.used(),
             self.spill_count()
         );
-
-        let partition = self.partition_id();
-        let mut in_mem_batches = self.in_mem_batches.lock().await;
-        // we could always get a chance to free some memory as long as we are holding some
-        if in_mem_batches.len() == 0 {
-            return Ok(0);
-        }
 
         let tracking_metrics = self
             .metrics_set
@@ -916,7 +917,7 @@ async fn do_sort(
         schema.clone(),
         expr,
         metrics_set,
-        Arc::new(context.session_config()),
+        Arc::new(context.session_config().clone()),
         context.runtime_env(),
         fetch,
     );
@@ -953,7 +954,7 @@ mod tests {
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_primitive_array, as_string_array};
     use futures::FutureExt;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::HashMap;
 
     #[tokio::test]
     async fn test_in_mem_sort() -> Result<()> {
@@ -1150,7 +1151,7 @@ mod tests {
     async fn test_sort_metadata() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let field_metadata: BTreeMap<String, String> =
+        let field_metadata: HashMap<String, String> =
             vec![("foo".to_string(), "bar".to_string())]
                 .into_iter()
                 .collect();
@@ -1160,7 +1161,7 @@ mod tests {
                 .collect();
 
         let mut field = Field::new("field_name", DataType::UInt64, true);
-        field.set_metadata(Some(field_metadata.clone()));
+        field.set_metadata(field_metadata.clone());
         let schema = Schema::new_with_metadata(vec![field], schema_metadata.clone());
         let schema = Arc::new(schema);
 
@@ -1191,10 +1192,7 @@ mod tests {
         assert_eq!(&vec![expected_batch], &result);
 
         // explicitlty ensure the metadata is present
-        assert_eq!(
-            result[0].schema().fields()[0].metadata(),
-            Some(&field_metadata)
-        );
+        assert_eq!(result[0].schema().fields()[0].metadata(), &field_metadata);
         assert_eq!(result[0].schema().metadata(), &schema_metadata);
 
         Ok(())

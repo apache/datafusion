@@ -801,10 +801,10 @@ pub struct Timestamp {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Decimal {
-    #[prost(uint64, tag = "1")]
-    pub whole: u64,
-    #[prost(uint64, tag = "2")]
-    pub fractional: u64,
+    #[prost(uint32, tag = "3")]
+    pub precision: u32,
+    #[prost(int32, tag = "4")]
+    pub scale: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct List {

@@ -30,8 +30,7 @@ use datafusion::physical_plan::{
     sorts::sort_preserving_merge::SortPreservingMergeExec,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
-use rand::{prelude::StdRng, Rng, SeedableRng};
-use test_utils::{add_empty_batches, batches_to_vec, partitions_to_sorted_vec};
+use test_utils::{batches_to_vec, partitions_to_sorted_vec, stagger_batch_with_seed};
 
 #[tokio::test]
 async fn test_merge_2() {
@@ -151,21 +150,10 @@ fn make_staggered_batches(low: i32, high: i32, seed: u64) -> Vec<RecordBatch> {
     let input: Int32Array = (low..high).map(Some).collect();
 
     // split into several record batches
-    let mut remainder =
+    let batch =
         RecordBatch::try_from_iter(vec![("x", Arc::new(input) as ArrayRef)]).unwrap();
 
-    let mut batches = vec![];
-
-    // use a random number generator to pick a random sized output
-    let mut rng = StdRng::seed_from_u64(seed);
-    while remainder.num_rows() > 0 {
-        let batch_size = rng.gen_range(0..remainder.num_rows() + 1);
-
-        batches.push(remainder.slice(0, batch_size));
-        remainder = remainder.slice(batch_size, remainder.num_rows() - batch_size);
-    }
-
-    add_empty_batches(batches, &mut rng)
+    stagger_batch_with_seed(batch, seed)
 }
 
 fn concat(mut v1: Vec<RecordBatch>, v2: Vec<RecordBatch>) -> Vec<RecordBatch> {
