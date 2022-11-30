@@ -17,6 +17,7 @@
 
 //! Serialization / Deserialization to Bytes
 use crate::logical_plan::{AsLogicalPlan, LogicalExtensionCodec};
+use crate::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use crate::{from_proto::parse_expr, protobuf};
 use arrow::datatypes::SchemaRef;
 use datafusion::datasource::TableProvider;
@@ -33,6 +34,7 @@ use std::sync::Arc;
 
 // Reexport Bytes which appears in the API
 use datafusion::execution::registry::FunctionRegistry;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 
 mod registry;
@@ -143,14 +145,14 @@ impl Serializeable for Expr {
 
 /// Serialize a LogicalPlan as bytes
 pub fn logical_plan_to_bytes(plan: &LogicalPlan) -> Result<Bytes> {
-    let extension_codec = DefaultExtensionCodec {};
+    let extension_codec = DefaultLogicalExtensionCodec {};
     logical_plan_to_bytes_with_extension_codec(plan, &extension_codec)
 }
 
 /// Serialize a LogicalPlan as json
 #[cfg(feature = "json")]
 pub fn logical_plan_to_json(plan: &LogicalPlan) -> Result<String> {
-    let extension_codec = DefaultExtensionCodec {};
+    let extension_codec = DefaultLogicalExtensionCodec {};
     let protobuf =
         protobuf::LogicalPlanNode::try_from_logical_plan(plan, &extension_codec)
             .map_err(|e| {
@@ -179,7 +181,7 @@ pub fn logical_plan_to_bytes_with_extension_codec(
 pub fn logical_plan_from_json(json: &str, ctx: &SessionContext) -> Result<LogicalPlan> {
     let back: protobuf::LogicalPlanNode = serde_json::from_str(json)
         .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {}", e)))?;
-    let extension_codec = DefaultExtensionCodec {};
+    let extension_codec = DefaultLogicalExtensionCodec {};
     back.try_into_logical_plan(ctx, &extension_codec)
 }
 
@@ -188,7 +190,7 @@ pub fn logical_plan_from_bytes(
     bytes: &[u8],
     ctx: &SessionContext,
 ) -> Result<LogicalPlan> {
-    let extension_codec = DefaultExtensionCodec {};
+    let extension_codec = DefaultLogicalExtensionCodec {};
     logical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
 }
 
@@ -204,10 +206,76 @@ pub fn logical_plan_from_bytes_with_extension_codec(
     protobuf.try_into_logical_plan(ctx, extension_codec)
 }
 
-#[derive(Debug)]
-struct DefaultExtensionCodec {}
+/// Serialize a PhysicalPlan as bytes
+pub fn physical_plan_to_bytes(plan: Arc<dyn ExecutionPlan>) -> Result<Bytes> {
+    let extension_codec = DefaultPhysicalExtensionCodec {};
+    physical_plan_to_bytes_with_extension_codec(plan, &extension_codec)
+}
 
-impl LogicalExtensionCodec for DefaultExtensionCodec {
+/// Serialize a PhysicalPlan as json
+#[cfg(feature = "json")]
+pub fn physical_plan_to_json(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
+    let extension_codec = DefaultPhysicalExtensionCodec {};
+    let protobuf =
+        protobuf::PhysicalPlanNode::try_from_physical_plan(plan, &extension_codec)
+            .map_err(|e| {
+                DataFusionError::Plan(format!("Error serializing plan: {}", e))
+            })?;
+    serde_json::to_string(&protobuf)
+        .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {}", e)))
+}
+
+/// Serialize a PhysicalPlan as bytes, using the provided extension codec
+pub fn physical_plan_to_bytes_with_extension_codec(
+    plan: Arc<dyn ExecutionPlan>,
+    extension_codec: &dyn PhysicalExtensionCodec,
+) -> Result<Bytes> {
+    let protobuf =
+        protobuf::PhysicalPlanNode::try_from_physical_plan(plan, extension_codec)?;
+    let mut buffer = BytesMut::new();
+    protobuf.encode(&mut buffer).map_err(|e| {
+        DataFusionError::Plan(format!("Error encoding protobuf as bytes: {}", e))
+    })?;
+    Ok(buffer.into())
+}
+
+/// Deserialize a PhysicalPlan from json
+#[cfg(feature = "json")]
+pub fn physical_plan_from_json(
+    json: &str,
+    ctx: &SessionContext,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let back: protobuf::PhysicalPlanNode = serde_json::from_str(json)
+        .map_err(|e| DataFusionError::Plan(format!("Error serializing plan: {}", e)))?;
+    let extension_codec = DefaultPhysicalExtensionCodec {};
+    back.try_into_physical_plan(ctx, &ctx.runtime_env(), &extension_codec)
+}
+
+/// Deserialize a PhysicalPlan from bytes
+pub fn physical_plan_from_bytes(
+    bytes: &[u8],
+    ctx: &SessionContext,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let extension_codec = DefaultPhysicalExtensionCodec {};
+    physical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
+}
+
+/// Deserialize a PhysicalPlan from bytes
+pub fn physical_plan_from_bytes_with_extension_codec(
+    bytes: &[u8],
+    ctx: &SessionContext,
+    extension_codec: &dyn PhysicalExtensionCodec,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let protobuf = protobuf::PhysicalPlanNode::decode(bytes).map_err(|e| {
+        DataFusionError::Plan(format!("Error decoding expr as protobuf: {}", e))
+    })?;
+    protobuf.try_into_physical_plan(ctx, &ctx.runtime_env(), extension_codec)
+}
+
+#[derive(Debug)]
+struct DefaultLogicalExtensionCodec {}
+
+impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
     fn try_decode(
         &self,
         _buf: &[u8],
@@ -243,6 +311,32 @@ impl LogicalExtensionCodec for DefaultExtensionCodec {
     ) -> std::result::Result<(), DataFusionError> {
         Err(DataFusionError::NotImplemented(
             "No codec provided to for TableProviders".to_string(),
+        ))
+    }
+}
+
+#[derive(Debug)]
+pub struct DefaultPhysicalExtensionCodec {}
+
+impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[Arc<dyn ExecutionPlan>],
+        _registry: &dyn FunctionRegistry,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Err(DataFusionError::NotImplemented(
+            "PhysicalExtensionCodec is not provided".to_string(),
+        ))
+    }
+
+    fn try_encode(
+        &self,
+        _node: Arc<dyn ExecutionPlan>,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        Err(DataFusionError::NotImplemented(
+            "PhysicalExtensionCodec is not provided".to_string(),
         ))
     }
 }
