@@ -222,7 +222,7 @@ fn find_inner_join(
                 Result::Ok(result)
             };
 
-            // Data type of l and r is same.
+            // Save join keys
             if l_is_left && r_is_right && can_hash(&l.get_type(left_input.schema())?) {
                 join_keys.push((l.clone(), r.clone()));
             } else if r_is_left_and_l_is_right()?
@@ -237,6 +237,7 @@ fn find_inner_join(
             let right_input = rights.remove(i);
             let join_schema = Arc::new(build_join_schema(left_input, &right_input)?);
 
+            // Wrap projection
             let (left_on, right_on): (Vec<Expr>, Vec<Expr>) =
                 join_keys.into_iter().unzip();
             let (new_left_input, _) =
@@ -244,6 +245,7 @@ fn find_inner_join(
             let (new_right_input, _) =
                 wrap_projection_for_join_if_necessary(&right_on, right_input)?;
 
+            // Build new join on    
             let join_on = left_on
                 .iter()
                 .zip(right_on.iter())

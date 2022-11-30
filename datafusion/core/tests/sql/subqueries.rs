@@ -465,7 +465,6 @@ order by value desc;
     \n                  TableScan: supplier projection=[s_suppkey, s_nationkey]\
     \n                Filter: nation.n_name = Utf8(\"GERMANY\")\
     \n                  TableScan: nation projection=[n_nationkey, n_name], partial_filters=[nation.n_name = Utf8(\"GERMANY\")]";
-
     assert_eq!(actual, expected);
 
     // assert data
