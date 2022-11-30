@@ -341,7 +341,19 @@ enum OtherErr<'a> {
 }
 
 impl DataFusionError {
-    /// Get underlying error.
+    /// Get deepest underlying [`DataFusionError`]
+    ///
+    /// [`DatafusionError`]s sometimes form a chain, such as `DatafusionError::ArrowError()` in order to conform
+    /// to the correct error signature. Thus sometimes there is a chain several layers deep that can obscure the
+    /// original error. This function finds the lowest level DataFusionError possible.
+    ///
+    /// For example,  `find_root` will return`DataFusionError::ResourceExhausted` given the input
+    /// ```text
+    /// DataFusionError::ArrowError
+    ///   ArrowError::External
+    ///    Box(DataFusionError::Context)
+    ///      DataFusionError::ResourceExhausted
+    /// ```
     ///
     /// This may be the same as `self`.
     pub fn find_root(&self) -> &Self {
