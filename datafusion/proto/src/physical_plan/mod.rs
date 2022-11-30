@@ -58,7 +58,7 @@ use prost::bytes::BufMut;
 use prost::Message;
 
 use crate::common::proto_error;
-use crate::common::{byte_to_string, str_to_byte};
+use crate::common::{csv_delimiter_to_string, str_to_byte};
 use crate::from_proto::parse_expr;
 use crate::physical_plan::from_proto::parse_physical_expr;
 use crate::protobuf::physical_expr_node::ExprType;
@@ -946,7 +946,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     protobuf::CsvScanExecNode {
                         base_conf: Some(exec.base_config().try_into()?),
                         has_header: exec.has_header(),
-                        delimiter: byte_to_string(exec.delimiter())?,
+                        delimiter: csv_delimiter_to_string(exec.delimiter())?,
                     },
                 )),
             })

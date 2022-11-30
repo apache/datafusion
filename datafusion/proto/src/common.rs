@@ -17,7 +17,7 @@
 
 use datafusion_common::DataFusionError;
 
-pub fn byte_to_string(b: u8) -> Result<String, DataFusionError> {
+pub fn csv_delimiter_to_string(b: u8) -> Result<String, DataFusionError> {
     let b = &[b];
     let b = std::str::from_utf8(b)
         .map_err(|_| DataFusionError::Internal("Invalid CSV delimiter".to_owned()))?;

@@ -96,17 +96,17 @@ pub(crate) fn parse_physical_expr(
             input_schema,
         )?),
         ExprType::AggregateExpr(_) => {
-            return Err(DataFusionError::Internal(
+            return Err(DataFusionError::NotImplemented(
                 "Cannot convert aggregate expr node to physical expression".to_owned(),
             ));
         }
         ExprType::WindowExpr(_) => {
-            return Err(DataFusionError::Internal(
+            return Err(DataFusionError::NotImplemented(
                 "Cannot convert window expr node to physical expression".to_owned(),
             ));
         }
         ExprType::Sort(_) => {
-            return Err(DataFusionError::Internal(
+            return Err(DataFusionError::NotImplemented(
                 "Cannot convert sort expr node to physical expression".to_owned(),
             ));
         }
