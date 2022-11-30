@@ -320,6 +320,12 @@ pub fn get_query_sql(query: usize) -> Result<Vec<String>> {
     }
 }
 
+/// Maximum size of data pages to produce (needed to make page pruning effective)
+const PARQUET_PAGE_SIZE_LIMIT: usize = 1024*1024;
+
+/// Maximum number of rows to write in each parquet data page
+const PARQUET_PAGE_ROW_LIMIT: usize = 1024*1024;
+
 /// Conver tbl (csv) file to parquet
 pub async fn convert_tbl(
     input_path: &str,
@@ -368,6 +374,8 @@ pub async fn convert_tbl(
             "parquet" => {
                 let props = WriterProperties::builder()
                     .set_compression(compression)
+                    .set_data_pagesize_limit(PARQUET_PAGE_SIZE_LIMIT)
+                    .set_data_page_row_count_limit(PARQUET_PAGE_ROW_LIMIT)
                     .build();
                 ctx.write_parquet(csv, output_path, Some(props)).await?
             }
