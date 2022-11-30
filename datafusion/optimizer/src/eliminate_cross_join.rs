@@ -245,7 +245,7 @@ fn find_inner_join(
             let (new_right_input, _) =
                 wrap_projection_for_join_if_necessary(&right_on, right_input)?;
 
-            // Build new join on    
+            // Build new join on
             let join_on = left_on
                 .iter()
                 .zip(right_on.iter())
