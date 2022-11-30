@@ -106,9 +106,11 @@ pub async fn main() -> Result<()> {
         let ctx = SessionContext::new();
         test_category.register_test_tables(&ctx).await;
 
-        let mut tester = sqllogictest::Runner::new(DataFusion { ctx, test_category });
-        // TODO: use tester.run_parallel_async()
-        tester.run_file_async(filename).await?;
+        if !cfg!(target_os = "windows") {
+            let mut tester = sqllogictest::Runner::new(DataFusion { ctx, test_category });
+            // TODO: use tester.run_parallel_async()
+            tester.run_file_async(filename).await?;
+        }
     }
 
     Ok(())
