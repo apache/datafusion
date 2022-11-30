@@ -912,7 +912,7 @@ mod tests {
             min: impl IntoIterator<Item = Option<i128>>,
             max: impl IntoIterator<Item = Option<i128>>,
             precision: u8,
-            scale: u8,
+            scale: i8,
         ) -> Self {
             Self {
                 min: Arc::new(

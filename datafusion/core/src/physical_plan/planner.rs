@@ -1997,7 +1997,7 @@ mod tests {
                 nullable: false, \
                 dict_id: 0, \
                 dict_is_ordered: false, \
-                metadata: None } }\
+                metadata: {} } }\
         ], metadata: {} }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
@@ -2006,7 +2006,7 @@ mod tests {
                 nullable: false, \
                 dict_id: 0, \
                 dict_is_ordered: false, \
-                metadata: None }\
+                metadata: {} }\
         ], metadata: {} }";
         match plan {
             Ok(_) => panic!("Expected planning failure"),
@@ -2053,7 +2053,7 @@ mod tests {
             .build()?;
         let e = plan(&logical_plan).await.unwrap_err().to_string();
 
-        assert_contains!(&e, "The data type inlist should be same, the value type is Boolean, one of list expr type is Struct([Field { name: \"foo\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None }])");
+        assert_contains!(&e, "The data type inlist should be same, the value type is Boolean, one of list expr type is Struct([Field { name: \"foo\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }])");
 
         Ok(())
     }
