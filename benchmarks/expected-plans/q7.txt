@@ -14,9 +14,9 @@ Sort: shipping.supp_nation ASC NULLS LAST, shipping.cust_nation ASC NULLS LAST, 
                         TableScan: lineitem projection=[l_orderkey, l_suppkey, l_extendedprice, l_discount, l_shipdate]
                     TableScan: orders projection=[o_orderkey, o_custkey]
                   TableScan: customer projection=[c_custkey, c_nationkey]
-                Filter: n1.n_name = Utf8("FRANCE") OR n1.n_name = Utf8("GERMANY")
-                  SubqueryAlias: n1
+                SubqueryAlias: n1
+                  Filter: nation.n_name = Utf8("FRANCE") OR nation.n_name = Utf8("GERMANY")
                     TableScan: nation projection=[n_nationkey, n_name]
-              Filter: n2.n_name = Utf8("GERMANY") OR n2.n_name = Utf8("FRANCE")
-                SubqueryAlias: n2
+              SubqueryAlias: n2
+                Filter: nation.n_name = Utf8("GERMANY") OR nation.n_name = Utf8("FRANCE")
                   TableScan: nation projection=[n_nationkey, n_name]
