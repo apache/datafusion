@@ -4499,7 +4499,7 @@ impl<'de> serde::Deserialize<'de> for Decimal {
                             if precision__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("precision"));
                             }
-                            precision__ =
+                            precision__ = 
                                 Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
@@ -4507,7 +4507,7 @@ impl<'de> serde::Deserialize<'de> for Decimal {
                             if scale__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("scale"));
                             }
-                            scale__ =
+                            scale__ = 
                                 Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
