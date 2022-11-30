@@ -544,4 +544,4 @@ jobs:
         with:
           rust-version: stable
       - name: Run sqllogictests
-        run: cargo run -p datafusion-sqllogictests
+        run: cargo test -p datafusion --test sqllogictests
