@@ -803,7 +803,7 @@ mod tests {
         let file_groups = meta.into_iter().map(Into::into).collect();
 
         // prepare the scan
-        let parquet_exec = ParquetExec::new(
+        let mut parquet_exec = ParquetExec::new(
             FileScanConfig {
                 object_store_url: ObjectStoreUrl::local_filesystem(),
                 file_groups: vec![file_groups],
