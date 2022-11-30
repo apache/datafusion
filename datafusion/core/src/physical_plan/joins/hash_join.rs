@@ -720,7 +720,7 @@ fn build_join_indices(
     }
 }
 
-// return the index of equal condition join result: left_indices and right_indices
+// Returns the index of equal condition join result: left_indices and right_indices
 // On LEFT.b1 = RIGHT.b2
 // LEFT Table:
 //  a1  b1  c1
@@ -1241,30 +1241,16 @@ fn append_right_indices(
     if appended_right_indices.is_empty() {
         (left_indices, right_indices)
     } else {
-        let matched_size = left_indices.len();
         let unmatched_size = appended_right_indices.len();
-        let total_size = matched_size + unmatched_size;
         // the new left indices: left_indices + null array
         // the new right indices: right_indices + appended_right_indices
-        let new_left_indices = (0..total_size)
-            .map(|pos| {
-                if pos < matched_size {
-                    unsafe { Some(left_indices.value_unchecked(pos)) }
-                } else {
-                    None
-                }
-            })
+        let new_left_indices = left_indices
+            .iter()
+            .chain(std::iter::repeat(None).take(unmatched_size))
             .collect::<UInt64Array>();
-        let new_right_indices = (0..total_size)
-            .map(|pos| {
-                if pos < matched_size {
-                    unsafe { Some(right_indices.value_unchecked(pos)) }
-                } else {
-                    unsafe {
-                        Some(appended_right_indices.value_unchecked(pos - matched_size))
-                    }
-                }
-            })
+        let new_right_indices = right_indices
+            .iter()
+            .chain(appended_right_indices.iter())
             .collect::<UInt32Array>();
         (new_left_indices, new_right_indices)
     }
@@ -2176,8 +2162,8 @@ mod tests {
         // just two line match
         // b2 = 10
         build_table(
-            ("a2", &vec![2, 4, 6, 8, 10, 12]),
-            ("b2", &vec![2, 4, 6, 8, 10, 10]),
+            ("a2", &vec![8, 12, 6, 2, 10, 4]),
+            ("b2", &vec![8, 10, 6, 2, 10, 4]),
             ("c2", &vec![20, 40, 60, 80, 100, 120]),
         )
     }
@@ -2330,8 +2316,8 @@ mod tests {
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
             "| 10 | 10 | 100 |",
-            "| 12 | 10 | 120 |",
-            "| 8  | 8  | 80  |",
+            "| 12 | 10 | 40  |",
+            "| 8  | 8  | 20  |",
             "+----+----+-----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
@@ -2386,17 +2372,15 @@ mod tests {
         let stream = join.execute(0, task_ctx.clone())?;
         let batches = common::collect(stream).await?;
 
-        // TODO: need fix the left semi join bug
         let expected = vec![
             "+----+----+-----+",
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
             "| 10 | 10 | 100 |",
-            "| 12 | 10 | 120 |",
-            "| 8  | 8  | 80  |",
+            "| 12 | 10 | 40  |",
+            "| 8  | 8  | 20  |",
             "+----+----+-----+",
         ];
-        // TODO: need fix the left semi join bug
         assert_batches_sorted_eq!(expected, &batches);
 
         // left_table right semi join right_table on left_table.b1 = right_table.b2 on left_table.a1!=9
@@ -2419,7 +2403,7 @@ mod tests {
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
             "| 10 | 10 | 100 |",
-            "| 12 | 10 | 120 |",
+            "| 12 | 10 | 40  |",
             "+----+----+-----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
@@ -2575,13 +2559,13 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         let expected = vec![
-            "+----+----+----+",
-            "| a2 | b2 | c2 |",
-            "+----+----+----+",
-            "| 2  | 2  | 20 |",
-            "| 4  | 4  | 40 |",
-            "| 6  | 6  | 60 |",
-            "+----+----+----+",
+            "+----+----+-----+",
+            "| a2 | b2 | c2  |",
+            "+----+----+-----+",
+            "| 2  | 2  | 80  |",
+            "| 4  | 4  | 120 |",
+            "| 6  | 6  | 60  |",
+            "+----+----+-----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
         Ok(())
@@ -2638,9 +2622,9 @@ mod tests {
             "| a2 | b2 | c2  |",
             "+----+----+-----+",
             "| 10 | 10 | 100 |",
-            "| 12 | 10 | 120 |",
-            "| 2  | 2  | 20  |",
-            "| 4  | 4  | 40  |",
+            "| 12 | 10 | 40  |",
+            "| 2  | 2  | 80  |",
+            "| 4  | 4  | 120 |",
             "| 6  | 6  | 60  |",
             "+----+----+-----+",
         ];
@@ -2670,14 +2654,14 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         let expected = vec![
-            "+----+----+----+",
-            "| a2 | b2 | c2 |",
-            "+----+----+----+",
-            "| 2  | 2  | 20 |",
-            "| 4  | 4  | 40 |",
-            "| 6  | 6  | 60 |",
-            "| 8  | 8  | 80 |",
-            "+----+----+----+",
+            "+----+----+-----+",
+            "| a2 | b2 | c2  |",
+            "+----+----+-----+",
+            "| 2  | 2  | 80  |",
+            "| 4  | 4  | 120 |",
+            "| 6  | 6  | 60  |",
+            "| 8  | 8  | 20  |",
+            "+----+----+-----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
