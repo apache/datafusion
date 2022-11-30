@@ -544,9 +544,22 @@ where
     let result = integer_array
         .iter()
         .map(|integer| {
-            integer.map(|integer| format!("{:x}", integer.to_usize().unwrap()))
+            if let Some(value) = integer {
+                if let Some(value_usize) = value.to_usize() {
+                    Ok(Some(format!("{:x}", value_usize)))
+                } else if let Some(value_isize) = value.to_isize() {
+                    Ok(Some(format!("{:x}", value_isize)))
+                } else {
+                    Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {:?} for function to_hex",
+                        integer,
+                    )))
+                }
+            } else {
+                Ok(None)
+            }
         })
-        .collect::<GenericStringArray<i32>>();
+        .collect::<Result<GenericStringArray<i32>>>()?;
 
     Ok(Arc::new(result) as ArrayRef)
 }
@@ -572,4 +585,52 @@ pub fn uuid(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let values = iter::repeat_with(|| Uuid::new_v4().to_string()).take(len);
     let array = GenericStringArray::<i32>::from_iter_values(values);
     Ok(ColumnarValue::Array(Arc::new(array)))
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::string_expressions;
+    use arrow::{array::Int32Array, datatypes::Int32Type};
+
+    use super::*;
+
+    #[test]
+    // Test to_hex function for zero
+    fn to_hex_zero() -> Result<()> {
+        let array = vec![0].into_iter().collect::<Int32Array>();
+        let array_ref = Arc::new(array);
+        let hex_value_arc = string_expressions::to_hex::<Int32Type>(&[array_ref])?;
+        let hex_value = as_string_array(&hex_value_arc)?;
+        let expected = StringArray::from(vec![Some("0")]);
+        assert_eq!(&expected, hex_value);
+
+        Ok(())
+    }
+
+    #[test]
+    // Test to_hex function for positive number
+    fn to_hex_positive_number() -> Result<()> {
+        let array = vec![100].into_iter().collect::<Int32Array>();
+        let array_ref = Arc::new(array);
+        let hex_value_arc = string_expressions::to_hex::<Int32Type>(&[array_ref])?;
+        let hex_value = as_string_array(&hex_value_arc)?;
+        let expected = StringArray::from(vec![Some("64")]);
+        assert_eq!(&expected, hex_value);
+
+        Ok(())
+    }
+
+    #[test]
+    // Test to_hex function for negative number
+    fn to_hex_negative_number() -> Result<()> {
+        let array = vec![-1].into_iter().collect::<Int32Array>();
+        let array_ref = Arc::new(array);
+        let hex_value_arc = string_expressions::to_hex::<Int32Type>(&[array_ref])?;
+        let hex_value = as_string_array(&hex_value_arc)?;
+        let expected = StringArray::from(vec![Some("ffffffffffffffff")]);
+        assert_eq!(&expected, hex_value);
+
+        Ok(())
+    }
 }
