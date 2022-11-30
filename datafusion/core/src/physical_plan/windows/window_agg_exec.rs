@@ -122,7 +122,9 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
+        // This executor maintains input order, and has required input_ordering filled
+        // hence output_ordering would be `required_input_ordering`
+        self.required_input_ordering()[0]
     }
 
     fn maintains_input_order(&self) -> bool {
