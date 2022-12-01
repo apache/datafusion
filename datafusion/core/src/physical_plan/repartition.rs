@@ -30,7 +30,7 @@ use crate::physical_plan::{
 };
 use arrow::array::{ArrayRef, UInt64Builder};
 use arrow::datatypes::SchemaRef;
-use arrow::error::Result as ArrowResult;
+use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use log::debug;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -482,18 +482,25 @@ impl RepartitionExec {
         match input_task.await {
             // Error in joining task
             Err(e) => {
+                let e = Arc::new(e);
+
                 for (_, tx) in txs {
-                    let err = DataFusionError::Execution(format!("Join Error: {}", e));
-                    let err = Err(err.into());
+                    let err = Err(ArrowError::ExternalError(Box::new(
+                        DataFusionError::Context(
+                            "Join Error".to_string(),
+                            Box::new(DataFusionError::External(Box::new(Arc::clone(&e)))),
+                        ),
+                    )));
                     tx.send(Some(err)).ok();
                 }
             }
             // Error from running input task
             Ok(Err(e)) => {
+                let e = Arc::new(e);
+
                 for (_, tx) in txs {
                     // wrap it because need to send error to all output partitions
-                    let err = DataFusionError::Execution(e.to_string());
-                    let err = Err(err.into());
+                    let err = Err(ArrowError::ExternalError(Box::new(e.clone())));
                     tx.send(Some(err)).ok();
                 }
             }
