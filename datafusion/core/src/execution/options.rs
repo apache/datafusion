@@ -34,6 +34,8 @@ use crate::datasource::{
     listing::ListingOptions,
 };
 
+use super::context::SessionConfig;
+
 /// Options that control the reading of CSV files.
 ///
 /// Note this structure is supplied when a datasource is created and
@@ -167,26 +169,24 @@ pub struct ParquetReadOptions<'a> {
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<(String, DataType)>,
-    /// Should DataFusion parquet reader use the predicate to prune data,
-    /// overridden by value on execution::context::SessionConfig
-    // TODO move this into ConfigOptions
-    pub parquet_pruning: bool,
-    /// Tell the parquet reader to skip any metadata that may be in
-    /// the file Schema. This can help avoid schema conflicts due to
-    /// metadata.  Defaults to true.
-    // TODO move this into ConfigOptions
-    pub skip_metadata: bool,
+    /// Should the parquet reader use the predicate to prune row groups?
+    /// If None, uses value in SessionConfig
+    pub parquet_pruning: Option<bool>,
+    /// Should the parquet reader to skip any metadata that may be in
+    /// the file Schema? This can help avoid schema conflicts due to
+    /// metadata.
+    ///
+    /// If None specified, uses value in SessionConfig
+    pub skip_metadata: Option<bool>,
 }
 
 impl<'a> Default for ParquetReadOptions<'a> {
     fn default() -> Self {
-        let format_default = ParquetFormat::default();
-
         Self {
             file_extension: DEFAULT_PARQUET_EXTENSION,
             table_partition_cols: vec![],
-            parquet_pruning: format_default.enable_pruning(),
-            skip_metadata: format_default.skip_metadata(),
+            parquet_pruning: None,
+            skip_metadata: None,
         }
     }
 }
@@ -194,7 +194,7 @@ impl<'a> Default for ParquetReadOptions<'a> {
 impl<'a> ParquetReadOptions<'a> {
     /// Specify parquet_pruning
     pub fn parquet_pruning(mut self, parquet_pruning: bool) -> Self {
-        self.parquet_pruning = parquet_pruning;
+        self.parquet_pruning = Some(parquet_pruning);
         self
     }
 
@@ -202,7 +202,7 @@ impl<'a> ParquetReadOptions<'a> {
     /// the file Schema. This can help avoid schema conflicts due to
     /// metadata.  Defaults to true.
     pub fn skip_metadata(mut self, skip_metadata: bool) -> Self {
-        self.skip_metadata = skip_metadata;
+        self.skip_metadata = Some(skip_metadata);
         self
     }
 
@@ -216,14 +216,14 @@ impl<'a> ParquetReadOptions<'a> {
     }
 
     /// Helper to convert these user facing options to `ListingTable` options
-    pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
-        let file_format = ParquetFormat::default()
+    pub fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
+        let file_format = ParquetFormat::new(config.config_options())
             .with_enable_pruning(self.parquet_pruning)
             .with_skip_metadata(self.skip_metadata);
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(target_partitions)
+            .with_target_partitions(config.target_partitions)
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 }

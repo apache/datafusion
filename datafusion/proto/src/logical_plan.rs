@@ -423,7 +423,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                         &FileFormatType::Parquet(protobuf::ParquetFormat {
                             enable_pruning,
                         }) => Arc::new(
-                            ParquetFormat::default().with_enable_pruning(enable_pruning),
+                            ParquetFormat::new(ctx.config_options())
+                                .with_enable_pruning(Some(enable_pruning)),
                         ),
                         FileFormatType::Csv(protobuf::CsvFormat {
                             has_header,
