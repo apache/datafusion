@@ -18,7 +18,7 @@
 use async_trait::async_trait;
 use datafusion::arrow::csv::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionContext, SessionConfig};
 use std::path::Path;
 use std::time::Duration;
 
@@ -114,17 +114,22 @@ async fn run_file(path: &Path) -> Result<()> {
 }
 
 async fn context_for_test_file(file_name: &str) -> SessionContext {
-    let ctx = SessionContext::new();
 
     // find relevant test_category, if any, based on file name
     match file_name {
         "aggregate.slt" => {
             println!("Registering aggregate tables");
+            let ctx = SessionContext::new();
             setup::register_aggregate_tables(&ctx).await;
             ctx
         }
+        "information_schema.slt" => {
+            println!("Enabling information schema");
+            SessionContext::with_config(SessionConfig::new().with_information_schema(true))
+        }
         _ => {
-            ctx
+            println!("No extra context");
+            SessionContext::new()
         }
     }
 
