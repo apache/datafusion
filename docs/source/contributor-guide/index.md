@@ -134,6 +134,10 @@ cargo test -p datafusion --tests sql_integration
 
 One very important test is the [sql_integration](../../../datafusion/core/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setups.
 
+### sqllogictests Tests
+
+The [sqllogictests](../../../datafusion/core/tests/sqllogictests) also validate DataFusion SQL against an assortment of data setups.
+
 ### SQL / Postgres Integration Tests
 
 The [integration-tests](../../../integration-tests) directory contains a harness that runs certain queries against both postgres and datafusion and compares results
