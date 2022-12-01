@@ -641,11 +641,13 @@ impl OptimizerRule for PushDownFilter {
                     }
                 }
 
+                // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
+                // After push, we need to replace `a+b` with Column(a)+Column(b)
+                // So we need create a replace_map, add {`a+b` --> Expr(Column(a)+Column(b))}
                 let mut replace_map = HashMap::new();
                 for expr in &agg.group_expr {
                     replace_map.insert(expr.display_name()?, expr.clone());
                 }
-
                 let replaced_push_predicates = push_predicates
                     .iter()
                     .map(|expr| replace_cols_by_name(expr.clone(), &replace_map))
