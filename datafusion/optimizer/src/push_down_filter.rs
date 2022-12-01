@@ -888,6 +888,19 @@ mod tests {
     }
 
     #[test]
+    fn push_agg_need_replace_expr() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .aggregate(vec![add(col("b"), col("a"))], vec![sum(col("a")), col("b")])?
+            .filter(col("test.b + test.a").gt(lit(10i64)))?
+            .build()?;
+        let expected =
+            "Aggregate: groupBy=[[test.b + test.a]], aggr=[[SUM(test.a), test.b]]\
+        \n  Filter: test.b + test.a > Int64(10)\
+        \n    TableScan: test";
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
     fn filter_keep_agg() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
