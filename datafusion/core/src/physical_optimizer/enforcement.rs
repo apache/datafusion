@@ -901,7 +901,7 @@ fn ensure_distribution_and_ordering(
 }
 
 /// Check the required ordering requirements are satisfied by the provided PhysicalSortExprs.
-fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
+pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortExpr]>,
     equal_properties: F,

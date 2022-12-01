@@ -19,6 +19,7 @@
 
 use crate::error::Result;
 use crate::execution::context::TaskContext;
+use crate::physical_optimizer::enforcement::ordering_satisfy;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
@@ -122,9 +123,16 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        // This executor maintains input order, and has required input_ordering filled
-        // hence output_ordering would be `required_input_ordering`
-        self.required_input_ordering()[0]
+        // TODO: Simply return "self.input.output_ordering()" once it is fixed to return
+        //       the right ordering during physical planning.
+        let req_ordering = self.sort_keys.as_deref();
+        if ordering_satisfy(self.input.output_ordering(), req_ordering, || {
+            self.input.equivalence_properties()
+        }) {
+            self.input.output_ordering()
+        } else {
+            req_ordering
+        }
     }
 
     fn maintains_input_order(&self) -> bool {
