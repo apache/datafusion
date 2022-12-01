@@ -40,8 +40,6 @@ crates = {
     'datafusion-sql': 'datafusion/sql/Cargo.toml',
     'datafusion-benchmarks': 'benchmarks/Cargo.toml',
     'datafusion-examples': 'datafusion-examples/Cargo.toml',
-    'parquet-test-utils': 'parquet-test-utils/Cargo.toml',
-    'test-utils': 'test-utils/Cargo.toml',
 }
 
 def update_datafusion_version(cargo_toml: str, new_version: str):
