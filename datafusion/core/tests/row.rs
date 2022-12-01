@@ -34,7 +34,7 @@ async fn test_with_parquet() -> Result<()> {
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
     let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
+    let exec = get_exec("alltypes_plain.parquet", projection.as_ref(), None).await?;
     let schema = exec.schema().clone();
 
     let batches = collect(exec, task_ctx).await?;
@@ -55,7 +55,7 @@ async fn test_with_parquet_word_aligned() -> Result<()> {
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
     let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7]);
-    let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
+    let exec = get_exec("alltypes_plain.parquet", projection.as_ref(), None).await?;
     let schema = exec.schema().clone();
 
     let batches = collect(exec, task_ctx).await?;
@@ -73,7 +73,7 @@ async fn test_with_parquet_word_aligned() -> Result<()> {
 
 async fn get_exec(
     file_name: &str,
-    projection: &Option<Vec<usize>>,
+    projection: Option<&Vec<usize>>,
     limit: Option<usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let testdata = datafusion::test_util::parquet_test_data();
@@ -103,7 +103,7 @@ async fn get_exec(
                 file_schema,
                 file_groups,
                 statistics,
-                projection: projection.clone(),
+                projection: projection.cloned(),
                 limit,
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),

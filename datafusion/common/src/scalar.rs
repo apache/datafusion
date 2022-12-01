@@ -2160,7 +2160,7 @@ impl ScalarValue {
     fn eq_array_decimal(
         array: &ArrayRef,
         index: usize,
-        value: &Option<i128>,
+        value: Option<&i128>,
         precision: u8,
         scale: i8,
     ) -> Result<bool> {
@@ -2196,8 +2196,14 @@ impl ScalarValue {
     pub fn eq_array(&self, array: &ArrayRef, index: usize) -> bool {
         match self {
             ScalarValue::Decimal128(v, precision, scale) => {
-                ScalarValue::eq_array_decimal(array, index, v, *precision, *scale)
-                    .unwrap()
+                ScalarValue::eq_array_decimal(
+                    array,
+                    index,
+                    v.as_ref(),
+                    *precision,
+                    *scale,
+                )
+                .unwrap()
             }
             ScalarValue::Boolean(val) => {
                 eq_array_primitive!(array, index, BooleanArray, val)

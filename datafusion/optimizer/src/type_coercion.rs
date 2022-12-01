@@ -319,7 +319,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                     Some(expr) => expr.get_type(&self.schema).map(Some),
                 }?;
                 let case_when_coerce_type =
-                    get_coerce_type_for_case_when(&then_types, &else_type);
+                    get_coerce_type_for_case_when(&then_types, else_type.as_ref());
                 match case_when_coerce_type {
                     None => Err(DataFusionError::Internal(format!(
                         "Failed to coerce then ({:?}) and else ({:?}) to common types in CASE WHEN expression",
