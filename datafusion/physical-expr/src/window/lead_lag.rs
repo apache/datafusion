@@ -120,7 +120,7 @@ pub(crate) struct WindowShiftEvaluator {
 }
 
 fn create_empty_array(
-    value: &Option<ScalarValue>,
+    value: Option<&ScalarValue>,
     data_type: &DataType,
     size: usize,
 ) -> Result<ArrayRef> {
@@ -140,7 +140,7 @@ fn create_empty_array(
 fn shift_with_default_value(
     array: &ArrayRef,
     offset: i64,
-    value: &Option<ScalarValue>,
+    value: Option<&ScalarValue>,
 ) -> Result<ArrayRef> {
     use arrow::compute::concat;
 
@@ -172,7 +172,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
     fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
         let value = &self.values[0];
         let value = value.slice(partition.start, partition.end - partition.start);
-        shift_with_default_value(&value, self.shift_offset, &self.default_value)
+        shift_with_default_value(&value, self.shift_offset, self.default_value.as_ref())
     }
 }
 
