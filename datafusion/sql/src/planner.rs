@@ -662,11 +662,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         ctes: &mut HashMap<String, LogicalPlan>,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
+        // From clause may exist CTEs, we should separate them with global CTEs.
+        // CTEs in from clause are allowed to be duplicated.
+        // Such as `select * from (WITH source AS (select 1 as e) SELECT * FROM source) t1, (WITH source AS (select 1 as e) SELECT * FROM source) t2;` which is valid.
+        let origin_ctes = (*ctes).clone();
         let left = self.create_relation(t.relation, ctes, outer_query_schema)?;
         match t.joins.len() {
-            0 => Ok(left),
+            0 => {
+                *ctes = origin_ctes.clone();
+                Ok(left)
+            }
             _ => {
                 let mut joins = t.joins.into_iter();
+                *ctes = origin_ctes.clone();
                 let mut left = self.parse_relation_join(
                     left,
                     joins.next().unwrap(), // length of joins > 0
@@ -674,9 +682,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     outer_query_schema,
                 )?;
                 for join in joins {
+                    *ctes = origin_ctes.clone();
                     left =
                         self.parse_relation_join(left, join, ctes, outer_query_schema)?;
                 }
+                *ctes = origin_ctes.clone();
                 Ok(left)
             }
         }
