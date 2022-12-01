@@ -67,7 +67,9 @@ impl FlightService for FlightServiceImpl {
     ) -> Result<Response<SchemaResult>, Status> {
         let request = request.into_inner();
 
-        let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let config = SessionConfig::new();
+        let listing_options =
+            ListingOptions::new(Arc::new(ParquetFormat::new(config.config_options())));
         let table_path =
             ListingTableUrl::parse(&request.path[0]).map_err(to_tonic_err)?;
 

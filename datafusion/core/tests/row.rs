@@ -34,7 +34,13 @@ async fn test_with_parquet() -> Result<()> {
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
     let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    let exec = get_exec("alltypes_plain.parquet", projection.as_ref(), None).await?;
+    let exec = get_exec(
+        &session_ctx,
+        "alltypes_plain.parquet",
+        projection.as_ref(),
+        None,
+    )
+    .await?;
     let schema = exec.schema().clone();
 
     let batches = collect(exec, task_ctx).await?;
@@ -55,7 +61,13 @@ async fn test_with_parquet_word_aligned() -> Result<()> {
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
     let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7]);
-    let exec = get_exec("alltypes_plain.parquet", projection.as_ref(), None).await?;
+    let exec = get_exec(
+        &session_ctx,
+        "alltypes_plain.parquet",
+        projection.as_ref(),
+        None,
+    )
+    .await?;
     let schema = exec.schema().clone();
 
     let batches = collect(exec, task_ctx).await?;
@@ -72,6 +84,7 @@ async fn test_with_parquet_word_aligned() -> Result<()> {
 }
 
 async fn get_exec(
+    ctx: &SessionContext,
     file_name: &str,
     projection: Option<&Vec<usize>>,
     limit: Option<usize>,
@@ -81,7 +94,7 @@ async fn get_exec(
 
     let path = Path::from_filesystem_path(filename).unwrap();
 
-    let format = ParquetFormat::default();
+    let format = ParquetFormat::new(ctx.config_options());
     let object_store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
     let object_store_url = ObjectStoreUrl::local_filesystem();
 

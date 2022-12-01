@@ -61,6 +61,16 @@ pub const OPT_PARQUET_REORDER_FILTERS: &str =
 pub const OPT_PARQUET_ENABLE_PAGE_INDEX: &str =
     "datafusion.execution.parquet.enable_page_index";
 
+/// Configuration option "datafusion.execution.parquet.pruning"
+pub const OPT_PARQUET_ENABLE_PRUNING: &str = "datafusion.execution.parquet.pruning";
+
+/// Configuration option "datafusion.execution.parquet.skip_metadata"
+pub const OPT_PARQUET_SKIP_METADATA: &str = "datafusion.execution.parquet.skip_metadata";
+
+/// Configuration option "datafusion.execution.parquet.metadata_size_hint"
+pub const OPT_PARQUET_METADATA_SIZE_HINT: &str =
+    "datafusion.execution.parquet.metadata_size_hint";
+
 /// Configuration option "datafusion.optimizer.skip_failed_rules"
 pub const OPT_OPTIMIZER_SKIP_FAILED_RULES: &str =
     "datafusion.optimizer.skip_failed_rules";
@@ -256,6 +266,29 @@ impl BuiltInConfigs {
                 false,
             ),
             ConfigDefinition::new_bool(
+                OPT_PARQUET_ENABLE_PRUNING,
+                "If true, the parquet reader attempts to skip entire row groups based \
+                 on the predicate in the query and the metadata (min/max values) stored in \
+                 the parquet file.",
+                true,
+            ),
+            ConfigDefinition::new_bool(
+                OPT_PARQUET_SKIP_METADATA,
+                "If true, the parquet reader skip the optional embedded metadata that may be in \
+                the file Schema. This setting can help avoid schema conflicts when querying \
+                multiple parquet files with schemas containing compatible types but different metadata.",
+                true,
+            ),
+            ConfigDefinition::new(
+                OPT_PARQUET_METADATA_SIZE_HINT,
+                "If specified, the parquet reader will try and fetch the last `size_hint` \
+                 bytes of the parquet file optimistically. If not specified, two read are required: \
+                 One read to fetch the 8-byte parquet footer and  \
+                 another to fetch the metadata length encoded in the footer.",
+                DataType::UInt64,
+                ScalarValue::UInt64(None),
+            ),
+            ConfigDefinition::new_bool(
                 OPT_OPTIMIZER_SKIP_FAILED_RULES,
                 "When set to true, the logical plan optimizer will produce warning \
                 messages if any optimization rules produce errors and then proceed to the next \
@@ -422,6 +455,12 @@ impl ConfigOptions {
     /// get a u64 configuration option
     pub fn get_u64(&self, key: &str) -> Option<u64> {
         get_conf_value!(self, UInt64, key, "u64")
+    }
+
+    /// get a u64 configuration option as a usize
+    pub fn get_usize(&self, key: &str) -> Option<usize> {
+        let v = get_conf_value!(self, UInt64, key, "usize");
+        v.and_then(|v| v.try_into().ok())
     }
 
     /// get a string configuration option
