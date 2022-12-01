@@ -104,7 +104,7 @@ impl TableProvider for ViewTable {
     async fn scan(
         &self,
         state: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

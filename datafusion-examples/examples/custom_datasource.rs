@@ -118,7 +118,7 @@ impl Debug for CustomDataSource {
 impl CustomDataSource {
     pub(crate) async fn create_physical_plan(
         &self,
-        projections: &Option<Vec<usize>>,
+        projections: Option<&Vec<usize>>,
         schema: SchemaRef,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(CustomExec::new(projections, schema, self.clone())))
@@ -177,7 +177,7 @@ impl TableProvider for CustomDataSource {
     async fn scan(
         &self,
         _state: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         // filters and limit can be used here to inject some push-down operations if needed
         _filters: &[Expr],
         _limit: Option<usize>,
@@ -194,11 +194,11 @@ struct CustomExec {
 
 impl CustomExec {
     fn new(
-        projections: &Option<Vec<usize>>,
+        projections: Option<&Vec<usize>>,
         schema: SchemaRef,
         db: CustomDataSource,
     ) -> Self {
-        let projected_schema = project_schema(&schema, projections.as_ref()).unwrap();
+        let projected_schema = project_schema(&schema, projections).unwrap();
         Self {
             db,
             projected_schema,

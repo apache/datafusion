@@ -795,12 +795,11 @@ impl TableProvider for DataFrame {
     async fn scan(
         &self,
         _ctx: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut expr = projection
-            .as_ref()
             // construct projections
             .map_or_else(
                 || {
