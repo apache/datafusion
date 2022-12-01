@@ -267,19 +267,10 @@ impl LogicalPlanBuilder {
         &self,
         expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        self.project_with_alias(expr, None)
-    }
-
-    /// Apply a projection with alias
-    pub fn project_with_alias(
-        &self,
-        expr: impl IntoIterator<Item = impl Into<Expr>>,
-        alias: Option<String>,
-    ) -> Result<Self> {
         Ok(Self::from(project_with_alias(
             self.plan.clone(),
             expr,
-            alias,
+            None,
         )?))
     }
 
@@ -308,14 +299,7 @@ impl LogicalPlanBuilder {
 
     /// Apply an alias
     pub fn alias(&self, alias: &str) -> Result<Self> {
-        let schema: Schema = self.schema().as_ref().clone().into();
-        let schema =
-            DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
-        Ok(Self::from(LogicalPlan::SubqueryAlias(SubqueryAlias {
-            input: Arc::new(self.plan.clone()),
-            alias: alias.to_string(),
-            schema,
-        })))
+        Ok(Self::from(with_alias(&self.plan, alias)?))
     }
 
     /// Add missing sort columns to all downstream projection
@@ -984,20 +968,24 @@ pub fn project_with_alias(
         DFSchemaRef::new(input_schema),
     )?);
     match alias {
-        Some(alias) => Ok(with_alias(projection, alias)),
+        Some(alias) => with_alias_owned(projection, &alias),
         None => Ok(projection),
     }
 }
 
 /// Create a SubqueryAlias to wrap a LogicalPlan.
-pub fn with_alias(plan: LogicalPlan, alias: String) -> LogicalPlan {
-    let plan_schema = &**plan.schema();
-    let schema = (plan_schema.clone()).replace_qualifier(alias.as_str());
-    LogicalPlan::SubqueryAlias(SubqueryAlias {
+pub fn with_alias(plan: &LogicalPlan, alias: &str) -> Result<LogicalPlan> {
+    with_alias_owned(plan.clone(), alias)
+}
+
+pub fn with_alias_owned(plan: LogicalPlan, alias: &str) -> Result<LogicalPlan> {
+    let schema: Schema = plan.schema().as_ref().clone().into();
+    let schema = DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
+    Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
         input: Arc::new(plan),
-        alias,
-        schema: Arc::new(schema),
-    })
+        alias: alias.to_string(),
+        schema,
+    }))
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
