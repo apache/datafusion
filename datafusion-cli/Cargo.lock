@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "14.0.0"
+version = "15.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -705,7 +705,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-cli"
-version = "14.0.0"
+version = "15.0.0"
 dependencies = [
  "arrow",
  "clap 3.2.23",
@@ -721,7 +721,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-common"
-version = "14.0.0"
+version = "15.0.0"
 dependencies = [
  "arrow",
  "chrono",
@@ -732,7 +732,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-expr"
-version = "14.0.0"
+version = "15.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-optimizer"
-version = "14.0.0"
+version = "15.0.0"
 dependencies = [
  "arrow",
  "async-trait",
@@ -757,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-physical-expr"
-version = "14.0.0"
+version = "15.0.0"
 dependencies = [
  "ahash",
  "arrow",
@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-row"
-version = "14.0.0"
+version = "15.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "datafusion-sql"
-version = "14.0.0"
+version = "15.0.0"
 dependencies = [
  "arrow-schema",
  "datafusion-common",
