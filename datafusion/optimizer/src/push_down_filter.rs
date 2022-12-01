@@ -856,7 +856,7 @@ mod tests {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("a")], vec![sum(col("b")).alias("total_salary")])?
-            .filter(col("test.a").gt(lit(10i64)))?
+            .filter(col("a").gt(lit(10i64)))?
             .build()?;
         // filter of key aggregation is commutative
         let expected = "\
