@@ -136,7 +136,7 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
                                     patterns.insert(pattern.to_string(), re.clone());
                                     Ok(re)
                                 },
-                                Err(err) => Err(DataFusionError::Execution(err.to_string())),
+                                Err(err) => Err(DataFusionError::External(Box::new(err))),
                             }
                         }
                     };
@@ -182,7 +182,7 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
                                     patterns.insert(pattern, re.clone());
                                     Ok(re)
                                 },
-                                Err(err) => Err(DataFusionError::Execution(err.to_string())),
+                                Err(err) => Err(DataFusionError::External(Box::new(err))),
                             }
                         }
                     };
@@ -254,8 +254,8 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
         None => (pattern.to_string(), 1),
     };
 
-    let re = Regex::new(&pattern)
-        .map_err(|err| DataFusionError::Execution(err.to_string()))?;
+    let re =
+        Regex::new(&pattern).map_err(|err| DataFusionError::External(Box::new(err)))?;
 
     // Replaces the posix groups in the replacement string
     // with rust ones.
@@ -522,7 +522,7 @@ mod tests {
         let pattern_err = re.expect_err("broken pattern should have failed");
         assert_eq!(
             pattern_err.to_string(),
-            "Execution error: regex parse error:\n    [\n    ^\nerror: unclosed character class"
+            "External error: regex parse error:\n    [\n    ^\nerror: unclosed character class"
         );
     }
 
