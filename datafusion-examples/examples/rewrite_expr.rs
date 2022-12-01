@@ -88,7 +88,7 @@ impl OptimizerRule for MyRule {
                 let predicate = predicate.rewrite(&mut expr_rewriter)?;
                 Ok(LogicalPlan::Filter(Filter::try_new(
                     predicate,
-                    filter.input.clone(),
+                    filter.input,
                 )?))
             }
             _ => Ok(plan.clone()),
