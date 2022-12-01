@@ -92,9 +92,9 @@ mod tests {
     use crate::datasource::file_format::test_util::scan_format;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
-    use arrow::array::{BinaryArray, TimestampMicrosecondArray};
     use datafusion_common::cast::{
-        as_boolean_array, as_float32_array, as_float64_array, as_int32_array,
+        as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
+        as_int32_array, as_timestamp_microsecond_array,
     };
     use futures::StreamExt;
 
@@ -248,11 +248,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .unwrap();
+        let array = as_timestamp_microsecond_array(batches[0].column(0))?;
         let mut values: Vec<i64> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));
@@ -327,11 +323,7 @@ mod tests {
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
 
-        let array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
+        let array = as_binary_array(batches[0].column(0))?;
         let mut values: Vec<&str> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(std::str::from_utf8(array.value(i)).unwrap());
