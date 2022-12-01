@@ -25,8 +25,6 @@ This is the Datafusion implementation of [sqllogictest](https://www.sqlite.org/s
 
 `cargo test -p datafusion --test sqllogictests`
 
-#### Setup
-
 #### sqllogictests
 
 > :warning: **Warning**:Datafusion's sqllogictest implementation and migration is still in progress. Definitions taken from https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
