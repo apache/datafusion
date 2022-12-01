@@ -18,7 +18,7 @@
 use async_trait::async_trait;
 use datafusion::arrow::csv::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::prelude::{SessionContext, SessionConfig};
+use datafusion::prelude::{SessionConfig, SessionContext};
 use std::path::Path;
 use std::time::Duration;
 
@@ -40,11 +40,7 @@ impl sqllogictest::AsyncDB for DataFusion {
     type Error = TestError;
 
     async fn run(&mut self, sql: &str) -> Result<String> {
-        println!(
-            "[{}] Running query: \"{}\"",
-            self.file_name,
-            sql
-        );
+        println!("[{}] Running query: \"{}\"", self.file_name, sql);
         let result = run_query(&self.ctx, sql).await?;
         Ok(result)
     }
@@ -72,8 +68,6 @@ pub async fn main() -> Result<()> {
     }
 }
 
-
-
 #[tokio::main]
 #[cfg(not(target_family = "windows"))]
 pub async fn main() -> Result<()> {
@@ -94,16 +88,10 @@ pub async fn main() -> Result<()> {
     Ok(())
 }
 
-
 async fn run_file(path: &Path) -> Result<()> {
     println!("Running: {}", path.display());
 
-    let file_name =  path
-        .file_name()
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
+    let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
 
     let ctx = context_for_test_file(&file_name).await;
 
@@ -114,7 +102,6 @@ async fn run_file(path: &Path) -> Result<()> {
 }
 
 async fn context_for_test_file(file_name: &str) -> SessionContext {
-
     // find relevant test_category, if any, based on file name
     match file_name {
         "aggregate.slt" => {
@@ -125,14 +112,15 @@ async fn context_for_test_file(file_name: &str) -> SessionContext {
         }
         "information_schema.slt" => {
             println!("Enabling information schema");
-            SessionContext::with_config(SessionConfig::new().with_information_schema(true))
+            SessionContext::with_config(
+                SessionConfig::new().with_information_schema(true),
+            )
         }
         _ => {
             println!("No extra context");
             SessionContext::new()
         }
     }
-
 }
 
 fn format_batches(batches: &[RecordBatch]) -> Result<String> {
