@@ -563,16 +563,20 @@ pub fn from_plan(
         }
         LogicalPlan::Explain(_) => {
             // Explain should be handled specially in the optimizers;
-            // If this assert fails it means some optimizer pass is
+            // If this check cannot pass it means some optimizer pass is
             // trying to optimize Explain directly
-            assert!(
-                expr.is_empty(),
-                "Explain can not be created from utils::from_expr"
-            );
-            assert!(
-                inputs.is_empty(),
-                "Explain can not be created from utils::from_expr"
-            );
+            if expr.is_empty() {
+                return Err(DataFusionError::Plan(
+                    "Invalid EXPLAIN command. Expression is empty".to_string(),
+                ));
+            }
+
+            if inputs.is_empty() {
+                return Err(DataFusionError::Plan(
+                    "Invalid EXPLAIN command. Inputs are empty".to_string(),
+                ));
+            }
+
             Ok(plan.clone())
         }
         LogicalPlan::EmptyRelation(_)
