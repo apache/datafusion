@@ -15,31 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod common_subexpr_eliminate;
-pub mod decorrelate_where_exists;
-pub mod decorrelate_where_in;
-pub mod eliminate_cross_join;
-pub mod eliminate_filter;
-pub mod eliminate_limit;
-pub mod eliminate_outer_join;
-pub mod filter_null_join_keys;
-pub mod inline_table_scan;
-pub mod limit_push_down;
-pub mod optimizer;
-pub mod projection_push_down;
-pub mod propagate_empty_relation;
-pub mod push_down_filter;
-pub mod scalar_subquery_to_join;
-pub mod simplify_expressions;
-pub mod single_distinct_to_groupby;
-pub mod subquery_filter_to_join;
-pub mod type_coercion;
-pub mod utils;
+use datafusion::prelude::*;
+use datafusion_common::Result;
+use datafusion_proto::bytes::{physical_plan_from_bytes, physical_plan_to_bytes};
 
-pub mod rewrite_disjunctive_predicate;
-#[cfg(test)]
-pub mod test;
-pub mod unwrap_cast_in_comparison;
-
-pub use optimizer::{OptimizerConfig, OptimizerRule};
-pub use utils::optimize_children;
+#[tokio::main]
+async fn main() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    let logical_plan = ctx.table("t1")?.to_logical_plan()?;
+    let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
+    let bytes = physical_plan_to_bytes(physical_plan.clone())?;
+    let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(
+        format!("{:?}", physical_plan),
+        format!("{:?}", physical_round_trip)
+    );
+    Ok(())
+}

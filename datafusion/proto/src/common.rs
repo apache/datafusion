@@ -15,31 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod common_subexpr_eliminate;
-pub mod decorrelate_where_exists;
-pub mod decorrelate_where_in;
-pub mod eliminate_cross_join;
-pub mod eliminate_filter;
-pub mod eliminate_limit;
-pub mod eliminate_outer_join;
-pub mod filter_null_join_keys;
-pub mod inline_table_scan;
-pub mod limit_push_down;
-pub mod optimizer;
-pub mod projection_push_down;
-pub mod propagate_empty_relation;
-pub mod push_down_filter;
-pub mod scalar_subquery_to_join;
-pub mod simplify_expressions;
-pub mod single_distinct_to_groupby;
-pub mod subquery_filter_to_join;
-pub mod type_coercion;
-pub mod utils;
+use datafusion_common::DataFusionError;
 
-pub mod rewrite_disjunctive_predicate;
-#[cfg(test)]
-pub mod test;
-pub mod unwrap_cast_in_comparison;
+pub fn csv_delimiter_to_string(b: u8) -> Result<String, DataFusionError> {
+    let b = &[b];
+    let b = std::str::from_utf8(b)
+        .map_err(|_| DataFusionError::Internal("Invalid CSV delimiter".to_owned()))?;
+    Ok(b.to_owned())
+}
 
-pub use optimizer::{OptimizerConfig, OptimizerRule};
-pub use utils::optimize_children;
+pub fn str_to_byte(s: &String) -> Result<u8, DataFusionError> {
+    if s.len() != 1 {
+        return Err(DataFusionError::Internal(
+            "Invalid CSV delimiter".to_owned(),
+        ));
+    }
+    Ok(s.as_bytes()[0])
+}
+
+pub(crate) fn proto_error<S: Into<String>>(message: S) -> DataFusionError {
+    DataFusionError::Internal(message.into())
+}

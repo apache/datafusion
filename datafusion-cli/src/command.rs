@@ -59,22 +59,16 @@ impl Command {
     ) -> Result<()> {
         let now = Instant::now();
         match self {
-            Self::Help => print_options
-                .print_batches(&[all_commands_info()], now)
-                .map_err(|e| DataFusionError::Execution(e.to_string())),
+            Self::Help => print_options.print_batches(&[all_commands_info()], now),
             Self::ListTables => {
                 let df = ctx.sql("SHOW TABLES").await?;
                 let batches = df.collect().await?;
-                print_options
-                    .print_batches(&batches, now)
-                    .map_err(|e| DataFusionError::Execution(e.to_string()))
+                print_options.print_batches(&batches, now)
             }
             Self::DescribeTable(name) => {
                 let df = ctx.sql(&format!("SHOW COLUMNS FROM {}", name)).await?;
                 let batches = df.collect().await?;
-                print_options
-                    .print_batches(&batches, now)
-                    .map_err(|e| DataFusionError::Execution(e.to_string()))
+                print_options.print_batches(&batches, now)
             }
             Self::Include(filename) => {
                 if let Some(filename) = filename {
