@@ -22,7 +22,6 @@ use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
-use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use std::any::Any;
 use std::ops::Range;
@@ -61,10 +60,7 @@ impl BuiltInWindowFunctionExpr for RowNumber {
         &self.name
     }
 
-    fn create_evaluator(
-        &self,
-        _batch: &RecordBatch,
-    ) -> Result<Box<dyn PartitionEvaluator>> {
+    fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::<NumRowsEvaluator>::default())
     }
 }
@@ -73,7 +69,11 @@ impl BuiltInWindowFunctionExpr for RowNumber {
 pub(crate) struct NumRowsEvaluator {}
 
 impl PartitionEvaluator for NumRowsEvaluator {
-    fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
+    fn evaluate_partition(
+        &self,
+        _values: &[ArrayRef],
+        partition: Range<usize>,
+    ) -> Result<ArrayRef> {
         let num_rows = partition.end - partition.start;
         Ok(Arc::new(UInt64Array::from_iter_values(
             1..(num_rows as u64) + 1,
@@ -96,7 +96,10 @@ mod tests {
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, true)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
         let row_number = RowNumber::new("row_number".to_owned());
-        let result = row_number.create_evaluator(&batch)?.evaluate(vec![0..8])?;
+        let values = row_number.evaluate_args(&batch)?;
+        let result = row_number
+            .create_evaluator()?
+            .evaluate(&values, vec![0..8])?;
         assert_eq!(1, result.len());
         let result = as_uint64_array(&result[0])?;
         let result = result.values();
@@ -112,7 +115,10 @@ mod tests {
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![arr])?;
         let row_number = RowNumber::new("row_number".to_owned());
-        let result = row_number.create_evaluator(&batch)?.evaluate(vec![0..8])?;
+        let values = row_number.evaluate_args(&batch)?;
+        let result = row_number
+            .create_evaluator()?
+            .evaluate(&values, vec![0..8])?;
         assert_eq!(1, result.len());
         let result = as_uint64_array(&result[0])?;
         let result = result.values();

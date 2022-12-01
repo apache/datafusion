@@ -87,15 +87,9 @@ impl WindowExpr for AggregateWindowExpr {
         let partition_columns = self.partition_columns(batch)?;
         let partition_points =
             self.evaluate_partition_points(batch.num_rows(), &partition_columns)?;
-        let values = self.evaluate_args(batch)?;
-
         let sort_options: Vec<SortOptions> =
             self.order_by.iter().map(|o| o.options).collect();
-        let columns = self.sort_columns(batch)?;
-        let order_columns: Vec<&ArrayRef> = columns.iter().map(|s| &s.values).collect();
-        // Sort values, this will make the same partitions consecutive. Also, within the partition
-        // range, values will be sorted.
-        let order_bys = &order_columns[self.partition_by.len()..];
+        let (_, order_bys) = self.get_values_orderbys(batch)?;
         let window_frame = if !order_bys.is_empty() && self.window_frame.is_none() {
             // OVER (ORDER BY a) case
             // We create an implicit window for ORDER BY.
@@ -107,14 +101,8 @@ impl WindowExpr for AggregateWindowExpr {
         for partition_range in &partition_points {
             let mut accumulator = self.aggregate.create_accumulator()?;
             let length = partition_range.end - partition_range.start;
-            let slice_order_bys = order_bys
-                .iter()
-                .map(|v| v.slice(partition_range.start, length))
-                .collect::<Vec<_>>();
-            let value_slice = values
-                .iter()
-                .map(|v| v.slice(partition_range.start, length))
-                .collect::<Vec<_>>();
+            let (values, order_bys) =
+                self.get_values_orderbys(&batch.slice(partition_range.start, length))?;
 
             let mut window_frame_ctx = WindowFrameContext::new(&window_frame);
             let mut last_range: (usize, usize) = (0, 0);
@@ -123,7 +111,7 @@ impl WindowExpr for AggregateWindowExpr {
             // First, cur_range is calculated, then it is compared with last_range.
             for i in 0..length {
                 let cur_range = window_frame_ctx.calculate_range(
-                    &slice_order_bys,
+                    &order_bys,
                     &sort_options,
                     length,
                     i,
@@ -135,7 +123,7 @@ impl WindowExpr for AggregateWindowExpr {
                     // Accumulate any new rows that have entered the window:
                     let update_bound = cur_range.1 - last_range.1;
                     if update_bound > 0 {
-                        let update: Vec<ArrayRef> = value_slice
+                        let update: Vec<ArrayRef> = values
                             .iter()
                             .map(|v| v.slice(last_range.1, update_bound))
                             .collect();
@@ -144,7 +132,7 @@ impl WindowExpr for AggregateWindowExpr {
                     // Remove rows that have now left the window:
                     let retract_bound = cur_range.0 - last_range.0;
                     if retract_bound > 0 {
-                        let retract: Vec<ArrayRef> = value_slice
+                        let retract: Vec<ArrayRef> = values
                             .iter()
                             .map(|v| v.slice(last_range.0, retract_bound))
                             .collect();

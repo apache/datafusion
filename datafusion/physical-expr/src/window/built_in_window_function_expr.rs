@@ -17,6 +17,7 @@
 
 use super::partition_evaluator::PartitionEvaluator;
 use crate::PhysicalExpr;
+use arrow::array::ArrayRef;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -45,9 +46,16 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
         "BuiltInWindowFunctionExpr: default name"
     }
 
+    /// Evaluate window function arguments against the batch and return
+    /// an array ref. Typically, the resulting vector is a single element vector.
+    fn evaluate_args(&self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
+        self.expressions()
+            .iter()
+            .map(|e| e.evaluate(batch))
+            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .collect()
+    }
+
     /// Create built-in window evaluator with a batch
-    fn create_evaluator(
-        &self,
-        batch: &RecordBatch,
-    ) -> Result<Box<dyn PartitionEvaluator>>;
+    fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
 }
