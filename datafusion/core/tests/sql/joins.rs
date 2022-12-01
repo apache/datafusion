@@ -2210,8 +2210,6 @@ async fn null_aware_left_anti_join() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "Test ignored, will be enabled after fixing right semi join bug"]
-// https://github.com/apache/arrow-datafusion/issues/4247
 async fn right_semi_join() -> Result<()> {
     let test_repartition_joins = vec![true, false];
     for repartition_joins in test_repartition_joins {
