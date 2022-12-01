@@ -296,7 +296,7 @@ jobs:
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
     needs: [linux-build-lib]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     container:
       image: amd64/rust
       env:
