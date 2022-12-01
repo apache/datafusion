@@ -22,7 +22,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
 
-use arrow::datatypes::*;
+use arrow_schema::*;
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayAgg, ExactNumberInfo, SetQuantifier};
 use sqlparser::ast::{
@@ -1129,7 +1129,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.aggregate(
                     plan,
                     &select_exprs,
-                    &having_expr_opt,
+                    having_expr_opt.as_ref(),
                     group_by_exprs,
                     aggr_exprs,
                 )?
@@ -1267,7 +1267,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         input: LogicalPlan,
         select_exprs: &[Expr],
-        having_expr_opt: &Option<Expr>,
+        having_expr_opt: Option<&Expr>,
         group_by_exprs: Vec<Expr>,
         aggr_exprs: Vec<Expr>,
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {

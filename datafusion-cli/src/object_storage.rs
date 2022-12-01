@@ -60,7 +60,7 @@ fn build_s3_object_store(url: &Url) -> Result<Arc<dyn object_store::ObjectStore>
     let host = get_host_name(url)?;
     match AmazonS3Builder::from_env().with_bucket_name(host).build() {
         Ok(s3) => Ok(Arc::new(s3)),
-        Err(err) => Err(DataFusionError::Execution(err.to_string())),
+        Err(err) => Err(DataFusionError::External(Box::new(err))),
     }
 }
 
@@ -73,7 +73,7 @@ fn build_gcs_object_store(url: &Url) -> Result<Arc<dyn object_store::ObjectStore
     }
     match builder.build() {
         Ok(gcs) => Ok(Arc::new(gcs)),
-        Err(err) => Err(DataFusionError::Execution(err.to_string())),
+        Err(err) => Err(DataFusionError::External(Box::new(err))),
     }
 }
 

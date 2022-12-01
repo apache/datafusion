@@ -103,9 +103,9 @@ impl TableProviderFactory for ListingTableFactory {
                 .table_partition_cols
                 .iter()
                 .map(|col| {
-                    schema.field_with_name(col).map_err(|arrow_err| {
-                        DataFusionError::Execution(arrow_err.to_string())
-                    })
+                    schema
+                        .field_with_name(col)
+                        .map_err(DataFusionError::ArrowError)
                 })
                 .collect::<datafusion_common::Result<Vec<_>>>()?
                 .into_iter()

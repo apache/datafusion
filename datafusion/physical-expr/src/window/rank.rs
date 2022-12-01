@@ -24,7 +24,6 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
-use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use std::any::Any;
 use std::iter;
@@ -92,10 +91,7 @@ impl BuiltInWindowFunctionExpr for Rank {
         &self.name
     }
 
-    fn create_evaluator(
-        &self,
-        _batch: &RecordBatch,
-    ) -> Result<Box<dyn PartitionEvaluator>> {
+    fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(RankEvaluator {
             rank_type: self.rank_type,
         }))
@@ -109,10 +105,6 @@ pub(crate) struct RankEvaluator {
 impl PartitionEvaluator for RankEvaluator {
     fn include_rank(&self) -> bool {
         true
-    }
-
-    fn evaluate_partition(&self, _partition: Range<usize>) -> Result<ArrayRef> {
-        unreachable!("rank evaluation must be called with evaluate_partition_with_rank")
     }
 
     fn evaluate_partition_with_rank(
@@ -166,35 +158,24 @@ impl PartitionEvaluator for RankEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::{array::*, datatypes::*};
     use datafusion_common::cast::{as_float64_array, as_uint64_array};
 
     fn test_with_rank(expr: &Rank, expected: Vec<u64>) -> Result<()> {
-        test_i32_result(
-            expr,
-            vec![-2, -2, 1, 3, 3, 3, 7, 8],
-            vec![0..2, 2..3, 3..6, 6..7, 7..8],
-            expected,
-        )
+        test_i32_result(expr, vec![0..2, 2..3, 3..6, 6..7, 7..8], expected)
     }
 
     fn test_without_rank(expr: &Rank, expected: Vec<u64>) -> Result<()> {
-        test_i32_result(expr, vec![-2, -2, 1, 3, 3, 3, 7, 8], vec![0..8], expected)
+        test_i32_result(expr, vec![0..8], expected)
     }
 
     fn test_f64_result(
         expr: &Rank,
-        data: Vec<i32>,
         range: Range<usize>,
         ranks: Vec<Range<usize>>,
         expected: Vec<f64>,
     ) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(data));
-        let values = vec![arr];
-        let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
-        let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
         let result = expr
-            .create_evaluator(&batch)?
+            .create_evaluator()?
             .evaluate_with_rank(vec![range], ranks)?;
         assert_eq!(1, result.len());
         let result = as_float64_array(&result[0])?;
@@ -205,16 +186,11 @@ mod tests {
 
     fn test_i32_result(
         expr: &Rank,
-        data: Vec<i32>,
         ranks: Vec<Range<usize>>,
         expected: Vec<u64>,
     ) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(data));
-        let values = vec![arr];
-        let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
-        let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
         let result = expr
-            .create_evaluator(&batch)?
+            .create_evaluator()?
             .evaluate_with_rank(vec![0..8], ranks)?;
         assert_eq!(1, result.len());
         let result = as_uint64_array(&result[0])?;
@@ -245,25 +221,19 @@ mod tests {
 
         // empty case
         let expected = vec![0.0; 0];
-        test_f64_result(&r, vec![0; 0], 0..0, vec![0..0; 0], expected)?;
+        test_f64_result(&r, 0..0, vec![0..0; 0], expected)?;
 
         // singleton case
         let expected = vec![0.0];
-        test_f64_result(&r, vec![13], 0..1, vec![0..1], expected)?;
+        test_f64_result(&r, 0..1, vec![0..1], expected)?;
 
         // uniform case
         let expected = vec![0.0; 7];
-        test_f64_result(&r, vec![4; 7], 0..7, vec![0..7], expected)?;
+        test_f64_result(&r, 0..7, vec![0..7], expected)?;
 
         // non-trivial case
         let expected = vec![0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 0.5];
-        test_f64_result(
-            &r,
-            vec![1, 1, 1, 2, 2, 2, 2],
-            0..7,
-            vec![0..3, 3..7],
-            expected,
-        )?;
+        test_f64_result(&r, 0..7, vec![0..3, 3..7], expected)?;
 
         Ok(())
     }

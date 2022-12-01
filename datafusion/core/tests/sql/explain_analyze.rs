@@ -907,3 +907,25 @@ async fn explain_physical_plan_only() {
     ]];
     assert_eq!(expected, actual);
 }
+
+#[tokio::test]
+async fn explain_nested() {
+    async fn test_nested_explain(explain_phy_plan_flag: bool) {
+        let config = SessionConfig::new()
+            .set_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY, explain_phy_plan_flag);
+        let ctx = SessionContext::with_config(config);
+        let sql = "EXPLAIN explain select 1";
+        let plan = ctx.create_logical_plan(sql).unwrap();
+
+        let plan = ctx.create_physical_plan(&plan).await;
+
+        assert!(plan
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Explain must be root of the plan"));
+    }
+
+    test_nested_explain(true).await;
+    test_nested_explain(false).await;
+}

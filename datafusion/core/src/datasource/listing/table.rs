@@ -547,7 +547,7 @@ impl TableProvider for ListingTable {
     async fn scan(
         &self,
         ctx: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -557,7 +557,7 @@ impl TableProvider for ListingTable {
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
             let schema = self.schema();
-            let projected_schema = project_schema(&schema, projection.as_ref())?;
+            let projected_schema = project_schema(&schema, projection)?;
             return Ok(Arc::new(EmptyExec::new(false, projected_schema)));
         }
 
@@ -586,7 +586,7 @@ impl TableProvider for ListingTable {
                     file_schema: Arc::clone(&self.file_schema),
                     file_groups: partitioned_file_lists,
                     statistics,
-                    projection: projection.clone(),
+                    projection: projection.cloned(),
                     limit,
                     output_ordering: self.try_create_output_ordering()?,
                     table_partition_cols,
@@ -710,7 +710,7 @@ mod tests {
         let table = load_table(&ctx, "alltypes_plain.parquet").await?;
         let projection = None;
         let exec = table
-            .scan(&ctx.state(), &projection, &[], None)
+            .scan(&ctx.state(), projection, &[], None)
             .await
             .expect("Scan table");
 
@@ -740,7 +740,7 @@ mod tests {
             .with_schema(schema);
         let table = ListingTable::try_new(config)?;
 
-        let exec = table.scan(&state, &None, &[], None).await?;
+        let exec = table.scan(&state, None, &[], None).await?;
         assert_eq!(exec.statistics().num_rows, Some(8));
         assert_eq!(exec.statistics().total_byte_size, Some(671));
 
@@ -880,7 +880,7 @@ mod tests {
         let filter = Expr::not_eq(col("p1"), lit("v1"));
 
         let scan = table
-            .scan(&ctx.state(), &None, &[filter], None)
+            .scan(&ctx.state(), None, &[filter], None)
             .await
             .expect("Empty execution plan");
 

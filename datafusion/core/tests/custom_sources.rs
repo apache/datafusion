@@ -193,12 +193,12 @@ impl TableProvider for CustomTableProvider {
     async fn scan(
         &self,
         _state: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(CustomExecutionPlan {
-            projection: projection.clone(),
+            projection: projection.cloned(),
         }))
     }
 }

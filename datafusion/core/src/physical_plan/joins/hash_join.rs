@@ -248,8 +248,8 @@ impl HashJoinExec {
     }
 
     /// Filters applied before join output
-    pub fn filter(&self) -> &Option<JoinFilter> {
-        &self.filter
+    pub fn filter(&self) -> Option<&JoinFilter> {
+        self.filter.as_ref()
     }
 
     /// How the join is performed
@@ -698,7 +698,7 @@ fn build_join_indices(
     left_data: &JoinLeftData,
     on_left: &[Column],
     on_right: &[Column],
-    filter: &Option<JoinFilter>,
+    filter: Option<&JoinFilter>,
     random_state: &RandomState,
     null_equals_null: &bool,
 ) -> Result<(UInt64Array, UInt32Array)> {
@@ -1363,7 +1363,7 @@ impl HashJoinStream {
                         left_data,
                         &self.on_left,
                         &self.on_right,
-                        &self.filter,
+                        self.filter.as_ref(),
                         &self.random_state,
                         &self.null_equals_null,
                     );

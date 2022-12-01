@@ -930,7 +930,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 projection,
                                 definition: view_table
                                     .definition()
-                                    .clone()
+                                    .map(|s| s.to_string())
                                     .unwrap_or_default(),
                             },
                         ))),
