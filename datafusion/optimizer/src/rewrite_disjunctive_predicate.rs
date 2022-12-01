@@ -131,12 +131,12 @@ impl OptimizerRule for RewriteDisjunctivePredicate {
     ) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(filter) => {
-                let predicate = predicate(filter.predicate())?;
+                let predicate = predicate(&filter.predicate)?;
                 let rewritten_predicate = rewrite_predicate(predicate);
                 let rewritten_expr = normalize_predicate(rewritten_predicate);
                 Ok(LogicalPlan::Filter(Filter::try_new(
                     rewritten_expr,
-                    Arc::new(Self::optimize(self, filter.input(), _optimizer_config)?),
+                    Arc::new(Self::optimize(self, &filter.input, _optimizer_config)?),
                 )?))
             }
             _ => utils::optimize_children(self, plan, _optimizer_config),

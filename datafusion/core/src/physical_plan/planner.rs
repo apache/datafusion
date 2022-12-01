@@ -756,12 +756,12 @@ impl DefaultPhysicalPlanner {
                     )?))
                 }
                 LogicalPlan::Filter(filter) => {
-                    let physical_input = self.create_initial_plan(filter.input(), session_state).await?;
+                    let physical_input = self.create_initial_plan(&filter.input, session_state).await?;
                     let input_schema = physical_input.as_ref().schema();
-                    let input_dfschema = filter.input().schema();
+                    let input_dfschema = filter.input.schema();
 
                     let runtime_expr = self.create_physical_expr(
-                        filter.predicate(),
+                        &filter.predicate,
                         input_dfschema,
                         &input_schema,
                         session_state,

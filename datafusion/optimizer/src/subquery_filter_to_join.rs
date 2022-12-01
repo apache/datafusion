@@ -57,10 +57,10 @@ impl OptimizerRule for SubqueryFilterToJoin {
         match plan {
             LogicalPlan::Filter(filter) => {
                 // Apply optimizer rule to current input
-                let optimized_input = self.optimize(filter.input(), optimizer_config)?;
+                let optimized_input = self.optimize(&filter.input, optimizer_config)?;
 
                 // Splitting filter expression into components by AND
-                let filters = utils::split_conjunction(filter.predicate());
+                let filters = utils::split_conjunction(&filter.predicate);
 
                 // Searching for subquery-based filters
                 let (subquery_filters, regular_filters): (Vec<&Expr>, Vec<&Expr>) =
@@ -79,7 +79,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
 
                 if !subqueries_in_regular.is_empty() {
                     return Ok(LogicalPlan::Filter(Filter::try_new(
-                        filter.predicate().clone(),
+                        filter.predicate.clone(),
                         Arc::new(optimized_input),
                     )?));
                 };
@@ -151,7 +151,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                     Ok(plan) => plan,
                     Err(_) => {
                         return Ok(LogicalPlan::Filter(Filter::try_new(
-                            filter.predicate().clone(),
+                            filter.predicate.clone(),
                             Arc::new(optimized_input),
                         )?))
                     }

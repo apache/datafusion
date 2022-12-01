@@ -43,10 +43,8 @@ impl OptimizerRule for EliminateFilter {
         _optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         let predicate_and_input = match plan {
-            LogicalPlan::Filter(filter) => match filter.predicate() {
-                Expr::Literal(ScalarValue::Boolean(Some(v))) => {
-                    Some((*v, filter.input()))
-                }
+            LogicalPlan::Filter(filter) => match filter.predicate {
+                Expr::Literal(ScalarValue::Boolean(Some(v))) => Some((v, &filter.input)),
                 _ => None,
             },
             _ => None,

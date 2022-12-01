@@ -1193,9 +1193,9 @@ pub struct SubqueryAlias {
 #[derive(Clone)]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
-    predicate: Expr,
+    pub predicate: Expr,
     /// The incoming logical plan
-    input: Arc<LogicalPlan>,
+    pub input: Arc<LogicalPlan>,
 }
 
 impl Filter {

@@ -68,12 +68,12 @@ impl OptimizerRule for EliminateOuterJoin {
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
         match plan {
-            LogicalPlan::Filter(filter) => match filter.input().as_ref() {
+            LogicalPlan::Filter(filter) => match filter.input.as_ref() {
                 LogicalPlan::Join(join) => {
                     let mut non_nullable_cols: Vec<Column> = vec![];
 
                     extract_non_nullable_columns(
-                        filter.predicate(),
+                        &filter.predicate,
                         &mut non_nullable_cols,
                         join.left.schema(),
                         join.right.schema(),

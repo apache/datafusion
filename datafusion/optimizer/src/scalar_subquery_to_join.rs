@@ -97,21 +97,21 @@ impl OptimizerRule for ScalarSubqueryToJoin {
         match plan {
             LogicalPlan::Filter(filter) => {
                 // Apply optimizer rule to current input
-                let optimized_input = self.optimize(filter.input(), optimizer_config)?;
+                let optimized_input = self.optimize(&filter.input, optimizer_config)?;
 
                 let (subqueries, other_exprs) =
-                    self.extract_subquery_exprs(filter.predicate(), optimizer_config)?;
+                    self.extract_subquery_exprs(&filter.predicate, optimizer_config)?;
 
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
                     return Ok(LogicalPlan::Filter(Filter::try_new(
-                        filter.predicate().clone(),
+                        filter.predicate.clone(),
                         Arc::new(optimized_input),
                     )?));
                 }
 
                 // iterate through all subqueries in predicate, turning each into a join
-                let mut cur_input = filter.input().as_ref().clone();
+                let mut cur_input = filter.input.as_ref().clone();
                 for subquery in subqueries {
                     if let Some(optimized_subquery) = optimize_scalar(
                         &subquery,
@@ -123,7 +123,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                     } else {
                         // if we can't handle all of the subqueries then bail for now
                         return Ok(LogicalPlan::Filter(Filter::try_new(
-                            filter.predicate().clone(),
+                            filter.predicate.clone(),
                             Arc::new(optimized_input),
                         )?));
                     }
@@ -228,14 +228,14 @@ fn optimize_scalar(
 
     // if there were filters, we use that logical plan, otherwise the plan from the aggregate
     let input = if let Some(filter) = filter {
-        filter.input()
+        &filter.input
     } else {
         &aggr.input
     };
 
     // if there were filters, split and capture them
     let subqry_filter_exprs = if let Some(filter) = filter {
-        split_conjunction(filter.predicate())
+        split_conjunction(&filter.predicate)
     } else {
         vec![]
     };
