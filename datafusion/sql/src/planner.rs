@@ -665,6 +665,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // From clause may exist CTEs, we should separate them from global CTEs.
         // CTEs in from clause are allowed to be duplicated.
         // Such as `select * from (WITH source AS (select 1 as e) SELECT * FROM source) t1, (WITH source AS (select 1 as e) SELECT * FROM source) t2;` which is valid.
+        // So always use original global CTEs to plan CTEs in from clause.
+        // Btw, don't need to add CTEs in from to global CTEs.
         let origin_ctes = ctes.clone();
         let left = self.create_relation(t.relation, ctes, outer_query_schema)?;
         match t.joins.len() {
