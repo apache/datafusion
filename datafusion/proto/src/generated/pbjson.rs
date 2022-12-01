@@ -1,3 +1,117 @@
+impl serde::Serialize for Action {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.settings.is_empty() {
+            len += 1;
+        }
+        if self.action_type.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.Action", len)?;
+        if !self.settings.is_empty() {
+            struct_ser.serialize_field("settings", &self.settings)?;
+        }
+        if let Some(v) = self.action_type.as_ref() {
+            match v {
+                action::ActionType::FetchPartition(v) => {
+                    struct_ser.serialize_field("fetchPartition", v)?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for Action {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "settings",
+            "fetch_partition",
+            "fetchPartition",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Settings,
+            FetchPartition,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "settings" => Ok(GeneratedField::Settings),
+                            "fetchPartition" | "fetch_partition" => Ok(GeneratedField::FetchPartition),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = Action;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.Action")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<Action, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut settings__ = None;
+                let mut action_type__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Settings => {
+                            if settings__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("settings"));
+                            }
+                            settings__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::FetchPartition => {
+                            if action_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fetchPartition"));
+                            }
+                            action_type__ = map.next_value::<::std::option::Option<_>>()?.map(action::ActionType::FetchPartition)
+;
+                        }
+                    }
+                }
+                Ok(Action {
+                    settings: settings__.unwrap_or_default(),
+                    action_type: action_type__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.Action", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for AggregateExecNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -5342,6 +5456,115 @@ impl<'de> serde::Deserialize<'de> for EmptyRelationNode {
         deserializer.deserialize_struct("datafusion.EmptyRelationNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ExecutorData {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.executor_id.is_empty() {
+            len += 1;
+        }
+        if !self.resources.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ExecutorData", len)?;
+        if !self.executor_id.is_empty() {
+            struct_ser.serialize_field("executorId", &self.executor_id)?;
+        }
+        if !self.resources.is_empty() {
+            struct_ser.serialize_field("resources", &self.resources)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ExecutorData {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "executor_id",
+            "executorId",
+            "resources",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ExecutorId,
+            Resources,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "executorId" | "executor_id" => Ok(GeneratedField::ExecutorId),
+                            "resources" => Ok(GeneratedField::Resources),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ExecutorData;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ExecutorData")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<ExecutorData, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut executor_id__ = None;
+                let mut resources__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::ExecutorId => {
+                            if executor_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("executorId"));
+                            }
+                            executor_id__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::Resources => {
+                            if resources__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("resources"));
+                            }
+                            resources__ = Some(map.next_value()?);
+                        }
+                    }
+                }
+                Ok(ExecutorData {
+                    executor_id: executor_id__.unwrap_or_default(),
+                    resources: resources__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ExecutorData", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ExecutorHeartbeat {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -6011,6 +6234,114 @@ impl<'de> serde::Deserialize<'de> for ExecutorResource {
         deserializer.deserialize_struct("datafusion.ExecutorResource", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ExecutorResourcePair {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.total.is_some() {
+            len += 1;
+        }
+        if self.available.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ExecutorResourcePair", len)?;
+        if let Some(v) = self.total.as_ref() {
+            struct_ser.serialize_field("total", v)?;
+        }
+        if let Some(v) = self.available.as_ref() {
+            struct_ser.serialize_field("available", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ExecutorResourcePair {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "total",
+            "available",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Total,
+            Available,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "total" => Ok(GeneratedField::Total),
+                            "available" => Ok(GeneratedField::Available),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ExecutorResourcePair;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.ExecutorResourcePair")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<ExecutorResourcePair, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut total__ = None;
+                let mut available__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Total => {
+                            if total__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("total"));
+                            }
+                            total__ = map.next_value()?;
+                        }
+                        GeneratedField::Available => {
+                            if available__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("available"));
+                            }
+                            available__ = map.next_value()?;
+                        }
+                    }
+                }
+                Ok(ExecutorResourcePair {
+                    total: total__,
+                    available: available__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.ExecutorResourcePair", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ExecutorSpecification {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -6453,6 +6784,191 @@ impl<'de> serde::Deserialize<'de> for ExplainNode {
             }
         }
         deserializer.deserialize_struct("datafusion.ExplainNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for FetchPartition {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.job_id.is_empty() {
+            len += 1;
+        }
+        if self.stage_id != 0 {
+            len += 1;
+        }
+        if self.partition_id != 0 {
+            len += 1;
+        }
+        if !self.path.is_empty() {
+            len += 1;
+        }
+        if !self.host.is_empty() {
+            len += 1;
+        }
+        if self.port != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.FetchPartition", len)?;
+        if !self.job_id.is_empty() {
+            struct_ser.serialize_field("jobId", &self.job_id)?;
+        }
+        if self.stage_id != 0 {
+            struct_ser.serialize_field("stageId", &self.stage_id)?;
+        }
+        if self.partition_id != 0 {
+            struct_ser.serialize_field("partitionId", &self.partition_id)?;
+        }
+        if !self.path.is_empty() {
+            struct_ser.serialize_field("path", &self.path)?;
+        }
+        if !self.host.is_empty() {
+            struct_ser.serialize_field("host", &self.host)?;
+        }
+        if self.port != 0 {
+            struct_ser.serialize_field("port", &self.port)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for FetchPartition {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "job_id",
+            "jobId",
+            "stage_id",
+            "stageId",
+            "partition_id",
+            "partitionId",
+            "path",
+            "host",
+            "port",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            JobId,
+            StageId,
+            PartitionId,
+            Path,
+            Host,
+            Port,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "jobId" | "job_id" => Ok(GeneratedField::JobId),
+                            "stageId" | "stage_id" => Ok(GeneratedField::StageId),
+                            "partitionId" | "partition_id" => Ok(GeneratedField::PartitionId),
+                            "path" => Ok(GeneratedField::Path),
+                            "host" => Ok(GeneratedField::Host),
+                            "port" => Ok(GeneratedField::Port),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = FetchPartition;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.FetchPartition")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<FetchPartition, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut job_id__ = None;
+                let mut stage_id__ = None;
+                let mut partition_id__ = None;
+                let mut path__ = None;
+                let mut host__ = None;
+                let mut port__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::JobId => {
+                            if job_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("jobId"));
+                            }
+                            job_id__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::StageId => {
+                            if stage_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stageId"));
+                            }
+                            stage_id__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::PartitionId => {
+                            if partition_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitionId"));
+                            }
+                            partition_id__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Path => {
+                            if path__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("path"));
+                            }
+                            path__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::Host => {
+                            if host__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("host"));
+                            }
+                            host__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::Port => {
+                            if port__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("port"));
+                            }
+                            port__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(FetchPartition {
+                    job_id: job_id__.unwrap_or_default(),
+                    stage_id: stage_id__.unwrap_or_default(),
+                    partition_id: partition_id__.unwrap_or_default(),
+                    path: path__.unwrap_or_default(),
+                    host: host__.unwrap_or_default(),
+                    port: port__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.FetchPartition", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for Field {
@@ -9846,6 +10362,114 @@ impl<'de> serde::Deserialize<'de> for JoinType {
         deserializer.deserialize_any(GeneratedVisitor)
     }
 }
+impl serde::Serialize for KeyValuePair {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.key.is_empty() {
+            len += 1;
+        }
+        if !self.value.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.KeyValuePair", len)?;
+        if !self.key.is_empty() {
+            struct_ser.serialize_field("key", &self.key)?;
+        }
+        if !self.value.is_empty() {
+            struct_ser.serialize_field("value", &self.value)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for KeyValuePair {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "key",
+            "value",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Key,
+            Value,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "key" => Ok(GeneratedField::Key),
+                            "value" => Ok(GeneratedField::Value),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = KeyValuePair;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.KeyValuePair")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<KeyValuePair, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut key__ = None;
+                let mut value__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Key => {
+                            if key__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("key"));
+                            }
+                            key__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::Value => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("value"));
+                            }
+                            value__ = Some(map.next_value()?);
+                        }
+                    }
+                }
+                Ok(KeyValuePair {
+                    key: key__.unwrap_or_default(),
+                    value: value__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.KeyValuePair", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for LikeNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -11758,6 +12382,578 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
         deserializer.deserialize_struct("datafusion.LogicalPlanNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for MultiTaskDefinition {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.task_ids.is_empty() {
+            len += 1;
+        }
+        if !self.job_id.is_empty() {
+            len += 1;
+        }
+        if self.stage_id != 0 {
+            len += 1;
+        }
+        if self.stage_attempt_num != 0 {
+            len += 1;
+        }
+        if !self.plan.is_empty() {
+            len += 1;
+        }
+        if self.output_partitioning.is_some() {
+            len += 1;
+        }
+        if !self.session_id.is_empty() {
+            len += 1;
+        }
+        if self.launch_time != 0 {
+            len += 1;
+        }
+        if !self.props.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.MultiTaskDefinition", len)?;
+        if !self.task_ids.is_empty() {
+            struct_ser.serialize_field("taskIds", &self.task_ids)?;
+        }
+        if !self.job_id.is_empty() {
+            struct_ser.serialize_field("jobId", &self.job_id)?;
+        }
+        if self.stage_id != 0 {
+            struct_ser.serialize_field("stageId", &self.stage_id)?;
+        }
+        if self.stage_attempt_num != 0 {
+            struct_ser.serialize_field("stageAttemptNum", &self.stage_attempt_num)?;
+        }
+        if !self.plan.is_empty() {
+            struct_ser.serialize_field("plan", pbjson::private::base64::encode(&self.plan).as_str())?;
+        }
+        if let Some(v) = self.output_partitioning.as_ref() {
+            struct_ser.serialize_field("outputPartitioning", v)?;
+        }
+        if !self.session_id.is_empty() {
+            struct_ser.serialize_field("sessionId", &self.session_id)?;
+        }
+        if self.launch_time != 0 {
+            struct_ser.serialize_field("launchTime", ToString::to_string(&self.launch_time).as_str())?;
+        }
+        if !self.props.is_empty() {
+            struct_ser.serialize_field("props", &self.props)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for MultiTaskDefinition {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "task_ids",
+            "taskIds",
+            "job_id",
+            "jobId",
+            "stage_id",
+            "stageId",
+            "stage_attempt_num",
+            "stageAttemptNum",
+            "plan",
+            "output_partitioning",
+            "outputPartitioning",
+            "session_id",
+            "sessionId",
+            "launch_time",
+            "launchTime",
+            "props",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            TaskIds,
+            JobId,
+            StageId,
+            StageAttemptNum,
+            Plan,
+            OutputPartitioning,
+            SessionId,
+            LaunchTime,
+            Props,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "taskIds" | "task_ids" => Ok(GeneratedField::TaskIds),
+                            "jobId" | "job_id" => Ok(GeneratedField::JobId),
+                            "stageId" | "stage_id" => Ok(GeneratedField::StageId),
+                            "stageAttemptNum" | "stage_attempt_num" => Ok(GeneratedField::StageAttemptNum),
+                            "plan" => Ok(GeneratedField::Plan),
+                            "outputPartitioning" | "output_partitioning" => Ok(GeneratedField::OutputPartitioning),
+                            "sessionId" | "session_id" => Ok(GeneratedField::SessionId),
+                            "launchTime" | "launch_time" => Ok(GeneratedField::LaunchTime),
+                            "props" => Ok(GeneratedField::Props),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = MultiTaskDefinition;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.MultiTaskDefinition")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<MultiTaskDefinition, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut task_ids__ = None;
+                let mut job_id__ = None;
+                let mut stage_id__ = None;
+                let mut stage_attempt_num__ = None;
+                let mut plan__ = None;
+                let mut output_partitioning__ = None;
+                let mut session_id__ = None;
+                let mut launch_time__ = None;
+                let mut props__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::TaskIds => {
+                            if task_ids__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("taskIds"));
+                            }
+                            task_ids__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::JobId => {
+                            if job_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("jobId"));
+                            }
+                            job_id__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::StageId => {
+                            if stage_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stageId"));
+                            }
+                            stage_id__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::StageAttemptNum => {
+                            if stage_attempt_num__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stageAttemptNum"));
+                            }
+                            stage_attempt_num__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Plan => {
+                            if plan__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("plan"));
+                            }
+                            plan__ = 
+                                Some(map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::OutputPartitioning => {
+                            if output_partitioning__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("outputPartitioning"));
+                            }
+                            output_partitioning__ = map.next_value()?;
+                        }
+                        GeneratedField::SessionId => {
+                            if session_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sessionId"));
+                            }
+                            session_id__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::LaunchTime => {
+                            if launch_time__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("launchTime"));
+                            }
+                            launch_time__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Props => {
+                            if props__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("props"));
+                            }
+                            props__ = Some(map.next_value()?);
+                        }
+                    }
+                }
+                Ok(MultiTaskDefinition {
+                    task_ids: task_ids__.unwrap_or_default(),
+                    job_id: job_id__.unwrap_or_default(),
+                    stage_id: stage_id__.unwrap_or_default(),
+                    stage_attempt_num: stage_attempt_num__.unwrap_or_default(),
+                    plan: plan__.unwrap_or_default(),
+                    output_partitioning: output_partitioning__,
+                    session_id: session_id__.unwrap_or_default(),
+                    launch_time: launch_time__.unwrap_or_default(),
+                    props: props__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.MultiTaskDefinition", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for NamedCount {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if self.value != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.NamedCount", len)?;
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if self.value != 0 {
+            struct_ser.serialize_field("value", ToString::to_string(&self.value).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for NamedCount {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "name",
+            "value",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Name,
+            Value,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "name" => Ok(GeneratedField::Name),
+                            "value" => Ok(GeneratedField::Value),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = NamedCount;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.NamedCount")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<NamedCount, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut name__ = None;
+                let mut value__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::Value => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("value"));
+                            }
+                            value__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(NamedCount {
+                    name: name__.unwrap_or_default(),
+                    value: value__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.NamedCount", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for NamedGauge {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if self.value != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.NamedGauge", len)?;
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if self.value != 0 {
+            struct_ser.serialize_field("value", ToString::to_string(&self.value).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for NamedGauge {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "name",
+            "value",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Name,
+            Value,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "name" => Ok(GeneratedField::Name),
+                            "value" => Ok(GeneratedField::Value),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = NamedGauge;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.NamedGauge")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<NamedGauge, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut name__ = None;
+                let mut value__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::Value => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("value"));
+                            }
+                            value__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(NamedGauge {
+                    name: name__.unwrap_or_default(),
+                    value: value__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.NamedGauge", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for NamedTime {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if self.value != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.NamedTime", len)?;
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if self.value != 0 {
+            struct_ser.serialize_field("value", ToString::to_string(&self.value).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for NamedTime {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "name",
+            "value",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Name,
+            Value,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "name" => Ok(GeneratedField::Name),
+                            "value" => Ok(GeneratedField::Value),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = NamedTime;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.NamedTime")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<NamedTime, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut name__ = None;
+                let mut value__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::Value => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("value"));
+                            }
+                            value__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(NamedTime {
+                    name: name__.unwrap_or_default(),
+                    value: value__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.NamedTime", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for NegativeNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -11938,6 +13134,310 @@ impl<'de> serde::Deserialize<'de> for Not {
             }
         }
         deserializer.deserialize_struct("datafusion.Not", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for OperatorMetric {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.metric.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.OperatorMetric", len)?;
+        if let Some(v) = self.metric.as_ref() {
+            match v {
+                operator_metric::Metric::OutputRows(v) => {
+                    struct_ser.serialize_field("outputRows", ToString::to_string(&v).as_str())?;
+                }
+                operator_metric::Metric::ElapseTime(v) => {
+                    struct_ser.serialize_field("elapseTime", ToString::to_string(&v).as_str())?;
+                }
+                operator_metric::Metric::SpillCount(v) => {
+                    struct_ser.serialize_field("spillCount", ToString::to_string(&v).as_str())?;
+                }
+                operator_metric::Metric::SpilledBytes(v) => {
+                    struct_ser.serialize_field("spilledBytes", ToString::to_string(&v).as_str())?;
+                }
+                operator_metric::Metric::CurrentMemoryUsage(v) => {
+                    struct_ser.serialize_field("currentMemoryUsage", ToString::to_string(&v).as_str())?;
+                }
+                operator_metric::Metric::Count(v) => {
+                    struct_ser.serialize_field("count", v)?;
+                }
+                operator_metric::Metric::Gauge(v) => {
+                    struct_ser.serialize_field("gauge", v)?;
+                }
+                operator_metric::Metric::Time(v) => {
+                    struct_ser.serialize_field("time", v)?;
+                }
+                operator_metric::Metric::StartTimestamp(v) => {
+                    struct_ser.serialize_field("startTimestamp", ToString::to_string(&v).as_str())?;
+                }
+                operator_metric::Metric::EndTimestamp(v) => {
+                    struct_ser.serialize_field("endTimestamp", ToString::to_string(&v).as_str())?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for OperatorMetric {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "output_rows",
+            "outputRows",
+            "elapse_time",
+            "elapseTime",
+            "spill_count",
+            "spillCount",
+            "spilled_bytes",
+            "spilledBytes",
+            "current_memory_usage",
+            "currentMemoryUsage",
+            "count",
+            "gauge",
+            "time",
+            "start_timestamp",
+            "startTimestamp",
+            "end_timestamp",
+            "endTimestamp",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            OutputRows,
+            ElapseTime,
+            SpillCount,
+            SpilledBytes,
+            CurrentMemoryUsage,
+            Count,
+            Gauge,
+            Time,
+            StartTimestamp,
+            EndTimestamp,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "outputRows" | "output_rows" => Ok(GeneratedField::OutputRows),
+                            "elapseTime" | "elapse_time" => Ok(GeneratedField::ElapseTime),
+                            "spillCount" | "spill_count" => Ok(GeneratedField::SpillCount),
+                            "spilledBytes" | "spilled_bytes" => Ok(GeneratedField::SpilledBytes),
+                            "currentMemoryUsage" | "current_memory_usage" => Ok(GeneratedField::CurrentMemoryUsage),
+                            "count" => Ok(GeneratedField::Count),
+                            "gauge" => Ok(GeneratedField::Gauge),
+                            "time" => Ok(GeneratedField::Time),
+                            "startTimestamp" | "start_timestamp" => Ok(GeneratedField::StartTimestamp),
+                            "endTimestamp" | "end_timestamp" => Ok(GeneratedField::EndTimestamp),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = OperatorMetric;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.OperatorMetric")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<OperatorMetric, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut metric__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::OutputRows => {
+                            if metric__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("outputRows"));
+                            }
+                            metric__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| operator_metric::Metric::OutputRows(x.0));
+                        }
+                        GeneratedField::ElapseTime => {
+                            if metric__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("elapseTime"));
+                            }
+                            metric__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| operator_metric::Metric::ElapseTime(x.0));
+                        }
+                        GeneratedField::SpillCount => {
+                            if metric__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("spillCount"));
+                            }
+                            metric__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| operator_metric::Metric::SpillCount(x.0));
+                        }
+                        GeneratedField::SpilledBytes => {
+                            if metric__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("spilledBytes"));
+                            }
+                            metric__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| operator_metric::Metric::SpilledBytes(x.0));
+                        }
+                        GeneratedField::CurrentMemoryUsage => {
+                            if metric__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("currentMemoryUsage"));
+                            }
+                            metric__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| operator_metric::Metric::CurrentMemoryUsage(x.0));
+                        }
+                        GeneratedField::Count => {
+                            if metric__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("count"));
+                            }
+                            metric__ = map.next_value::<::std::option::Option<_>>()?.map(operator_metric::Metric::Count)
+;
+                        }
+                        GeneratedField::Gauge => {
+                            if metric__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("gauge"));
+                            }
+                            metric__ = map.next_value::<::std::option::Option<_>>()?.map(operator_metric::Metric::Gauge)
+;
+                        }
+                        GeneratedField::Time => {
+                            if metric__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("time"));
+                            }
+                            metric__ = map.next_value::<::std::option::Option<_>>()?.map(operator_metric::Metric::Time)
+;
+                        }
+                        GeneratedField::StartTimestamp => {
+                            if metric__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("startTimestamp"));
+                            }
+                            metric__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| operator_metric::Metric::StartTimestamp(x.0));
+                        }
+                        GeneratedField::EndTimestamp => {
+                            if metric__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("endTimestamp"));
+                            }
+                            metric__ = map.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| operator_metric::Metric::EndTimestamp(x.0));
+                        }
+                    }
+                }
+                Ok(OperatorMetric {
+                    metric: metric__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.OperatorMetric", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for OperatorMetricsSet {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.metrics.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.OperatorMetricsSet", len)?;
+        if !self.metrics.is_empty() {
+            struct_ser.serialize_field("metrics", &self.metrics)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for OperatorMetricsSet {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "metrics",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Metrics,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "metrics" => Ok(GeneratedField::Metrics),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = OperatorMetricsSet;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.OperatorMetricsSet")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<OperatorMetricsSet, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut metrics__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::Metrics => {
+                            if metrics__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metrics"));
+                            }
+                            metrics__ = Some(map.next_value()?);
+                        }
+                    }
+                }
+                Ok(OperatorMetricsSet {
+                    metrics: metrics__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.OperatorMetricsSet", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for OptimizedLogicalPlanType {
@@ -20107,6 +21607,424 @@ impl<'de> serde::Deserialize<'de> for SubqueryAliasNode {
             }
         }
         deserializer.deserialize_struct("datafusion.SubqueryAliasNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for TaskDefinition {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.task_id != 0 {
+            len += 1;
+        }
+        if self.task_attempt_num != 0 {
+            len += 1;
+        }
+        if !self.job_id.is_empty() {
+            len += 1;
+        }
+        if self.stage_id != 0 {
+            len += 1;
+        }
+        if self.stage_attempt_num != 0 {
+            len += 1;
+        }
+        if self.partition_id != 0 {
+            len += 1;
+        }
+        if !self.plan.is_empty() {
+            len += 1;
+        }
+        if self.output_partitioning.is_some() {
+            len += 1;
+        }
+        if !self.session_id.is_empty() {
+            len += 1;
+        }
+        if self.launch_time != 0 {
+            len += 1;
+        }
+        if !self.props.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.TaskDefinition", len)?;
+        if self.task_id != 0 {
+            struct_ser.serialize_field("taskId", &self.task_id)?;
+        }
+        if self.task_attempt_num != 0 {
+            struct_ser.serialize_field("taskAttemptNum", &self.task_attempt_num)?;
+        }
+        if !self.job_id.is_empty() {
+            struct_ser.serialize_field("jobId", &self.job_id)?;
+        }
+        if self.stage_id != 0 {
+            struct_ser.serialize_field("stageId", &self.stage_id)?;
+        }
+        if self.stage_attempt_num != 0 {
+            struct_ser.serialize_field("stageAttemptNum", &self.stage_attempt_num)?;
+        }
+        if self.partition_id != 0 {
+            struct_ser.serialize_field("partitionId", &self.partition_id)?;
+        }
+        if !self.plan.is_empty() {
+            struct_ser.serialize_field("plan", pbjson::private::base64::encode(&self.plan).as_str())?;
+        }
+        if let Some(v) = self.output_partitioning.as_ref() {
+            struct_ser.serialize_field("outputPartitioning", v)?;
+        }
+        if !self.session_id.is_empty() {
+            struct_ser.serialize_field("sessionId", &self.session_id)?;
+        }
+        if self.launch_time != 0 {
+            struct_ser.serialize_field("launchTime", ToString::to_string(&self.launch_time).as_str())?;
+        }
+        if !self.props.is_empty() {
+            struct_ser.serialize_field("props", &self.props)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TaskDefinition {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "task_id",
+            "taskId",
+            "task_attempt_num",
+            "taskAttemptNum",
+            "job_id",
+            "jobId",
+            "stage_id",
+            "stageId",
+            "stage_attempt_num",
+            "stageAttemptNum",
+            "partition_id",
+            "partitionId",
+            "plan",
+            "output_partitioning",
+            "outputPartitioning",
+            "session_id",
+            "sessionId",
+            "launch_time",
+            "launchTime",
+            "props",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            TaskId,
+            TaskAttemptNum,
+            JobId,
+            StageId,
+            StageAttemptNum,
+            PartitionId,
+            Plan,
+            OutputPartitioning,
+            SessionId,
+            LaunchTime,
+            Props,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "taskId" | "task_id" => Ok(GeneratedField::TaskId),
+                            "taskAttemptNum" | "task_attempt_num" => Ok(GeneratedField::TaskAttemptNum),
+                            "jobId" | "job_id" => Ok(GeneratedField::JobId),
+                            "stageId" | "stage_id" => Ok(GeneratedField::StageId),
+                            "stageAttemptNum" | "stage_attempt_num" => Ok(GeneratedField::StageAttemptNum),
+                            "partitionId" | "partition_id" => Ok(GeneratedField::PartitionId),
+                            "plan" => Ok(GeneratedField::Plan),
+                            "outputPartitioning" | "output_partitioning" => Ok(GeneratedField::OutputPartitioning),
+                            "sessionId" | "session_id" => Ok(GeneratedField::SessionId),
+                            "launchTime" | "launch_time" => Ok(GeneratedField::LaunchTime),
+                            "props" => Ok(GeneratedField::Props),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TaskDefinition;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.TaskDefinition")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<TaskDefinition, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut task_id__ = None;
+                let mut task_attempt_num__ = None;
+                let mut job_id__ = None;
+                let mut stage_id__ = None;
+                let mut stage_attempt_num__ = None;
+                let mut partition_id__ = None;
+                let mut plan__ = None;
+                let mut output_partitioning__ = None;
+                let mut session_id__ = None;
+                let mut launch_time__ = None;
+                let mut props__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::TaskId => {
+                            if task_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("taskId"));
+                            }
+                            task_id__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::TaskAttemptNum => {
+                            if task_attempt_num__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("taskAttemptNum"));
+                            }
+                            task_attempt_num__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::JobId => {
+                            if job_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("jobId"));
+                            }
+                            job_id__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::StageId => {
+                            if stage_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stageId"));
+                            }
+                            stage_id__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::StageAttemptNum => {
+                            if stage_attempt_num__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stageAttemptNum"));
+                            }
+                            stage_attempt_num__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::PartitionId => {
+                            if partition_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitionId"));
+                            }
+                            partition_id__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Plan => {
+                            if plan__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("plan"));
+                            }
+                            plan__ = 
+                                Some(map.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::OutputPartitioning => {
+                            if output_partitioning__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("outputPartitioning"));
+                            }
+                            output_partitioning__ = map.next_value()?;
+                        }
+                        GeneratedField::SessionId => {
+                            if session_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sessionId"));
+                            }
+                            session_id__ = Some(map.next_value()?);
+                        }
+                        GeneratedField::LaunchTime => {
+                            if launch_time__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("launchTime"));
+                            }
+                            launch_time__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Props => {
+                            if props__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("props"));
+                            }
+                            props__ = Some(map.next_value()?);
+                        }
+                    }
+                }
+                Ok(TaskDefinition {
+                    task_id: task_id__.unwrap_or_default(),
+                    task_attempt_num: task_attempt_num__.unwrap_or_default(),
+                    job_id: job_id__.unwrap_or_default(),
+                    stage_id: stage_id__.unwrap_or_default(),
+                    stage_attempt_num: stage_attempt_num__.unwrap_or_default(),
+                    partition_id: partition_id__.unwrap_or_default(),
+                    plan: plan__.unwrap_or_default(),
+                    output_partitioning: output_partitioning__,
+                    session_id: session_id__.unwrap_or_default(),
+                    launch_time: launch_time__.unwrap_or_default(),
+                    props: props__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.TaskDefinition", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for TaskId {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.task_id != 0 {
+            len += 1;
+        }
+        if self.task_attempt_num != 0 {
+            len += 1;
+        }
+        if self.partition_id != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.TaskId", len)?;
+        if self.task_id != 0 {
+            struct_ser.serialize_field("taskId", &self.task_id)?;
+        }
+        if self.task_attempt_num != 0 {
+            struct_ser.serialize_field("taskAttemptNum", &self.task_attempt_num)?;
+        }
+        if self.partition_id != 0 {
+            struct_ser.serialize_field("partitionId", &self.partition_id)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TaskId {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "task_id",
+            "taskId",
+            "task_attempt_num",
+            "taskAttemptNum",
+            "partition_id",
+            "partitionId",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            TaskId,
+            TaskAttemptNum,
+            PartitionId,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "taskId" | "task_id" => Ok(GeneratedField::TaskId),
+                            "taskAttemptNum" | "task_attempt_num" => Ok(GeneratedField::TaskAttemptNum),
+                            "partitionId" | "partition_id" => Ok(GeneratedField::PartitionId),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TaskId;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.TaskId")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> std::result::Result<TaskId, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut task_id__ = None;
+                let mut task_attempt_num__ = None;
+                let mut partition_id__ = None;
+                while let Some(k) = map.next_key()? {
+                    match k {
+                        GeneratedField::TaskId => {
+                            if task_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("taskId"));
+                            }
+                            task_id__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::TaskAttemptNum => {
+                            if task_attempt_num__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("taskAttemptNum"));
+                            }
+                            task_attempt_num__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::PartitionId => {
+                            if partition_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitionId"));
+                            }
+                            partition_id__ = 
+                                Some(map.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(TaskId {
+                    task_id: task_id__.unwrap_or_default(),
+                    task_attempt_num: task_attempt_num__.unwrap_or_default(),
+                    partition_id: partition_id__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.TaskId", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for TimeUnit {

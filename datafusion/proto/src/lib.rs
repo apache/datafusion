@@ -26,6 +26,7 @@ pub mod generated;
 pub mod logical_plan;
 pub mod physical_plan;
 pub mod to_proto;
+pub mod scheduler;
 
 pub use generated::datafusion as protobuf;
 

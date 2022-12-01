@@ -918,6 +918,8 @@ message StringifiedPlan {
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
+// Physical Plan 
+/////////////////////////////////////////////////////////////////////////////////////////////////
 
 // PhysicalPlanNode is a nested type
 message PhysicalPlanNode {
@@ -1295,15 +1297,6 @@ message ColumnStats {
   uint32 distinct_count = 4;
 }
 
-message PartitionLocation {
-  // partition_id of the map stage who produces the shuffle.
-  uint32 map_partition_id = 1;
-  // partition_id of the shuffle, a composition of(job_id + map_stage_id + partition_id).
-  PartitionId partition_id = 2;
-  ExecutorMetadata executor_meta = 3;
-  PartitionStats partition_stats = 4;
-  string path = 5;
-}
 
 // Unique identifier for a materialized partition of data
 message PartitionId {
@@ -1366,4 +1359,118 @@ message ExecutorStatus {
     string dead = 2;
     string unknown = 3;
   }
+}
+
+message Action {
+
+  oneof ActionType {
+    // Fetch a partition from an executor
+    FetchPartition fetch_partition = 3;
+  }
+
+  // configuration settings
+  repeated KeyValuePair settings = 100;
+}
+
+message FetchPartition {
+  string job_id = 1;
+  uint32 stage_id = 2;
+  uint32 partition_id = 3;
+  string path = 4;
+  string host = 5;
+  uint32 port = 6;
+}
+
+message KeyValuePair {
+  string key = 1;
+  string value = 2;
+}
+
+message ExecutorData {
+  string executor_id = 1;
+  repeated ExecutorResourcePair resources = 2;
+}
+
+message ExecutorResourcePair {
+  ExecutorResource total = 1;
+  ExecutorResource available = 2;
+}
+
+message PartitionLocation {
+  // partition_id of the map stage who produces the shuffle.
+  uint32 map_partition_id = 1;
+  // partition_id of the shuffle, a composition of(job_id + map_stage_id + partition_id).
+  PartitionId partition_id = 2;
+  ExecutorMetadata executor_meta = 3;
+  PartitionStats partition_stats = 4;
+  string path = 5;
+}
+
+message TaskDefinition {
+  uint32 task_id = 1;
+  uint32 task_attempt_num = 2;
+  string job_id = 3;
+  uint32 stage_id = 4;
+  uint32 stage_attempt_num = 5;
+  uint32 partition_id = 6;
+  bytes plan = 7;
+  // Output partition for shuffle writer
+  PhysicalHashRepartition output_partitioning = 8;
+  string session_id = 9;
+  uint64 launch_time = 10;
+  repeated KeyValuePair props = 11;
+}
+
+message OperatorMetricsSet {
+  repeated OperatorMetric metrics = 1;
+}
+
+message OperatorMetric {
+  oneof metric {
+    uint64 output_rows = 1;
+    uint64 elapse_time = 2;
+    uint64 spill_count = 3;
+    uint64 spilled_bytes = 4;
+    uint64 current_memory_usage = 5;
+    NamedCount count = 6;
+    NamedGauge gauge = 7;
+    NamedTime time = 8;
+    int64 start_timestamp = 9;
+    int64 end_timestamp = 10;
+  }
+}
+
+message NamedCount {
+  string name = 1;
+  uint64 value = 2;
+}
+
+message NamedGauge {
+  string name = 1;
+  uint64 value = 2;
+}
+
+message NamedTime {
+  string name = 1;
+  uint64 value = 2;
+}
+
+// A set of tasks in the same stage
+message MultiTaskDefinition {
+  repeated TaskId task_ids = 1;
+  string job_id = 2;
+  uint32 stage_id = 3;
+  uint32 stage_attempt_num = 4;
+  bytes plan = 5;
+  // Output partition for shuffle writer
+  PhysicalHashRepartition output_partitioning = 6;
+  string session_id = 7;
+  uint64 launch_time = 8;
+  repeated KeyValuePair props = 9;
+}
+
+message TaskId {
+  uint32 task_id = 1;
+  uint32 task_attempt_num = 2;
+  uint32 partition_id = 3;
 }

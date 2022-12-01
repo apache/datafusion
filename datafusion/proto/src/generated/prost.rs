@@ -1715,21 +1715,6 @@ pub struct ColumnStats {
     #[prost(uint32, tag = "4")]
     pub distinct_count: u32,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PartitionLocation {
-    /// partition_id of the map stage who produces the shuffle.
-    #[prost(uint32, tag = "1")]
-    pub map_partition_id: u32,
-    /// partition_id of the shuffle, a composition of(job_id + map_stage_id + partition_id).
-    #[prost(message, optional, tag = "2")]
-    pub partition_id: ::core::option::Option<PartitionId>,
-    #[prost(message, optional, tag = "3")]
-    pub executor_meta: ::core::option::Option<ExecutorMetadata>,
-    #[prost(message, optional, tag = "4")]
-    pub partition_stats: ::core::option::Option<PartitionStats>,
-    #[prost(string, tag = "5")]
-    pub path: ::prost::alloc::string::String,
-}
 /// Unique identifier for a materialized partition of data
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PartitionId {
@@ -1843,6 +1828,189 @@ pub mod executor_status {
         #[prost(string, tag = "3")]
         Unknown(::prost::alloc::string::String),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Action {
+    /// configuration settings
+    #[prost(message, repeated, tag = "100")]
+    pub settings: ::prost::alloc::vec::Vec<KeyValuePair>,
+    #[prost(oneof = "action::ActionType", tags = "3")]
+    pub action_type: ::core::option::Option<action::ActionType>,
+}
+/// Nested message and enum types in `Action`.
+pub mod action {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum ActionType {
+        /// Fetch a partition from an executor
+        #[prost(message, tag = "3")]
+        FetchPartition(super::FetchPartition),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FetchPartition {
+    #[prost(string, tag = "1")]
+    pub job_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub stage_id: u32,
+    #[prost(uint32, tag = "3")]
+    pub partition_id: u32,
+    #[prost(string, tag = "4")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub host: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "6")]
+    pub port: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct KeyValuePair {
+    #[prost(string, tag = "1")]
+    pub key: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExecutorData {
+    #[prost(string, tag = "1")]
+    pub executor_id: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub resources: ::prost::alloc::vec::Vec<ExecutorResourcePair>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExecutorResourcePair {
+    #[prost(message, optional, tag = "1")]
+    pub total: ::core::option::Option<ExecutorResource>,
+    #[prost(message, optional, tag = "2")]
+    pub available: ::core::option::Option<ExecutorResource>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartitionLocation {
+    /// partition_id of the map stage who produces the shuffle.
+    #[prost(uint32, tag = "1")]
+    pub map_partition_id: u32,
+    /// partition_id of the shuffle, a composition of(job_id + map_stage_id + partition_id).
+    #[prost(message, optional, tag = "2")]
+    pub partition_id: ::core::option::Option<PartitionId>,
+    #[prost(message, optional, tag = "3")]
+    pub executor_meta: ::core::option::Option<ExecutorMetadata>,
+    #[prost(message, optional, tag = "4")]
+    pub partition_stats: ::core::option::Option<PartitionStats>,
+    #[prost(string, tag = "5")]
+    pub path: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TaskDefinition {
+    #[prost(uint32, tag = "1")]
+    pub task_id: u32,
+    #[prost(uint32, tag = "2")]
+    pub task_attempt_num: u32,
+    #[prost(string, tag = "3")]
+    pub job_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "4")]
+    pub stage_id: u32,
+    #[prost(uint32, tag = "5")]
+    pub stage_attempt_num: u32,
+    #[prost(uint32, tag = "6")]
+    pub partition_id: u32,
+    #[prost(bytes = "vec", tag = "7")]
+    pub plan: ::prost::alloc::vec::Vec<u8>,
+    /// Output partition for shuffle writer
+    #[prost(message, optional, tag = "8")]
+    pub output_partitioning: ::core::option::Option<PhysicalHashRepartition>,
+    #[prost(string, tag = "9")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "10")]
+    pub launch_time: u64,
+    #[prost(message, repeated, tag = "11")]
+    pub props: ::prost::alloc::vec::Vec<KeyValuePair>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OperatorMetricsSet {
+    #[prost(message, repeated, tag = "1")]
+    pub metrics: ::prost::alloc::vec::Vec<OperatorMetric>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OperatorMetric {
+    #[prost(oneof = "operator_metric::Metric", tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10")]
+    pub metric: ::core::option::Option<operator_metric::Metric>,
+}
+/// Nested message and enum types in `OperatorMetric`.
+pub mod operator_metric {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Metric {
+        #[prost(uint64, tag = "1")]
+        OutputRows(u64),
+        #[prost(uint64, tag = "2")]
+        ElapseTime(u64),
+        #[prost(uint64, tag = "3")]
+        SpillCount(u64),
+        #[prost(uint64, tag = "4")]
+        SpilledBytes(u64),
+        #[prost(uint64, tag = "5")]
+        CurrentMemoryUsage(u64),
+        #[prost(message, tag = "6")]
+        Count(super::NamedCount),
+        #[prost(message, tag = "7")]
+        Gauge(super::NamedGauge),
+        #[prost(message, tag = "8")]
+        Time(super::NamedTime),
+        #[prost(int64, tag = "9")]
+        StartTimestamp(i64),
+        #[prost(int64, tag = "10")]
+        EndTimestamp(i64),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NamedCount {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub value: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NamedGauge {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub value: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NamedTime {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub value: u64,
+}
+/// A set of tasks in the same stage
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MultiTaskDefinition {
+    #[prost(message, repeated, tag = "1")]
+    pub task_ids: ::prost::alloc::vec::Vec<TaskId>,
+    #[prost(string, tag = "2")]
+    pub job_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "3")]
+    pub stage_id: u32,
+    #[prost(uint32, tag = "4")]
+    pub stage_attempt_num: u32,
+    #[prost(bytes = "vec", tag = "5")]
+    pub plan: ::prost::alloc::vec::Vec<u8>,
+    /// Output partition for shuffle writer
+    #[prost(message, optional, tag = "6")]
+    pub output_partitioning: ::core::option::Option<PhysicalHashRepartition>,
+    #[prost(string, tag = "7")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "8")]
+    pub launch_time: u64,
+    #[prost(message, repeated, tag = "9")]
+    pub props: ::prost::alloc::vec::Vec<KeyValuePair>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TaskId {
+    #[prost(uint32, tag = "1")]
+    pub task_id: u32,
+    #[prost(uint32, tag = "2")]
+    pub task_attempt_num: u32,
+    #[prost(uint32, tag = "3")]
+    pub partition_id: u32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
