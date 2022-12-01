@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
     // Register the in-memory table containing the data
     ctx.register_table("users", Arc::new(mem_table))?;
 
-    let dataframe = ctx.sql("select * from (WITH source AS (select 1 as e) SELECT * FROM source) t1,   (WITH source AS (select 1 as e) SELECT * FROM source) t2, (WITH source AS (select 1 as e) SELECT * FROM source) t3;").await?;
+    let dataframe = ctx.sql("SELECT * FROM users;").await?;
 
     timeout(Duration::from_secs(10), async move {
         let result = dataframe.collect().await.unwrap();
