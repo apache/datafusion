@@ -86,18 +86,17 @@ impl WindowAggExec {
                 let new_sort_exprs: Result<Vec<PhysicalSortExpr>> = sort_exprs
                     .iter()
                     .map(|e| {
-                        let new_expr = e.expr.clone().transform_down(&|e| match e
-                            .as_any()
-                            .downcast_ref::<Column>()
-                        {
-                            Some(col) => Ok(Some(Arc::new(Column::new(
-                                col.name(),
-                                window_expr_len + col.index(),
-                            )))),
-                            None => Ok(None),
-                        });
+                        let new_expr = e.expr.clone().transform_down(&|e| {
+                            Ok(e.as_any().downcast_ref::<Column>().map(|col| {
+                                Arc::new(Column::new(
+                                    col.name(),
+                                    window_expr_len + col.index(),
+                                ))
+                                    as Arc<dyn PhysicalExpr>
+                            }))
+                        })?;
                         Ok(PhysicalSortExpr {
-                            expr: new_expr?,
+                            expr: new_expr,
                             options: e.options,
                         })
                     })
@@ -163,15 +162,15 @@ impl ExecutionPlan for WindowAggExec {
                 let new_exprs = exprs
                     .into_iter()
                     .map(|expr| {
-                        expr.transform_down(
-                            &|e| match e.as_any().downcast_ref::<Column>() {
-                                Some(col) => Ok(Some(Arc::new(Column::new(
+                        expr.transform_down(&|e| {
+                            Ok(e.as_any().downcast_ref::<Column>().map(|col| {
+                                Arc::new(Column::new(
                                     col.name(),
                                     window_expr_len + col.index(),
-                                )))),
-                                None => Ok(None),
-                            },
-                        )
+                                ))
+                                    as Arc<dyn PhysicalExpr>
+                            }))
+                        })
                         .unwrap()
                     })
                     .collect::<Vec<_>>();
