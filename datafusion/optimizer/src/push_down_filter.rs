@@ -907,27 +907,6 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected)
     }
 
-    #[test]
-    fn filter_keep_partial_agg() -> Result<()> {
-        let table_scan = test_table_scan()?;
-        let f1 = col("c").eq(lit(1i64)).and(col("b").gt(lit(2i64)));
-        let f2 = col("c").eq(lit(1i64)).and(col("b").gt(lit(3i64)));
-        let filter = f1.or(f2);
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![sum(col("b")).alias("b")])?
-            .filter(filter)?
-            .build()?;
-        // filter of aggregate is after aggregation since they are non-commutative
-        // (c =1 AND b > 2) OR (c = 1 AND b > 3)
-        // rewrite to CNF
-        // (c = 1 OR c = 1) [can pushDown] AND (c = 1 OR b > 3) AND (b > 2 OR C = 1) AND (b > 2 OR b > 3)
-
-        let expected = "Filter: (test.c = Int64(1) OR test.c = Int64(1)) AND (test.c = Int64(1) OR b > Int64(3)) AND (b > Int64(2) OR test.c = Int64(1)) AND (b > Int64(2) OR b > Int64(3))\
-        \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b) AS b]]\
-        \n    TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
-    }
-
     /// verifies that a filter is pushed to before a projection, the filter expression is correctly re-written
     #[test]
     fn alias() -> Result<()> {
