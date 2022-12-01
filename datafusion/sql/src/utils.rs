@@ -17,7 +17,7 @@
 
 //! SQL Utility Functions
 
-use arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
+use arrow_schema::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
 use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
