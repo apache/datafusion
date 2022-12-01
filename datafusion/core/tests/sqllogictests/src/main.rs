@@ -77,6 +77,8 @@ pub async fn main() -> Result<()> {
     //
     // Note: can't use tester.run_parallel_async()
     // as that will reuse the same SessionContext
+    //
+    // We could run these tests in parallel eventually if we wanted.
 
     for path in paths {
         // TODO better error handling
@@ -88,6 +90,7 @@ pub async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Run the tests in the specified `.slt` file
 async fn run_file(path: &Path) -> Result<()> {
     println!("Running: {}", path.display());
 
@@ -101,8 +104,8 @@ async fn run_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Create a SessionContext, configured for the specific test
 async fn context_for_test_file(file_name: &str) -> SessionContext {
-    // find relevant test_category, if any, based on file name
     match file_name {
         "aggregate.slt" => {
             println!("Registering aggregate tables");
@@ -117,7 +120,7 @@ async fn context_for_test_file(file_name: &str) -> SessionContext {
             )
         }
         _ => {
-            println!("No extra context");
+            println!("Using default SessionContex");
             SessionContext::new()
         }
     }
