@@ -178,6 +178,11 @@ impl FileScanConfig {
 }
 
 /// A wrapper to customize partitioned file display
+///
+/// Prints in the format:
+/// ```text
+/// NUM_GROUPS:[[file1, file2,...], [fileN, fileM, ...], ...]
+/// ```
 #[derive(Debug)]
 struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
 
