@@ -1029,6 +1029,7 @@ pub fn wrap_projection_for_join_if_necessary(
             //    join keys: [cast(a as int)]
             //
             //  then a and cast(a as int) will use the same field name - `a` in projection schema.
+            //  https://github.com/apache/arrow-datafusion/issues/4478
             if matches!(key, Expr::Cast(_))
                 || matches!(
                     key,
