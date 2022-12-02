@@ -778,26 +778,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .build()
                 } else {
                     // Wrap projection for left input if left join keys contain normal expression.
-                    let (left_child, left_projected) =
+                    let (left_child, left_join_keys, left_projected) =
                         wrap_projection_for_join_if_necessary(&left_keys, left)?;
-                    let left_join_keys = left_keys
-                        .iter()
-                        .map(|key| {
-                            key.try_into_col()
-                                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
 
                     // Wrap projection for right input if right join keys contains normal expression.
-                    let (right_child, right_projected) =
+                    let (right_child, right_join_keys, right_projected) =
                         wrap_projection_for_join_if_necessary(&right_keys, right)?;
-                    let right_join_keys = right_keys
-                        .iter()
-                        .map(|key| {
-                            key.try_into_col()
-                                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
 
                     let join_plan_builder = LogicalPlanBuilder::from(left_child).join(
                         &right_child,
@@ -805,7 +791,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         (left_join_keys, right_join_keys),
                         join_filter,
                     )?;
-
+   
                     // Remove temporary projected columns if necessary.
                     if left_projected || right_projected {
                         let final_join_result = join_schema
