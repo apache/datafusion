@@ -72,10 +72,12 @@ fn digest_process(
             ))),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => Ok(digest_algorithm
-                .digest_scalar(&a.as_ref().map(|s: &String| s.as_bytes()))),
+            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
+                Ok(digest_algorithm
+                    .digest_scalar(a.as_ref().map(|s: &String| s.as_bytes())))
+            }
             ScalarValue::Binary(a) | ScalarValue::LargeBinary(a) => Ok(digest_algorithm
-                .digest_scalar(&a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
+                .digest_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
                 other, digest_algorithm,
@@ -112,7 +114,7 @@ macro_rules! digest_to_scalar {
 
 impl DigestAlgorithm {
     /// digest an optional string to its hash value, null values are returned as is
-    fn digest_scalar(self, value: &Option<&[u8]>) -> ColumnarValue {
+    fn digest_scalar(self, value: Option<&[u8]>) -> ColumnarValue {
         ColumnarValue::Scalar(match self {
             Self::Md5 => digest_to_scalar!(Md5, value),
             Self::Sha224 => digest_to_scalar!(Sha224, value),
