@@ -82,7 +82,7 @@ impl TableProviderFactory for ListingTableFactory {
                     .with_delimiter(cmd.delimiter as u8)
                     .with_file_compression_type(file_compression_type),
             ),
-            FileType::PARQUET => Arc::new(ParquetFormat::default()),
+            FileType::PARQUET => Arc::new(ParquetFormat::new(state.config_options())),
             FileType::AVRO => Arc::new(AvroFormat::default()),
             FileType::JSON => Arc::new(
                 JsonFormat::default().with_file_compression_type(file_compression_type),
@@ -103,9 +103,9 @@ impl TableProviderFactory for ListingTableFactory {
                 .table_partition_cols
                 .iter()
                 .map(|col| {
-                    schema.field_with_name(col).map_err(|arrow_err| {
-                        DataFusionError::Execution(arrow_err.to_string())
-                    })
+                    schema
+                        .field_with_name(col)
+                        .map_err(DataFusionError::ArrowError)
                 })
                 .collect::<datafusion_common::Result<Vec<_>>>()?
                 .into_iter()

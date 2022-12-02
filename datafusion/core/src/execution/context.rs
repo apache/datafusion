@@ -21,6 +21,7 @@ use crate::{
         catalog::{CatalogList, MemoryCatalogList},
         information_schema::CatalogWithInformationSchema,
     },
+    config::OPT_PARQUET_ENABLE_PRUNING,
     datasource::listing::{ListingOptions, ListingTable},
     datasource::{MemTable, ViewTable},
     logical_expr::{PlanType, ToStringifiedPlan},
@@ -226,6 +227,11 @@ impl SessionContext {
     /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.state.read().runtime_env.clone()
+    }
+
+    /// Return a handle to the shared configuration options
+    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
+        self.state.read().config_options()
     }
 
     /// Return the session_id of this Session
@@ -693,9 +699,7 @@ impl SessionContext {
         options: ParquetReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let target_partitions = self.copied_config().target_partitions;
-
-        let listing_options = options.to_listing_options(target_partitions);
+        let listing_options = options.to_listing_options(&self.state.read().config);
 
         // with parquet we resolve the schema in all cases
         let resolved_schema = listing_options
@@ -814,13 +818,7 @@ impl SessionContext {
         table_path: &str,
         options: ParquetReadOptions<'_>,
     ) -> Result<()> {
-        let (target_partitions, parquet_pruning) = {
-            let conf = self.copied_config();
-            (conf.target_partitions, conf.parquet_pruning)
-        };
-        let listing_options = options
-            .parquet_pruning(parquet_pruning)
-            .to_listing_options(target_partitions);
+        let listing_options = options.to_listing_options(&self.state.read().config);
 
         self.register_listing_table(name, table_path, listing_options, None, None)
             .await?;
@@ -1162,8 +1160,6 @@ pub struct SessionConfig {
     /// Should DataFusion repartition data using the partition keys to execute window functions in
     /// parallel using the provided `target_partitions` level
     pub repartition_windows: bool,
-    /// Should DataFusion parquet reader using the predicate to prune data
-    pub parquet_pruning: bool,
     /// Should DataFusion collect statistics after listing files
     pub collect_statistics: bool,
     /// Configuration options
@@ -1183,7 +1179,6 @@ impl Default for SessionConfig {
             repartition_joins: true,
             repartition_aggregations: true,
             repartition_windows: true,
-            parquet_pruning: true,
             collect_statistics: false,
             config_options: Arc::new(RwLock::new(ConfigOptions::new())),
             // Assume no extensions by default.
@@ -1287,9 +1282,19 @@ impl SessionConfig {
     }
 
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
-    pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
-        self.parquet_pruning = enabled;
+    pub fn with_parquet_pruning(self, enabled: bool) -> Self {
+        self.config_options
+            .write()
+            .set_bool(OPT_PARQUET_ENABLE_PRUNING, enabled);
         self
+    }
+
+    /// Returns true if pruning predicate should be used to skip parquet row groups
+    pub fn parquet_pruning(&self) -> bool {
+        self.config_options
+            .read()
+            .get_bool(OPT_PARQUET_ENABLE_PRUNING)
+            .unwrap_or(false)
     }
 
     /// Enables or disables the collection of statistics after listing files
@@ -1339,7 +1344,7 @@ impl SessionConfig {
         );
         map.insert(
             PARQUET_PRUNING.to_owned(),
-            format!("{}", self.parquet_pruning),
+            format!("{}", self.parquet_pruning()),
         );
         map.insert(
             COLLECT_STATISTICS.to_owned(),
@@ -1732,6 +1737,11 @@ impl SessionState {
         let planner = self.query_planner.clone();
         let logical_plan = self.optimize(logical_plan)?;
         planner.create_physical_plan(&logical_plan, self).await
+    }
+
+    /// return the configuration options
+    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
+        self.config.config_options()
     }
 }
 

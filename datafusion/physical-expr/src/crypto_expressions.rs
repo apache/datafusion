@@ -25,7 +25,7 @@ use arrow::{
 };
 use blake2::{Blake2b512, Blake2s256, Digest};
 use blake3::Hasher as Blake3;
-use datafusion_common::cast::as_generic_binary_array;
+use datafusion_common::cast::{as_binary_array, as_generic_binary_array};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -284,15 +284,7 @@ pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     // md5 requires special handling because of its unique utf8 return type
     Ok(match value {
         ColumnarValue::Array(array) => {
-            let binary_array = array
-                .as_ref()
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "Impossibly got non-binary array data from digest".into(),
-                    )
-                })?;
+            let binary_array = as_binary_array(&array)?;
             let string_array: StringArray = binary_array
                 .iter()
                 .map(|opt| opt.map(hex_encode::<_>))

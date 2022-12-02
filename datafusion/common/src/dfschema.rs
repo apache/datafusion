@@ -351,9 +351,45 @@ impl DFSchema {
         let other_fields = other.fields().iter();
         self_fields.zip(other_fields).all(|(f1, f2)| {
             f1.qualifier() == f2.qualifier()
-                && f1.data_type() == f2.data_type()
                 && f1.name() == f2.name()
+                && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
         })
+    }
+
+    /// Returns true of two [`DataType`]s are semantically equal (same
+    /// name and type), ignoring both metadata and nullability.
+    ///
+    /// request to upstream: <https://github.com/apache/arrow-rs/issues/3199>
+    fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
+        // check nested fields
+        match (dt1, dt2) {
+            (DataType::Dictionary(k1, v1), DataType::Dictionary(k2, v2)) => {
+                Self::datatype_is_semantically_equal(k1.as_ref(), k2.as_ref())
+                    && Self::datatype_is_semantically_equal(v1.as_ref(), v2.as_ref())
+            }
+            (DataType::List(f1), DataType::List(f2))
+            | (DataType::LargeList(f1), DataType::LargeList(f2))
+            | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _))
+            | (DataType::Map(f1, _), DataType::Map(f2, _)) => {
+                Self::field_is_semantically_equal(f1, f2)
+            }
+            (DataType::Struct(fields1), DataType::Struct(fields2))
+            | (DataType::Union(fields1, _, _), DataType::Union(fields2, _, _)) => {
+                let iter1 = fields1.iter();
+                let iter2 = fields2.iter();
+                fields1.len() == fields2.len() &&
+                        // all fields have to be the same
+                    iter1
+                    .zip(iter2)
+                        .all(|(f1, f2)| Self::field_is_semantically_equal(f1, f2))
+            }
+            _ => dt1 == dt2,
+        }
+    }
+
+    fn field_is_semantically_equal(f1: &Field, f2: &Field) -> bool {
+        f1.name() == f2.name()
+            && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
     }
 
     /// Strip all field qualifier in schema
@@ -806,6 +842,51 @@ mod tests {
         let field2_i16_t = DFField::from(Field::new("f2", DataType::Int16, true));
         let field3_i16_t = DFField::from(Field::new("f3", DataType::Int16, true));
 
+        let dict =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let field_dict_t = DFField::from(Field::new("f_dict", dict.clone(), true));
+        let field_dict_f = DFField::from(Field::new("f_dict", dict, false));
+
+        let list_t = DFField::from(Field::new(
+            "f_list",
+            DataType::List(Box::new(field1_i16_t.field().clone())),
+            true,
+        ));
+        let list_f = DFField::from(Field::new(
+            "f_list",
+            DataType::List(Box::new(field1_i16_f.field().clone())),
+            false,
+        ));
+
+        let list_f_name = DFField::from(Field::new(
+            "f_list",
+            DataType::List(Box::new(field2_i16_t.field().clone())),
+            false,
+        ));
+
+        let struct_t = DFField::from(Field::new(
+            "f_struct",
+            DataType::Struct(vec![field1_i16_t.field().clone()]),
+            true,
+        ));
+        let struct_f = DFField::from(Field::new(
+            "f_struct",
+            DataType::Struct(vec![field1_i16_f.field().clone()]),
+            false,
+        ));
+
+        let struct_f_meta = DFField::from(Field::new(
+            "f_struct",
+            DataType::Struct(vec![field1_i16_t_meta.field().clone()]),
+            false,
+        ));
+
+        let struct_f_type = DFField::from(Field::new(
+            "f_struct",
+            DataType::Struct(vec![field1_i32_t.field().clone()]),
+            false,
+        ));
+
         // same
         TestCase {
             fields1: vec![&field1_i16_t],
@@ -870,6 +951,70 @@ mod tests {
         }
         .run();
 
+        // dictionary
+        TestCase {
+            fields1: vec![&field_dict_t],
+            fields2: vec![&field_dict_t],
+            expected: true,
+        }
+        .run();
+
+        // dictionary (different nullable)
+        TestCase {
+            fields1: vec![&field_dict_t],
+            fields2: vec![&field_dict_f],
+            expected: true,
+        }
+        .run();
+
+        // dictionary (wrong type)
+        TestCase {
+            fields1: vec![&field_dict_t],
+            fields2: vec![&field1_i16_t],
+            expected: false,
+        }
+        .run();
+
+        // list (different embedded nullability)
+        TestCase {
+            fields1: vec![&list_t],
+            fields2: vec![&list_f],
+            expected: true,
+        }
+        .run();
+
+        // list (different sub field names)
+        TestCase {
+            fields1: vec![&list_t],
+            fields2: vec![&list_f_name],
+            expected: false,
+        }
+        .run();
+
+        // struct
+        TestCase {
+            fields1: vec![&struct_t],
+            fields2: vec![&struct_f],
+            expected: true,
+        }
+        .run();
+
+        // struct (different embedded meta)
+        TestCase {
+            fields1: vec![&struct_t],
+            fields2: vec![&struct_f_meta],
+            expected: true,
+        }
+        .run();
+
+        // struct (different field type)
+        TestCase {
+            fields1: vec![&struct_t],
+            fields2: vec![&struct_f_type],
+            expected: false,
+        }
+        .run();
+
         #[derive(Debug)]
         struct TestCase<'a> {
             fields1: Vec<&'a DFField>,
@@ -885,7 +1030,9 @@ mod tests {
                 assert_eq!(
                     schema1.equivalent_names_and_types(&schema2),
                     self.expected,
-                    "schema1:\n\n{:#?}\n\nschema2:\n\n{:#?}",
+                    "Comparison did not match expected: {}\n\n\
+                     schema1:\n\n{:#?}\n\nschema2:\n\n{:#?}",
+                    self.expected,
                     schema1,
                     schema2
                 );

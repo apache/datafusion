@@ -15,31 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod common_subexpr_eliminate;
-pub mod decorrelate_where_exists;
-pub mod decorrelate_where_in;
-pub mod eliminate_cross_join;
-pub mod eliminate_filter;
-pub mod eliminate_limit;
-pub mod eliminate_outer_join;
-pub mod filter_null_join_keys;
-pub mod inline_table_scan;
-pub mod limit_push_down;
-pub mod optimizer;
-pub mod projection_push_down;
-pub mod propagate_empty_relation;
-pub mod push_down_filter;
-pub mod scalar_subquery_to_join;
-pub mod simplify_expressions;
-pub mod single_distinct_to_groupby;
-pub mod subquery_filter_to_join;
-pub mod type_coercion;
-pub mod utils;
+use datafusion::arrow::{
+    array::{Array, Decimal128Builder},
+    datatypes::{Field, Schema},
+    record_batch::RecordBatch,
+};
+use std::sync::Arc;
 
-pub mod rewrite_disjunctive_predicate;
-#[cfg(test)]
-pub mod test;
-pub mod unwrap_cast_in_comparison;
-
-pub use optimizer::{OptimizerConfig, OptimizerRule};
-pub use utils::optimize_children;
+// TODO: move this to datafusion::test_utils?
+pub fn make_decimal() -> RecordBatch {
+    let mut decimal_builder = Decimal128Builder::with_capacity(20);
+    for i in 110000..110010 {
+        decimal_builder.append_value(i as i128);
+    }
+    for i in 100000..100010 {
+        decimal_builder.append_value(-i as i128);
+    }
+    let array = decimal_builder
+        .finish()
+        .with_precision_and_scale(10, 3)
+        .unwrap();
+    let schema = Schema::new(vec![Field::new("c1", array.data_type().clone(), true)]);
+    RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
+}
