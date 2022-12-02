@@ -928,7 +928,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     }))
 }
 
-/// Project with optional alias
+/// Create Projection
 /// # Errors
 /// This function errors under any of the following conditions:
 /// * Two or more expressions have the same name
