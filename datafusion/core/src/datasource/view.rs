@@ -474,8 +474,7 @@ mod tests {
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
             .to_string();
-        // TODO: limit_push_down support SubqueryAlias
-        assert!(formatted.contains("GlobalLimitExec: skip=0, fetch=10"));
+        assert!(formatted.contains("ParquetExec: limit=Some(10)"));
         Ok(())
     }
 
