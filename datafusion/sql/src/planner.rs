@@ -45,9 +45,7 @@ use datafusion_common::{
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::builder::{
-    project_with_alias, with_alias, with_alias_owned,
-};
+use datafusion_expr::logical_plan::builder::{project, subquery_alias, subquery_alias_owned};
 use datafusion_expr::logical_plan::Join as HashJoin;
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
@@ -859,7 +857,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 (
                     match (cte, self.schema_provider.get_table_provider(table_ref)) {
                         (Some(cte_plan), _) => match table_alias {
-                            Some(cte_alias) => with_alias(cte_plan, &cte_alias),
+                            Some(cte_alias) => subquery_alias(cte_plan, &cte_alias),
                             _ => Ok(cte_plan.clone()),
                         },
                         (_, Ok(provider)) => {
@@ -888,7 +886,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )?;
 
                 let plan = match normalized_alias {
-                    Some(alias) => with_alias_owned(logical_plan, &alias)?,
+                    Some(alias) => subquery_alias_owned(logical_plan, &alias)?,
                     _ => logical_plan,
                 };
                 (plan, alias)
@@ -1176,7 +1174,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // final projection
-        let plan = project_with_alias(plan, select_exprs_post_aggr, alias)?;
+        let mut plan = project(plan, select_exprs_post_aggr)?;
+        plan = match alias {
+            Some(alias) => subquery_alias_owned(plan, &alias)?,
+            None => plan,
+        };
 
         // process distinct clause
         let plan = if select.distinct {

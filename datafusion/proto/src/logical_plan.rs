@@ -39,7 +39,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_common::{context, Column, DataFusionError};
-use datafusion_expr::logical_plan::builder::project_with_alias;
+use datafusion_expr::logical_plan::builder::{project, subquery_alias_owned};
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
@@ -324,20 +324,21 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Projection(projection) => {
                 let input: LogicalPlan =
                     into_logical_plan!(projection.input, ctx, extension_codec)?;
-                let x: Vec<Expr> = projection
+                let expr: Vec<Expr> = projection
                     .expr
                     .iter()
                     .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
-                project_with_alias(
-                    input,
-                    x,
-                    projection.optional_alias.as_ref().map(|a| match a {
+
+                let new_proj = project(input, expr)?;
+                match projection.optional_alias.as_ref() {
+                    Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
-                            alias.clone()
+                            subquery_alias_owned(new_proj, alias)
                         }
-                    }),
-                )
+                    },
+                    _ => Ok(new_proj),
+                }
             }
             LogicalPlanType::Selection(selection) => {
                 let input: LogicalPlan =
