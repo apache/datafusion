@@ -437,6 +437,90 @@ async fn median_test(
 }
 
 #[tokio::test]
+// test case for https://github.com/apache/arrow-datafusion/issues/3105
+// has an intermediate grouping there
+async fn median_multi() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("create table cpu (host string, usage float) as select * from (values ('host0', 90.1), ('host1', 90.2), ('host1', 90.4));")
+        .await?
+        .collect()
+        .await?;
+
+    let sql = "select host, median(usage) from cpu group by host;";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+-------------------+",
+        "| host  | MEDIAN(cpu.usage) |",
+        "+-------+-------------------+",
+        "| host0 | 90.1              |",
+        "| host1 | 90.3              |",
+        "+-------+-------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+
+    let sql = "select median(usage) from cpu;";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------------+",
+        "| MEDIAN(cpu.usage) |",
+        "+-------------------+",
+        "| 90.2              |",
+        "+-------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn median_multi_odd() -> Result<()> {
+    let ctx = SessionContext::new();
+    // data is not sorted and has an odd number of values per group
+    ctx.sql("create table cpu (host string, usage float) as select * from (values ('host0', 90.2), ('host1', 90.1), ('host1', 90.5), ('host0', 90.5), ('host1', 90.0), ('host1', 90.3), ('host0', 87.9),  ('host1', 89.3) );")
+        .await.unwrap()
+        .collect()
+        .await.unwrap();
+
+    let sql = "select host, median(usage) from cpu group by host;";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+-------------------+",
+        "| host  | MEDIAN(cpu.usage) |",
+        "+-------+-------------------+",
+        "| host0 | 90.2              |",
+        "| host1 | 90.1              |",
+        "+-------+-------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn median_multi_even() -> Result<()> {
+    let ctx = SessionContext::new();
+    // data is not sorted and has an even number of values per group
+    ctx.sql("create table cpu (host string, usage float) as select * from (values ('host0', 90.2), ('host1', 90.1), ('host1', 90.5), ('host0', 90.5), ('host1', 90.0), ('host1', 90.3), ('host1', 90.2), ('host1', 90.3) );")
+        .await.unwrap()
+        .collect()
+        .await.unwrap();
+
+    let sql = "select host, median(usage) from cpu group by host;";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+-------------------+",
+        "| host  | MEDIAN(cpu.usage) |",
+        "+-------+-------------------+",
+        "| host0 | 90.35             |",
+        "| host1 | 90.25             |",
+        "+-------+-------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_external_table_count() {
     let ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&ctx).await;
