@@ -663,7 +663,7 @@ impl DataFrame {
             LogicalPlanBuilder::window_plan(self.plan.clone(), window_func_exprs)?
         };
 
-        let new_column = Expr::Alias(Box::new(expr), name.to_string());
+        let new_column = expr.alias(name);
         let mut col_exists = false;
         let mut fields: Vec<Expr> = plan
             .schema()

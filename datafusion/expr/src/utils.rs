@@ -674,7 +674,7 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     match e {
         Expr::Column(_) => e,
         Expr::Alias(inner_expr, name) => {
-            Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
+            columnize_expr(*inner_expr, input_schema).alias(name)
         }
         Expr::Cast(Cast { expr, data_type }) => Expr::Cast(Cast {
             expr: Box::new(columnize_expr(*expr, input_schema)),
