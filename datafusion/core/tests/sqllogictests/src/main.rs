@@ -18,8 +18,8 @@
 use async_trait::async_trait;
 use datafusion::arrow::csv::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::prelude::SessionContext;
-use std::path::PathBuf;
+use datafusion::prelude::{SessionConfig, SessionContext};
+use std::path::Path;
 use std::time::Duration;
 
 use sqllogictest::TestError;
@@ -29,41 +29,10 @@ mod setup;
 mod utils;
 
 const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files";
-const TEST_CATEGORIES: [TestCategory; 2] =
-    [TestCategory::Aggregate, TestCategory::ArrowTypeOf];
-
-pub enum TestCategory {
-    Aggregate,
-    ArrowTypeOf,
-}
-
-impl TestCategory {
-    fn as_str(&self) -> &'static str {
-        match self {
-            TestCategory::Aggregate => "Aggregate",
-            TestCategory::ArrowTypeOf => "ArrowTypeOf",
-        }
-    }
-
-    fn test_filename(&self) -> &'static str {
-        match self {
-            TestCategory::Aggregate => "aggregate.slt",
-            TestCategory::ArrowTypeOf => "arrow_typeof.slt",
-        }
-    }
-
-    async fn register_test_tables(&self, ctx: &SessionContext) {
-        println!("[{}] Registering tables", self.as_str());
-        match self {
-            TestCategory::Aggregate => setup::register_aggregate_tables(ctx).await,
-            TestCategory::ArrowTypeOf => (),
-        }
-    }
-}
 
 pub struct DataFusion {
     ctx: SessionContext,
-    test_category: TestCategory,
+    file_name: String,
 }
 
 #[async_trait]
@@ -71,11 +40,7 @@ impl sqllogictest::AsyncDB for DataFusion {
     type Error = TestError;
 
     async fn run(&mut self, sql: &str) -> Result<String> {
-        println!(
-            "[{}] Running query: \"{}\"",
-            self.test_category.as_str(),
-            sql
-        );
+        println!("[{}] Running query: \"{}\"", self.file_name, sql);
         let result = run_query(&self.ctx, sql).await?;
         Ok(result)
     }
@@ -96,24 +61,68 @@ impl sqllogictest::AsyncDB for DataFusion {
 }
 
 #[tokio::main]
+#[cfg(target_family = "windows")]
 pub async fn main() -> Result<()> {
-    for test_category in TEST_CATEGORIES {
-        let filename = PathBuf::from(format!(
-            "{}/{}",
-            TEST_DIRECTORY,
-            test_category.test_filename()
-        ));
-        let ctx = SessionContext::new();
-        test_category.register_test_tables(&ctx).await;
+    println!("Skipping test on windows");
+    Ok(())
+}
 
-        if !cfg!(target_os = "windows") {
-            let mut tester = sqllogictest::Runner::new(DataFusion { ctx, test_category });
-            // TODO: use tester.run_parallel_async()
-            tester.run_file_async(filename).await?;
-        }
+#[tokio::main]
+#[cfg(not(target_family = "windows"))]
+pub async fn main() -> Result<()> {
+    let paths = std::fs::read_dir(TEST_DIRECTORY).unwrap();
+
+    // run each file using its own new SessionContext
+    //
+    // Note: can't use tester.run_parallel_async()
+    // as that will reuse the same SessionContext
+    //
+    // We could run these tests in parallel eventually if we wanted.
+
+    for path in paths {
+        // TODO better error handling
+        let path = path.unwrap().path();
+
+        run_file(&path).await?;
     }
 
     Ok(())
+}
+
+/// Run the tests in the specified `.slt` file
+async fn run_file(path: &Path) -> Result<()> {
+    println!("Running: {}", path.display());
+
+    let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
+
+    let ctx = context_for_test_file(&file_name).await;
+
+    let mut tester = sqllogictest::Runner::new(DataFusion { ctx, file_name });
+    tester.run_file_async(path).await?;
+
+    Ok(())
+}
+
+/// Create a SessionContext, configured for the specific test
+async fn context_for_test_file(file_name: &str) -> SessionContext {
+    match file_name {
+        "aggregate.slt" => {
+            println!("Registering aggregate tables");
+            let ctx = SessionContext::new();
+            setup::register_aggregate_tables(&ctx).await;
+            ctx
+        }
+        "information_schema.slt" => {
+            println!("Enabling information schema");
+            SessionContext::with_config(
+                SessionConfig::new().with_information_schema(true),
+            )
+        }
+        _ => {
+            println!("Using default SessionContex");
+            SessionContext::new()
+        }
+    }
 }
 
 fn format_batches(batches: &[RecordBatch]) -> Result<String> {
