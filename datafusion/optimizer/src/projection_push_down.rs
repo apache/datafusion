@@ -94,23 +94,36 @@ fn optimize_plan(
 
             let mut new_expr = Vec::new();
             let mut new_fields = Vec::new();
+            let mut new_required_columns = HashSet::new();
 
             // Gather all columns needed for expressions in this Projection
-            schema
-                .fields()
-                .iter()
-                .enumerate()
-                .try_for_each(|(i, field)| {
-                    if required_columns.contains(&field.qualified_column()) {
-                        new_expr.push(expr[i].clone());
-                        new_fields.push(field.clone());
+            schema.fields().iter().enumerate().for_each(|(i, field)| {
+                if required_columns.contains(&field.qualified_column()) {
+                    new_expr.push(expr[i].clone());
+                    new_fields.push(field.clone());
+                }
+            });
 
-                        // gather the new set of required columns
-                        expr_to_columns(&expr[i], &mut new_required_columns)
-                    } else {
-                        Ok(())
-                    }
-                })?;
+            for e in new_expr.iter() {
+                expr_to_columns(e, &mut new_required_columns)?
+            }
+
+            // Gather all columns needed for expressions in this Projection
+            // schema
+            //     .fields()
+            //     .iter()
+            //     .enumerate()
+            //     .try_for_each(|(i, field)| {
+            //         if required_columns.contains(&field.qualified_column()) {
+            //             new_expr.push(expr[i].clone());
+            //             new_fields.push(field.clone());
+            //
+            //             // gather the new set of required columns
+            //             expr_to_columns(&expr[i], &mut new_required_columns)
+            //         } else {
+            //             Ok(())
+            //         }
+            //     })?;
 
             let new_input = optimize_plan(
                 _optimizer,

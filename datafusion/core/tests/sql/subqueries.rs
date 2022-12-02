@@ -162,8 +162,8 @@ order by s_acctbal desc, n_name, s_name, p_partkey;"#;
     \n                Inner Join: supplier.s_nationkey = nation.n_nationkey\
     \n                  Inner Join: partsupp.ps_suppkey = supplier.s_suppkey\
     \n                    TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]\
-    \n                    TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey, s_phone, s_acctbal, s_comment]\
-    \n                  TableScan: nation projection=[n_nationkey, n_name, n_regionkey]\
+    \n                    TableScan: supplier projection=[s_suppkey, s_nationkey]\
+    \n                  TableScan: nation projection=[n_nationkey, n_regionkey]\
     \n                Filter: region.r_name = Utf8(\"EUROPE\")\
     \n                  TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8(\"EUROPE\")]";
     assert_eq!(actual, expected);
@@ -445,7 +445,7 @@ order by value desc;
         .map_err(|e| format!("{:?} at {}", e, "error"))
         .unwrap();
     let actual = format!("{}", plan.display_indent());
-    let expected = "Sort: value DESC NULLS FIRST\
+    let expected =  "Sort: value DESC NULLS FIRST\
     \n  Projection: partsupp.ps_partkey, SUM(partsupp.ps_supplycost * partsupp.ps_availqty) AS value\
     \n    Filter: CAST(SUM(partsupp.ps_supplycost * partsupp.ps_availqty) AS Decimal128(38, 15)) > CAST(__sq_1.__value AS Decimal128(38, 15))\
     \n      CrossJoin:\
@@ -461,7 +461,7 @@ order by value desc;
     \n            Aggregate: groupBy=[[]], aggr=[[SUM(CAST(partsupp.ps_supplycost AS Decimal128(26, 2)) * CAST(partsupp.ps_availqty AS Decimal128(26, 2)))]]\
     \n              Inner Join: supplier.s_nationkey = nation.n_nationkey\
     \n                Inner Join: partsupp.ps_suppkey = supplier.s_suppkey\
-    \n                  TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_availqty, ps_supplycost]\
+    \n                  TableScan: partsupp projection=[ps_suppkey, ps_availqty, ps_supplycost]\
     \n                  TableScan: supplier projection=[s_suppkey, s_nationkey]\
     \n                Filter: nation.n_name = Utf8(\"GERMANY\")\
     \n                  TableScan: nation projection=[n_nationkey, n_name], partial_filters=[nation.n_name = Utf8(\"GERMANY\")]";

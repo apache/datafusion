@@ -64,7 +64,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "SortExec: [c1@1 ASC NULLS LAST]",
+        "SortExec: [c1@0 ASC NULLS LAST]",
         "metrics=[output_rows=5, elapsed_compute="
     );
     assert_metrics!(
@@ -744,7 +744,7 @@ async fn test_physical_plan_display_indent_multi_children() {
         "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 9000)",
         "          ProjectionExec: expr=[c1@0 as c2]",
         "            RepartitionExec: partitioning=RoundRobinBatch(9000)",
-        "              CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c2]",
+        "              CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1]",
     ];
 
     let normalizer = ExplainNormalizer::new();
