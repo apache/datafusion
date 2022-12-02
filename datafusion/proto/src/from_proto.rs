@@ -806,11 +806,20 @@ pub fn parse_expr(
                         .ok_or_else(|| Error::unknown("BuiltInWindowFunction", *i))?
                         .into();
 
+                    let args = match parse_optional_expr(&expr.expr, registry)? {
+                        None => {
+                            vec![]
+                        }
+                        Some(x) => {
+                            vec![x]
+                        }
+                    };
+
                     Ok(Expr::WindowFunction {
                         fun: datafusion_expr::window_function::WindowFunction::BuiltInWindowFunction(
                             built_in_function,
                         ),
-                        args: vec![parse_required_expr(&expr.expr, registry, "expr")?],
+                        args,
                         partition_by,
                         order_by,
                         window_frame,
@@ -1234,16 +1243,14 @@ impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
                 })?;
         match bound_type {
             protobuf::WindowFrameBoundType::CurrentRow => Ok(Self::CurrentRow),
-            protobuf::WindowFrameBoundType::Preceding => {
-                // FIXME implement bound value parsing
-                // https://github.com/apache/arrow-datafusion/issues/361
-                Ok(Self::Preceding(ScalarValue::UInt64(Some(1))))
-            }
-            protobuf::WindowFrameBoundType::Following => {
-                // FIXME implement bound value parsing
-                // https://github.com/apache/arrow-datafusion/issues/361
-                Ok(Self::Following(ScalarValue::UInt64(Some(1))))
-            }
+            protobuf::WindowFrameBoundType::Preceding => match bound.bound_value {
+                Some(x) => Ok(Self::Preceding(ScalarValue::try_from(&x)?)),
+                None => Ok(Self::Preceding(ScalarValue::UInt64(None))),
+            },
+            protobuf::WindowFrameBoundType::Following => match bound.bound_value {
+                Some(x) => Ok(Self::Following(ScalarValue::try_from(&x)?)),
+                None => Ok(Self::Following(ScalarValue::UInt64(None))),
+            },
         }
     }
 }
