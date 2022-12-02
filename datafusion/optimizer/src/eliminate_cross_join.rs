@@ -59,6 +59,7 @@ impl OptimizerRule for EliminateCrossJoin {
         plan: &LogicalPlan,
         _optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        println!("EliminateCrossJoin");
         match plan {
             LogicalPlan::Filter(filter) => {
                 let input = (**filter.input()).clone();
@@ -1246,6 +1247,36 @@ mod tests {
                     col("t3.b").lt(lit(15u32)),
                 ),
             ))?
+            .build()?;
+
+        let expected = vec![
+            "Filter: t3.c < UInt32(15) AND t3.b < UInt32(15) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "  Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c, t3.a, t3.b, t3.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "    Inner Join: t3.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32, a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
+            "      Projection: t1.a, t1.b, t1.c, t3.a, t3.b, t3.c, t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32]",
+            "        Inner Join: t1.a * UInt32(2) = t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t1.a * UInt32(2):UInt32, a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32]",
+            "          Projection: t1.a, t1.b, t1.c, t1.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t1.a * UInt32(2):UInt32]",
+            "            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+            "          Projection: t3.a, t3.b, t3.c, t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32]",
+            "            TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]",
+            "      Projection: t2.a, t2.b, t2.c, t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
+            "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+        ];
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn reorder_join() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // could eliminate to inner join
+        let plan = LogicalPlanBuilder::from(t1)
+            .cross_join(&t2)?
+            .filter((col("t1.a") + lit(11u32)).eq(col("t2.a")))?
             .build()?;
 
         let expected = vec![
