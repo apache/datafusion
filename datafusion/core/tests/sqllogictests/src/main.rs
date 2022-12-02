@@ -63,9 +63,8 @@ impl sqllogictest::AsyncDB for DataFusion {
 #[tokio::main]
 #[cfg(target_family = "windows")]
 pub async fn main() -> Result<()> {
-    if cfg!(target_os = "windows") {
-        println!("Skipping test on windows");
-    }
+    println!("Skipping test on windows");
+    Ok(())
 }
 
 #[tokio::main]
