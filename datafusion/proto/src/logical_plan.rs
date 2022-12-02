@@ -39,7 +39,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_common::{context, Column, DataFusionError, OwnedTableReference};
-use datafusion_expr::logical_plan::builder::{project, subquery_alias_owned};
+use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
@@ -348,7 +348,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                 match projection.optional_alias.as_ref() {
                     Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
-                            subquery_alias_owned(new_proj, alias)
+                            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                                new_proj, alias,
+                            )?))
                         }
                     },
                     _ => Ok(new_proj),
