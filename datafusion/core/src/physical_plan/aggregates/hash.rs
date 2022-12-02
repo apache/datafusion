@@ -468,6 +468,11 @@ impl std::fmt::Debug for Accumulators {
 }
 
 /// Create a RecordBatch with all group keys and accumulator' states or values.
+///
+/// The output looks like
+/// ```text
+/// gby_expr1, gby_expr2, ... agg_1, agg2, ...
+/// ```
 fn create_batch_from_map(
     mode: &AggregateMode,
     accumulators: &Accumulators,
@@ -493,6 +498,7 @@ fn create_batch_from_map(
         }
     }
 
+    // First, output all group by exprs
     let mut columns = (0..num_group_expr)
         .map(|i| {
             ScalarValue::iter_to_array(
@@ -504,7 +510,7 @@ fn create_batch_from_map(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // add state / evaluated arrays
+    // next, output  aggregates: either intermediate state or final output
     for (x, &state_len) in acc_data_types.iter().enumerate() {
         for y in 0..state_len {
             match mode {
