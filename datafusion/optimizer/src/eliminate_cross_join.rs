@@ -17,7 +17,7 @@
 
 //! Optimizer rule to eliminate cross join to inner join if join predicates are available in filters.
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DFSchema, DataFusionError, Result};
+use datafusion_common::{DFSchema, DataFusionError, Result};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::utils::{can_hash, check_all_column_from_schema};
 use datafusion_expr::{
@@ -59,7 +59,6 @@ impl OptimizerRule for EliminateCrossJoin {
         plan: &LogicalPlan,
         _optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        println!("EliminateCrossJoin");
         match plan {
             LogicalPlan::Filter(filter) => {
                 let input = (**filter.input()).clone();

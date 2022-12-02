@@ -791,7 +791,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         (left_join_keys, right_join_keys),
                         join_filter,
                     )?;
-   
+
                     // Remove temporary projected columns if necessary.
                     if left_projected || right_projected {
                         let final_join_result = join_schema
@@ -5951,6 +5951,23 @@ mod tests {
             \n      TableScan: person\
             \n    SubqueryAlias: p2\
             \n      TableScan: person";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_inner_join_with_cast_key() {
+        let sql = "SELECT person.id, person.age
+            FROM person
+            INNER JOIN orders
+            ON cast(person.id as Int) = cast(orders.customer_id as Int)";
+
+        let expected = "Projection: person.id, person.age\
+        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+        \n    Inner Join: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
+        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, CAST(person.id AS Int32) AS CAST(person.id AS Int32)\
+        \n        TableScan: person\
+        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, CAST(orders.customer_id AS Int32) AS CAST(orders.customer_id AS Int32)\
+        \n        TableScan: orders";
         quick_test(sql, expected);
     }
 

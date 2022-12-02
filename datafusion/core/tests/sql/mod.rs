@@ -195,7 +195,7 @@ fn create_join_context(
     ]));
     let t1_data = RecordBatch::try_new(
         t1_schema,
-    vec![
+        vec![
             Arc::new(UInt32Array::from_slice([11, 22, 33, 44])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
