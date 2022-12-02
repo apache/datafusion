@@ -6011,7 +6011,7 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    // TODO: will ad more tests to cover maby other cases
+    // TODO: will add more tests to cover many other cases
     #[test]
     fn test_prepare_statement_to_plan() {
         let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $1";
