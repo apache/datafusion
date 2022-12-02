@@ -138,6 +138,9 @@ One very important test is the [sql_integration](../../../datafusion/core/tests/
 
 The [sqllogictests](../../../datafusion/core/tests/sqllogictests) also validate DataFusion SQL against an assortment of data setups.
 
+Data Driven tests have many benefits including being easier to write and maintain. We are in the process of [migrating sql_integration tests](https://github.com/apache/arrow-datafusion/issues/4460) and encourage
+you to add new tests using sqllogictests if possible.
+
 ### SQL / Postgres Integration Tests
 
 The [integration-tests](../../../integration-tests) directory contains a harness that runs certain queries against both postgres and datafusion and compares results
