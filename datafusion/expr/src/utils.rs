@@ -22,8 +22,8 @@ use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
-    Limit, Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union,
-    Values, Window,
+    Limit, Partitioning, Prepare, Projection, Repartition, Sort, Subquery, SubqueryAlias,
+    Union, Values, Window,
 };
 use crate::{Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 use arrow::datatypes::{DataType, TimeUnit};
@@ -126,7 +126,8 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
-            | Expr::GetIndexedField { .. } => {}
+            | Expr::GetIndexedField { .. }
+            | Expr::Placeholder(_) => {}
         }
         Ok(Recursion::Continue(self))
     }
@@ -575,6 +576,13 @@ pub fn from_plan(
             );
             Ok(plan.clone())
         }
+        LogicalPlan::Prepare(Prepare {
+            name, data_types, ..
+        }) => Ok(LogicalPlan::Prepare(Prepare {
+            name: name.clone(),
+            data_types: data_types.clone(),
+            input: Arc::new(inputs[0].clone()),
+        })),
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::CreateExternalTable(_)

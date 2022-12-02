@@ -124,7 +124,8 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
             | Expr::Sort { .. }
             | Expr::WindowFunction { .. }
             | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. } => {
+            | Expr::QualifiedWildcard { .. }
+            | Expr::Placeholder(_) => {
                 *self.is_applicable = false;
                 Recursion::Stop(self)
             }

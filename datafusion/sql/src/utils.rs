@@ -411,6 +411,7 @@ where
                     )))
                 }
             },
+            Expr::Placeholder(param) => Ok(Expr::Placeholder(param.clone())),
         },
     }
 }

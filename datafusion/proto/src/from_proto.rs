@@ -19,7 +19,7 @@ use crate::protobuf::plan_type::PlanTypeEnum::{
     FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
     OptimizedLogicalPlan, OptimizedPhysicalPlan,
 };
-use crate::protobuf::{self};
+use crate::protobuf::{self, PlaceholderNode};
 use crate::protobuf::{
     CubeNode, GroupingSetNode, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
     RollupNode,
@@ -1183,6 +1183,9 @@ pub fn parse_expr(
                     .map(|expr| parse_expr(expr, registry))
                     .collect::<Result<Vec<_>, Error>>()?,
             )))
+        }
+        ExprType::Placeholder(PlaceholderNode { param }) => {
+            Ok(Expr::Placeholder(param.clone()))
         }
     }
 }

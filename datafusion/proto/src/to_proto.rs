@@ -27,7 +27,7 @@ use crate::protobuf::{
         OptimizedLogicalPlan, OptimizedPhysicalPlan,
     },
     CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList, OptimizedLogicalPlanType,
-    OptimizedPhysicalPlanType, RollupNode,
+    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
@@ -892,6 +892,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         })
                         .collect::<Result<Vec<_>, Self::Error>>()?,
                 })),
+            },
+            Expr::Placeholder(param) => Self {
+                expr_type: Some(ExprType::Placeholder(PlaceholderNode { param: param.clone() })),
             },
 
             Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } =>

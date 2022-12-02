@@ -291,6 +291,7 @@ impl ExprRewritable for Expr {
                     key,
                 ))
             }
+            Expr::Placeholder(param) => Expr::Placeholder(param),
         };
 
         // now rewrite this expression itself

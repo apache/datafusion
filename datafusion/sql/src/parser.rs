@@ -728,4 +728,34 @@ mod tests {
 
         Ok(())
     }
+
+    // TODO: remove these 2 tests because they were tested in sqlparser
+    // This is just for me to see how the statements look like
+    #[ignore]
+    #[test]
+    fn create_prepared_statement() -> Result<(), ParserError> {
+        // positive case
+        let sql = "PREPARE my_plan(TIME, INT) AS SELECT region FROM cpu WHERE time = $1 and usage_user > $2";
+        let statements = DFParser::parse_sql(sql)?;
+
+        println!("{:#?}", statements[0]);
+        assert_eq!(statements.len(), 1);
+
+        let sql = "SELECT region FROM cpu WHERE time = 10 and usage_user > 20";
+        let statements = DFParser::parse_sql(sql)?;
+        println!("{:#?}", statements[0]);
+        assert_eq!(statements.len(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn execute_statement() -> Result<(), ParserError> {
+        // positive case
+        let sql = "EXECUTE my_plan(1, '2022-11-30')";
+        let statements = DFParser::parse_sql(sql)?;
+        println!("{:#?}", statements[0]);
+        assert_eq!(statements.len(), 1);
+        Ok(())
+    }
 }

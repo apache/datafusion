@@ -45,6 +45,8 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::{collections::HashMap, sync::Arc};
 
+use super::Prepare;
+
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
 
@@ -119,6 +121,7 @@ impl LogicalPlanBuilder {
     /// The column names are not specified by the SQL standard and different database systems do it differently,
     /// so it's usually better to override the default names with a table alias list.
     pub fn values(mut values: Vec<Vec<Expr>>) -> Result<Self> {
+        // todo: hanlde for Placeholder expr
         if values.is_empty() {
             return Err(DataFusionError::Plan("Values list cannot be empty".into()));
         }
@@ -290,6 +293,14 @@ impl LogicalPlanBuilder {
             expr,
             Arc::new(self.plan.clone()),
         )?)))
+    }
+
+    pub fn prepare(&self, name: String, data_types: Vec<DataType>) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Prepare(Prepare {
+            name,
+            data_types,
+            input: Arc::new(self.plan.clone()),
+        })))
     }
 
     /// Limit the number of rows returned

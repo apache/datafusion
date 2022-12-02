@@ -46,7 +46,6 @@ use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::builder::{project_with_alias, with_alias};
-use datafusion_expr::logical_plan::Join as HashJoin;
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
@@ -55,6 +54,7 @@ use datafusion_expr::logical_plan::{
     Partitioning, PlanType, SetVariable, ToStringifiedPlan,
 };
 use datafusion_expr::logical_plan::{Filter, Subquery};
+use datafusion_expr::logical_plan::{Join as HashJoin, Prepare};
 use datafusion_expr::utils::{
     can_hash, check_all_column_from_schema, expand_qualified_wildcard, expand_wildcard,
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_column_exprs,
@@ -331,6 +331,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .to_string(),
                 )),
             },
+            Statement::Prepare {
+                name,
+                data_types,
+                statement,
+            } => {
+                let plan = self.sql_statement_to_plan(*statement)?;
+                Ok(LogicalPlan::Prepare(Prepare {
+                    name: name.to_string(),
+                    data_types: data_types
+                        .into_iter()
+                        .map(|t| self.convert_data_type(&t))
+                        .collect::<Result<_>>()?,
+                    input: Arc::new(plan),
+                }))
+            }
 
             Statement::ShowTables {
                 extended,
@@ -1740,6 +1755,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Ok(Expr::Literal(ScalarValue::Null))
                         }
                         SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
+                        SQLExpr::Value(Value::Placeholder(param)) => {
+                            Ok(Expr::Placeholder(param))
+                        }
                         SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(
                             op,
                             *expr,
@@ -1790,6 +1808,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(Value::SingleQuotedString(ref s) | Value::DoubleQuotedString(ref s)) => Ok(lit(s.clone())),
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
             SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Null)),
+            SQLExpr::Value(Value::Placeholder(param)) => Ok(Expr::Placeholder(param)),
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::DatePart,
                 args: vec![
@@ -5989,6 +6008,20 @@ mod tests {
             \n      TableScan: person\
             \n    SubqueryAlias: p2\
             \n      TableScan: person";
+        quick_test(sql, expected);
+    }
+
+    // TODO: will ad more tests to cover maby other cases
+    #[test]
+    fn test_prepare_statement_to_plan() {
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $1";
+        //let statements = DFParser::parse_sql(sql).unwrap();
+
+        let expected = "Prepare: \"my_plan\" [Int32] \
+        \n  Projection: person.id, person.age\
+        \n    Filter: person.age = $1\
+        \n      TableScan: person";
+
         quick_test(sql, expected);
     }
 

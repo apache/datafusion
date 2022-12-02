@@ -89,6 +89,8 @@ pub enum Expr {
     Alias(Box<Expr>, String),
     /// A named reference to a qualified filed in a schema.
     Column(Column),
+    /// A place holder for parameters in a prepared statement.
+    Placeholder(String),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
     /// A constant value.
@@ -528,6 +530,7 @@ impl Expr {
             Expr::Literal(..) => "Literal",
             Expr::Negative(..) => "Negative",
             Expr::Not(..) => "Not",
+            Expr::Placeholder(..) => "Placeholder",
             Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
             Expr::ScalarFunction { .. } => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
@@ -984,6 +987,7 @@ impl fmt::Debug for Expr {
                     )
                 }
             },
+            Expr::Placeholder(param) => write!(f, "{}", param),
         }
     }
 }
@@ -1269,6 +1273,7 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
             "Create name does not support qualified wildcard".to_string(),
         )),
+        Expr::Placeholder(param) => Ok(format!("{}", param)),
     }
 }
 

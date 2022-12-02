@@ -108,6 +108,8 @@ pub enum LogicalPlan {
     Distinct(Distinct),
     /// Set a Variable
     SetVariable(SetVariable),
+    /// Prepare a statement
+    Prepare(Prepare),
 }
 
 impl LogicalPlan {
@@ -134,6 +136,7 @@ impl LogicalPlan {
             LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
                 schema
             }
+            LogicalPlan::Prepare(Prepare { input, .. }) => input.schema(),
             LogicalPlan::Explain(explain) => &explain.schema,
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
@@ -201,8 +204,9 @@ impl LogicalPlan {
             | LogicalPlan::Sort(Sort { input, .. })
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::CreateView(CreateView { input, .. })
-            | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
-            LogicalPlan::Distinct(Distinct { input, .. }) => input.all_schemas(),
+            | LogicalPlan::Filter(Filter { input, .. })
+            | LogicalPlan::Distinct(Distinct { input, .. })
+            | LogicalPlan::Prepare(Prepare { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::SetVariable(_) => vec![],
@@ -271,7 +275,8 @@ impl LogicalPlan {
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
-            | LogicalPlan::Distinct(_) => {
+            | LogicalPlan::Distinct(_)
+            | LogicalPlan::Prepare(_) => {
                 vec![]
             }
         }
@@ -300,7 +305,8 @@ impl LogicalPlan {
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::CreateView(CreateView { input, .. }) => {
+            | LogicalPlan::CreateView(CreateView { input, .. })
+            | LogicalPlan::Prepare(Prepare { input, .. }) => {
                 vec![input]
             }
             // plans without inputs
@@ -448,9 +454,8 @@ impl LogicalPlan {
                 input.accept(visitor)?
             }
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::CreateView(CreateView { input, .. }) => {
-                input.accept(visitor)?
-            }
+            | LogicalPlan::CreateView(CreateView { input, .. })
+            | LogicalPlan::Prepare(Prepare { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Extension(extension) => {
                 for input in extension.node.inputs() {
                     if !input.accept(visitor)? {
@@ -961,6 +966,11 @@ impl LogicalPlan {
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union(_) => write!(f, "Union"),
                     LogicalPlan::Extension(e) => e.node.fmt_for_explain(f),
+                    LogicalPlan::Prepare(Prepare {
+                        name, data_types, ..
+                    }) => {
+                        write!(f, "Prepare: {:?} {:?} ", name, data_types)
+                    }
                 }
             }
         }
@@ -1356,6 +1366,17 @@ pub struct CreateExternalTable {
     pub file_compression_type: String,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
+}
+
+/// Prepare a statement
+#[derive(Clone)]
+pub struct Prepare {
+    /// The name of the statement
+    pub name: String,
+    /// Data types of the parameters
+    pub data_types: Vec<DataType>,
+    /// The logical plan of the statements
+    pub input: Arc<LogicalPlan>,
 }
 
 /// Produces a relation with string representations of

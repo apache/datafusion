@@ -127,6 +127,7 @@ impl ExprSchemable for Expr {
             Expr::Like { .. } | Expr::ILike { .. } | Expr::SimilarTo { .. } => {
                 Ok(DataType::Boolean)
             }
+            Expr::Placeholder(_) => Ok(DataType::Boolean),
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
@@ -198,7 +199,8 @@ impl ExprSchemable for Expr {
             | Expr::IsNotTrue(_)
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
-            | Expr::Exists { .. } => Ok(false),
+            | Expr::Exists { .. }
+            | Expr::Placeholder(_) => Ok(false), // todo: Placeholder should return false?
             Expr::InSubquery { expr, .. } => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
