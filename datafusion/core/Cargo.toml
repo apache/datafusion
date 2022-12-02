@@ -18,7 +18,7 @@
 [package]
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
-version = "14.0.0"
+version = "15.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "../../README.md"
@@ -64,13 +64,13 @@ bytes = "1.1"
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { version = "0.4.23", default-features = false }
 dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "14.0.0", features = ["parquet", "object_store"] }
-datafusion-expr = { path = "../expr", version = "14.0.0" }
-datafusion-jit = { path = "../jit", version = "14.0.0", optional = true }
-datafusion-optimizer = { path = "../optimizer", version = "14.0.0" }
-datafusion-physical-expr = { path = "../physical-expr", version = "14.0.0" }
-datafusion-row = { path = "../row", version = "14.0.0" }
-datafusion-sql = { path = "../sql", version = "14.0.0" }
+datafusion-common = { path = "../common", version = "15.0.0", features = ["parquet", "object_store"] }
+datafusion-expr = { path = "../expr", version = "15.0.0" }
+datafusion-jit = { path = "../jit", version = "15.0.0", optional = true }
+datafusion-optimizer = { path = "../optimizer", version = "15.0.0" }
+datafusion-physical-expr = { path = "../physical-expr", version = "15.0.0" }
+datafusion-row = { path = "../row", version = "15.0.0" }
+datafusion-sql = { path = "../sql", version = "15.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
 glob = "0.3.0"
