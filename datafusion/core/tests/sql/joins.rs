@@ -2360,7 +2360,7 @@ async fn reduce_cross_join_with_cast_expr_join_key() -> Result<()> {
 
         // reduce to inner join, t2.t2_id will insert cast.
         let sql =
-            "select t1.t1_id, t2.t2_id, t1.t1_name from t1 cross join t2 where t1.t1_id + 11 = t2.t2_id";
+            "select t1.t1_id, t2.t2_id, t1.t1_name from t1 cross join t2 where t1.t1_id + 11 = cast(t2.t2_id as BIGINT)";
         let msg = format!("Creating logical plan for '{}'", sql);
         let plan = ctx
             .create_logical_plan(&("explain ".to_owned() + sql))
