@@ -205,8 +205,13 @@ impl JIT {
         builder.seal_block(entry_block);
 
         // Walk the AST and declare all variables.
-        let variables =
-            declare_variables(&mut builder, &params, &the_return, &stmts, entry_block);
+        let variables = declare_variables(
+            &mut builder,
+            &params,
+            the_return.as_ref(),
+            &stmts,
+            entry_block,
+        );
 
         // Now translate the statements of the function body.
         let mut trans = FunctionTranslator {
@@ -652,7 +657,7 @@ fn typed_zero(typ: JITType, builder: &mut FunctionBuilder) -> Value {
 fn declare_variables(
     builder: &mut FunctionBuilder,
     params: &[(String, JITType)],
-    the_return: &Option<(String, JITType)>,
+    the_return: Option<&(String, JITType)>,
     stmts: &[Stmt],
     entry_block: Block,
 ) -> HashMap<String, Variable> {

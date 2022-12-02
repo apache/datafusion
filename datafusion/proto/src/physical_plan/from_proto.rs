@@ -144,13 +144,13 @@ pub(crate) fn parse_physical_expr(
                 .map(|e| {
                     Ok((
                         parse_required_physical_expr(
-                            &e.when_expr,
+                            e.when_expr.as_ref(),
                             registry,
                             "when_expr",
                             input_schema,
                         )?,
                         parse_required_physical_expr(
-                            &e.then_expr,
+                            e.then_expr.as_ref(),
                             registry,
                             "then_expr",
                             input_schema,
@@ -237,7 +237,7 @@ fn parse_required_physical_box_expr(
 }
 
 fn parse_required_physical_expr(
-    expr: &Option<protobuf::PhysicalExprNode>,
+    expr: Option<&protobuf::PhysicalExprNode>,
     registry: &dyn FunctionRegistry,
     field: &str,
     input_schema: &Schema,

@@ -894,10 +894,16 @@ pub fn parse_expr(
                 .when_then_expr
                 .iter()
                 .map(|e| {
-                    let when_expr =
-                        parse_required_expr_inner(&e.when_expr, registry, "when_expr")?;
-                    let then_expr =
-                        parse_required_expr_inner(&e.then_expr, registry, "then_expr")?;
+                    let when_expr = parse_required_expr_inner(
+                        e.when_expr.as_ref(),
+                        registry,
+                        "when_expr",
+                    )?;
+                    let then_expr = parse_required_expr_inner(
+                        e.then_expr.as_ref(),
+                        registry,
+                        "then_expr",
+                    )?;
                     Ok((Box::new(when_expr), Box::new(then_expr)))
                 })
                 .collect::<Result<Vec<(Box<Expr>, Box<Expr>)>, Error>>()?;
@@ -1352,7 +1358,7 @@ fn parse_required_expr(
 }
 
 fn parse_required_expr_inner(
-    p: &Option<protobuf::LogicalExprNode>,
+    p: Option<&protobuf::LogicalExprNode>,
     registry: &dyn FunctionRegistry,
     field: impl Into<String>,
 ) -> Result<Expr, Error> {
