@@ -223,10 +223,10 @@ impl PhysicalOptimizerRule for Repartition {
         config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Don't run optimizer if target_partitions == 1
-        if config.target_partitions == 1 {
+        if config.target_partitions() == 1 {
             Ok(plan)
         } else {
-            optimize_partitions(config.target_partitions, plan, false, false)
+            optimize_partitions(config.target_partitions(), plan, false, false)
         }
     }
 
