@@ -97,6 +97,16 @@ impl Default for WindowFrame {
     }
 }
 
+impl WindowFrame {
+    pub fn empty_over() -> Self {
+        WindowFrame {
+            units: WindowFrameUnits::Rows,
+            start_bound: WindowFrameBound::Preceding(ScalarValue::Utf8(None)),
+            end_bound: WindowFrameBound::Following(ScalarValue::Utf8(None)),
+        }
+    }
+}
+
 /// There are five ways to describe starting and ending frame boundaries:
 ///
 /// 1. UNBOUNDED PRECEDING
