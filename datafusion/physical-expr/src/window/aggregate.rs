@@ -89,14 +89,6 @@ impl WindowExpr for AggregateWindowExpr {
             self.evaluate_partition_points(batch.num_rows(), &partition_columns)?;
         let sort_options: Vec<SortOptions> =
             self.order_by.iter().map(|o| o.options).collect();
-        let (_, order_bys) = self.get_values_orderbys(batch)?;
-        let window_frame = if !order_bys.is_empty() && self.window_frame.is_none() {
-            // OVER (ORDER BY a) case
-            // We create an implicit window for ORDER BY.
-            Some(Arc::new(WindowFrame::default()))
-        } else {
-            self.window_frame.clone()
-        };
         let mut row_wise_results: Vec<ScalarValue> = vec![];
         for partition_range in &partition_points {
             let mut accumulator = self.aggregate.create_accumulator()?;
@@ -104,7 +96,7 @@ impl WindowExpr for AggregateWindowExpr {
             let (values, order_bys) =
                 self.get_values_orderbys(&batch.slice(partition_range.start, length))?;
 
-            let mut window_frame_ctx = WindowFrameContext::new(&window_frame);
+            let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
             let mut last_range: (usize, usize) = (0, 0);
 
             // We iterate on each row to perform a running calculation.

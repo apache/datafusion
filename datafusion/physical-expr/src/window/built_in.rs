@@ -93,20 +93,12 @@ impl WindowExpr for BuiltInWindowExpr {
         let results = if evaluator.uses_window_frame() {
             let sort_options: Vec<SortOptions> =
                 self.order_by.iter().map(|o| o.options).collect();
-            let (_, order_bys) = self.get_values_orderbys(batch)?;
-            let window_frame = if !order_bys.is_empty() && self.window_frame.is_none() {
-                // OVER (ORDER BY a) case
-                // We create an implicit window for ORDER BY.
-                Some(Arc::new(WindowFrame::default()))
-            } else {
-                self.window_frame.clone()
-            };
             let mut row_wise_results = vec![];
             for partition_range in &partition_points {
                 let length = partition_range.end - partition_range.start;
                 let (values, order_bys) = self
                     .get_values_orderbys(&batch.slice(partition_range.start, length))?;
-                let mut window_frame_ctx = WindowFrameContext::new(&window_frame);
+                let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
                 // We iterate on each row to calculate window frame range and and window function result
                 for idx in 0..length {
                     let range = window_frame_ctx.calculate_range(
