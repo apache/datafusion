@@ -181,7 +181,7 @@ impl FileScanConfig {
 ///
 /// Prints in the format:
 /// ```text
-/// NUM_GROUPS:[[file1, file2,...], [fileN, fileM, ...], ...]
+/// {NUM_GROUPS groups: [[file1, file2,...], [fileN, fileM, ...], ...]}
 /// ```
 #[derive(Debug)]
 struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
@@ -189,7 +189,8 @@ struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
 impl<'a> Display for FileGroupsDisplay<'a> {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         let mut first_group = true;
-        write!(f, "{}:[", self.0.len())?;
+        let groups = if self.0.len() == 1 { "group" } else { "groups" };
+        write!(f, "{{{} {}: [", self.0.len(), groups)?;
         for group in self.0 {
             if !first_group {
                 write!(f, ", ")?;
@@ -208,7 +209,7 @@ impl<'a> Display for FileGroupsDisplay<'a> {
             }
             write!(f, "]")?;
         }
-        write!(f, "]")?;
+        write!(f, "]}}")?;
         Ok(())
     }
 }
@@ -817,19 +818,27 @@ mod tests {
 
     #[test]
     fn file_groups_display_empty() {
-        let expected = "0:[]";
+        let expected = "{0 groups: []}";
         assert_eq!(&FileGroupsDisplay(&[]).to_string(), expected);
     }
 
     #[test]
-    fn file_groups_display() {
+    fn file_groups_display_one() {
+        let files = [vec![partitioned_file("foo"), partitioned_file("bar")]];
+
+        let expected = "{1 group: [[foo, bar]]}";
+        assert_eq!(&FileGroupsDisplay(&files).to_string(), expected);
+    }
+
+    #[test]
+    fn file_groups_display_many() {
         let files = [
             vec![partitioned_file("foo"), partitioned_file("bar")],
             vec![partitioned_file("baz")],
             vec![],
         ];
 
-        let expected = "3:[[foo, bar], [baz], []]";
+        let expected = "{3 groups: [[foo, bar], [baz], []]}";
         assert_eq!(&FileGroupsDisplay(&files).to_string(), expected);
     }
 
