@@ -138,29 +138,37 @@ where
 {
     let delimiter = LineDelimiter::new();
 
-    futures::stream::unfold((s, delimiter), |(mut s, mut delimiter)| async move {
-        loop {
-            if let Some(next) = delimiter.next() {
-                return Some((Ok(next), (s, delimiter)));
-            }
+    futures::stream::unfold(
+        (s, delimiter, false),
+        |(mut s, mut delimiter, mut exhausted)| async move {
+            loop {
+                if let Some(next) = delimiter.next() {
+                    return Some((Ok(next), (s, delimiter, exhausted)));
+                } else if exhausted {
+                    return None;
+                }
 
-            match s.next().await {
-                Some(Ok(bytes)) => delimiter.push(bytes),
-                Some(Err(e)) => return Some((Err(e), (s, delimiter))),
-                None => match delimiter.finish() {
-                    Ok(true) => return None,
-                    Ok(false) => continue,
-                    Err(e) => return Some((Err(e), (s, delimiter))),
-                },
+                match s.next().await {
+                    Some(Ok(bytes)) => delimiter.push(bytes),
+                    Some(Err(e)) => return Some((Err(e), (s, delimiter, exhausted))),
+                    None => {
+                        exhausted = true;
+                        match delimiter.finish() {
+                            Ok(true) => return None,
+                            Ok(false) => continue,
+                            Err(e) => return Some((Err(e), (s, delimiter, exhausted))),
+                        }
+                    }
+                }
             }
-        }
-    })
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::stream::TryStreamExt;
+    use futures::stream::{BoxStream, TryStreamExt};
 
     #[test]
     fn test_delimiter() {
@@ -207,6 +215,31 @@ mod tests {
         let input = vec!["hello\nworld\nbin", "go\ncup", "cakes"];
         let input_stream =
             futures::stream::iter(input.into_iter().map(|s| Ok(Bytes::from(s))));
+        let stream = newline_delimited_stream(input_stream);
+
+        let results: Vec<_> = stream.try_collect().await.unwrap();
+        assert_eq!(
+            results,
+            vec![
+                Bytes::from("hello\nworld\n"),
+                Bytes::from("bingo\n"),
+                Bytes::from("cupcakes")
+            ]
+        )
+    }
+    #[tokio::test]
+    async fn test_delimiter_unfold_stream() {
+        let input_stream: BoxStream<'static, Result<Bytes>> = futures::stream::unfold(
+            VecDeque::from(["hello\nworld\nbin", "go\ncup", "cakes"]),
+            |mut input| async move {
+                if !input.is_empty() {
+                    Some((Ok(Bytes::from(input.pop_front().unwrap())), input))
+                } else {
+                    None
+                }
+            },
+        )
+        .boxed();
         let stream = newline_delimited_stream(input_stream);
 
         let results: Vec<_> = stream.try_collect().await.unwrap();
