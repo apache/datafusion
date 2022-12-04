@@ -806,14 +806,9 @@ pub fn parse_expr(
                         .ok_or_else(|| Error::unknown("BuiltInWindowFunction", *i))?
                         .into();
 
-                    let args = match parse_optional_expr(&expr.expr, registry)? {
-                        None => {
-                            vec![]
-                        }
-                        Some(x) => {
-                            vec![x]
-                        }
-                    };
+                    let args = parse_optional_expr(&expr.expr, registry)?
+                        .map(|e| vec![e])
+                        .unwrap_or_else(Vec::new);
 
                     Ok(Expr::WindowFunction {
                         fun: datafusion_expr::window_function::WindowFunction::BuiltInWindowFunction(
