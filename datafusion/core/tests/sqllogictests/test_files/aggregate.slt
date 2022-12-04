@@ -271,7 +271,31 @@ SELECT approx_distinct(c9) AS a, approx_distinct(c9) AS b FROM aggregate_test_10
 ----
 100 100
 
-# csv_query_approx_percentile_cont (c2)
+## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
+## data, asserting the estimated quantiles are ±5% their actual values.
+##
+## Actual quantiles calculated with:
+##
+## ```r
+## read_csv("./testing/data/csv/aggregate_test_100.csv") |>
+##     select_if(is.numeric) |>
+##     summarise_all(~ quantile(., c(0.1, 0.5, 0.9)))
+## ```
+##
+## Giving:
+##
+## ```text
+##      c2    c3      c4           c5       c6    c7     c8          c9     c10   c11    c12
+##   <dbl> <dbl>   <dbl>        <dbl>    <dbl> <dbl>  <dbl>       <dbl>   <dbl> <dbl>  <dbl>
+## 1     1 -95.3 -22925. -1882606710  -7.25e18  18.9  2671.  472608672. 1.83e18 0.109 0.0714
+## 2     3  15.5   4599    377164262   1.13e18 134.  30634  2365817608. 9.30e18 0.491 0.551
+## 3     5 102.   25334.  1991374996.  7.37e18 231   57518. 3776538487. 1.61e19 0.834 0.946
+## ```
+##
+## Column `c12` is omitted due to a large relative error (~10%) due to the small
+## float values.
+
+#csv_query_approx_percentile_cont (c2)
 query T
 SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.1) AS DOUBLE) / 1.0) < 0.05) AS q FROM aggregate_test_100
 ----
@@ -607,7 +631,7 @@ e       -4268.333333333333
         2319.97
 
 # csv_query_approx_percentile_cont_with_weight
-query II
+query TI
 SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 73
@@ -617,7 +641,7 @@ d 124
 e 115
 
 # csv_query_approx_percentile_cont_with_weight (2)
-query II
+query TI
 SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 73
@@ -627,7 +651,7 @@ d 124
 e 115
 
 # csv_query_approx_percentile_cont_with_histogram_bins
-query II
+query TI
 SELECT c1, approx_percentile_cont(c3, 0.95, 200) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 73
@@ -636,8 +660,17 @@ c 122
 d 124
 e 115
 
+query TI
+SELECT c1, approx_percentile_cont_with_weight(c3, c2, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 74
+b 68
+c 123
+d 124
+e 115
+
 # csv_query_sum_crossjoin
-query III
+query TTI
 SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY a.c1, b.c1 ORDER BY a.c1, b.c1
 ----
 a a 1260
@@ -667,7 +700,7 @@ e d 1134
 e e 1323
 
 # csv_query_cube_sum_crossjoin
-query III
+query TTI
 SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY CUBE (a.c1, b.c1) ORDER BY a.c1, b.c1
 ----
 a a 1260
@@ -708,7 +741,7 @@ e   6300
     28500
 
 # csv_query_cube_distinct_count
-query III
+query TII
 SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY CUBE (c1,c2) ORDER BY c1,c2
 ----
 a 1 5
@@ -749,7 +782,7 @@ e   18
     80
 
 # csv_query_rollup_distinct_count
-query III
+query TII
 SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY ROLLUP (c1,c2) ORDER BY c1,c2
 ----
 a 1 5
@@ -785,7 +818,7 @@ e  18
    80
 
 # csv_query_rollup_sum_crossjoin
-query III
+query TTI
 SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY ROLLUP (a.c1, b.c1) ORDER BY a.c1, b.c1
 ----
 a a 1260
@@ -847,7 +880,6 @@ SELECT count(1 + 1)
 # ----
 # [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm]
 
-# FIX: Decimal error
 # csv_query_array_agg_with_overflow
 query IIRIII
 select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by c2 order by c2
@@ -862,7 +894,6 @@ select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count
 # statement error
 # SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100;
 
-# FIX: Decimal error
 # csv_query_array_cube_agg_with_overflow
 query TIIRIII 
 select c1, c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by CUBE (c1,c2) order by c1, c2
@@ -941,31 +972,32 @@ e   847  40.333333333333336  120 -95  21
 # TODO: aggregate_timestamps_avg
 
 # aggregate_time_min_and_max
-query II
+query TT
 select min(t), max(t) from  (select '00:00:00' as t union select '00:00:01' union select '00:00:02')
 ----
 00:00:00 00:00:02
 
 # aggregate_decimal_min
-query I
+query R
 select min(c1) from d_table
 ----
 -100.009
 
 # aggregate_decimal_max
-query I
+query R
 select max(c1) from d_table
 ----
 110.009
 
-query I
+# aggregate_decimal_sum
+query R
 select sum(c1) from d_table
 ----
 100.000
 
 # FIX: doesn't check datatype
 # aggregate_decimal_avg
-query I
+query R
 select avg(c1) from d_table
 ----
 5.0000000
@@ -1011,12 +1043,17 @@ select avg(c1) from d_table
 
 # TODO: simple_mean
 
-# TOOD: bottom 2 require pre-populated data
-# query_sum_distinct
-query II
+# query_sum_distinct - 2 different aggregate functions: avg and sum(distinct)
+query RI
 SELECT AVG(c1), SUM(DISTINCT c2) FROM test
 ----
 1.75 3
+
+# query_sum_distinct - 2 sum(distinct) functions
+query II
+SELECT SUM(DISTINCT c1), SUM(DISTINCT c2) FROM test
+----
+4 3
 
 # # query_count_distinct
 query I
@@ -1045,7 +1082,7 @@ SELECT COUNT(DISTINCT c1) FROM test
 # [[1]]
 
 # test_approx_percentile_cont_decimal_support
-query II
+query TI
 SELECT c1, approx_percentile_cont(c2, cast(0.85 as decimal(10,2))) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 ----
 a 4
