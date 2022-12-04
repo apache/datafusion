@@ -72,8 +72,6 @@ pub async fn main() -> Result<()> {
 #[cfg(not(target_family = "windows"))]
 pub async fn main() -> Result<()> {
     // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
-
-    use log::info;
     env_logger::init();
 
     // run each file using its own new DB
@@ -129,19 +127,19 @@ fn get_test_files() -> Vec<PathBuf> {
 async fn context_for_test_file(file_name: &str) -> SessionContext {
     match file_name {
         "aggregate.slt" => {
-            println!("Registering aggregate tables");
+            info!("Registering aggregate tables");
             let ctx = SessionContext::new();
             setup::register_aggregate_tables(&ctx).await;
             ctx
         }
         "information_schema.slt" => {
-            println!("Enabling information schema");
+            info!("Enabling information schema");
             SessionContext::with_config(
                 SessionConfig::new().with_information_schema(true),
             )
         }
         _ => {
-            println!("Using default SessionContex");
+            info!("Using default SessionContex");
             SessionContext::new()
         }
     }
