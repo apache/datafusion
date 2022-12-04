@@ -20,7 +20,7 @@ use datafusion::arrow::csv::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use log::info;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use sqllogictest::TestError;
@@ -99,28 +99,49 @@ pub async fn main() -> Result<()> {
 }
 
 /// Gets a list of test files to execute. If there were arguments
-/// passed to the program treat them as filenames
-///
+/// passed to the program treat it as a cargo test filter (substring match on filenames)
 fn get_test_files() -> Vec<PathBuf> {
     info!("Test directory: {}", TEST_DIRECTORY);
 
     let args: Vec<_> = std::env::args().collect();
 
-    if args.len() > 1 {
-        let test_path = PathBuf::from(TEST_DIRECTORY);
-
-        // treat args after the first as filenames in the test directory
-        args.into_iter()
+    // treat args after the first as filters to run (substring matching)
+    let filters = if !args.is_empty() {
+        args.iter()
             .skip(1)
-            .map(|arg| test_path.join(arg))
+            .map(|arg| arg.as_str())
             .collect::<Vec<_>>()
     } else {
-        // default to all files in test directory
-        std::fs::read_dir(TEST_DIRECTORY)
-            .unwrap()
-            .map(|path| path.unwrap().path())
-            .collect()
+        vec![]
+    };
+
+    // default to all files in test directory filtering based on name
+    std::fs::read_dir(TEST_DIRECTORY)
+        .unwrap()
+        .map(|path| path.unwrap().path())
+        .filter(|path| check_test_file(&filters, path.as_path()))
+        .collect()
+}
+
+/// because this test can be run as a cargo test, commands like
+///
+/// ```shell
+/// cargo test foo
+/// ```
+///
+/// Will end up passing `foo` as a command line argument.
+///
+/// be compatible with this, treat the command line arguments as a
+/// filter and that does a substring match on each input.
+/// returns true f this path should be run
+fn check_test_file(filters: &[&str], path: &Path) -> bool {
+    if filters.is_empty() {
+        return true;
     }
+
+    // otherwise check if any filter matches
+    let path_str = path.to_string_lossy();
+    filters.iter().any(|filter| path_str.contains(filter))
 }
 
 /// Create a SessionContext, configured for the specific test
