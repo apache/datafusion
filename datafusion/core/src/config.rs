@@ -224,7 +224,7 @@ impl BuiltInConfigs {
             config_definitions: vec![ConfigDefinition::new_u64(
                 OPT_TARGET_PARTITIONS,
                 "Number of partitions for query execution. Increasing partitions can increase \
-                 concurrency.",
+                 concurrency. Defaults to the number of cpu cores on the system.",
                 num_cpus::get() as u64,
             ),
 
@@ -405,11 +405,14 @@ impl BuiltInConfigs {
         let configs = Self::new();
         let mut docs = "| key | type | default | description |\n".to_string();
         docs += "|-----|------|---------|-------------|\n";
-        for config in configs
+
+        let config_definitions: Vec<_> = configs
             .config_definitions
-            .iter()
-            .sorted_by_key(|c| c.key.as_str())
-        {
+            .into_iter()
+            .map(|v| normalize_for_display(v))
+            .collect();
+
+        for config in config_definitions.iter().sorted_by_key(|c| c.key.as_str()) {
             let _ = writeln!(
                 &mut docs,
                 "| {} | {} | {} | {} |",
@@ -418,6 +421,16 @@ impl BuiltInConfigs {
         }
         docs
     }
+}
+
+/// Normalizes a config definition prior to markdown display
+fn normalize_for_display(mut v: ConfigDefinition) -> ConfigDefinition {
+    // Since the default value of target_partitions depends on the number of cores,
+    // set the default value to 0 in the docs.
+    if v.key == OPT_TARGET_PARTITIONS {
+        v.default_value = ScalarValue::UInt64(Some(0))
+    }
+    v
 }
 
 /// Configuration options struct. This can contain values for built-in and custom options
