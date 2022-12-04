@@ -23,22 +23,20 @@ use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchema, DataFusionError};
 use datafusion_expr::Expr as DFExpr;
-use datafusion_sql::parser::{DFParser, Statement};
 use datafusion_sql::planner::SqlToRel;
 use sqlparser::ast::{Expr, SetExpr, Statement as SQLStatement};
 use std::collections::HashMap;
 
-pub async fn insert(ctx: &SessionContext, sql: String) -> Result<String> {
+pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<String> {
     // First, use sqlparser to get table name and insert values
-    let mut table_name = "".to_string();
-    let mut insert_values: Vec<Vec<Expr>> = vec![];
-    if let Statement::Statement(statement) = &DFParser::parse_sql(&sql)?[0] {
-        if let SQLStatement::Insert {
+    let table_name;
+    let insert_values: Vec<Vec<Expr>>;
+    match insert_stmt {
+        SQLStatement::Insert {
             table_name: name,
             source,
             ..
-        } = &**statement
-        {
+        } => {
             // Todo: check columns match table schema
             table_name = name.to_string();
             match &*source.body {
@@ -52,11 +50,7 @@ pub async fn insert(ctx: &SessionContext, sql: String) -> Result<String> {
                 }
             }
         }
-    } else {
-        return Err(DFSqlLogicTestError::Internal(format!(
-            "{:?} not an insert statement",
-            sql
-        )));
+        _ => unreachable!(),
     }
 
     // Second, get table by table name

@@ -19,6 +19,8 @@ use async_trait::async_trait;
 use datafusion::arrow::csv::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_sql::parser::{DFParser, Statement};
+use sqlparser::ast::Statement as SQLStatement;
 use std::path::Path;
 use std::time::Duration;
 
@@ -142,10 +144,15 @@ fn format_batches(batches: &[RecordBatch]) -> Result<String> {
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<String> {
     let sql = sql.into();
     // Check if the sql is `insert`
-    if sql.trim_start().to_lowercase().starts_with("insert") {
-        // Process the insert statement
-        insert(ctx, sql).await?;
-        return Ok("".to_string());
+    match DFParser::parse_sql(&sql) {
+        Ok(statements) => {
+            if let Statement::Statement(statement) = &statements[0] {
+                if let SQLStatement::Insert { .. } = &**statement {
+                    return insert(ctx, &**statement).await;
+                }
+            }
+        }
+        Err(_) => {}
     }
     let df = ctx.sql(sql.as_str()).await.unwrap();
     let results: Vec<RecordBatch> = df.collect().await.unwrap();
