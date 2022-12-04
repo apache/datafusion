@@ -15,6 +15,12 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# target_partitions defaults to num_cores, so set
+# to a known value that is unlikely to be
+# the real number of cores on a system
+statement ok
+SET datafusion.execution.target_partitions=7
+
 # show all variables
 query R
 SHOW ALL
@@ -33,7 +39,7 @@ datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
 datafusion.execution.parquet.reorder_filters false
 datafusion.execution.parquet.skip_metadata true
-datafusion.execution.target_partitions 16
+datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
 datafusion.explain.logical_plan_only false
 datafusion.explain.physical_plan_only false
