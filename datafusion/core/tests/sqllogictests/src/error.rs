@@ -31,7 +31,7 @@ pub enum DFSqlLogicTestError {
     /// Error from datafusion
     DataFusion(DataFusionError),
     /// Error returned when SQL is syntactically incorrect.
-    SQL(ParserError),
+    Sql(ParserError),
     /// Error returned on a branch that we know it is possible
     /// but to which we still have no implementation for.
     /// Often, these errors are tracked in our issue tracker.
@@ -54,7 +54,7 @@ impl From<DataFusionError> for DFSqlLogicTestError {
 
 impl From<ParserError> for DFSqlLogicTestError {
     fn from(value: ParserError) -> Self {
-        DFSqlLogicTestError::SQL(value)
+        DFSqlLogicTestError::Sql(value)
     }
 }
 
@@ -69,7 +69,7 @@ impl Display for DFSqlLogicTestError {
             DFSqlLogicTestError::DataFusion(error) => {
                 write!(f, "DataFusion error: {}", error)
             }
-            DFSqlLogicTestError::SQL(error) => write!(f, "SQL Parser error: {}", error),
+            DFSqlLogicTestError::Sql(error) => write!(f, "SQL Parser error: {}", error),
             DFSqlLogicTestError::NotImplemented(error) => {
                 write!(f, "This feature is not implemented yet: {}", error)
             }

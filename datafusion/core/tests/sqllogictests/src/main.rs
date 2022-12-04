@@ -23,7 +23,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::error::{DFSqlLogicTestError, Result};
-use crate::insert::insert::insert;
+use crate::insert::insert;
 
 mod error;
 mod insert;
@@ -144,7 +144,7 @@ async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<Strin
     // Check if the sql is `insert`
     if sql.trim_start().to_lowercase().starts_with("insert") {
         // Process the insert statement
-        insert(ctx, sql.into()).await?;
+        insert(ctx, sql).await?;
         return Ok("".to_string());
     }
     let df = ctx.sql(sql.as_str()).await.unwrap();
