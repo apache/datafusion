@@ -562,12 +562,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     .map(|e| e.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let window_frame = match window_frame {
-                    Some(frame) => Some(
-                        protobuf::window_expr_node::WindowFrame::Frame(frame.try_into()?)
-                    ),
-                    None => None
-                };
+                let window_frame: Option<protobuf::WindowFrame> = Some(window_frame.try_into()?);
                 let window_expr = Box::new(protobuf::WindowExprNode {
                     expr: arg_expr,
                     window_function: Some(window_function),

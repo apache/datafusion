@@ -1484,15 +1484,14 @@ pub fn create_window_expr_with_name(
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if let Some(ref window_frame) = window_frame {
-                if !is_window_valid(window_frame) {
-                    return Err(DataFusionError::Execution(format!(
+            if !is_window_valid(window_frame) {
+                return Err(DataFusionError::Execution(format!(
                         "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
                         window_frame.start_bound, window_frame.end_bound
                     )));
-                }
             }
-            let window_frame = window_frame.clone().map(Arc::new);
+
+            let window_frame = Arc::new(window_frame.clone());
             windows::create_window_expr(
                 fun,
                 name,

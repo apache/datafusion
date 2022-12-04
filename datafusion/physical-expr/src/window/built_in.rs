@@ -37,7 +37,7 @@ pub struct BuiltInWindowExpr {
     expr: Arc<dyn BuiltInWindowFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
-    window_frame: Option<Arc<WindowFrame>>,
+    window_frame: Arc<WindowFrame>,
 }
 
 impl BuiltInWindowExpr {
@@ -46,7 +46,7 @@ impl BuiltInWindowExpr {
         expr: Arc<dyn BuiltInWindowFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
-        window_frame: Option<Arc<WindowFrame>>,
+        window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
             expr,

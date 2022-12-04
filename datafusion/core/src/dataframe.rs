@@ -897,7 +897,7 @@ mod tests {
             args: vec![col("aggregate_test_100.c1")],
             partition_by: vec![col("aggregate_test_100.c2")],
             order_by: vec![],
-            window_frame: Some(WindowFrame::empty_over()),
+            window_frame: WindowFrame::empty_over(),
         };
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();

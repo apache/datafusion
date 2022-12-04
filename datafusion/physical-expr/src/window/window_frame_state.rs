@@ -43,26 +43,21 @@ pub enum WindowFrameContext<'a> {
         window_frame: &'a Arc<WindowFrame>,
         state: WindowFrameStateGroups,
     },
-    Default,
 }
 
 impl<'a> WindowFrameContext<'a> {
     /// Create a new default state for the given window frame.
-    pub fn new(window_frame: &'a Option<Arc<WindowFrame>>) -> Self {
-        if let Some(window_frame) = window_frame {
-            match window_frame.units {
-                WindowFrameUnits::Rows => WindowFrameContext::Rows(window_frame),
-                WindowFrameUnits::Range => WindowFrameContext::Range {
-                    window_frame,
-                    state: WindowFrameStateRange::default(),
-                },
-                WindowFrameUnits::Groups => WindowFrameContext::Groups {
-                    window_frame,
-                    state: WindowFrameStateGroups::default(),
-                },
-            }
-        } else {
-            WindowFrameContext::Default
+    pub fn new(window_frame: &'a Arc<WindowFrame>) -> Self {
+        match window_frame.units {
+            WindowFrameUnits::Rows => WindowFrameContext::Rows(window_frame),
+            WindowFrameUnits::Range => WindowFrameContext::Range {
+                window_frame,
+                state: WindowFrameStateRange::default(),
+            },
+            WindowFrameUnits::Groups => WindowFrameContext::Groups {
+                window_frame,
+                state: WindowFrameStateGroups::default(),
+            },
         }
     }
 
@@ -96,7 +91,6 @@ impl<'a> WindowFrameContext<'a> {
                 window_frame,
                 ref mut state,
             } => state.calculate_range(window_frame, range_columns, length, idx),
-            WindowFrameContext::Default => Ok((0, length)),
         }
     }
 
