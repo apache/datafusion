@@ -409,7 +409,7 @@ impl BuiltInConfigs {
         let config_definitions: Vec<_> = configs
             .config_definitions
             .into_iter()
-            .map(|v| normalize_for_display(v))
+            .map(normalize_for_display)
             .collect();
 
         for config in config_definitions.iter().sorted_by_key(|c| c.key.as_str()) {
