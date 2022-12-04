@@ -31,7 +31,7 @@ use std::fmt::Debug;
 /// * update its state from multiple accumulators' states via `merge_batch`
 /// * compute the final value from its internal state via `evaluate`
 pub trait Accumulator: Send + Sync + Debug {
-    /// Returns the partal intermediate state of the accumulator. This
+    /// Returns the partial intermediate state of the accumulator. This
     /// partial state is serialied as `Arrays` and then combined with
     /// other partial states from different instances of this
     /// accumulator (that ran on different partitions, for

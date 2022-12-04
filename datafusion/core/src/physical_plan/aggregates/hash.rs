@@ -510,7 +510,7 @@ fn create_batch_from_map(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // next, output  aggregates: either intermediate state or final output
+    // next, output aggregates: either intermediate state or final output
     for (x, &state_len) in acc_data_types.iter().enumerate() {
         for y in 0..state_len {
             match mode {
