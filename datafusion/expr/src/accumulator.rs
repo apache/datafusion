@@ -65,7 +65,7 @@ pub trait Accumulator: Send + Sync + Debug {
     /// Updates the accumulator's state from an `Array` containing one
     /// or more intermediate values.
     ///
-    /// The `states` array passed was formed by cancatenating the
+    /// The `states` array passed was formed by concatenating the
     /// results of calling `[state]` on zero or more other accumulator
     /// instances.
     ///
