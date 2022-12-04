@@ -19,7 +19,8 @@ use async_trait::async_trait;
 use datafusion::arrow::csv::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use std::path::Path;
+use log::info;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use sqllogictest::TestError;
@@ -70,37 +71,58 @@ pub async fn main() -> Result<()> {
 #[tokio::main]
 #[cfg(not(target_family = "windows"))]
 pub async fn main() -> Result<()> {
-    let paths = std::fs::read_dir(TEST_DIRECTORY).unwrap();
+    // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
 
-    // run each file using its own new SessionContext
+    use log::info;
+    env_logger::init();
+
+    // run each file using its own new DB
     //
     // Note: can't use tester.run_parallel_async()
     // as that will reuse the same SessionContext
     //
     // We could run these tests in parallel eventually if we wanted.
 
-    for path in paths {
-        // TODO better error handling
-        let path = path.unwrap().path();
+    let files = get_test_files();
+    info!("Running test files {:?}", files);
 
-        run_file(&path).await?;
+    for path in files {
+        println!("Running: {}", path.display());
+
+        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
+
+        let ctx = context_for_test_file(&file_name).await;
+
+        let mut tester = sqllogictest::Runner::new(DataFusion { ctx, file_name });
+        tester.run_file_async(path).await?;
     }
 
     Ok(())
 }
 
-/// Run the tests in the specified `.slt` file
-async fn run_file(path: &Path) -> Result<()> {
-    println!("Running: {}", path.display());
+/// Gets a list of test files to execute. If there were arguments
+/// passed to the program treat them as filenames
+///
+fn get_test_files() -> Vec<PathBuf> {
+    info!("Test directory: {}", TEST_DIRECTORY);
 
-    let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
+    let args: Vec<_> = std::env::args().collect();
 
-    let ctx = context_for_test_file(&file_name).await;
+    if args.len() > 1 {
+        let test_path = PathBuf::from(TEST_DIRECTORY);
 
-    let mut tester = sqllogictest::Runner::new(DataFusion { ctx, file_name });
-    tester.run_file_async(path).await?;
-
-    Ok(())
+        // treat args after the first as filenames in the test directory
+        args.into_iter()
+            .skip(1)
+            .map(|arg| test_path.join(arg))
+            .collect::<Vec<_>>()
+    } else {
+        // default to all files in test directory
+        std::fs::read_dir(TEST_DIRECTORY)
+            .unwrap()
+            .map(|path| path.unwrap().path())
+            .collect()
+    }
 }
 
 /// Create a SessionContext, configured for the specific test

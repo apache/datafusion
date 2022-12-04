@@ -23,7 +23,21 @@ This is the Datafusion implementation of [sqllogictest](https://www.sqlite.org/s
 
 #### Running tests
 
-`cargo test -p datafusion --test sqllogictests`
+```shell
+cargo test -p datafusion --test sqllogictests
+```
+
+Run tests with debug logging enabled:
+
+```shell
+RUST_LOG=debug cargo test -p datafusion --test sqllogictests
+```
+
+Run only the tests in `information_schema.slt`:
+
+```shell
+cargo test -p datafusion --test sqllogictests -- information_schema.slt
+```
 
 #### sqllogictests
 
