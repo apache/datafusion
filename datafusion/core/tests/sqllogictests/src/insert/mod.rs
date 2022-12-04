@@ -17,7 +17,7 @@
 
 mod util;
 
-use crate::error::{DFSqlLogicTestError, Result};
+use crate::error::Result;
 use crate::insert::util::LogicTestContextProvider;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
@@ -44,9 +44,8 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<
                     insert_values = values.0.clone();
                 }
                 _ => {
-                    return Err(DFSqlLogicTestError::NotImplemented(
-                        "Only support insert values".to_string(),
-                    ));
+                    // Directly panic: make it easy to find the location of the error.
+                    panic!()
                 }
             }
         }
@@ -59,11 +58,7 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<
     let table_batches = table_provider
         .as_any()
         .downcast_ref::<MemTable>()
-        .ok_or_else(|| {
-            DFSqlLogicTestError::NotImplemented(
-                "only support use memory table in logictest".to_string(),
-            )
-        })?
+        .unwrap()
         .get_batches();
 
     // Third, transfer insert values to `RecordBatch`
