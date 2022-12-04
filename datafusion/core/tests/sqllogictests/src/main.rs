@@ -20,6 +20,7 @@ use datafusion::arrow::csv::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sql::parser::{DFParser, Statement};
+use normalize::normalize_batch;
 use sqlparser::ast::Statement as SQLStatement;
 use std::path::Path;
 use std::time::Duration;
@@ -29,6 +30,7 @@ use crate::insert::insert;
 
 mod error;
 mod insert;
+mod normalize;
 mod setup;
 mod utils;
 
@@ -129,13 +131,13 @@ async fn context_for_test_file(file_name: &str) -> SessionContext {
     }
 }
 
-fn format_batches(batches: &[RecordBatch]) -> Result<String> {
+fn format_batches(batches: Vec<RecordBatch>) -> Result<String> {
     let mut bytes = vec![];
     {
         let builder = WriterBuilder::new().has_headers(false).with_delimiter(b' ');
         let mut writer = builder.build(&mut bytes);
         for batch in batches {
-            writer.write(batch).unwrap();
+            writer.write(&normalize_batch(batch)).unwrap();
         }
     }
     Ok(String::from_utf8(bytes).unwrap())
@@ -153,6 +155,6 @@ async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<Strin
     }
     let df = ctx.sql(sql.as_str()).await.unwrap();
     let results: Vec<RecordBatch> = df.collect().await.unwrap();
-    let formatted_batches = format_batches(&results)?;
+    let formatted_batches = format_batches(results)?;
     Ok(formatted_batches)
 }
