@@ -22,9 +22,11 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use std::path::Path;
 use std::time::Duration;
 
-use sqllogictest::TestError;
-pub type Result<T> = std::result::Result<T, TestError>;
+use crate::error::{DFSqlLogicTestError, Result};
+use crate::insert::insert::insert;
 
+mod error;
+mod insert;
 mod setup;
 mod utils;
 
@@ -37,7 +39,7 @@ pub struct DataFusion {
 
 #[async_trait]
 impl sqllogictest::AsyncDB for DataFusion {
-    type Error = TestError;
+    type Error = DFSqlLogicTestError;
 
     async fn run(&mut self, sql: &str) -> Result<String> {
         println!("[{}] Running query: \"{}\"", self.file_name, sql);
@@ -138,7 +140,14 @@ fn format_batches(batches: &[RecordBatch]) -> Result<String> {
 }
 
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<String> {
-    let df = ctx.sql(&sql.into()).await.unwrap();
+    let sql = sql.into();
+    // Check if the sql is `insert`
+    if sql.trim_start().to_lowercase().starts_with("insert") {
+        // Process the insert statement
+        insert(ctx, sql.into()).await?;
+        return Ok("".to_string());
+    }
+    let df = ctx.sql(sql.as_str()).await.unwrap();
     let results: Vec<RecordBatch> = df.collect().await.unwrap();
     let formatted_batches = format_batches(&results)?;
     Ok(formatted_batches)

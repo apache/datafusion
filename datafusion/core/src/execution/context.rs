@@ -958,6 +958,22 @@ impl SessionContext {
         }
     }
 
+    /// Return a [`TabelProvider`] for the specified table.
+    pub fn table_provider<'a>(
+        &self,
+        table_ref: impl Into<TableReference<'a>>,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let table_ref = table_ref.into();
+        let schema = self.state.read().schema_for_ref(table_ref)?;
+        match schema.table(table_ref.table()) {
+            Some(ref provider) => Ok(Arc::clone(provider)),
+            _ => Err(DataFusionError::Plan(format!(
+                "No table named '{}'",
+                table_ref.table()
+            ))),
+        }
+    }
+
     /// Returns the set of available tables in the default catalog and
     /// schema.
     ///
