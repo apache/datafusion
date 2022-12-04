@@ -127,6 +127,7 @@ async fn context_for_test_file(file_name: &str) -> SessionContext {
     }
 }
 
+
 fn format_batches(batches: &[RecordBatch]) -> Result<String> {
     let mut bytes = vec![];
     {
