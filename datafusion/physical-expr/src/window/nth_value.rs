@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 /// nth_value kind
 #[derive(Debug, Copy, Clone)]
-enum NthValueKind {
+pub enum NthValueKind {
     First,
     Last,
     Nth(u32),
@@ -93,6 +93,11 @@ impl NthValue {
                 kind: NthValueKind::Nth(n),
             }),
         }
+    }
+
+    /// Get nth_value kind
+    pub fn get_kind(&self) -> NthValueKind {
+        self.kind
     }
 }
 
