@@ -2223,12 +2223,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             }
                         })
                         .transpose()?;
-                    let window_frame = if let Some(window_frame) = window_frame{
+                    let window_frame = if let Some(window_frame) = window_frame {
                         window_frame
-                    }else if order_by.is_empty(){
+                    } else if order_by.is_empty() {
                         WindowFrame::empty_over()
-                    }
-                    else{
+                    } else {
                         WindowFrame::default()
                     };
                     let fun = WindowFunction::from_str(&name)?;

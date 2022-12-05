@@ -431,12 +431,11 @@ fn convert_to_coerced_type(
     value: &ScalarValue,
 ) -> Result<ScalarValue> {
     match value {
-        // In here we do casting either for ScalarValue::Utf8(None) or
+        // In here we do casting either for NULL types or
         // ScalarValue::Utf8(Some(val)). The other types are already casted.
         // The reason is that we convert the sqlparser result
         // to the Utf8 for all possible cases. Hence the types other than Utf8
         // are already casted to appropriate type. Therefore they can be returned directly.
-        ScalarValue::Utf8(None) => ScalarValue::try_from(coerced_type),
         ScalarValue::Utf8(Some(val)) => {
             // we need special handling for Interval types
             if let DataType::Interval(..) = coerced_type {
@@ -445,7 +444,13 @@ fn convert_to_coerced_type(
                 ScalarValue::try_from_string(val.clone(), coerced_type)
             }
         }
-        s => Ok(s.clone()),
+        s => {
+            if s.is_null() {
+                ScalarValue::try_from(coerced_type)
+            } else {
+                Ok(s.clone())
+            }
+        }
     }
 }
 
