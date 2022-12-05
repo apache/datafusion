@@ -37,8 +37,15 @@ pub struct Rank {
     rank_type: RankType,
 }
 
+impl Rank {
+    /// Get rank_type of the rank in window function with order by
+    pub fn get_type(&self) -> RankType {
+        self.rank_type
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
-pub(crate) enum RankType {
+pub enum RankType {
     Basic,
     Dense,
     Percent,
