@@ -89,8 +89,6 @@ pub enum Expr {
     Alias(Box<Expr>, String),
     /// A named reference to a qualified filed in a schema.
     Column(Column),
-    /// A place holder for parameters in a prepared statement.
-    Placeholder(String),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
     /// A constant value.
@@ -246,6 +244,8 @@ pub enum Expr {
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
+    /// A place holder for parameters in a prepared statement.
+    Placeholder(String),
 }
 
 /// Binary expression
