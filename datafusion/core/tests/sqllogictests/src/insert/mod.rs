@@ -19,6 +19,7 @@ mod util;
 
 use crate::error::Result;
 use crate::insert::util::LogicTestContextProvider;
+use arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchema, DataFusionError};
@@ -26,6 +27,7 @@ use datafusion_expr::Expr as DFExpr;
 use datafusion_sql::planner::SqlToRel;
 use sqlparser::ast::{Expr, SetExpr, Statement as SQLStatement};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<String> {
     // First, use sqlparser to get table name and insert values
@@ -52,19 +54,14 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<
         _ => unreachable!(),
     }
 
-    // Second, get table by table name
-    // Here we assume table must be in memory table.
-    let table_provider = ctx.table_provider(table_name.as_str())?;
-    let table_batches = table_provider
-        .as_any()
-        .downcast_ref::<MemTable>()
-        .unwrap()
-        .get_batches();
+    // Second, get batches in table and destroy the old table
+    let mut origin_batches = ctx.table(table_name.as_str())?.collect().await?;
+    let schema = ctx.table_provider(table_name.as_str())?.schema();
+    ctx.deregister_table(table_name.as_str())?;
 
     // Third, transfer insert values to `RecordBatch`
     // Attention: schema info can be ignored. (insert values don't contain schema info)
     let sql_to_rel = SqlToRel::new(&LogicTestContextProvider {});
-    let mut insert_batches = Vec::with_capacity(insert_values.len());
     for row in insert_values.into_iter() {
         let logical_exprs = row
             .into_iter()
@@ -74,12 +71,17 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<
             .collect::<std::result::Result<Vec<DFExpr>, DataFusionError>>()?;
         // Directly use `select` to get `RecordBatch`
         let dataframe = ctx.read_empty()?;
-        insert_batches.push(dataframe.select(logical_exprs)?.collect().await?)
+        origin_batches.extend(dataframe.select(logical_exprs)?.collect().await?)
     }
 
-    // Final, append the `RecordBatch` to memtable's batches
-    let mut table_batches = table_batches.write();
-    table_batches.extend(insert_batches);
+    // Replace new batches schema to old schema
+    for batch in origin_batches.iter_mut() {
+        *batch = RecordBatch::try_new(schema.clone(), batch.columns().to_vec())?;
+    }
+
+    // Final, create new memtable with same schema.
+    let new_provider = MemTable::try_new(schema, vec![origin_batches])?;
+    ctx.register_table(table_name.as_str(), Arc::new(new_provider))?;
 
     Ok("".to_string())
 }
