@@ -23,12 +23,13 @@
 use crate::{downcast_value, DataFusionError};
 use arrow::{
     array::{
-        Array, BinaryArray, BooleanArray, Date32Array, Decimal128Array, DictionaryArray,
-        Float32Array, Float64Array, GenericBinaryArray, GenericListArray, Int32Array,
-        Int64Array, LargeListArray, ListArray, MapArray, NullArray, OffsetSizeTrait,
-        PrimitiveArray, StringArray, StructArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-        UInt32Array, UInt64Array, UnionArray,
+        Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+        DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array,
+        Float64Array, GenericBinaryArray, GenericListArray, GenericStringArray,
+        Int32Array, Int64Array, LargeListArray, ListArray, MapArray, NullArray,
+        OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray, UInt32Array, UInt64Array, UnionArray,
     },
     datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };
@@ -176,4 +177,30 @@ pub fn as_timestamp_second_array(
 // Downcast ArrayRef to BinaryArray
 pub fn as_binary_array(array: &dyn Array) -> Result<&BinaryArray, DataFusionError> {
     Ok(downcast_value!(array, BinaryArray))
+}
+
+// Downcast ArrayRef to FixedSizeListArray
+pub fn as_fixed_size_list_array(
+    array: &dyn Array,
+) -> Result<&FixedSizeListArray, DataFusionError> {
+    Ok(downcast_value!(array, FixedSizeListArray))
+}
+
+// Downcast ArrayRef to FixedSizeListArray
+pub fn as_fixed_size_binary_array(
+    array: &dyn Array,
+) -> Result<&FixedSizeBinaryArray, DataFusionError> {
+    Ok(downcast_value!(array, FixedSizeBinaryArray))
+}
+
+// Downcast ArrayRef to Date64Array
+pub fn as_date64_array(array: &dyn Array) -> Result<&Date64Array, DataFusionError> {
+    Ok(downcast_value!(array, Date64Array))
+}
+
+// Downcast ArrayRef to GenericBinaryArray
+pub fn as_generic_string_array<T: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<&GenericStringArray<T>, DataFusionError> {
+    Ok(downcast_value!(array, GenericStringArray, T))
 }

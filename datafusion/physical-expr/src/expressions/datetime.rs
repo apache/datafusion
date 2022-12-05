@@ -17,7 +17,7 @@
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
-use arrow::array::{Array, ArrayRef, Date64Array};
+use arrow::array::{Array, ArrayRef};
 use arrow::compute::unary;
 use arrow::datatypes::{
     DataType, Date32Type, Date64Type, Schema, TimeUnit, TimestampMicrosecondType,
@@ -25,8 +25,9 @@ use arrow::datatypes::{
 };
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::{
-    as_date32_array, as_timestamp_microsecond_array, as_timestamp_millisecond_array,
-    as_timestamp_nanosecond_array, as_timestamp_second_array,
+    as_date32_array, as_date64_array, as_timestamp_microsecond_array,
+    as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
+    as_timestamp_second_array,
 };
 use datafusion_common::scalar::{
     date32_add, date64_add, microseconds_add, milliseconds_add, nanoseconds_add,
@@ -194,7 +195,7 @@ pub fn evaluate_array(
             })) as ArrayRef
         }
         DataType::Date64 => {
-            let array = array.as_any().downcast_ref::<Date64Array>().unwrap();
+            let array = as_date64_array(&array)?;
             Arc::new(unary::<Date64Type, _, Date64Type>(array, |ms| {
                 date64_add(ms, scalar, sign).unwrap()
             })) as ArrayRef

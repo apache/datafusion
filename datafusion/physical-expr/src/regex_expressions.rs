@@ -26,12 +26,11 @@ use arrow::array::{
     OffsetSizeTrait,
 };
 use arrow::compute;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{cast::as_generic_string_array, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionImplementation};
 use hashbrown::HashMap;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::any::type_name;
 use std::sync::Arc;
 
 use crate::functions::{make_scalar_function, make_scalar_function_with_hints, Hint};
@@ -42,7 +41,7 @@ use crate::functions::{make_scalar_function, make_scalar_function_with_hints, Hi
 /// then calls the given early abort function.
 macro_rules! fetch_string_arg {
     ($ARG:expr, $NAME:expr, $T:ident, $EARLY_ABORT:ident) => {{
-        let array = downcast_string_array_arg!($ARG, $NAME, $T);
+        let array = as_generic_string_array::<T>($ARG)?;
         if array.len() == 0 || array.is_null(0) {
             return $EARLY_ABORT(array);
         } else {
@@ -51,32 +50,18 @@ macro_rules! fetch_string_arg {
     }};
 }
 
-macro_rules! downcast_string_array_arg {
-    ($ARG:expr, $NAME:expr, $T:ident) => {{
-        $ARG.as_any()
-            .downcast_ref::<GenericStringArray<T>>()
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "could not cast {} to {}",
-                    $NAME,
-                    type_name::<GenericStringArray<T>>()
-                ))
-            })?
-    }};
-}
-
 /// extract a specific group from a string column, using a regular expression
 pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => {
-            let values = downcast_string_array_arg!(args[0], "string", T);
-            let regex = downcast_string_array_arg!(args[1], "pattern", T);
+            let values = as_generic_string_array::<T>(&args[0])?;
+            let regex = as_generic_string_array::<T>(&args[1])?;
             compute::regexp_match(values, regex, None).map_err(DataFusionError::ArrowError)
         }
         3 => {
-            let values = downcast_string_array_arg!(args[0], "string", T);
-            let regex = downcast_string_array_arg!(args[1], "pattern", T);
-            let flags = Some(downcast_string_array_arg!(args[2], "flags", T));
+            let values = as_generic_string_array::<T>(&args[0])?;
+            let regex = as_generic_string_array::<T>(&args[1])?;
+            let flags = Some(as_generic_string_array::<T>(&args[2])?);
 
             match flags {
                 Some(f) if f.iter().any(|s| s == Some("g")) => {
@@ -115,9 +100,9 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
 
     match args.len() {
         3 => {
-            let string_array = downcast_string_array_arg!(args[0], "string", T);
-            let pattern_array = downcast_string_array_arg!(args[1], "pattern", T);
-            let replacement_array = downcast_string_array_arg!(args[2], "replacement", T);
+            let string_array = as_generic_string_array::<T>(&args[0])?;
+            let pattern_array = as_generic_string_array::<T>(&args[1])?;
+            let replacement_array = as_generic_string_array::<T>(&args[2])?;
 
             let result = string_array
             .iter()
@@ -150,10 +135,10 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
             Ok(Arc::new(result) as ArrayRef)
         }
         4 => {
-            let string_array = downcast_string_array_arg!(args[0], "string", T);
-            let pattern_array = downcast_string_array_arg!(args[1], "pattern", T);
-            let replacement_array = downcast_string_array_arg!(args[2], "replacement", T);
-            let flags_array = downcast_string_array_arg!(args[3], "flags", T);
+            let string_array = as_generic_string_array::<T>(&args[0])?;
+            let pattern_array = as_generic_string_array::<T>(&args[1])?;
+            let replacement_array = as_generic_string_array::<T>(&args[2])?;
+            let flags_array = as_generic_string_array::<T>(&args[3])?;
 
             let result = string_array
             .iter()
@@ -227,13 +212,13 @@ fn _regexp_replace_early_abort<T: OffsetSizeTrait>(
 fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
-    let string_array = downcast_string_array_arg!(args[0], "string", T);
-    let pattern = fetch_string_arg!(args[1], "pattern", T, _regexp_replace_early_abort);
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let pattern = fetch_string_arg!(&args[1], "pattern", T, _regexp_replace_early_abort);
     let replacement =
-        fetch_string_arg!(args[2], "replacement", T, _regexp_replace_early_abort);
+        fetch_string_arg!(&args[2], "replacement", T, _regexp_replace_early_abort);
     let flags = match args.len() {
         3 => None,
-        4 => Some(fetch_string_arg!(args[3], "flags", T, _regexp_replace_early_abort)),
+        4 => Some(fetch_string_arg!(&args[3], "flags", T, _regexp_replace_early_abort)),
         other => {
             return Err(DataFusionError::Internal(format!(
                 "regexp_replace was called with {} arguments. It requires at least 3 and at most 4.",

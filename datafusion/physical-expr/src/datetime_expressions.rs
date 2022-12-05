@@ -18,23 +18,22 @@
 //! DateTime expressions
 
 use arrow::{
-    array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait, PrimitiveArray},
+    array::TimestampNanosecondArray, compute::kernels::temporal, datatypes::TimeUnit,
+    temporal_conversions::timestamp_ns_to_datetime,
+};
+use arrow::{
+    array::{Array, ArrayRef, OffsetSizeTrait, PrimitiveArray},
     compute::kernels::cast_utils::string_to_timestamp_nanos,
     datatypes::{
         ArrowPrimitiveType, DataType, IntervalDayTimeType, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
     },
 };
-use arrow::{
-    array::{Date64Array, TimestampNanosecondArray},
-    compute::kernels::temporal,
-    datatypes::TimeUnit,
-    temporal_conversions::timestamp_ns_to_datetime,
-};
 use chrono::prelude::*;
 use chrono::Duration;
 use datafusion_common::cast::{
-    as_date32_array, as_timestamp_microsecond_array, as_timestamp_millisecond_array,
+    as_date32_array, as_date64_array, as_generic_string_array,
+    as_timestamp_microsecond_array, as_timestamp_millisecond_array,
     as_timestamp_nanosecond_array, as_timestamp_second_array,
 };
 use datafusion_common::{DataFusionError, Result};
@@ -69,12 +68,7 @@ where
         )));
     }
 
-    let array = args[0]
-        .as_any()
-        .downcast_ref::<GenericStringArray<T>>()
-        .ok_or_else(|| {
-            DataFusionError::Internal("failed to downcast to string".to_string())
-        })?;
+    let array = as_generic_string_array::<T>(args[0])?;
 
     // first map is the iterator, second is for the `Option<_>`
     array
@@ -412,7 +406,7 @@ macro_rules! extract_date_part {
                 Err(e) => Err(e),
             },
             DataType::Date64 => {
-                let array = $ARRAY.as_any().downcast_ref::<Date64Array>().unwrap();
+                let array = as_date64_array($ARRAY)?;
                 Ok($FN(array)?)
             }
             DataType::Timestamp(time_unit, None) => match time_unit {
