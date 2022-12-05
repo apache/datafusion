@@ -36,7 +36,8 @@ RUST_LOG=debug cargo test -p datafusion --test sqllogictests
 Run only the tests in `information_schema.slt`:
 
 ```shell
-cargo test -p datafusion --test sqllogictests -- information_schema.slt
+# information_schema.slt matches due to substring matching `information`
+cargo test -p datafusion --test sqllogictests -- information
 ```
 
 #### sqllogictests
