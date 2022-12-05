@@ -419,6 +419,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub fn query_to_plan_with_alias(
         &self,
         query: Query,
+        param_data_types: &Vec<DataType>,
         alias: Option<String>,
         ctes: &mut HashMap<String, LogicalPlan>,
         outer_query_schema: Option<&DFSchema>,
@@ -992,6 +993,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(LogicalPlan::Filter(Filter::try_new(
                     filter_expr,
                     Arc::new(plan),
+                    &[], // todo: get this list from the ctes after refactoing it
                 )?))
             }
             None => Ok(plan),
@@ -5209,6 +5211,21 @@ mod tests {
         assert_eq!(format!("{:?}", plan), expected);
     }
 
+    fn prepare_stmt_quick_test(
+        sql: &str,
+        expected_plan: &str,
+        expected_data_types: &str,
+    ) {
+        let plan = logical_plan(sql).unwrap();
+        // verify plan
+        assert_eq!(format!("{:?}", plan), expected_plan);
+        // verify data types
+        if let LogicalPlan::Prepare(Prepare { data_types, .. }) = plan {
+            let dt = format!("{:?}", data_types);
+            assert_eq!(dt, expected_data_types);
+        }
+    }
+
     struct MockContextProvider {}
 
     impl ContextProvider for MockContextProvider {
@@ -6011,18 +6028,76 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    // TODO: will add more tests to cover many other cases
     #[test]
-    fn test_prepare_statement_to_plan() {
-        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $1";
-        //let statements = DFParser::parse_sql(sql).unwrap();
+    fn test_prepare_statement_to_plan_no_param() {
+        // no embedded parameter but still declare it
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
 
-        let expected = "Prepare: \"my_plan\" [Int32] \
+        let expected_plan = "Prepare: \"my_plan\" [Int32] \
+        \n  Projection: person.id, person.age\
+        \n    Filter: person.age = Int64(10)\
+        \n      TableScan: person";
+
+        let expected_dt = "[Int32]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        /////////////////////////
+        // no embedded parameter and no declare it
+        let sql = "PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10";
+
+        let expected_plan = "Prepare: \"my_plan\" [] \
+        \n  Projection: person.id, person.age\
+        \n    Filter: person.age = Int64(10)\
+        \n      TableScan: person";
+
+        let expected_dt = "[]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    fn test_prepare_statement_to_plan_one_param() {
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $1";
+
+        let expected_plan = "Prepare: \"my_plan\" [Int32] \
         \n  Projection: person.id, person.age\
         \n    Filter: person.age = $1\
         \n      TableScan: person";
 
-        quick_test(sql, expected);
+        let expected_dt = "[Int32]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    fn test_prepare_statement_to_plan_multi_params() {
+        let sql = "PREPARE my_plan(INT, DOUBLE, STRING, INT) AS SELECT id, age  FROM person WHERE age IN ($1, $4) AND salary > $2 OR first_name = $3";
+
+        let expected_plan = "Prepare: \"my_plan\" [Int32, Float64, Utf8, Int32] \
+        \n  Projection: person.id, person.age\
+        \n    Filter: person.age IN ([$1, $4]) AND person.salary > $2 OR person.first_name = $3\
+        \n      TableScan: person";
+
+        let expected_dt = "[Int32, Float64, Utf8, Int32]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    fn test_prepare_statement_to_plan_value_list() {
+        let sql = "PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);";
+
+        let expected_plan = "Prepare: \"my_plan\" [Utf8, Utf8] \
+        \n  Projection: t.num, t.letter\
+        \n    SubqueryAlias: t\
+        \n      Projection: t.column1 AS num, t.column2 AS letter\
+        \n        SubqueryAlias: t\
+        \n          Values: (Int64(1), $1), (Int64(2), $2)";
+
+        let expected_dt = "[Utf8, Utf8]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {

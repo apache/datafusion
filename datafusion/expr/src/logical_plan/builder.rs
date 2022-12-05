@@ -155,7 +155,9 @@ impl LogicalPlanBuilder {
                         nulls.push((i, j));
                         Ok(field_types[j].clone())
                     } else {
+                        println!("====== expr: {:?}", expr);
                         let data_type = expr.get_type(&empty_schema)?;
+                        println!("========= data_type: {:?}", data_type);
                         if let Some(prev_data_type) = &field_types[j] {
                             if prev_data_type != &data_type {
                                 let err = format!("Inconsistent data type across values list at row {} column {}", i, j);
