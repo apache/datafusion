@@ -20,16 +20,15 @@
 
 use crate::{
     error::Result,
-    execution::{
-        disk_manager::{DiskManager, DiskManagerConfig},
-        memory_manager::{MemoryConsumerId, MemoryManager, MemoryManagerConfig},
-    },
+    execution::disk_manager::{DiskManager, DiskManagerConfig},
 };
 use std::collections::HashMap;
 
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::listing_table_factory::ListingTableFactory;
 use crate::datasource::object_store::ObjectStoreRegistry;
+use crate::execution::memory_manager::MemoryManagerConfig;
+use crate::execution::MemoryManager;
 use datafusion_common::DataFusionError;
 use object_store::ObjectStore;
 use std::fmt::{Debug, Formatter};
@@ -72,26 +71,6 @@ impl RuntimeEnv {
             object_store_registry,
             table_factories,
         })
-    }
-
-    /// Register the consumer to get it tracked
-    pub fn register_requester(&self, id: &MemoryConsumerId) {
-        self.memory_manager.register_requester(id);
-    }
-
-    /// Drop the consumer from get tracked, reclaim memory
-    pub fn drop_consumer(&self, id: &MemoryConsumerId, mem_used: usize) {
-        self.memory_manager.drop_consumer(id, mem_used)
-    }
-
-    /// Grow tracker memory of `delta`
-    pub fn grow_tracker_usage(&self, delta: usize) {
-        self.memory_manager.grow_tracker_usage(delta)
-    }
-
-    /// Shrink tracker memory of `delta`
-    pub fn shrink_tracker_usage(&self, delta: usize) {
-        self.memory_manager.shrink_tracker_usage(delta)
     }
 
     /// Registers a custom `ObjectStore` to be used when accessing a

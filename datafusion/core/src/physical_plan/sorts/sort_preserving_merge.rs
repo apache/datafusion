@@ -169,7 +169,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
             )));
         }
 
-        let tracking_metrics = MemTrackingMetrics::new(&self.metrics, partition);
+        let tracking_metrics =
+            MemTrackingMetrics::new(&self.metrics, context.memory_manager(), partition);
 
         let input_partitions = self.input.output_partitioning().partition_count();
         debug!(
@@ -342,7 +343,7 @@ impl SortPreservingMergeStream {
         streams: Vec<SortedStream>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
-        tracking_metrics: MemTrackingMetrics,
+        mut tracking_metrics: MemTrackingMetrics,
         batch_size: usize,
     ) -> Result<Self> {
         let stream_count = streams.len();
@@ -1258,7 +1259,8 @@ mod tests {
         }
 
         let metrics = ExecutionPlanMetricsSet::new();
-        let tracking_metrics = MemTrackingMetrics::new(&metrics, 0);
+        let tracking_metrics =
+            MemTrackingMetrics::new(&metrics, task_ctx.memory_manager(), 0);
 
         let merge_stream = SortPreservingMergeStream::new_from_streams(
             streams,

@@ -74,7 +74,7 @@ use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
     OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
-use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
+use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry, MemoryManager};
 use crate::physical_optimizer::enforcement::BasicEnforcement;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
@@ -1910,6 +1910,11 @@ impl TaskContext {
     /// Return the task_id of this [TaskContext]
     pub fn task_id(&self) -> Option<String> {
         self.task_id.clone()
+    }
+
+    /// Return the [`MemoryManager`] associated with this [TaskContext]
+    pub fn memory_manager(&self) -> &Arc<MemoryManager> {
+        &self.runtime.memory_manager
     }
 
     /// Return the [RuntimeEnv] associated with this [TaskContext]

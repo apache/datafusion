@@ -28,10 +28,7 @@ use futures::stream::{Stream, StreamExt};
 
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::execution::memory_manager::proxy::{
-    MemoryConsumerProxy, RawTableAllocExt, VecAllocExt,
-};
-use crate::execution::MemoryConsumerId;
+use crate::execution::memory_manager::proxy::{RawTableAllocExt, VecAllocExt};
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, AccumulatorItem, AggregateMode, PhysicalGroupBy,
 };
@@ -41,6 +38,7 @@ use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use crate::scalar::ScalarValue;
 
+use crate::execution::memory_manager::TrackedAllocation;
 use arrow::{array::ArrayRef, compute, compute::cast};
 use arrow::{
     array::{Array, UInt32Builder},
@@ -125,6 +123,10 @@ impl GroupedHashAggregateStream {
 
         timer.done();
 
+        let allocation = context
+            .memory_manager()
+            .new_tracked_allocation(format!("GroupedHashAggregateStream[{}]", partition));
+
         let inner = GroupedHashAggregateStreamInner {
             schema: Arc::clone(&schema),
             mode,
@@ -134,11 +136,7 @@ impl GroupedHashAggregateStream {
             baseline_metrics,
             aggregate_expressions,
             accumulators: Accumulators {
-                memory_consumer: MemoryConsumerProxy::new(
-                    "GroupBy Hash Accumulators",
-                    MemoryConsumerId::new(partition),
-                    Arc::clone(&context.runtime_env().memory_manager),
-                ),
+                allocation,
                 map: RawTable::with_capacity(0),
                 group_states: Vec::with_capacity(0),
             },
@@ -172,15 +170,10 @@ impl GroupedHashAggregateStream {
                         // allocate memory
                         // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
                         // overshooting a bit. Also this means we either store the whole record batch or not.
-                        let result = match result {
-                            Ok(allocated) => {
-                                this.accumulators.memory_consumer.alloc(allocated).await
-                            }
-                            Err(e) => Err(e),
-                        };
-
-                        match result {
-                            Ok(()) => continue,
+                        match result.and_then(|allocated| {
+                            this.accumulators.allocation.try_grow(allocated)
+                        }) {
+                            Ok(_) => continue,
                             Err(e) => Err(ArrowError::ExternalError(Box::new(e))),
                         }
                     }
@@ -441,7 +434,7 @@ struct GroupState {
 
 /// The state of all the groups
 struct Accumulators {
-    memory_consumer: MemoryConsumerProxy,
+    allocation: TrackedAllocation,
 
     /// Logically maps group values to an index in `group_states`
     ///
