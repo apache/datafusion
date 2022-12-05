@@ -178,22 +178,39 @@ impl FileScanConfig {
 }
 
 /// A wrapper to customize partitioned file display
+///
+/// Prints in the format:
+/// ```text
+/// {NUM_GROUPS groups: [[file1, file2,...], [fileN, fileM, ...], ...]}
+/// ```
 #[derive(Debug)]
 struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
 
 impl<'a> Display for FileGroupsDisplay<'a> {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        let parts: Vec<_> = self
-            .0
-            .iter()
-            .map(|pp| {
-                pp.iter()
-                    .map(|pf| pf.object_meta.location.as_ref())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .collect();
-        write!(f, "[{}]", parts.join(", "))
+        let mut first_group = true;
+        let groups = if self.0.len() == 1 { "group" } else { "groups" };
+        write!(f, "{{{} {}: [", self.0.len(), groups)?;
+        for group in self.0 {
+            if !first_group {
+                write!(f, ", ")?;
+            }
+            first_group = false;
+            write!(f, "[")?;
+
+            let mut first_file = true;
+            for pf in group {
+                if !first_file {
+                    write!(f, ", ")?;
+                }
+                first_file = false;
+
+                write!(f, "{}", pf.object_meta.location.as_ref())?;
+            }
+            write!(f, "]")?;
+        }
+        write!(f, "]}}")?;
+        Ok(())
     }
 }
 
@@ -521,6 +538,8 @@ pub(crate) fn get_output_ordering(
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+
     use crate::{
         test::{build_table_i32, columns},
         test_util::aggr_test_schema,
@@ -794,6 +813,48 @@ mod tests {
             table_partition_cols,
             config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
+        }
+    }
+
+    #[test]
+    fn file_groups_display_empty() {
+        let expected = "{0 groups: []}";
+        assert_eq!(&FileGroupsDisplay(&[]).to_string(), expected);
+    }
+
+    #[test]
+    fn file_groups_display_one() {
+        let files = [vec![partitioned_file("foo"), partitioned_file("bar")]];
+
+        let expected = "{1 group: [[foo, bar]]}";
+        assert_eq!(&FileGroupsDisplay(&files).to_string(), expected);
+    }
+
+    #[test]
+    fn file_groups_display_many() {
+        let files = [
+            vec![partitioned_file("foo"), partitioned_file("bar")],
+            vec![partitioned_file("baz")],
+            vec![],
+        ];
+
+        let expected = "{3 groups: [[foo, bar], [baz], []]}";
+        assert_eq!(&FileGroupsDisplay(&files).to_string(), expected);
+    }
+
+    /// create a PartitionedFile for testing
+    fn partitioned_file(path: &str) -> PartitionedFile {
+        let object_meta = ObjectMeta {
+            location: object_store::path::Path::parse(path).unwrap(),
+            last_modified: Utc::now(),
+            size: 42,
+        };
+
+        PartitionedFile {
+            object_meta,
+            partition_values: vec![],
+            range: None,
+            extensions: None,
         }
     }
 }

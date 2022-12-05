@@ -26,6 +26,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use parking_lot::RwLock;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
@@ -40,7 +41,7 @@ use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
 #[derive(Debug)]
 pub struct MemTable {
     schema: SchemaRef,
-    batches: Vec<Vec<RecordBatch>>,
+    batches: Arc<RwLock<Vec<Vec<RecordBatch>>>>,
 }
 
 impl MemTable {
@@ -53,7 +54,7 @@ impl MemTable {
         {
             Ok(Self {
                 schema,
-                batches: partitions,
+                batches: Arc::new(RwLock::new(partitions)),
             })
         } else {
             Err(DataFusionError::Plan(
@@ -117,6 +118,11 @@ impl MemTable {
         }
         MemTable::try_new(schema.clone(), data)
     }
+
+    /// Get record batches in MemTable
+    pub fn get_batches(&self) -> Arc<RwLock<Vec<Vec<RecordBatch>>>> {
+        self.batches.clone()
+    }
 }
 
 #[async_trait]
@@ -140,8 +146,9 @@ impl TableProvider for MemTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let batches = self.batches.read();
         Ok(Arc::new(MemoryExec::try_new(
-            &self.batches.clone(),
+            &(*batches).clone(),
             self.schema(),
             projection.cloned(),
         )?))
