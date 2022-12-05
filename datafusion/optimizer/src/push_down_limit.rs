@@ -27,9 +27,9 @@ use std::sync::Arc;
 
 /// Optimization rule that tries to push down LIMIT.
 #[derive(Default)]
-pub struct LimitPushDown {}
+pub struct PushDownLimit {}
 
-impl LimitPushDown {
+impl PushDownLimit {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
@@ -74,7 +74,7 @@ fn push_down_join(
 }
 
 /// Push down Limit.
-impl OptimizerRule for LimitPushDown {
+impl OptimizerRule for PushDownLimit {
     fn optimize(
         &self,
         plan: &LogicalPlan,
@@ -229,7 +229,7 @@ impl OptimizerRule for LimitPushDown {
     }
 
     fn name(&self) -> &str {
-        "limit_push_down"
+        "push_down_limit"
     }
 }
 
@@ -254,7 +254,7 @@ mod test {
     };
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        let optimized_plan = LimitPushDown::new()
+        let optimized_plan = PushDownLimit::new()
             .optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
 
