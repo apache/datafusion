@@ -62,7 +62,6 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<
     // Third, transfer insert values to `RecordBatch`
     // Attention: schema info can be ignored. (insert values don't contain schema info)
     let sql_to_rel = SqlToRel::new(&LogicTestContextProvider {});
-    let mut insert_batches = Vec::with_capacity(insert_values.len());
     for row in insert_values.into_iter() {
         let logical_exprs = row
             .into_iter()
@@ -72,15 +71,12 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<
             .collect::<std::result::Result<Vec<DFExpr>, DataFusionError>>()?;
         // Directly use `select` to get `RecordBatch`
         let dataframe = ctx.read_empty()?;
-        insert_batches.extend(dataframe.select(logical_exprs)?.collect().await?)
+        origin_batches.extend(dataframe.select(logical_exprs)?.collect().await?)
     }
 
     // Replace new batches schema to old schema
-    for batch in insert_batches.iter_mut() {
-        origin_batches.push(RecordBatch::try_new(
-            schema.clone(),
-            batch.columns().to_vec(),
-        )?);
+    for batch in origin_batches.iter_mut() {
+        *batch = RecordBatch::try_new(schema.clone(), batch.columns().to_vec())?;
     }
 
     // Final, create new memtable with same schema.
