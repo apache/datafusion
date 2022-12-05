@@ -27,6 +27,28 @@ use std::env;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+/// Configuration option "datafusion.execution.target_partitions"
+pub const OPT_TARGET_PARTITIONS: &str = "datafusion.execution.target_partitions";
+
+/// Configuration option "datafusion.catalog.create_default_catalog_and_schema"
+pub const OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA: &str =
+    "datafusion.catalog.create_default_catalog_and_schema";
+/// Configuration option "datafusion.catalog.information_schema"
+pub const OPT_INFORMATION_SCHEMA: &str = "datafusion.catalog.information_schema";
+
+/// Configuration option "datafusion.optimizer.repartition_joins"
+pub const OPT_REPARTITION_JOINS: &str = "datafusion.optimizer.repartition_joins";
+
+/// Configuration option "datafusion.optimizer.repartition_aggregations"
+pub const OPT_REPARTITION_AGGREGATIONS: &str =
+    "datafusion.optimizer.repartition_aggregations";
+
+/// Configuration option "datafusion.optimizer.repartition_windows"
+pub const OPT_REPARTITION_WINDOWS: &str = "datafusion.optimizer.repartition_windows";
+
+/// Configuration option "datafusion.execuction_collect_statistics"
+pub const OPT_COLLECT_STATISTICS: &str = "datafusion.execuction_collect_statistics";
+
 /// Configuration option "datafusion.optimizer.filter_null_join_keys"
 pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filter_null_join_keys";
 
@@ -199,7 +221,54 @@ impl BuiltInConfigs {
     /// configuration options
     pub fn new() -> Self {
         Self {
-            config_definitions: vec![ConfigDefinition::new_bool(
+            config_definitions: vec![ConfigDefinition::new_u64(
+                OPT_TARGET_PARTITIONS,
+                "Number of partitions for query execution. Increasing partitions can increase \
+                 concurrency. Defaults to the number of cpu cores on the system.",
+                num_cpus::get() as u64,
+            ),
+
+            ConfigDefinition::new_bool(
+                OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA,
+                "Whether the default catalog and schema should be created automatically.",
+                true
+            ),
+
+            ConfigDefinition::new_bool(
+                OPT_INFORMATION_SCHEMA,
+                "Should DataFusion provide access to `information_schema` \
+                 virtual tables for displaying schema information",
+                false
+            ),
+
+            ConfigDefinition::new_bool(
+                OPT_REPARTITION_JOINS,
+                "Should DataFusion repartition data using the join keys to execute joins in parallel \
+                 using the provided `target_partitions` level",
+                true
+            ),
+
+            ConfigDefinition::new_bool(
+                OPT_REPARTITION_AGGREGATIONS,
+                "Should DataFusion repartition data using the aggregate keys to execute aggregates \
+                 in parallel using the provided `target_partitions` level",
+                true
+            ),
+
+            ConfigDefinition::new_bool(
+                OPT_REPARTITION_WINDOWS,
+                "Should DataFusion collect statistics after listing files",
+                true
+            ),
+
+            ConfigDefinition::new_bool(
+                OPT_COLLECT_STATISTICS,
+                "Should DataFusion repartition data using the partitions keys to execute window \
+                 functions in parallel using the provided `target_partitions` level",
+                false
+            ),
+
+            ConfigDefinition::new_bool(
                 OPT_FILTER_NULL_JOIN_KEYS,
                 "When set to true, the optimizer will insert filters before a join between \
                 a nullable and non-nullable column to filter out nulls on the nullable side. This \
@@ -336,11 +405,14 @@ impl BuiltInConfigs {
         let configs = Self::new();
         let mut docs = "| key | type | default | description |\n".to_string();
         docs += "|-----|------|---------|-------------|\n";
-        for config in configs
+
+        let config_definitions: Vec<_> = configs
             .config_definitions
-            .iter()
-            .sorted_by_key(|c| c.key.as_str())
-        {
+            .into_iter()
+            .map(normalize_for_display)
+            .collect();
+
+        for config in config_definitions.iter().sorted_by_key(|c| c.key.as_str()) {
             let _ = writeln!(
                 &mut docs,
                 "| {} | {} | {} | {} |",
@@ -349,6 +421,16 @@ impl BuiltInConfigs {
         }
         docs
     }
+}
+
+/// Normalizes a config definition prior to markdown display
+fn normalize_for_display(mut v: ConfigDefinition) -> ConfigDefinition {
+    // Since the default value of target_partitions depends on the number of cores,
+    // set the default value to 0 in the docs.
+    if v.key == OPT_TARGET_PARTITIONS {
+        v.default_value = ScalarValue::UInt64(Some(0))
+    }
+    v
 }
 
 /// Configuration options struct. This can contain values for built-in and custom options
@@ -434,6 +516,12 @@ impl ConfigOptions {
 
     /// set a `u64` configuration option
     pub fn set_u64(&mut self, key: &str, value: u64) {
+        self.set(key, ScalarValue::UInt64(Some(value)))
+    }
+
+    /// set a `usize` configuration option
+    pub fn set_usize(&mut self, key: &str, value: usize) {
+        let value: u64 = value.try_into().expect("convert u64 to usize");
         self.set(key, ScalarValue::UInt64(Some(value)))
     }
 
