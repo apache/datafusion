@@ -72,7 +72,7 @@ impl PhysicalOptimizerRule for BasicEnforcement {
         plan: Arc<dyn ExecutionPlan>,
         config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_partitions = config.target_partitions;
+        let target_partitions = config.target_partitions();
         let top_down_join_key_reordering = config
             .config_options()
             .read()

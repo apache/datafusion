@@ -839,6 +839,7 @@ mod tests {
     use std::vec;
 
     use super::*;
+    use crate::execution::context::SessionConfig;
     use crate::execution::options::{CsvReadOptions, ParquetReadOptions};
     use crate::physical_plan::ColumnarValue;
     use crate::physical_plan::Partitioning;
@@ -1538,8 +1539,7 @@ mod tests {
         assert_eq!(4016, union_rows.iter().map(|x| x.num_rows()).sum::<usize>());
 
         let physical_plan = union.create_physical_plan().await?;
-        let default_partition_count =
-            SessionContext::new().copied_config().target_partitions;
+        let default_partition_count = SessionConfig::new().target_partitions();
 
         // For partition aware union, the output partition count should not be changed.
         assert_eq!(
@@ -1594,8 +1594,7 @@ mod tests {
         assert_eq!(916, union_rows.iter().map(|x| x.num_rows()).sum::<usize>());
 
         let physical_plan = union.create_physical_plan().await?;
-        let default_partition_count =
-            SessionContext::new().copied_config().target_partitions;
+        let default_partition_count = SessionConfig::new().target_partitions();
 
         // For non-partition aware union, the output partitioning count should be the combination of all output partitions count
         assert!(matches!(
@@ -1624,8 +1623,7 @@ mod tests {
             JoinType::RightAnti,
         ];
 
-        let default_partition_count =
-            SessionContext::new().copied_config().target_partitions;
+        let default_partition_count = SessionConfig::new().target_partitions();
 
         for join_type in all_join_types {
             let join = left.join(
