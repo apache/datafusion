@@ -19,11 +19,11 @@ use async_trait::async_trait;
 use datafusion::arrow::csv::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use log::info;
-use std::path::{Path, PathBuf};
 use datafusion_sql::parser::{DFParser, Statement};
+use log::info;
 use normalize::normalize_batch;
 use sqlparser::ast::Statement as SQLStatement;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::{DFSqlLogicTestError, Result};
@@ -166,7 +166,7 @@ async fn context_for_test_file(file_name: &str) -> SessionContext {
             )
         }
         _ => {
-            info!("Using default SessionContex");
+            info!("Using default SessionContext");
             SessionContext::new()
         }
     }
