@@ -44,9 +44,9 @@ use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGro
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
 use crate::physical_plan::filter::FilterExec;
-use crate::physical_plan::joins::CrossJoinExec;
 use crate::physical_plan::joins::HashJoinExec;
 use crate::physical_plan::joins::SortMergeJoinExec;
+use crate::physical_plan::joins::{CrossJoinExec, NestedLoopJoinExec};
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
@@ -937,7 +937,16 @@ impl DefaultPhysicalPlanner {
                         .read()
                         .get_bool(OPT_PREFER_HASH_JOIN)
                         .unwrap_or_default();
-                    if session_state.config.target_partitions > 1
+                    if join_on.is_empty() {
+                        // if there is no equal join condition for `on`, will use the
+                        // nested loop join
+                        Ok(Arc::new(NestedLoopJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_filter,
+                            join_type,
+                        )?))
+                    } else if session_state.config.target_partitions > 1
                         && session_state.config.repartition_joins
                         && !prefer_hash_join
                     {

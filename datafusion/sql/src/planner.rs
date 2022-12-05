@@ -778,9 +778,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 let join_filter = filter.into_iter().reduce(Expr::and);
 
-                if left_keys.is_empty() {
-                    // TODO should not use cross join when the join_filter exists
-                    // https://github.com/apache/arrow-datafusion/issues/4363
+                // If join_filter exists, will generate the Join plan with the JoinType
+                if left_keys.is_empty() && join_filter.is_none() {
                     let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
                     join_filter
                         .map(|filter| join.filter(filter))
@@ -5867,6 +5866,46 @@ mod tests {
         \n      TableScan: person\
         \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
         \n        TableScan: orders";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_noneq_with_filter_join() {
+        // inner join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person INNER JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Inner Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+        quick_test(sql, expected);
+        // left join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person LEFT JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Left Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+        quick_test(sql, expected);
+        // right join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person RIGHT JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Right Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+        quick_test(sql, expected);
+        // full join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person FULL JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Full Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
