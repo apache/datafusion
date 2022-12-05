@@ -26,7 +26,8 @@ use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
 use crate::cast::{
-    as_decimal128_array, as_dictionary_array, as_list_array, as_struct_array,
+    as_decimal128_array, as_dictionary_array, as_fixed_size_binary_array,
+    as_fixed_size_list_array, as_list_array, as_struct_array,
 };
 use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
@@ -2109,8 +2110,7 @@ impl ScalarValue {
                 Self::Struct(Some(field_values), Box::new(fields.clone()))
             }
             DataType::FixedSizeList(nested_type, _len) => {
-                let list_array =
-                    array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+                let list_array = as_fixed_size_list_array(array)?;
                 let value = match list_array.is_null(index) {
                     true => None,
                     false => {
@@ -2124,10 +2124,7 @@ impl ScalarValue {
                 ScalarValue::new_list(value, nested_type.data_type().clone())
             }
             DataType::FixedSizeBinary(_) => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<FixedSizeBinaryArray>()
-                    .unwrap();
+                let array = as_fixed_size_binary_array(array)?;
                 let size = match array.data_type() {
                     DataType::FixedSizeBinary(size) => *size,
                     _ => unreachable!(),

@@ -31,11 +31,11 @@ use crate::physical_plan::{
     Column, DisplayFormatType, EquivalenceProperties, ExecutionPlan, Partitioning,
     PhysicalExpr,
 };
-use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::cast::as_boolean_array;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::{split_conjunction, AnalysisContext};
@@ -217,15 +217,7 @@ fn batch_filter(
         .map(|v| v.into_array(batch.num_rows()))
         .map_err(DataFusionError::into)
         .and_then(|array| {
-            array
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "Filter predicate evaluated to non-boolean value".to_string(),
-                    )
-                    .into()
-                })
+            Ok(as_boolean_array(&array)?)
                 // apply filter array to record batch
                 .and_then(|filter_array| filter_record_batch(batch, filter_array))
         })
