@@ -59,6 +59,11 @@ impl AggregateWindowExpr {
             window_frame,
         }
     }
+
+    /// Get aggregate expr of AggregateWindowExpr
+    pub fn get_aggregate_expr(&self) -> &Arc<dyn AggregateExpr> {
+        &self.aggregate
+    }
 }
 
 /// peer based evaluation based on the fact that batch is pre-sorted given the sort columns
