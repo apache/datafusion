@@ -770,20 +770,6 @@ message ScalarTimestampValue {
   string timezone = 5;
 }
 
-message ScalarTime32Value {
-  oneof value {
-    int32 time32_second_value = 1;
-    int32 time32_millisecond_value = 2;
-  };
-}
-
-message ScalarTime64Value {
-  oneof value {
-    int64 time64_microsecond_value = 1;
-    int64 time64_nanosecond_value = 2;
-  };
-}
-
 message ScalarDictionaryValue {
   ArrowType index_type = 1;
   ScalarValue value = 2;
@@ -844,12 +830,10 @@ message ScalarValue{
         ScalarDictionaryValue dictionary_value = 27;
         bytes binary_value = 28;
         bytes large_binary_value = 29;
-
         ScalarTime64Value time64_value = 30;
         IntervalMonthDayNanoValue interval_month_day_nano = 31;
         StructValue struct_value = 32;
         ScalarFixedSizeBinary fixed_size_binary_value = 34;
->>>>>>> upstream/master
     }
 }
 
