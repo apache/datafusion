@@ -15,6 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
+## DDL Tests
+##
+
 statement ok
 CREATE TABLE users AS VALUES(1,2),(2,3);
 
@@ -45,6 +48,32 @@ select * from users;
 2 4
 11 20
 
-# Test insert into a undefined table
+
+# Dropping table
+statement ok
+DROP TABLE users;
+
+# Table is gone
+statement error
+select * from users;
+
+# Can not drop it again
+statement error
+DROP TABLE user;
+
+# Can not insert into a undefined table
 statement error
 insert into user values(1, 20);
+
+
+# Verify that creating tables with periods in their name works
+# (note "foo.bar" is the table name, NOT table "bar" in schema "foo")
+statement ok
+CREATE TABLE "foo.bar" AS VALUES(1,2),(2,3);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo.bar";
+----
+1 2
+2 3

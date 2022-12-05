@@ -167,7 +167,8 @@ message EmptyRelationNode {
 }
 
 message CreateExternalTableNode {
-  string name = 1;
+  reserved 1; // was string name
+  OwnedTableReference name = 12;
   string location = 2;
   string file_type = 3;
   bool has_header = 4;
@@ -193,7 +194,8 @@ message CreateCatalogNode {
 }
 
 message CreateViewNode {
-  string name = 1;
+  reserved 1; // was string name
+  OwnedTableReference name = 5;
   LogicalPlanNode input = 2;
   bool or_replace = 3;
   string definition = 4;
@@ -913,6 +915,29 @@ message PlanType {
 message StringifiedPlan {
   PlanType plan_type = 1;
   string plan = 2;
+}
+
+message BareTableReference {
+  string table = 1;
+}
+
+message PartialTableReference {
+  string schema = 1;
+  string table = 2;
+}
+
+message FullTableReference {
+  string catalog = 1;
+  string schema = 2;
+  string table = 3;
+}
+
+message OwnedTableReference {
+  oneof table_reference_enum {
+    BareTableReference bare = 1;
+    PartialTableReference partial = 2;
+    FullTableReference full = 3;
+  }
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
