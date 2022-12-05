@@ -103,6 +103,31 @@ pub struct ParserOptions {
     parse_float_as_decimal: bool,
 }
 
+#[derive(Debug, Clone)]
+/// Struct to store Common Table Expression provided with WITH clause and Parameter Data Types provided with PREPARE statement
+pub struct Ctes {
+    /// Data type provided with prepare statement
+    pub prepare_param_data_types: Vec<DataType>,
+    /// Map of CTE name to logical plan of the WITH clause
+    pub ctes: HashMap<String, LogicalPlan>,
+}
+
+impl Default for Ctes {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Ctes {
+    /// Create a new Ctes
+    pub fn new() -> Self {
+        Self {
+            prepare_param_data_types: vec![],
+            ctes: HashMap::new(),
+        }
+    }
+}
+
 /// SQL query planner
 pub struct SqlToRel<'a, S: ContextProvider> {
     schema_provider: &'a S,
@@ -181,7 +206,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 describe_alias: _,
                 ..
             } => self.explain_statement_to_plan(verbose, analyze, *statement),
-            Statement::Query(query) => self.query_to_plan(*query, &mut HashMap::new()),
+            Statement::Query(query) => self.query_to_plan(*query, &mut Ctes::new()),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
             Statement::SetVariable {
                 local,
@@ -204,7 +229,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 && table_properties.is_empty()
                 && with_options.is_empty() =>
             {
-                let plan = self.query_to_plan(*query, &mut HashMap::new())?;
+                let plan = self.query_to_plan(*query, &mut Ctes::new())?;
                 let input_schema = plan.schema();
 
                 let plan = if !columns.is_empty() {
@@ -248,7 +273,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 with_options,
                 ..
             } if with_options.is_empty() => {
-                let mut plan = self.query_to_plan(*query, &mut HashMap::new())?;
+                let mut plan = self.query_to_plan(*query, &mut Ctes::new())?;
                 plan = Self::apply_expr_alias(plan, &columns)?;
 
                 Ok(LogicalPlan::CreateView(CreateView {
@@ -367,11 +392,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a logical plan from an SQL query
-    pub fn query_to_plan(
-        &self,
-        query: Query,
-        ctes: &mut HashMap<String, LogicalPlan>,
-    ) -> Result<LogicalPlan> {
+    pub fn query_to_plan(&self, query: Query, ctes: &mut Ctes) -> Result<LogicalPlan> {
         self.query_to_plan_with_alias(query, None, ctes, None)
     }
 
@@ -379,7 +400,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub fn subquery_to_plan(
         &self,
         query: Query,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
         outer_query_schema: &DFSchema,
     ) -> Result<LogicalPlan> {
         self.query_to_plan_with_alias(query, None, ctes, Some(outer_query_schema))
@@ -390,7 +411,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         query: Query,
         alias: Option<String>,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         let set_expr = query.body;
@@ -406,7 +427,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
                 let cte_name = normalize_ident(&cte.alias.name);
-                if ctes.contains_key(&cte_name) {
+                if ctes.ctes.contains_key(&cte_name) {
                     return Err(DataFusionError::SQL(ParserError(format!(
                         "WITH query name {:?} specified more than once",
                         cte_name
@@ -424,7 +445,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // projection (e.g. "WITH table(t1, t2) AS SELECT 1, 2").
                 let logical_plan = self.apply_table_alias(logical_plan, cte.alias)?;
 
-                ctes.insert(cte_name, logical_plan);
+                ctes.ctes.insert(cte_name, logical_plan);
             }
         }
         let plan = self.set_expr_to_plan(*set_expr, alias, ctes, outer_query_schema)?;
@@ -436,7 +457,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         set_expr: SetExpr,
         alias: Option<String>,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         match set_expr {
@@ -618,7 +639,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn plan_from_tables(
         &self,
         mut from: Vec<TableWithJoins>,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         match from.len() {
@@ -644,7 +665,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn plan_table_with_joins(
         &self,
         t: TableWithJoins,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         // From clause may exist CTEs, we should separate them from global CTEs.
@@ -683,7 +704,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         left: LogicalPlan,
         join: Join,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         let right = self.create_relation(join.relation, ctes, outer_query_schema)?;
@@ -722,7 +743,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         right: LogicalPlan,
         constraint: JoinConstraint,
         join_type: JoinType,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
     ) -> Result<LogicalPlan> {
         match constraint {
             JoinConstraint::On(sql_expr) => {
@@ -837,7 +858,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn create_relation(
         &self,
         relation: TableFactor,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         let (plan, alias) = match relation {
@@ -850,7 +871,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let table_name = normalize_sql_object_name(sql_object_name);
                 let table_ref: TableReference = table_name.as_str().into();
                 let table_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
-                let cte = ctes.get(&table_name);
+                let cte = ctes.ctes.get(&table_name);
                 (
                     match (cte, self.schema_provider.get_table_provider(table_ref)) {
                         (Some(cte_plan), _) => match table_alias {
@@ -953,7 +974,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         selection: Option<SQLExpr>,
         plan: LogicalPlan,
         outer_query_schema: Option<&DFSchema>,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
     ) -> Result<LogicalPlan> {
         match selection {
             Some(predicate_expr) => {
@@ -1017,7 +1038,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn select_to_plan(
         &self,
         select: Select,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
         alias: Option<String>,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
@@ -1218,7 +1239,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         projection: Vec<SelectItem>,
         empty_from: bool,
         outer_query_schema: Option<&DFSchema>,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
         from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
         projection
@@ -1371,7 +1392,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Some(skip_expr) => match self.sql_to_rex(
                 skip_expr.value,
                 input.schema(),
-                &mut HashMap::new(),
+                &mut Ctes::new(),
             )? {
                 Expr::Literal(ScalarValue::Int64(Some(s))) => {
                     if s < 0 {
@@ -1394,7 +1415,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let n = match self.sql_to_rex(
                     limit_expr,
                     input.schema(),
-                    &mut HashMap::new(),
+                    &mut Ctes::new(),
                 )? {
                     Expr::Literal(ScalarValue::Int64(Some(n))) => Ok(n as usize),
                     _ => Err(DataFusionError::Plan(
@@ -1456,7 +1477,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let field = schema.field(field_index - 1);
                 Expr::Column(field.qualified_column())
             }
-            e => self.sql_expr_to_logical_expr(e, schema, &mut HashMap::new())?,
+            e => self.sql_expr_to_logical_expr(e, schema, &mut Ctes::new())?,
         };
         Ok({
             let asc = asc.unwrap_or(true);
@@ -1537,7 +1558,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         plan: &LogicalPlan,
         empty_from: bool,
         outer_query_schema: Option<&DFSchema>,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
         from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
         let input_schema = match outer_query_schema {
@@ -1586,7 +1607,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         sql: SQLExpr,
         schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
     ) -> Result<Expr> {
         let mut expr = self.sql_expr_to_logical_expr(sql, schema, ctes)?;
         expr = self.rewrite_partial_qualifier(expr, schema);
@@ -1626,7 +1647,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         sql: FunctionArg,
         schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
     ) -> Result<Expr> {
         match sql {
             FunctionArg::Named {
@@ -1654,7 +1675,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         op: BinaryOperator,
         right: SQLExpr,
         schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
     ) -> Result<Expr> {
         let operator = match op {
             BinaryOperator::Gt => Ok(Operator::Gt),
@@ -1698,7 +1719,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         op: UnaryOperator,
         expr: SQLExpr,
         schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
     ) -> Result<Expr> {
         match op {
             UnaryOperator::Not => Ok(Expr::Not(Box::new(
@@ -1747,19 +1768,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Ok(Expr::Literal(ScalarValue::Null))
                         }
                         SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
-                        SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(
-                            op,
-                            *expr,
-                            &schema,
-                            &mut HashMap::new(),
-                        ),
+                        SQLExpr::UnaryOp { op, expr } => {
+                            self.parse_sql_unary_op(op, *expr, &schema, &mut Ctes::new())
+                        }
                         SQLExpr::BinaryOp { left, op, right } => self
                             .parse_sql_binary_op(
                                 *left,
                                 op,
                                 *right,
                                 &schema,
-                                &mut HashMap::new(),
+                                &mut Ctes::new(),
                             ),
                         SQLExpr::TypedString { data_type, value } => {
                             Ok(Expr::Cast(Cast::new(
@@ -1771,7 +1789,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Box::new(self.sql_expr_to_logical_expr(
                                 *expr,
                                 &schema,
-                                &mut HashMap::new(),
+                                &mut Ctes::new(),
                             )?),
                             self.convert_data_type(&data_type)?,
                         ))),
@@ -1790,7 +1808,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         sql: SQLExpr,
         schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
     ) -> Result<Expr> {
         match sql {
             SQLExpr::Value(Value::Number(n, _)) => self.parse_sql_number(&n),
@@ -2338,7 +2356,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         subquery: Query,
         negated: bool,
         input_schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
     ) -> Result<Expr> {
         Ok(Expr::Exists {
             subquery: Subquery {
@@ -2358,7 +2376,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         subquery: Query,
         negated: bool,
         input_schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
     ) -> Result<Expr> {
         Ok(Expr::InSubquery {
             expr: Box::new(self.sql_to_rex(expr, input_schema, ctes)?),
@@ -2377,7 +2395,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         subquery: Query,
         input_schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
     ) -> Result<Expr> {
         Ok(Expr::ScalarSubquery(Subquery {
             subquery: Arc::new(self.subquery_to_plan(subquery, ctes, input_schema)?),
@@ -2388,7 +2406,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         array_agg: ArrayAgg,
         input_schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        ctes: &mut Ctes,
     ) -> Result<Expr> {
         // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
         let ArrayAgg {
@@ -2437,7 +2455,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
         args.into_iter()
-            .map(|a| self.sql_fn_arg_to_logical_expr(a, schema, &mut HashMap::new()))
+            .map(|a| self.sql_fn_arg_to_logical_expr(a, schema, &mut Ctes::new()))
             .collect::<Result<Vec<Expr>>>()
     }
 
@@ -2455,7 +2473,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
                         Ok(Expr::Literal(COUNT_STAR_EXPANSION.clone()))
                     }
-                    _ => self.sql_fn_arg_to_logical_expr(a, schema, &mut HashMap::new()),
+                    _ => self.sql_fn_arg_to_logical_expr(a, schema, &mut Ctes::new()),
                 })
                 .collect::<Result<Vec<Expr>>>()?,
             _ => self.function_args_to_expr(args, schema)?,
@@ -2708,7 +2726,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         for element in elements {
             let value =
-                self.sql_expr_to_logical_expr(element, schema, &mut HashMap::new())?;
+                self.sql_expr_to_logical_expr(element, schema, &mut Ctes::new())?;
             match value {
                 Expr::Literal(scalar) => {
                     values.push(scalar);
