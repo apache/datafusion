@@ -522,6 +522,7 @@ impl From<ObjectMeta> for FileMeta {
 ///
 ///              ParquetExec
 ///```
+#[allow(clippy::manual_filter)]
 pub(crate) fn get_output_ordering(
     base_config: &FileScanConfig,
 ) -> Option<&[PhysicalSortExpr]> {
