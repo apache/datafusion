@@ -1076,11 +1076,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             }
 
             datafusion::scalar::ScalarValue::Time32Second(v) => {
-<<<<<<< HEAD
                 create_proto_scalar(v, &data_type, |v| {
-=======
-                create_proto_scalar(v, PrimitiveScalarType::Time32Second, |v| {
->>>>>>> Changes in proto to provide full support for Time32 and Time64
                     Value::Time32Value(protobuf::ScalarTime32Value {
                         value: Some(
                             protobuf::scalar_time32_value::Value::Time32SecondValue(*v),
@@ -1090,11 +1086,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             }
 
             datafusion::scalar::ScalarValue::Time32Millisecond(v) => {
-<<<<<<< HEAD
                 create_proto_scalar(v, &data_type, |v| {
-=======
-                create_proto_scalar(v, PrimitiveScalarType::Time32Millisecond, |v| {
->>>>>>> Changes in proto to provide full support for Time32 and Time64
                     Value::Time32Value(protobuf::ScalarTime32Value {
                         value: Some(
                             protobuf::scalar_time32_value::Value::Time32MillisecondValue(
@@ -1106,11 +1098,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             }
 
             datafusion::scalar::ScalarValue::Time64Microsecond(v) => {
-<<<<<<< HEAD
                 create_proto_scalar(v, &data_type, |v| {
-=======
-                create_proto_scalar(v, PrimitiveScalarType::Time64Microsecond, |v| {
->>>>>>> Changes in proto to provide full support for Time32 and Time64
                     Value::Time64Value(protobuf::ScalarTime64Value {
                         value: Some(
                             protobuf::scalar_time64_value::Value::Time64MicrosecondValue(
@@ -1122,11 +1110,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             }
 
             datafusion::scalar::ScalarValue::Time64Nanosecond(v) => {
-<<<<<<< HEAD
                 create_proto_scalar(v, &data_type, |v| {
-=======
-                create_proto_scalar(v, PrimitiveScalarType::Time64Nanosecond, |v| {
->>>>>>> Changes in proto to provide full support for Time32 and Time64
                     Value::Time64Value(protobuf::ScalarTime64Value {
                         value: Some(
                             protobuf::scalar_time64_value::Value::Time64NanosecondValue(
@@ -1315,32 +1299,3 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
 
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
-<<<<<<< HEAD
-=======
-
-// Does not check if list subtypes are valid
-fn is_valid_scalar_type_no_list_check(datatype: &DataType) -> bool {
-    match datatype {
-        DataType::Boolean
-        | DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Float32
-        | DataType::Float64
-        | DataType::LargeUtf8
-        | DataType::Utf8
-        | DataType::Date32 => true,
-        DataType::Time64(time_unit) => {
-            matches!(time_unit, TimeUnit::Microsecond | TimeUnit::Nanosecond)
-        }
-
-        DataType::List(_) => true,
-        _ => false,
-    }
-}
->>>>>>> Implement Time32 and Time64 in hash_join and hash_util
