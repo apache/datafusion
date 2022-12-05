@@ -267,20 +267,7 @@ impl LogicalPlanBuilder {
         &self,
         expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        self.project_with_alias(expr, None)
-    }
-
-    /// Apply a projection with alias
-    pub fn project_with_alias(
-        &self,
-        expr: impl IntoIterator<Item = impl Into<Expr>>,
-        alias: Option<String>,
-    ) -> Result<Self> {
-        Ok(Self::from(project_with_alias(
-            self.plan.clone(),
-            expr,
-            alias,
-        )?))
+        Ok(Self::from(project(self.plan.clone(), expr)?))
     }
 
     /// Apply a filter
@@ -308,14 +295,7 @@ impl LogicalPlanBuilder {
 
     /// Apply an alias
     pub fn alias(&self, alias: &str) -> Result<Self> {
-        let schema: Schema = self.schema().as_ref().clone().into();
-        let schema =
-            DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
-        Ok(Self::from(LogicalPlan::SubqueryAlias(SubqueryAlias {
-            input: Arc::new(self.plan.clone()),
-            alias: alias.to_string(),
-            schema,
-        })))
+        Ok(Self::from(subquery_alias(&self.plan, alias)?))
     }
 
     /// Add missing sort columns to all downstream projection
@@ -342,7 +322,7 @@ impl LogicalPlanBuilder {
                 // projected alias.
                 missing_exprs.retain(|e| !expr.contains(e));
                 expr.extend(missing_exprs);
-                Ok(project_with_alias((*input).clone(), expr, None)?)
+                Ok(project((*input).clone(), expr)?)
             }
             _ => {
                 let new_inputs = curr_plan
@@ -948,15 +928,14 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     }))
 }
 
-/// Project with optional alias
+/// Create Projection
 /// # Errors
 /// This function errors under any of the following conditions:
 /// * Two or more expressions have the same name
 /// * An invalid expression is used (e.g. a `sort` expression)
-pub fn project_with_alias(
+pub fn project(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = impl Into<Expr>>,
-    alias: Option<String>,
 ) -> Result<LogicalPlan> {
     let input_schema = plan.schema();
     let mut projected_expr = vec![];
@@ -978,26 +957,26 @@ pub fn project_with_alias(
         plan.schema().metadata().clone(),
     )?;
 
-    let projection = LogicalPlan::Projection(Projection::try_new_with_schema(
+    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
         projected_expr,
         Arc::new(plan.clone()),
         DFSchemaRef::new(input_schema),
-    )?);
-    match alias {
-        Some(alias) => Ok(with_alias(projection, alias)),
-        None => Ok(projection),
-    }
+    )?))
 }
 
 /// Create a SubqueryAlias to wrap a LogicalPlan.
-pub fn with_alias(plan: LogicalPlan, alias: String) -> LogicalPlan {
-    let plan_schema = &**plan.schema();
-    let schema = (plan_schema.clone()).replace_qualifier(alias.as_str());
-    LogicalPlan::SubqueryAlias(SubqueryAlias {
+pub fn subquery_alias(plan: &LogicalPlan, alias: &str) -> Result<LogicalPlan> {
+    subquery_alias_owned(plan.clone(), alias)
+}
+
+pub fn subquery_alias_owned(plan: LogicalPlan, alias: &str) -> Result<LogicalPlan> {
+    let schema: Schema = plan.schema().as_ref().clone().into();
+    let schema = DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
+    Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
         input: Arc::new(plan),
-        alias,
-        schema: Arc::new(schema),
-    })
+        alias: alias.to_string(),
+        schema,
+    }))
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
