@@ -850,7 +850,8 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_expr::{
         avg, cast, count, count_distinct, create_udf, lit, max, min, sum,
-        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFunction,
+        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
+        WindowFunction,
     };
     use datafusion_physical_expr::expressions::Column;
 
@@ -896,7 +897,7 @@ mod tests {
             args: vec![col("aggregate_test_100.c1")],
             partition_by: vec![col("aggregate_test_100.c2")],
             order_by: vec![],
-            window_frame: None,
+            window_frame: WindowFrame::new(false),
         };
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();

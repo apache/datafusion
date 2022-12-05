@@ -1345,7 +1345,7 @@ mod roundtrip_tests {
             args: vec![],
             partition_by: vec![col("col1")],
             order_by: vec![col("col2")],
-            window_frame: None,
+            window_frame: WindowFrame::new(true),
         };
 
         // 2. with default window_frame
@@ -1356,7 +1356,7 @@ mod roundtrip_tests {
             args: vec![],
             partition_by: vec![col("col1")],
             order_by: vec![col("col2")],
-            window_frame: Some(WindowFrame::default()),
+            window_frame: WindowFrame::new(true),
         };
 
         // 3. with window_frame with row numbers
@@ -1373,7 +1373,7 @@ mod roundtrip_tests {
             args: vec![],
             partition_by: vec![col("col1")],
             order_by: vec![col("col2")],
-            window_frame: Some(range_number_frame),
+            window_frame: range_number_frame,
         };
 
         // 4. test with AggregateFunction
@@ -1388,7 +1388,7 @@ mod roundtrip_tests {
             args: vec![col("col1")],
             partition_by: vec![col("col1")],
             order_by: vec![col("col2")],
-            window_frame: Some(row_number_frame),
+            window_frame: row_number_frame,
         };
 
         roundtrip_expr_test(test_expr1, ctx.clone());

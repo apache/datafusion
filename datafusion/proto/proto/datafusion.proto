@@ -573,9 +573,7 @@ message WindowExprNode {
   repeated LogicalExprNode partition_by = 5;
   repeated LogicalExprNode order_by = 6;
   // repeated LogicalExprNode filter = 7;
-  oneof window_frame {
-    WindowFrame frame = 8;
-  }
+  WindowFrame window_frame = 8;
 }
 
 message BetweenNode {

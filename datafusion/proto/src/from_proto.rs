@@ -773,19 +773,17 @@ pub fn parse_expr(
             let window_frame = expr
                 .window_frame
                 .as_ref()
-                .map::<Result<WindowFrame, _>, _>(|e| match e {
-                    window_expr_node::WindowFrame::Frame(frame) => {
-                        let window_frame: WindowFrame = frame.clone().try_into()?;
-                        if WindowFrameUnits::Range == window_frame.units
-                            && order_by.len() != 1
-                        {
-                            Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
-                        } else {
-                            Ok(window_frame)
-                        }
+                .map::<Result<WindowFrame, _>, _>(|window_frame| {
+                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
+                    if WindowFrameUnits::Range == window_frame.units
+                        && order_by.len() != 1
+                    {
+                        Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
+                    } else {
+                        Ok(window_frame)
                     }
                 })
-                .transpose()?;
+                .transpose()?.ok_or_else(||{DataFusionError::Execution("expects somothing".to_string())})?;
 
             match window_function {
                 window_expr_node::WindowFunction::AggrFunction(i) => {
