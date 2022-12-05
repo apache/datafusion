@@ -21340,10 +21340,10 @@ impl serde::Serialize for WindowExprNode {
         if !self.order_by.is_empty() {
             len += 1;
         }
-        if self.window_function.is_some() {
+        if self.window_frame.is_some() {
             len += 1;
         }
-        if self.window_frame.is_some() {
+        if self.window_function.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.WindowExprNode", len)?;
@@ -21356,6 +21356,9 @@ impl serde::Serialize for WindowExprNode {
         if !self.order_by.is_empty() {
             struct_ser.serialize_field("orderBy", &self.order_by)?;
         }
+        if let Some(v) = self.window_frame.as_ref() {
+            struct_ser.serialize_field("windowFrame", v)?;
+        }
         if let Some(v) = self.window_function.as_ref() {
             match v {
                 window_expr_node::WindowFunction::AggrFunction(v) => {
@@ -21367,13 +21370,6 @@ impl serde::Serialize for WindowExprNode {
                     let v = BuiltInWindowFunction::from_i32(*v)
                         .ok_or_else(|| serde::ser::Error::custom(format!("Invalid variant {}", *v)))?;
                     struct_ser.serialize_field("builtInFunction", &v)?;
-                }
-            }
-        }
-        if let Some(v) = self.window_frame.as_ref() {
-            match v {
-                window_expr_node::WindowFrame::Frame(v) => {
-                    struct_ser.serialize_field("frame", v)?;
                 }
             }
         }
@@ -21392,11 +21388,12 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
             "partitionBy",
             "order_by",
             "orderBy",
+            "window_frame",
+            "windowFrame",
             "aggr_function",
             "aggrFunction",
             "built_in_function",
             "builtInFunction",
-            "frame",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -21404,9 +21401,9 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
             Expr,
             PartitionBy,
             OrderBy,
+            WindowFrame,
             AggrFunction,
             BuiltInFunction,
-            Frame,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -21431,9 +21428,9 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                             "expr" => Ok(GeneratedField::Expr),
                             "partitionBy" | "partition_by" => Ok(GeneratedField::PartitionBy),
                             "orderBy" | "order_by" => Ok(GeneratedField::OrderBy),
+                            "windowFrame" | "window_frame" => Ok(GeneratedField::WindowFrame),
                             "aggrFunction" | "aggr_function" => Ok(GeneratedField::AggrFunction),
                             "builtInFunction" | "built_in_function" => Ok(GeneratedField::BuiltInFunction),
-                            "frame" => Ok(GeneratedField::Frame),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -21456,8 +21453,8 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                 let mut expr__ = None;
                 let mut partition_by__ = None;
                 let mut order_by__ = None;
-                let mut window_function__ = None;
                 let mut window_frame__ = None;
+                let mut window_function__ = None;
                 while let Some(k) = map.next_key()? {
                     match k {
                         GeneratedField::Expr => {
@@ -21478,6 +21475,12 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                             }
                             order_by__ = Some(map.next_value()?);
                         }
+                        GeneratedField::WindowFrame => {
+                            if window_frame__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("windowFrame"));
+                            }
+                            window_frame__ = map.next_value()?;
+                        }
                         GeneratedField::AggrFunction => {
                             if window_function__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("aggrFunction"));
@@ -21490,21 +21493,14 @@ impl<'de> serde::Deserialize<'de> for WindowExprNode {
                             }
                             window_function__ = map.next_value::<::std::option::Option<BuiltInWindowFunction>>()?.map(|x| window_expr_node::WindowFunction::BuiltInFunction(x as i32));
                         }
-                        GeneratedField::Frame => {
-                            if window_frame__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("frame"));
-                            }
-                            window_frame__ = map.next_value::<::std::option::Option<_>>()?.map(window_expr_node::WindowFrame::Frame)
-;
-                        }
                     }
                 }
                 Ok(WindowExprNode {
                     expr: expr__,
                     partition_by: partition_by__.unwrap_or_default(),
                     order_by: order_by__.unwrap_or_default(),
-                    window_function: window_function__,
                     window_frame: window_frame__,
+                    window_function: window_function__,
                 })
             }
         }

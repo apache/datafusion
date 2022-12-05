@@ -789,7 +789,7 @@ pub fn check_all_column_from_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{col, AggregateFunction, WindowFunction};
+    use crate::{col, AggregateFunction, WindowFrame, WindowFunction};
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
@@ -806,28 +806,28 @@ mod tests {
             args: vec![col("name")],
             partition_by: vec![],
             order_by: vec![],
-            window_frame: None,
+            window_frame: WindowFrame::new(false),
         };
         let max2 = Expr::WindowFunction {
             fun: WindowFunction::AggregateFunction(AggregateFunction::Max),
             args: vec![col("name")],
             partition_by: vec![],
             order_by: vec![],
-            window_frame: None,
+            window_frame: WindowFrame::new(false),
         };
         let min3 = Expr::WindowFunction {
             fun: WindowFunction::AggregateFunction(AggregateFunction::Min),
             args: vec![col("name")],
             partition_by: vec![],
             order_by: vec![],
-            window_frame: None,
+            window_frame: WindowFrame::new(false),
         };
         let sum4 = Expr::WindowFunction {
             fun: WindowFunction::AggregateFunction(AggregateFunction::Sum),
             args: vec![col("age")],
             partition_by: vec![],
             order_by: vec![],
-            window_frame: None,
+            window_frame: WindowFrame::new(false),
         };
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
         let result = group_window_expr_by_sort_keys(exprs)?;
@@ -860,28 +860,28 @@ mod tests {
             args: vec![col("name")],
             partition_by: vec![],
             order_by: vec![age_asc.clone(), name_desc.clone()],
-            window_frame: None,
+            window_frame: WindowFrame::new(true),
         };
         let max2 = Expr::WindowFunction {
             fun: WindowFunction::AggregateFunction(AggregateFunction::Max),
             args: vec![col("name")],
             partition_by: vec![],
             order_by: vec![],
-            window_frame: None,
+            window_frame: WindowFrame::new(false),
         };
         let min3 = Expr::WindowFunction {
             fun: WindowFunction::AggregateFunction(AggregateFunction::Min),
             args: vec![col("name")],
             partition_by: vec![],
             order_by: vec![age_asc.clone(), name_desc.clone()],
-            window_frame: None,
+            window_frame: WindowFrame::new(true),
         };
         let sum4 = Expr::WindowFunction {
             fun: WindowFunction::AggregateFunction(AggregateFunction::Sum),
             args: vec![col("age")],
             partition_by: vec![],
             order_by: vec![name_desc.clone(), age_asc.clone(), created_at_desc.clone()],
-            window_frame: None,
+            window_frame: WindowFrame::new(true),
         };
         // FIXME use as_ref
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
@@ -919,7 +919,7 @@ mod tests {
                         nulls_first: true,
                     },
                 ],
-                window_frame: None,
+                window_frame: WindowFrame::new(true),
             },
             Expr::WindowFunction {
                 fun: WindowFunction::AggregateFunction(AggregateFunction::Sum),
@@ -942,7 +942,7 @@ mod tests {
                         nulls_first: true,
                     },
                 ],
-                window_frame: None,
+                window_frame: WindowFrame::new(true),
             },
         ];
         let expected = vec![

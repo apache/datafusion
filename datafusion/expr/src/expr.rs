@@ -199,7 +199,7 @@ pub enum Expr {
         /// List of order by expressions
         order_by: Vec<Expr>,
         /// Window frame
-        window_frame: Option<window_frame::WindowFrame>,
+        window_frame: window_frame::WindowFrame,
     },
     /// aggregate function
     AggregateUDF {
@@ -827,15 +827,11 @@ impl fmt::Debug for Expr {
                 if !order_by.is_empty() {
                     write!(f, " ORDER BY {:?}", order_by)?;
                 }
-                if let Some(window_frame) = window_frame {
-                    write!(
-                        f,
-                        " {} BETWEEN {} AND {}",
-                        window_frame.units,
-                        window_frame.start_bound,
-                        window_frame.end_bound
-                    )?;
-                }
+                write!(
+                    f,
+                    " {} BETWEEN {} AND {}",
+                    window_frame.units, window_frame.start_bound, window_frame.end_bound
+                )?;
                 Ok(())
             }
             Expr::AggregateFunction {
@@ -1187,9 +1183,7 @@ fn create_name(e: &Expr) -> Result<String> {
             if !order_by.is_empty() {
                 parts.push(format!("ORDER BY {:?}", order_by));
             }
-            if let Some(window_frame) = window_frame {
-                parts.push(format!("{}", window_frame));
-            }
+            parts.push(format!("{}", window_frame));
             Ok(parts.join(" "))
         }
         Expr::AggregateFunction {
