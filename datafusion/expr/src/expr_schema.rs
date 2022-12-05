@@ -200,7 +200,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. }
-            | Expr::Placeholder(_) => Ok(false), // todo: Placeholder should return false?
+            | Expr::Placeholder(_) => Ok(true),
             Expr::InSubquery { expr, .. } => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())

@@ -802,7 +802,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let data_types: Vec<DataType> = prepare
                     .data_types
                     .iter()
-                    .map(|t| DataType::try_from(t))
+                    .map(DataType::try_from)
                     .collect::<Result<_, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .prepare(prepare.name.clone(), data_types)?

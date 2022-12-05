@@ -1368,12 +1368,13 @@ pub struct CreateExternalTable {
     pub options: HashMap<String, String>,
 }
 
-/// Prepare a statement
+/// Prepare a statement but do not execute it. Prepare statements can have 0 or more
+/// `Expr::Placeholder` expressions that are filled in during execution
 #[derive(Clone)]
 pub struct Prepare {
     /// The name of the statement
     pub name: String,
-    /// Data types of the parameters
+    /// Data types of the parameters ([`Expr::Placeholder`])
     pub data_types: Vec<DataType>,
     /// The logical plan of the statements
     pub input: Arc<LogicalPlan>,

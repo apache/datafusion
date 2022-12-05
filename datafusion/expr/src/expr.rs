@@ -1273,7 +1273,7 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
             "Create name does not support qualified wildcard".to_string(),
         )),
-        Expr::Placeholder(param) => Ok(format!("{}", param)),
+        Expr::Placeholder(param) => Ok((*param).to_string()),
     }
 }
 
