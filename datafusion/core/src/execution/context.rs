@@ -940,17 +940,25 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<DataFrame>> {
         let table_ref = table_ref.into();
+        let provider = self.table_provider(table_ref)?;
+        let plan = LogicalPlanBuilder::scan(
+            table_ref.table(),
+            provider_as_source(Arc::clone(&provider)),
+            None,
+        )?
+        .build()?;
+        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+    }
+
+    /// Return a [`TabelProvider`] for the specified table.
+    pub fn table_provider<'a>(
+        &self,
+        table_ref: impl Into<TableReference<'a>>,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let table_ref = table_ref.into();
         let schema = self.state.read().schema_for_ref(table_ref)?;
         match schema.table(table_ref.table()) {
-            Some(ref provider) => {
-                let plan = LogicalPlanBuilder::scan(
-                    table_ref.table(),
-                    provider_as_source(Arc::clone(provider)),
-                    None,
-                )?
-                .build()?;
-                Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
-            }
+            Some(ref provider) => Ok(Arc::clone(provider)),
             _ => Err(DataFusionError::Plan(format!(
                 "No table named '{}'",
                 table_ref.table()

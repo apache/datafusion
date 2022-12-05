@@ -21,11 +21,17 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use log::info;
 use std::path::{Path, PathBuf};
+use datafusion_sql::parser::{DFParser, Statement};
+use normalize::normalize_batch;
+use sqlparser::ast::Statement as SQLStatement;
 use std::time::Duration;
 
-use sqllogictest::TestError;
-pub type Result<T> = std::result::Result<T, TestError>;
+use crate::error::{DFSqlLogicTestError, Result};
+use crate::insert::insert;
 
+mod error;
+mod insert;
+mod normalize;
 mod setup;
 mod utils;
 
@@ -38,7 +44,7 @@ pub struct DataFusion {
 
 #[async_trait]
 impl sqllogictest::AsyncDB for DataFusion {
-    type Error = TestError;
+    type Error = DFSqlLogicTestError;
 
     async fn run(&mut self, sql: &str) -> Result<String> {
         println!("[{}] Running query: \"{}\"", self.file_name, sql);
@@ -166,21 +172,30 @@ async fn context_for_test_file(file_name: &str) -> SessionContext {
     }
 }
 
-fn format_batches(batches: &[RecordBatch]) -> Result<String> {
+fn format_batches(batches: Vec<RecordBatch>) -> Result<String> {
     let mut bytes = vec![];
     {
         let builder = WriterBuilder::new().has_headers(false).with_delimiter(b' ');
         let mut writer = builder.build(&mut bytes);
         for batch in batches {
-            writer.write(batch).unwrap();
+            writer.write(&normalize_batch(batch)).unwrap();
         }
     }
     Ok(String::from_utf8(bytes).unwrap())
 }
 
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<String> {
-    let df = ctx.sql(&sql.into()).await.unwrap();
+    let sql = sql.into();
+    // Check if the sql is `insert`
+    if let Ok(statements) = DFParser::parse_sql(&sql) {
+        if let Statement::Statement(statement) = &statements[0] {
+            if let SQLStatement::Insert { .. } = &**statement {
+                return insert(ctx, statement).await;
+            }
+        }
+    }
+    let df = ctx.sql(sql.as_str()).await.unwrap();
     let results: Vec<RecordBatch> = df.collect().await.unwrap();
-    let formatted_batches = format_batches(&results)?;
+    let formatted_batches = format_batches(results)?;
     Ok(formatted_batches)
 }

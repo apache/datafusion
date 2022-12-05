@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-#
+
 #   http://www.apache.org/licenses/LICENSE-2.0
-#
+
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -15,34 +15,36 @@
 # specific language governing permissions and limitations
 # under the License.
 
-development-process:
-  - dev/**.*
-  - .github/**.*
-  - ci/**.*
-  - .asf.yaml
+statement ok
+CREATE TABLE users AS VALUES(1,2),(2,3);
 
-documentation:
-  - docs/**.*
-  - README.md
-  - ./**/README.md
-  - DEVELOPERS.md
-  - datafusion/docs/**.*
+query II rowsort
+select * from users;
+----
+1 2
+2 3
 
-sql:
-  - datafusion/sql/**/*
-  
-logical-expr:
-  - datafusion/expr/**/*
+statement ok
+insert into users values(2, 4);
 
-physical-expr:
-  - datafusion/physical-expr/**/*
+query II rowsort
+select * from users;
+----
+1 2
+2 3
+2 4
 
-optimizer:
-  - datafusion/optimizer/**/*
+statement ok
+insert into users values(1 + 10, 20);
 
-core:
-  - datafusion/core/**/*
+query II rowsort
+select * from users;
+----
+1 2
+2 3
+2 4
+11 20
 
-sqllogictest:
-  - datafusion/core/tests/sqllogictests/**/*
-
+# Test insert into a undefined table
+statement error
+insert into user values(1, 20);

@@ -55,6 +55,11 @@ impl BuiltInWindowExpr {
             window_frame,
         }
     }
+
+    /// Get BuiltInWindowFunction expr of BuiltInWindowExpr
+    pub fn get_built_in_func_expr(&self) -> &Arc<dyn BuiltInWindowFunctionExpr> {
+        &self.expr
+    }
 }
 
 impl WindowExpr for BuiltInWindowExpr {
