@@ -503,10 +503,7 @@ mod tests {
     fn multiple_now_expr() {
         let table_scan = test_table_scan();
         let time = Utc::now();
-        let proj = vec![
-            now_expr(),
-            Expr::Alias(Box::new(now_expr()), "t2".to_string()),
-        ];
+        let proj = vec![now_expr(), now_expr().alias("t2")];
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()

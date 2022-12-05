@@ -1137,21 +1137,17 @@ mod ci {
                                 Box::new(trim(col(Field::name(field)))),
                                 DataType::Float64,
                             )));
-                            Expr::Alias(
-                                Box::new(Expr::Cast(Cast::new(
-                                    inner_cast,
-                                    Field::data_type(field).to_owned(),
-                                ))),
-                                Field::name(field).to_string(),
-                            )
-                        }
-                        _ => Expr::Alias(
-                            Box::new(Expr::Cast(Cast::new(
-                                Box::new(trim(col(Field::name(field)))),
+                            Expr::Cast(Cast::new(
+                                inner_cast,
                                 Field::data_type(field).to_owned(),
-                            ))),
-                            Field::name(field).to_string(),
-                        ),
+                            ))
+                            .alias(Field::name(field))
+                        }
+                        _ => Expr::Cast(Cast::new(
+                            Box::new(trim(col(Field::name(field)))),
+                            Field::data_type(field).to_owned(),
+                        ))
+                        .alias(Field::name(field)),
                     }
                 })
                 .collect::<Vec<Expr>>(),

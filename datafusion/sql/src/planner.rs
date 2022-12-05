@@ -38,14 +38,16 @@ use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::parsers::parse_interval;
 use datafusion_common::TableReference;
-use datafusion_common::{context, ToDFSchema};
+use datafusion_common::ToDFSchema;
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::builder::{project_with_alias, with_alias};
+use datafusion_expr::logical_plan::builder::{
+    project, subquery_alias, subquery_alias_owned,
+};
 use datafusion_expr::logical_plan::Join as HashJoin;
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
@@ -247,24 +249,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ..
             } if with_options.is_empty() => {
                 let mut plan = self.query_to_plan(*query, &mut HashMap::new())?;
-
-                if !columns.is_empty() {
-                    plan = LogicalPlanBuilder::from(plan.clone())
-                        .project(
-                            plan.schema().fields().iter().zip(columns.into_iter()).map(
-                                |(field, ident)| {
-                                    col(field.name()).alias(normalize_ident(&ident))
-                                },
-                            ),
-                        )
-                        .map_err(|e| {
-                            context!("Failed to apply alias to inline projection.\n", e)
-                        })?
-                        .build()
-                        .map_err(|e| {
-                            context!("Failed to build plan for 'CREATE VIEW'.\n", e)
-                        })?;
-                }
+                plan = Self::apply_expr_alias(plan, &columns)?;
 
                 Ok(LogicalPlan::CreateView(CreateView {
                     name: name.to_string(),
@@ -869,9 +854,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 (
                     match (cte, self.schema_provider.get_table_provider(table_ref)) {
                         (Some(cte_plan), _) => match table_alias {
-                            Some(cte_alias) => {
-                                Ok(with_alias(cte_plan.clone(), cte_alias))
-                            }
+                            Some(cte_alias) => subquery_alias(cte_plan, &cte_alias),
                             _ => Ok(cte_plan.clone()),
                         },
                         (_, Ok(provider)) => {
@@ -891,16 +874,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             TableFactor::Derived {
                 subquery, alias, ..
             } => {
-                let normalized_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
                 let logical_plan = self.query_to_plan_with_alias(
                     *subquery,
                     None,
                     ctes,
                     outer_query_schema,
                 )?;
-
+                let normalized_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
                 let plan = match normalized_alias {
-                    Some(alias) => with_alias(logical_plan, alias),
+                    Some(alias) => subquery_alias_owned(logical_plan, &alias)?,
                     _ => logical_plan,
                 };
                 (plan, alias)
@@ -944,14 +926,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 columns_alias.len(),
             )))
         } else {
-            Ok(LogicalPlanBuilder::from(plan.clone())
-                .project_with_alias(
-                    plan.schema().fields().iter().zip(columns_alias.iter()).map(
-                        |(field, ident)| col(field.name()).alias(normalize_ident(ident)),
-                    ),
-                    Some(normalize_ident(&alias.name)),
-                )?
-                .build()?)
+            subquery_alias_owned(
+                Self::apply_expr_alias(plan, &alias.columns)?,
+                &normalize_ident(&alias.name),
+            )
+        }
+    }
+
+    fn apply_expr_alias(plan: LogicalPlan, idents: &Vec<Ident>) -> Result<LogicalPlan> {
+        if idents.is_empty() {
+            Ok(plan)
+        } else {
+            let fields = plan.schema().fields().clone();
+            LogicalPlanBuilder::from(plan)
+                .project(fields.iter().zip(idents.iter()).map(|(field, ident)| {
+                    col(field.name()).alias(normalize_ident(ident))
+                }))?
+                .build()
         }
     }
 
@@ -1190,7 +1181,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // final projection
-        let plan = project_with_alias(plan, select_exprs_post_aggr, alias)?;
+        let mut plan = project(plan, select_exprs_post_aggr)?;
+        plan = match alias {
+            Some(alias) => subquery_alias_owned(plan, &alias)?,
+            None => plan,
+        };
 
         // process distinct clause
         let plan = if select.distinct {
@@ -2083,7 +2078,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     negated,
                     Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
                     Box::new(pattern),
-                    escape_char
+                    escape_char,
                 )))
             }
 
@@ -2309,13 +2304,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
 
-            SQLExpr::Floor{expr, field: _field} => {
+            SQLExpr::Floor { expr, field: _field } => {
                 let fun = BuiltinScalarFunction::Floor;
                 let args = vec![self.sql_expr_to_logical_expr(*expr, schema, ctes)?];
                 Ok(Expr::ScalarFunction { fun, args })
             }
 
-            SQLExpr::Ceil{expr, field: _field} => {
+            SQLExpr::Ceil { expr, field: _field } => {
                 let fun = BuiltinScalarFunction::Ceil;
                 let args = vec![self.sql_expr_to_logical_expr(*expr, schema, ctes)?];
                 Ok(Expr::ScalarFunction { fun, args })
@@ -2595,7 +2590,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported Value {}",
                         value[0]
-                    )))
+                    )));
                 }
             },
             // for capture signed number e.g. +8, -8
@@ -2606,14 +2601,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported Value {}",
                         value[0]
-                    )))
+                    )));
                 }
             },
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "Unsupported Value {}",
                     value[0]
-                )))
+                )));
             }
         };
 
@@ -2840,7 +2835,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             return Err(DataFusionError::Internal(format!(
                                 "Incorrect data type for time_zone: {}",
                                 v.get_datatype(),
-                            )))
+                            )));
                         }
                         None => return Err(DataFusionError::Internal(
                             "Config Option datafusion.execution.time_zone doesn't exist"
@@ -2868,7 +2863,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             SQLDataType::Numeric(exact_number_info)
-            |SQLDataType::Decimal(exact_number_info) => {
+            | SQLDataType::Decimal(exact_number_info) => {
                 let (precision, scale) = match *exact_number_info {
                     ExactNumberInfo::None => (None, None),
                     ExactNumberInfo::Precision(precision) => (Some(precision), None),
@@ -2900,12 +2895,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharacterVarying(_)
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
-                | SQLDataType::CharLargeObject(_)
+            | SQLDataType::CharLargeObject(_)
             // precision is not supported
-                | SQLDataType::Timestamp(Some(_), _)
+            | SQLDataType::Timestamp(Some(_), _)
             // precision is not supported
-                | SQLDataType::Time(Some(_), _)
-                | SQLDataType::Dec(_)
+            | SQLDataType::Time(Some(_), _)
+            | SQLDataType::Dec(_)
             | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL type {:?}",
                 sql_type
