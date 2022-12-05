@@ -88,6 +88,10 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
 }
 
 impl Default for WindowFrame {
+    /// This window frame covers the table (or partition if `PARTITION BY` is used)
+    /// from beginning to the `CURRENT ROW` (with same rank)
+    // This window frame is used when `OVER` clause contains `ORDER BY` clause and
+    // window frame is `None`
     fn default() -> Self {
         WindowFrame {
             units: WindowFrameUnits::Range,
@@ -98,6 +102,9 @@ impl Default for WindowFrame {
 }
 
 impl WindowFrame {
+    /// This window frame covers whole table (or partition if `PARTITION BY` is used)
+    // This window frame is used when `OVER` clause doesn't contain `ORDER BY` clause and
+    // window frame is `None`
     pub fn empty_over() -> Self {
         WindowFrame {
             units: WindowFrameUnits::Rows,

@@ -439,10 +439,15 @@ async fn window_expr_eliminate() -> Result<()> {
 #[tokio::test]
 async fn window_in_expression() -> Result<()> {
     let ctx = SessionContext::new();
-    let sql = "select 1 - lag(amount, 1) over (order by idx) as col1 from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)";
+    let sql = "select 1 - lag(amount, 1) over (order by idx) as column1 from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+", "| col1 |", "+------+", "|      |", "| -99  |", "+------+",
+        "+---------+",
+        "| column1 |",
+        "+---------+",
+        "|         |",
+        "| -99     |",
+        "+---------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -657,13 +662,20 @@ async fn window_frame_order_by_null_timestamp_order_by() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_null_cases_csv(&ctx).await?;
     let sql = "SELECT
-                SUM(c1) OVER (ORDER BY c2 DESC) as sum1
+                SUM(c1) OVER (ORDER BY c2 DESC) as summation1
                 FROM null_cases
                 LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+", "| sum1 |", "+------+", "| 962  |", "| 962  |", "| 962  |",
-        "| 962  |", "| 962  |", "+------+",
+        "+------------+",
+        "| summation1 |",
+        "+------------+",
+        "| 962        |",
+        "| 962        |",
+        "| 962        |",
+        "| 962        |",
+        "| 962        |",
+        "+------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
