@@ -844,10 +844,12 @@ message ScalarValue{
         ScalarDictionaryValue dictionary_value = 27;
         bytes binary_value = 28;
         bytes large_binary_value = 29;
+
         ScalarTime64Value time64_value = 30;
         IntervalMonthDayNanoValue interval_month_day_nano = 31;
         StructValue struct_value = 32;
         ScalarFixedSizeBinary fixed_size_binary_value = 34;
+>>>>>>> upstream/master
     }
 }
 
