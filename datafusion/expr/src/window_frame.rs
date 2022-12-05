@@ -89,29 +89,28 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
     }
 }
 
-impl Default for WindowFrame {
-    /// This window frame covers the table (or partition if `PARTITION BY` is used)
-    /// from beginning to the `CURRENT ROW` (with same rank)
-    // This window frame is used when `OVER` clause contains `ORDER BY` clause and
-    // window frame is `None`
-    fn default() -> Self {
-        WindowFrame {
-            units: WindowFrameUnits::Range,
-            start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
-            end_bound: WindowFrameBound::CurrentRow,
-        }
-    }
-}
-
 impl WindowFrame {
-    /// This window frame covers whole table (or partition if `PARTITION BY` is used)
-    // This window frame is used when `OVER` clause doesn't contain `ORDER BY` clause and
-    // window frame is `None`
-    pub fn empty_over() -> Self {
-        WindowFrame {
-            units: WindowFrameUnits::Rows,
-            start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
-            end_bound: WindowFrameBound::Following(ScalarValue::Null),
+    /// Creates a new, default window frame (with the meaning of default depending on whether the
+    /// frame contains an `ORDER BY` clause.
+    pub fn new(has_order_by: bool) -> Self {
+        if has_order_by {
+            // This window frame covers the table (or partition if `PARTITION BY` is used)
+            // from beginning to the `CURRENT ROW` (with same rank). It is used when the `OVER`
+            // clause contains an `ORDER BY` clause but no frame.
+            WindowFrame {
+                units: WindowFrameUnits::Range,
+                start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
+                end_bound: WindowFrameBound::CurrentRow,
+            }
+        } else {
+            // This window frame covers the whole table (or partition if `PARTITION BY` is used).
+            // It is used when the `OVER` clause does not contain an `ORDER BY` clause and there is
+            // no frame.
+            WindowFrame {
+                units: WindowFrameUnits::Rows,
+                start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                end_bound: WindowFrameBound::Following(ScalarValue::UInt64(None)),
+            }
         }
     }
 }

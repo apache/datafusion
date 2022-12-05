@@ -308,7 +308,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                     &[window_node_expr],
                                     &[],
                                     &[],
-                                    Arc::new(WindowFrame::default()),
+                                    Arc::new(WindowFrame::new(false)),
                                     &physical_schema,
                                 )?)
                             }

@@ -1345,7 +1345,7 @@ mod roundtrip_tests {
             args: vec![],
             partition_by: vec![col("col1")],
             order_by: vec![col("col2")],
-            window_frame: WindowFrame::default(),
+            window_frame: WindowFrame::new(true),
         };
 
         // 2. with default window_frame
@@ -1356,7 +1356,7 @@ mod roundtrip_tests {
             args: vec![],
             partition_by: vec![col("col1")],
             order_by: vec![col("col2")],
-            window_frame: WindowFrame::default(),
+            window_frame: WindowFrame::new(true),
         };
 
         // 3. with window_frame with row numbers
