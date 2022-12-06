@@ -151,4 +151,8 @@ impl WindowExpr for AggregateWindowExpr {
     fn order_by(&self) -> &[PhysicalSortExpr] {
         &self.order_by
     }
+
+    fn get_window_frame(&self) -> Option<&Arc<WindowFrame>> {
+        self.window_frame.as_ref()
+    }
 }

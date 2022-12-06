@@ -133,4 +133,8 @@ impl WindowExpr for BuiltInWindowExpr {
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
         concat(&results).map_err(DataFusionError::ArrowError)
     }
+
+    fn get_window_frame(&self) -> Option<&Arc<WindowFrame>> {
+        self.window_frame.as_ref()
+    }
 }
