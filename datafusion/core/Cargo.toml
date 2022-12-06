@@ -110,6 +110,7 @@ doc-comment = "0.3"
 env_logger = "0.10"
 parquet-test-utils = { path = "../../parquet-test-utils" }
 rstest = "0.16.0"
+sqlparser = "0.27"
 test-utils = { path = "../../test-utils" }
 
 [[bench]]

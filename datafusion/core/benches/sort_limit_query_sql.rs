@@ -23,6 +23,7 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 
+use datafusion::prelude::SessionConfig;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -85,8 +86,8 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
 
     rt.block_on(async {
         // create local session context
-        let ctx = SessionContext::new();
-        ctx.state.write().config.target_partitions = 1;
+        let ctx =
+            SessionContext::with_config(SessionConfig::new().with_target_partitions(1));
 
         let table_provider = Arc::new(csv.await);
         let mem_table = MemTable::load(table_provider, Some(partitions), &ctx.state())

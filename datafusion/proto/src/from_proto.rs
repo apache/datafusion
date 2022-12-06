@@ -773,19 +773,17 @@ pub fn parse_expr(
             let window_frame = expr
                 .window_frame
                 .as_ref()
-                .map::<Result<WindowFrame, _>, _>(|e| match e {
-                    window_expr_node::WindowFrame::Frame(frame) => {
-                        let window_frame: WindowFrame = frame.clone().try_into()?;
-                        if WindowFrameUnits::Range == window_frame.units
-                            && order_by.len() != 1
-                        {
-                            Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
-                        } else {
-                            Ok(window_frame)
-                        }
+                .map::<Result<WindowFrame, _>, _>(|window_frame| {
+                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
+                    if WindowFrameUnits::Range == window_frame.units
+                        && order_by.len() != 1
+                    {
+                        Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
+                    } else {
+                        Ok(window_frame)
                     }
                 })
-                .transpose()?;
+                .transpose()?.ok_or_else(||{DataFusionError::Execution("expects somothing".to_string())})?;
 
             match window_function {
                 window_expr_node::WindowFunction::AggrFunction(i) => {
@@ -806,11 +804,15 @@ pub fn parse_expr(
                         .ok_or_else(|| Error::unknown("BuiltInWindowFunction", *i))?
                         .into();
 
+                    let args = parse_optional_expr(&expr.expr, registry)?
+                        .map(|e| vec![e])
+                        .unwrap_or_else(Vec::new);
+
                     Ok(Expr::WindowFunction {
                         fun: datafusion_expr::window_function::WindowFunction::BuiltInWindowFunction(
                             built_in_function,
                         ),
-                        args: vec![parse_required_expr(&expr.expr, registry, "expr")?],
+                        args,
                         partition_by,
                         order_by,
                         window_frame,
@@ -1240,16 +1242,14 @@ impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
                 })?;
         match bound_type {
             protobuf::WindowFrameBoundType::CurrentRow => Ok(Self::CurrentRow),
-            protobuf::WindowFrameBoundType::Preceding => {
-                // FIXME implement bound value parsing
-                // https://github.com/apache/arrow-datafusion/issues/361
-                Ok(Self::Preceding(ScalarValue::UInt64(Some(1))))
-            }
-            protobuf::WindowFrameBoundType::Following => {
-                // FIXME implement bound value parsing
-                // https://github.com/apache/arrow-datafusion/issues/361
-                Ok(Self::Following(ScalarValue::UInt64(Some(1))))
-            }
+            protobuf::WindowFrameBoundType::Preceding => match bound.bound_value {
+                Some(x) => Ok(Self::Preceding(ScalarValue::try_from(&x)?)),
+                None => Ok(Self::Preceding(ScalarValue::UInt64(None))),
+            },
+            protobuf::WindowFrameBoundType::Following => match bound.bound_value {
+                Some(x) => Ok(Self::Following(ScalarValue::try_from(&x)?)),
+                None => Ok(Self::Following(ScalarValue::UInt64(None))),
+            },
         }
     }
 }

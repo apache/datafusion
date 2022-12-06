@@ -71,7 +71,7 @@ impl OptimizerRule for EliminateLimit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::limit_push_down::LimitPushDown;
+    use crate::push_down_limit::PushDownLimit;
     use crate::test::*;
     use datafusion_common::Column;
     use datafusion_expr::{
@@ -94,7 +94,7 @@ mod tests {
         plan: &LogicalPlan,
         expected: &str,
     ) -> Result<()> {
-        let optimized_plan = LimitPushDown::new()
+        let optimized_plan = PushDownLimit::new()
             .optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
         let optimized_plan = EliminateLimit::new()

@@ -498,20 +498,14 @@ pub async fn transform_actual_result(
                                 fun: datafusion::logical_expr::BuiltinScalarFunction::Round,
                                 args: vec![col(Field::name(field)).mul(lit(100))],
                             }.div(lit(100)));
-                            Expr::Alias(
-                                Box::new(Expr::Cast(Cast::new(
+                            Expr::Cast(Cast::new(
                                     round,
                                     DataType::Decimal128(15, 2),
-                                ))),
-                                field.name().to_string(),
-                            )
+                                )).alias(field.name())
                         }
                         DataType::Utf8 => {
                             // if string, then trim it like the answers got trimmed
-                            Expr::Alias(
-                                Box::new(trim(col(Field::name(field)))),
-                                field.name().to_string(),
-                            )
+                            trim(col(Field::name(field))).alias(field.name())
                         }
                         _ => {
                             col(field.name())

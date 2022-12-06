@@ -179,7 +179,8 @@ fn optimize_where_in(
     }
     let projection = alias_cols(&subqry_cols);
     let subqry_plan = subqry_plan
-        .project_with_alias(projection, Some(subqry_alias.clone()))?
+        .project(projection)?
+        .alias(&subqry_alias)?
         .build()?;
     debug!("subquery plan:\n{}", subqry_plan.display_indent());
 
