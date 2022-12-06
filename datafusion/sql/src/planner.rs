@@ -702,20 +702,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         mut from: Vec<TableWithJoins>,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         match from.len() {
             0 => Ok(LogicalPlanBuilder::empty(true).build()?),
             1 => {
                 let from = from.remove(0);
-                self.plan_table_with_joins(from, planner_context, outer_query_schema)
+                self.plan_table_with_joins(from, planner_context)
             }
             _ => {
                 let plans = from
                     .into_iter()
-                    .map(|t| {
-                        self.plan_table_with_joins(t, planner_context, outer_query_schema)
-                    })
+                    .map(|t| self.plan_table_with_joins(t, planner_context))
                     .collect::<Result<Vec<_>>>()?;
                 let mut left = plans[0].clone();
                 for right in plans.iter().skip(1) {
@@ -730,7 +727,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         t: TableWithJoins,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         // From clause may exist CTEs, we should separate them from global CTEs.
         // CTEs in from clause are allowed to be duplicated.
@@ -738,8 +734,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // So always use original global CTEs to plan CTEs in from clause.
         // Btw, don't need to add CTEs in from to global CTEs.
         let origin_planner_context = planner_context.clone();
-        let left =
-            self.create_relation(t.relation, planner_context, outer_query_schema)?;
+        let left = self.create_relation(t.relation, planner_context)?;
         match t.joins.len() {
             0 => {
                 *planner_context = origin_planner_context;
@@ -752,16 +747,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     left,
                     joins.next().unwrap(), // length of joins > 0
                     planner_context,
-                    outer_query_schema,
                 )?;
                 for join in joins {
                     *planner_context = origin_planner_context.clone();
-                    left = self.parse_relation_join(
-                        left,
-                        join,
-                        planner_context,
-                        outer_query_schema,
-                    )?;
+                    left = self.parse_relation_join(left, join, planner_context)?;
                 }
                 *planner_context = origin_planner_context;
                 Ok(left)
@@ -774,10 +763,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         left: LogicalPlan,
         join: Join,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
-        let right =
-            self.create_relation(join.relation, planner_context, outer_query_schema)?;
+        let right = self.create_relation(join.relation, planner_context)?;
         match join.join_operator {
             JoinOperator::LeftOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Left, planner_context)
@@ -915,7 +902,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         relation: TableFactor,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         let (plan, alias) = match relation {
             TableFactor::Table { name, alias, .. } => {
@@ -947,11 +933,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table_with_joins,
                 alias,
             } => (
-                self.plan_table_with_joins(
-                    *table_with_joins,
-                    planner_context,
-                    outer_query_schema,
-                )?,
+                self.plan_table_with_joins(*table_with_joins, planner_context)?,
                 alias,
             ),
             // @todo Support TableFactory::TableFunction?
@@ -1096,9 +1078,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         // process `from` clause
-        let plan =
-            self.plan_from_tables(select.from, planner_context, outer_query_schema)?;
-
+        let plan = self.plan_from_tables(select.from, planner_context)?;
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
         // build from schema for unqualifier column ambiguous check
         // we should get only one field for unqualifier column from schema.
