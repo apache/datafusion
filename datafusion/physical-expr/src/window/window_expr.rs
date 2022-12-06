@@ -21,6 +21,7 @@ use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::WindowFrame;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -127,4 +128,7 @@ pub trait WindowExpr: Send + Sync + Debug {
             order_by_columns.iter().map(|s| s.values.clone()).collect();
         Ok((values, order_bys))
     }
+
+    // Get window frame of this WindowExpr, None if absent
+    fn get_window_frame(&self) -> &Arc<WindowFrame>;
 }
