@@ -1316,6 +1316,18 @@ async fn test_extract_date_part() -> Result<()> {
         "date_part('nanosecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
         "12123456780"
     );
+    test_expression!(
+        "date_part('millisecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "123"
+    );
+    test_expression!(
+        "date_part('microsecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "123456"
+    );
+    test_expression!(
+        "date_part('nanosecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "123456780"
+    );
     Ok(())
 }
 

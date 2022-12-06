@@ -541,6 +541,34 @@ where
     to_ticks(array, 1_000_000_000)
 }
 
+pub fn from_nanos<T>(array: &PrimitiveArray<T>, frac: i32) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    Ok(temporal::nanosecond(array).map(|op| {
+        let mut inner_values = op.values().to_vec();
+        inner_values.iter_mut().for_each(|x| *x /= frac);
+        Int32Array::from_slice(inner_values)
+    })?)
+}
+
+fn millis<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    from_nanos(array, 1_000_000)
+}
+
+fn micros<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    from_nanos(array, 1_000)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
