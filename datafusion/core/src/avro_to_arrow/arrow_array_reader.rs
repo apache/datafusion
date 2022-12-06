@@ -975,9 +975,10 @@ mod test {
     use crate::arrow::array::Array;
     use crate::arrow::datatypes::{Field, TimeUnit};
     use crate::avro_to_arrow::{Reader, ReaderBuilder};
-    use arrow::array::TimestampMicrosecondArray;
     use arrow::datatypes::DataType;
-    use datafusion_common::cast::{as_int32_array, as_int64_array, as_list_array};
+    use datafusion_common::cast::{
+        as_int32_array, as_int64_array, as_list_array, as_timestamp_microsecond_array,
+    };
     use std::fs::File;
 
     fn build_reader(name: &str, batch_size: usize) -> Reader<File> {
@@ -1008,11 +1009,8 @@ mod test {
             &DataType::Timestamp(TimeUnit::Microsecond, None),
             timestamp_col.1.data_type()
         );
-        let timestamp_array = batch
-            .column(timestamp_col.0)
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .unwrap();
+        let timestamp_array =
+            as_timestamp_microsecond_array(batch.column(timestamp_col.0)).unwrap();
         for i in 0..timestamp_array.len() {
             assert!(timestamp_array.is_valid(i));
         }

@@ -55,11 +55,11 @@ async fn parquet_query() {
 /// expressions make it all the way down to the ParquetExec
 async fn parquet_with_sort_order_specified() {
     let parquet_read_options = ParquetReadOptions::default();
-    let target_partitions = 2;
+    let session_config = SessionConfig::new().with_target_partitions(2);
 
     // The sort order is not specified
     let options_no_sort = parquet_read_options
-        .to_listing_options(target_partitions)
+        .to_listing_options(&session_config)
         .with_file_sort_order(None);
 
     // The sort order is specified (not actually correct in this case)
@@ -73,7 +73,7 @@ async fn parquet_with_sort_order_specified() {
         .collect::<Vec<_>>();
 
     let options_sort = parquet_read_options
-        .to_listing_options(target_partitions)
+        .to_listing_options(&session_config)
         .with_file_sort_order(Some(file_sort_order));
 
     // This string appears in ParquetExec if the output ordering is

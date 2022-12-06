@@ -72,7 +72,7 @@ impl PhysicalOptimizerRule for BasicEnforcement {
         plan: Arc<dyn ExecutionPlan>,
         config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_partitions = config.target_partitions;
+        let target_partitions = config.target_partitions();
         let top_down_join_key_reordering = config
             .config_options()
             .read()
@@ -1289,12 +1289,12 @@ mod tests {
                             top_join_plan.as_str(),
                             join_plan.as_str(),
                             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10)",
-                            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10)",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10)",
-                            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                         // Should include 4 RepartitionExecs
                         _ => vec![
@@ -1302,12 +1302,12 @@ mod tests {
                             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10)",
                             join_plan.as_str(),
                             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10)",
-                            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10)",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10)",
-                            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                     };
                     assert_optimized!(expected, top_join);
@@ -1345,12 +1345,12 @@ mod tests {
                                 top_join_plan.as_str(),
                                 join_plan.as_str(),
                                 "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10)",
-                                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                                 "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10)",
                                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                                 "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10)",
-                                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             ],
                         // Should include 4 RepartitionExecs
                         _ =>
@@ -1359,12 +1359,12 @@ mod tests {
                                 "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 6 }], 10)",
                                 join_plan.as_str(),
                                 "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10)",
-                                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                                 "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10)",
                                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                                 "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10)",
-                                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             ],
                     };
                     assert_optimized!(expected, top_join);
@@ -1414,11 +1414,11 @@ mod tests {
             "ProjectionExec: expr=[a@0 as a1, a@0 as a2]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 })]",
             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10)",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 1 }], 10)",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10)",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, top_join);
 
@@ -1436,11 +1436,11 @@ mod tests {
             "ProjectionExec: expr=[a@0 as a1, a@0 as a2]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 })]",
             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10)",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 1 }], 10)",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10)",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
 
         assert_optimized!(expected, top_join);
@@ -1487,11 +1487,11 @@ mod tests {
             "ProjectionExec: expr=[c@2 as c1]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 })]",
             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10)",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 1 }], 10)",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10)",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
 
         assert_optimized!(expected, top_join);
@@ -1524,11 +1524,11 @@ mod tests {
             "AggregateExec: mode=FinalPartitioned, gby=[a1@0 as a1], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }], 10)",
             "AggregateExec: mode=Partial, gby=[a@0 as a1], aggr=[]",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "AggregateExec: mode=FinalPartitioned, gby=[a2@0 as a2], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"a2\", index: 0 }], 10)",
             "AggregateExec: mode=Partial, gby=[a@0 as a2], aggr=[]",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, join);
         Ok(())
@@ -1573,11 +1573,11 @@ mod tests {
             "AggregateExec: mode=FinalPartitioned, gby=[b1@1 as b1, a1@0 as a1], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 0 }, Column { name: \"a1\", index: 1 }], 10)",
             "AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 0 }, Column { name: \"a\", index: 1 }], 10)",
             "AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, join);
         Ok(())
@@ -1679,16 +1679,16 @@ mod tests {
             "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 }), (Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 })]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 1 }, Column { name: \"c\", index: 2 }, Column { name: \"a\", index: 0 }], 10)",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }, Column { name: \"c1\", index: 2 }, Column { name: \"a1\", index: 0 }], 10)",
             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 }), (Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 })]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 1 }, Column { name: \"c\", index: 2 }, Column { name: \"a\", index: 0 }], 10)",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }, Column { name: \"c1\", index: 2 }, Column { name: \"a1\", index: 0 }], 10)",
             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, filter_top_join);
         Ok(())
@@ -1799,16 +1799,16 @@ mod tests {
                 "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 })]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 }, Column { name: \"c\", index: 2 }], 10)",
-                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }, Column { name: \"b1\", index: 1 }, Column { name: \"c1\", index: 2 }], 10)",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 })]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }, Column { name: \"b\", index: 1 }, Column { name: \"a\", index: 0 }], 10)",
-                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 2 }, Column { name: \"b1\", index: 1 }, Column { name: \"a1\", index: 0 }], 10)",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             ];
 
             assert_plan_txt!(expected, reordered);
@@ -1918,16 +1918,16 @@ mod tests {
                 "ProjectionExec: expr=[a@0 as A, a@0 as AA, b@1 as B, c@2 as C]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 })]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }, Column { name: \"b\", index: 1 }], 10)",
-                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"a1\", index: 0 }, Column { name: \"b1\", index: 1 }], 10)",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"c\", index: 2 }, Column { name: \"c1\", index: 2 }), (Column { name: \"b\", index: 1 }, Column { name: \"b1\", index: 1 }), (Column { name: \"a\", index: 0 }, Column { name: \"a1\", index: 0 })]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }, Column { name: \"b\", index: 1 }, Column { name: \"a\", index: 0 }], 10)",
-                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 "RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 2 }, Column { name: \"b1\", index: 1 }, Column { name: \"a1\", index: 0 }], 10)",
                 "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1]",
-                "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             ];
 
             assert_plan_txt!(expected, reordered);
@@ -1992,14 +1992,14 @@ mod tests {
                         join_plan.as_str(),
                         "SortExec: [a@0 ASC]",
                         "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10)",
-                        "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         "SortExec: [b1@1 ASC]",
                         "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10)",
                         "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                        "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         "SortExec: [c@2 ASC]",
                         "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10)",
-                        "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                     ],
                 // Should include 4 RepartitionExecs
                 _ => vec![
@@ -2009,14 +2009,14 @@ mod tests {
                         join_plan.as_str(),
                         "SortExec: [a@0 ASC]",
                         "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10)",
-                        "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         "SortExec: [b1@1 ASC]",
                         "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10)",
                         "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                        "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         "SortExec: [c@2 ASC]",
                         "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10)",
-                        "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                        "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                 ],
             };
             assert_optimized!(expected, top_join);
@@ -2045,14 +2045,14 @@ mod tests {
                             join_plan.as_str(),
                             "SortExec: [a@0 ASC]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10)",
-                            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "SortExec: [b1@1 ASC]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10)",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "SortExec: [c@2 ASC]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10)",
-                            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                         // Should include 4 RepartitionExecs and 4 SortExecs
                         _ => vec![
@@ -2062,14 +2062,14 @@ mod tests {
                             join_plan.as_str(),
                             "SortExec: [a@0 ASC]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"a\", index: 0 }], 10)",
-                            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "SortExec: [b1@1 ASC]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 1 }], 10)",
                             "ProjectionExec: expr=[a@0 as a1, b@1 as b1, c@2 as c1, d@3 as d1, e@4 as e1]",
-                            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                             "SortExec: [c@2 ASC]",
                             "RepartitionExec: partitioning=Hash([Column { name: \"c\", index: 2 }], 10)",
-                            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+                            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
                         ],
                     };
                     assert_optimized!(expected, top_join);
@@ -2136,13 +2136,13 @@ mod tests {
             "AggregateExec: mode=FinalPartitioned, gby=[b1@1 as b1, a1@0 as a1], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 0 }, Column { name: \"a1\", index: 1 }], 10)",
             "AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
             "SortExec: [b2@1 ASC,a2@0 ASC]",
             "ProjectionExec: expr=[a@1 as a2, b@0 as b2]",
             "AggregateExec: mode=FinalPartitioned, gby=[b@0 as b, a@1 as a], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b\", index: 0 }, Column { name: \"a\", index: 1 }], 10)",
             "AggregateExec: mode=Partial, gby=[b@1 as b, a@0 as a], aggr=[]",
-            "ParquetExec: limit=None, partitions=[x], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, join);
         Ok(())
@@ -2171,7 +2171,7 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [a@0 ASC]",
             "CoalesceBatchesExec: target_batch_size=4096",
-            "ParquetExec: limit=None, partitions=[x], output_ordering=[a@0 ASC], projection=[a, b, c, d, e]",
+            "ParquetExec: limit=None, partitions={1 group: [[x]]}, output_ordering=[a@0 ASC], projection=[a, b, c, d, e]",
         ];
         assert_optimized!(expected, exec);
         Ok(())

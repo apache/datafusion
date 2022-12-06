@@ -24,6 +24,6 @@ edition = "2021"
 
 [dependencies]
 arrow = { version = "28.0.0", features = ["prettyprint"] }
-datafusion-common = { path = "../datafusion/common", version = "14.0.0" }
+datafusion-common = { path = "../datafusion/common" }
 env_logger = "0.10.0"
 rand = "0.8"

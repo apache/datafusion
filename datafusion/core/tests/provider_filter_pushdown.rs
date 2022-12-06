@@ -143,7 +143,7 @@ impl TableProvider for CustomProvider {
     async fn scan(
         &self,
         _state: &SessionState,
-        _: &Option<Vec<usize>>,
+        _: Option<&Vec<usize>>,
         filters: &[Expr],
         _: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

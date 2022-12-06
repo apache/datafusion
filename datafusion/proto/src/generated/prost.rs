@@ -653,11 +653,11 @@ pub struct WindowExprNode {
     pub partition_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "6")]
     pub order_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    /// repeated LogicalExprNode filter = 7;
+    #[prost(message, optional, tag = "8")]
+    pub window_frame: ::core::option::Option<WindowFrame>,
     #[prost(oneof = "window_expr_node::WindowFunction", tags = "1, 2")]
     pub window_function: ::core::option::Option<window_expr_node::WindowFunction>,
-    /// repeated LogicalExprNode filter = 7;
-    #[prost(oneof = "window_expr_node::WindowFrame", tags = "8")]
-    pub window_frame: ::core::option::Option<window_expr_node::WindowFrame>,
 }
 /// Nested message and enum types in `WindowExprNode`.
 pub mod window_expr_node {
@@ -668,12 +668,6 @@ pub mod window_expr_node {
         /// udaf = 3
         #[prost(enumeration = "super::BuiltInWindowFunction", tag = "2")]
         BuiltInFunction(i32),
-    }
-    /// repeated LogicalExprNode filter = 7;
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum WindowFrame {
-        #[prost(message, tag = "8")]
-        Frame(super::WindowFrame),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

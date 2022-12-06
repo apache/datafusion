@@ -24,7 +24,6 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
-use arrow::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use std::any::Any;
@@ -40,6 +39,13 @@ pub struct WindowShift {
     shift_offset: i64,
     expr: Arc<dyn PhysicalExpr>,
     default_value: Option<ScalarValue>,
+}
+
+impl WindowShift {
+    /// Get shift_offset of window shift expression
+    pub fn get_shift_offset(&self) -> i64 {
+        self.shift_offset
+    }
 }
 
 /// lead() window function
@@ -95,19 +101,9 @@ impl BuiltInWindowFunctionExpr for WindowShift {
         &self.name
     }
 
-    fn create_evaluator(
-        &self,
-        batch: &RecordBatch,
-    ) -> Result<Box<dyn PartitionEvaluator>> {
-        let values = self
-            .expressions()
-            .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()?;
+    fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(WindowShiftEvaluator {
             shift_offset: self.shift_offset,
-            values,
             default_value: self.default_value.clone(),
         }))
     }
@@ -115,12 +111,11 @@ impl BuiltInWindowFunctionExpr for WindowShift {
 
 pub(crate) struct WindowShiftEvaluator {
     shift_offset: i64,
-    values: Vec<ArrayRef>,
     default_value: Option<ScalarValue>,
 }
 
 fn create_empty_array(
-    value: &Option<ScalarValue>,
+    value: Option<&ScalarValue>,
     data_type: &DataType,
     size: usize,
 ) -> Result<ArrayRef> {
@@ -140,7 +135,7 @@ fn create_empty_array(
 fn shift_with_default_value(
     array: &ArrayRef,
     offset: i64,
-    value: &Option<ScalarValue>,
+    value: Option<&ScalarValue>,
 ) -> Result<ArrayRef> {
     use arrow::compute::concat;
 
@@ -169,10 +164,15 @@ fn shift_with_default_value(
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {
-    fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
-        let value = &self.values[0];
+    fn evaluate_partition(
+        &self,
+        values: &[ArrayRef],
+        partition: Range<usize>,
+    ) -> Result<ArrayRef> {
+        // LEAD, LAG window functions take single column, values will have size 1
+        let value = &values[0];
         let value = value.slice(partition.start, partition.end - partition.start);
-        shift_with_default_value(&value, self.shift_offset, &self.default_value)
+        shift_with_default_value(&value, self.shift_offset, self.default_value.as_ref())
     }
 }
 
@@ -190,7 +190,8 @@ mod tests {
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
-        let result = expr.create_evaluator(&batch)?.evaluate(vec![0..8])?;
+        let values = expr.evaluate_args(&batch)?;
+        let result = expr.create_evaluator()?.evaluate(&values, vec![0..8])?;
         assert_eq!(1, result.len());
         let result = as_int32_array(&result[0])?;
         assert_eq!(expected, *result);

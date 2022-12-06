@@ -66,33 +66,51 @@ impl TryFrom<ast::WindowFrame> for WindowFrame {
             None => WindowFrameBound::CurrentRow,
         };
 
-        if let WindowFrameBound::Following(ScalarValue::Utf8(None)) = start_bound {
-            Err(DataFusionError::Execution(
-                "Invalid window frame: start bound cannot be unbounded following"
-                    .to_owned(),
-            ))
-        } else if let WindowFrameBound::Preceding(ScalarValue::Utf8(None)) = end_bound {
-            Err(DataFusionError::Execution(
-                "Invalid window frame: end bound cannot be unbounded preceding"
-                    .to_owned(),
-            ))
-        } else {
-            let units = value.units.into();
-            Ok(Self {
-                units,
-                start_bound,
-                end_bound,
-            })
-        }
+        if let WindowFrameBound::Following(val) = &start_bound {
+            if val.is_null() {
+                return Err(DataFusionError::Execution(
+                    "Invalid window frame: start bound cannot be unbounded following"
+                        .to_owned(),
+                ));
+            }
+        } else if let WindowFrameBound::Preceding(val) = &end_bound {
+            if val.is_null() {
+                return Err(DataFusionError::Execution(
+                    "Invalid window frame: end bound cannot be unbounded preceding"
+                        .to_owned(),
+                ));
+            }
+        };
+        Ok(Self {
+            units: value.units.into(),
+            start_bound,
+            end_bound,
+        })
     }
 }
 
-impl Default for WindowFrame {
-    fn default() -> Self {
-        WindowFrame {
-            units: WindowFrameUnits::Range,
-            start_bound: WindowFrameBound::Preceding(ScalarValue::Utf8(None)),
-            end_bound: WindowFrameBound::CurrentRow,
+impl WindowFrame {
+    /// Creates a new, default window frame (with the meaning of default depending on whether the
+    /// frame contains an `ORDER BY` clause.
+    pub fn new(has_order_by: bool) -> Self {
+        if has_order_by {
+            // This window frame covers the table (or partition if `PARTITION BY` is used)
+            // from beginning to the `CURRENT ROW` (with same rank). It is used when the `OVER`
+            // clause contains an `ORDER BY` clause but no frame.
+            WindowFrame {
+                units: WindowFrameUnits::Range,
+                start_bound: WindowFrameBound::Preceding(ScalarValue::Null),
+                end_bound: WindowFrameBound::CurrentRow,
+            }
+        } else {
+            // This window frame covers the whole table (or partition if `PARTITION BY` is used).
+            // It is used when the `OVER` clause does not contain an `ORDER BY` clause and there is
+            // no frame.
+            WindowFrame {
+                units: WindowFrameUnits::Rows,
+                start_bound: WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                end_bound: WindowFrameBound::Following(ScalarValue::UInt64(None)),
+            }
         }
     }
 }
@@ -137,15 +155,11 @@ impl TryFrom<ast::WindowFrameBound> for WindowFrameBound {
             ast::WindowFrameBound::Preceding(Some(v)) => {
                 Self::Preceding(convert_frame_bound_to_scalar_value(*v)?)
             }
-            ast::WindowFrameBound::Preceding(None) => {
-                Self::Preceding(ScalarValue::Utf8(None))
-            }
+            ast::WindowFrameBound::Preceding(None) => Self::Preceding(ScalarValue::Null),
             ast::WindowFrameBound::Following(Some(v)) => {
                 Self::Following(convert_frame_bound_to_scalar_value(*v)?)
             }
-            ast::WindowFrameBound::Following(None) => {
-                Self::Following(ScalarValue::Utf8(None))
-            }
+            ast::WindowFrameBound::Following(None) => Self::Following(ScalarValue::Null),
             ast::WindowFrameBound::CurrentRow => Self::CurrentRow,
         })
     }
@@ -183,15 +197,21 @@ pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> 
 impl fmt::Display for WindowFrameBound {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            WindowFrameBound::Preceding(ScalarValue::Utf8(None)) => {
-                f.write_str("UNBOUNDED PRECEDING")
+            WindowFrameBound::Preceding(n) => {
+                if n.is_null() {
+                    f.write_str("UNBOUNDED PRECEDING")
+                } else {
+                    write!(f, "{} PRECEDING", n)
+                }
             }
-            WindowFrameBound::Preceding(n) => write!(f, "{} PRECEDING", n),
             WindowFrameBound::CurrentRow => f.write_str("CURRENT ROW"),
-            WindowFrameBound::Following(ScalarValue::Utf8(None)) => {
-                f.write_str("UNBOUNDED FOLLOWING")
+            WindowFrameBound::Following(n) => {
+                if n.is_null() {
+                    f.write_str("UNBOUNDED FOLLOWING")
+                } else {
+                    write!(f, "{} FOLLOWING", n)
+                }
             }
-            WindowFrameBound::Following(n) => write!(f, "{} FOLLOWING", n),
         }
     }
 }

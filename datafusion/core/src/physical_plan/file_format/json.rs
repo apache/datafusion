@@ -261,6 +261,7 @@ mod tests {
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
     use crate::test::partitioned_file_groups;
+    use datafusion_common::cast::{as_int32_array, as_int64_array};
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
@@ -362,11 +363,7 @@ mod tests {
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 3);
-        let values = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
-            .unwrap();
+        let values = as_int64_array(batch.column(0))?;
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), -10);
         assert_eq!(values.value(2), 2);
@@ -416,11 +413,7 @@ mod tests {
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 3);
-        let values = batch
-            .column(missing_field_idx)
-            .as_any()
-            .downcast_ref::<arrow::array::Int32Array>()
-            .unwrap();
+        let values = as_int32_array(batch.column(missing_field_idx))?;
         assert_eq!(values.len(), 3);
         assert!(values.is_null(0));
         assert!(values.is_null(1));
@@ -471,11 +464,7 @@ mod tests {
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 4);
-        let values = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
-            .unwrap();
+        let values = as_int64_array(batch.column(0))?;
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), -10);
         assert_eq!(values.value(2), 2);

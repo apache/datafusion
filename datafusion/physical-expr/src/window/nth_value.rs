@@ -23,7 +23,6 @@ use crate::window::BuiltInWindowFunctionExpr;
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
-use arrow::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use std::any::Any;
@@ -32,7 +31,7 @@ use std::sync::Arc;
 
 /// nth_value kind
 #[derive(Debug, Copy, Clone)]
-enum NthValueKind {
+pub enum NthValueKind {
     First,
     Last,
     Nth(u32),
@@ -95,6 +94,11 @@ impl NthValue {
             }),
         }
     }
+
+    /// Get nth_value kind
+    pub fn get_kind(&self) -> NthValueKind {
+        self.kind
+    }
 }
 
 impl BuiltInWindowFunctionExpr for NthValue {
@@ -116,27 +120,14 @@ impl BuiltInWindowFunctionExpr for NthValue {
         &self.name
     }
 
-    fn create_evaluator(
-        &self,
-        batch: &RecordBatch,
-    ) -> Result<Box<dyn PartitionEvaluator>> {
-        let values = self
-            .expressions()
-            .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Box::new(NthValueEvaluator {
-            kind: self.kind,
-            values,
-        }))
+    fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        Ok(Box::new(NthValueEvaluator { kind: self.kind }))
     }
 }
 
 /// Value evaluator for nth_value functions
 pub(crate) struct NthValueEvaluator {
     kind: NthValueKind,
-    values: Vec<ArrayRef>,
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
@@ -144,12 +135,13 @@ impl PartitionEvaluator for NthValueEvaluator {
         true
     }
 
-    fn evaluate_partition(&self, _partition: Range<usize>) -> Result<ArrayRef> {
-        unreachable!("first, last, and nth_value evaluation must be called with evaluate_partition_with_rank")
-    }
-
-    fn evaluate_inside_range(&self, range: Range<usize>) -> Result<ScalarValue> {
-        let arr = &self.values[0];
+    fn evaluate_inside_range(
+        &self,
+        values: &[ArrayRef],
+        range: Range<usize>,
+    ) -> Result<ScalarValue> {
+        // FIRST_VALUE, LAST_VALUE, NTH_VALUE window functions take single column, values will have size 1
+        let arr = &values[0];
         let n_range = range.end - range.start;
         match self.kind {
             NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
@@ -188,10 +180,11 @@ mod tests {
                 end: i + 1,
             })
         }
-        let evaluator = expr.create_evaluator(&batch)?;
+        let evaluator = expr.create_evaluator()?;
+        let values = expr.evaluate_args(&batch)?;
         let result = ranges
             .into_iter()
-            .map(|range| evaluator.evaluate_inside_range(range))
+            .map(|range| evaluator.evaluate_inside_range(&values, range))
             .into_iter()
             .collect::<Result<Vec<ScalarValue>>>()?;
         let result = ScalarValue::iter_to_array(result.into_iter())?;

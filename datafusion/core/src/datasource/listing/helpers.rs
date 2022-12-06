@@ -21,10 +21,7 @@ use std::sync::Arc;
 
 use arrow::array::new_empty_array;
 use arrow::{
-    array::{
-        Array, ArrayBuilder, ArrayRef, Date64Array, Date64Builder, StringBuilder,
-        UInt64Builder,
-    },
+    array::{ArrayBuilder, ArrayRef, Date64Builder, StringBuilder, UInt64Builder},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
@@ -40,7 +37,7 @@ use crate::{
 use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
 use datafusion_common::{
-    cast::{as_string_array, as_uint64_array},
+    cast::{as_date64_array, as_string_array, as_uint64_array},
     Column, DataFusionError,
 };
 use datafusion_expr::{
@@ -342,11 +339,7 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Result<Vec<PartitionedFile>> {
         .flat_map(|batch| {
             let key_array = as_string_array(batch.column(0)).unwrap();
             let length_array = as_uint64_array(batch.column(1)).unwrap();
-            let modified_array = batch
-                .column(2)
-                .as_any()
-                .downcast_ref::<Date64Array>()
-                .unwrap();
+            let modified_array = as_date64_array(batch.column(2)).unwrap();
 
             (0..batch.num_rows()).map(move |row| {
                 Ok(PartitionedFile {

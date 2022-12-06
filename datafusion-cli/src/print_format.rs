@@ -49,7 +49,7 @@ macro_rules! batches_to_json {
             writer.write_batches($batches)?;
             writer.finish()?;
         }
-        String::from_utf8(bytes).map_err(|e| DataFusionError::Execution(e.to_string()))?
+        String::from_utf8(bytes).map_err(|e| DataFusionError::External(Box::new(e)))?
     }};
 }
 
@@ -64,8 +64,8 @@ fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<Stri
             writer.write(batch)?;
         }
     }
-    let formatted = String::from_utf8(bytes)
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    let formatted =
+        String::from_utf8(bytes).map_err(|e| DataFusionError::External(Box::new(e)))?;
     Ok(formatted)
 }
 

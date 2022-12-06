@@ -663,7 +663,7 @@ impl DataFrame {
             LogicalPlanBuilder::window_plan(self.plan.clone(), window_func_exprs)?
         };
 
-        let new_column = Expr::Alias(Box::new(expr), name.to_string());
+        let new_column = expr.alias(name);
         let mut col_exists = false;
         let mut fields: Vec<Expr> = plan
             .schema()
@@ -795,12 +795,11 @@ impl TableProvider for DataFrame {
     async fn scan(
         &self,
         _ctx: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut expr = projection
-            .as_ref()
             // construct projections
             .map_or_else(
                 || {
@@ -840,6 +839,7 @@ mod tests {
     use std::vec;
 
     use super::*;
+    use crate::execution::context::SessionConfig;
     use crate::execution::options::{CsvReadOptions, ParquetReadOptions};
     use crate::physical_plan::ColumnarValue;
     use crate::physical_plan::Partitioning;
@@ -851,7 +851,8 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_expr::{
         avg, cast, count, count_distinct, create_udf, lit, max, min, sum,
-        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFunction,
+        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
+        WindowFunction,
     };
     use datafusion_physical_expr::expressions::Column;
 
@@ -897,7 +898,7 @@ mod tests {
             args: vec![col("aggregate_test_100.c1")],
             partition_by: vec![col("aggregate_test_100.c2")],
             order_by: vec![],
-            window_frame: None,
+            window_frame: WindowFrame::new(false),
         };
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
@@ -915,15 +916,14 @@ mod tests {
     async fn select_with_periods() -> Result<()> {
         // define data with a column name that has a "." in it:
         let array: Int32Array = [1, 10].into_iter().collect();
-        let batch =
-            RecordBatch::try_from_iter(vec![("f.c1", Arc::new(array) as _)]).unwrap();
+        let batch = RecordBatch::try_from_iter(vec![("f.c1", Arc::new(array) as _)])?;
 
         let ctx = SessionContext::new();
-        ctx.register_batch("t", batch).unwrap();
+        ctx.register_batch("t", batch)?;
 
-        let df = ctx.table("t").unwrap().select_columns(&["f.c1"]).unwrap();
+        let df = ctx.table("t")?.select_columns(&["f.c1"])?;
 
-        let df_results = df.collect().await.unwrap();
+        let df_results = df.collect().await?;
 
         assert_batches_sorted_eq!(
             vec!["+------+", "| f.c1 |", "+------+", "| 1    |", "| 10   |", "+------+",],
@@ -1387,7 +1387,7 @@ mod tests {
 
         let plan = df.explain(false, false)?.collect().await?;
         // Filters all the way to Parquet
-        let formatted = pretty::pretty_format_batches(&plan).unwrap().to_string();
+        let formatted = pretty::pretty_format_batches(&plan)?.to_string();
         assert!(formatted.contains("FilterExec: id@0 = 1"));
 
         Ok(())
@@ -1446,8 +1446,8 @@ mod tests {
         GROUP BY
             column_1"#;
 
-        let df = ctx.sql(sql).await.unwrap();
-        df.show_limit(10).await.unwrap();
+        let df = ctx.sql(sql).await?;
+        df.show_limit(10).await?;
 
         Ok(())
     }
@@ -1456,20 +1456,17 @@ mod tests {
     async fn with_column_name() -> Result<()> {
         // define data with a column name that has a "." in it:
         let array: Int32Array = [1, 10].into_iter().collect();
-        let batch =
-            RecordBatch::try_from_iter(vec![("f.c1", Arc::new(array) as _)]).unwrap();
+        let batch = RecordBatch::try_from_iter(vec![("f.c1", Arc::new(array) as _)])?;
 
         let ctx = SessionContext::new();
-        ctx.register_batch("t", batch).unwrap();
+        ctx.register_batch("t", batch)?;
 
         let df = ctx
-            .table("t")
-            .unwrap()
+            .table("t")?
             // try and create a column with a '.' in it
-            .with_column("f.c2", lit("hello"))
-            .unwrap();
+            .with_column("f.c2", lit("hello"))?;
 
-        let df_results = df.collect().await.unwrap();
+        let df_results = df.collect().await?;
 
         assert_batches_sorted_eq!(
             vec![
@@ -1542,8 +1539,7 @@ mod tests {
         assert_eq!(4016, union_rows.iter().map(|x| x.num_rows()).sum::<usize>());
 
         let physical_plan = union.create_physical_plan().await?;
-        let default_partition_count =
-            SessionContext::new().copied_config().target_partitions;
+        let default_partition_count = SessionConfig::new().target_partitions();
 
         // For partition aware union, the output partition count should not be changed.
         assert_eq!(
@@ -1598,8 +1594,7 @@ mod tests {
         assert_eq!(916, union_rows.iter().map(|x| x.num_rows()).sum::<usize>());
 
         let physical_plan = union.create_physical_plan().await?;
-        let default_partition_count =
-            SessionContext::new().copied_config().target_partitions;
+        let default_partition_count = SessionConfig::new().target_partitions();
 
         // For non-partition aware union, the output partitioning count should be the combination of all output partitions count
         assert!(matches!(
@@ -1628,8 +1623,7 @@ mod tests {
             JoinType::RightAnti,
         ];
 
-        let default_partition_count =
-            SessionContext::new().copied_config().target_partitions;
+        let default_partition_count = SessionConfig::new().target_partitions();
 
         for join_type in all_join_types {
             let join = left.join(
@@ -1649,8 +1643,8 @@ mod tests {
                 | JoinType::LeftSemi
                 | JoinType::LeftAnti => {
                     let left_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-                        Arc::new(Column::new_with_schema("c1", &join_schema).unwrap()),
-                        Arc::new(Column::new_with_schema("c2", &join_schema).unwrap()),
+                        Arc::new(Column::new_with_schema("c1", &join_schema)?),
+                        Arc::new(Column::new_with_schema("c2", &join_schema)?),
                     ];
                     assert_eq!(
                         out_partitioning,
@@ -1659,8 +1653,8 @@ mod tests {
                 }
                 JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
                     let right_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-                        Arc::new(Column::new_with_schema("c2_c1", &join_schema).unwrap()),
-                        Arc::new(Column::new_with_schema("c2_c2", &join_schema).unwrap()),
+                        Arc::new(Column::new_with_schema("c2_c1", &join_schema)?),
+                        Arc::new(Column::new_with_schema("c2_c2", &join_schema)?),
                     ];
                     assert_eq!(
                         out_partitioning,

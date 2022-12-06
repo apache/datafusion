@@ -40,6 +40,7 @@ use datafusion::{
 };
 use datafusion_common::{context, Column, DataFusionError};
 use datafusion_expr::logical_plan::Prepare;
+use datafusion_expr::logical_plan::builder::{project, subquery_alias_owned};
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
@@ -324,21 +325,21 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Projection(projection) => {
                 let input: LogicalPlan =
                     into_logical_plan!(projection.input, ctx, extension_codec)?;
-                let x: Vec<Expr> = projection
+                let expr: Vec<Expr> = projection
                     .expr
                     .iter()
                     .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
-                LogicalPlanBuilder::from(input)
-                    .project_with_alias(
-                        x,
-                        projection.optional_alias.as_ref().map(|a| match a {
-                            protobuf::projection_node::OptionalAlias::Alias(alias) => {
-                                alias.clone()
-                            }
-                        }),
-                    )?
-                    .build()
+
+                let new_proj = project(input, expr)?;
+                match projection.optional_alias.as_ref() {
+                    Some(a) => match a {
+                        protobuf::projection_node::OptionalAlias::Alias(alias) => {
+                            subquery_alias_owned(new_proj, alias)
+                        }
+                    },
+                    _ => Ok(new_proj),
+                }
             }
             LogicalPlanType::Selection(selection) => {
                 let input: LogicalPlan =
@@ -424,7 +425,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                         &FileFormatType::Parquet(protobuf::ParquetFormat {
                             enable_pruning,
                         }) => Arc::new(
-                            ParquetFormat::default().with_enable_pruning(enable_pruning),
+                            ParquetFormat::new(ctx.config_options())
+                                .with_enable_pruning(Some(enable_pruning)),
                         ),
                         FileFormatType::Csv(protobuf::CsvFormat {
                             has_header,
@@ -942,7 +944,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 projection,
                                 definition: view_table
                                     .definition()
-                                    .clone()
+                                    .map(|s| s.to_string())
                                     .unwrap_or_default(),
                             },
                         ))),

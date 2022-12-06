@@ -20,22 +20,24 @@
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::{
-    logical_plan::{
-        Join, JoinType, Limit, LogicalPlan, Projection, Sort, TableScan, Union,
-    },
+    logical_plan::{Join, JoinType, Limit, LogicalPlan, Sort, TableScan, Union},
     CrossJoin,
 };
 use std::sync::Arc;
 
 /// Optimization rule that tries to push down LIMIT.
 #[derive(Default)]
-pub struct LimitPushDown {}
+pub struct PushDownLimit {}
 
-impl LimitPushDown {
+impl PushDownLimit {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
+}
+
+fn is_no_join_condition(join: &Join) -> bool {
+    join.on.is_empty() && join.filter.is_none()
 }
 
 fn push_down_join(
@@ -72,7 +74,7 @@ fn push_down_join(
 }
 
 /// Push down Limit.
-impl OptimizerRule for LimitPushDown {
+impl OptimizerRule for PushDownLimit {
     fn optimize(
         &self,
         plan: &LogicalPlan,
@@ -119,7 +121,8 @@ impl OptimizerRule for LimitPushDown {
         };
         let skip = limit.skip;
 
-        let plan = match &*limit.input {
+        let child_plan = &*limit.input;
+        let plan = match child_plan {
             LogicalPlan::TableScan(scan) => {
                 let limit = if fetch != 0 { fetch + skip } else { 0 };
                 let new_input = LogicalPlan::TableScan(TableScan {
@@ -132,21 +135,6 @@ impl OptimizerRule for LimitPushDown {
                 });
                 plan.with_new_inputs(&[new_input])?
             }
-
-            LogicalPlan::Projection(projection) => {
-                let new_input = LogicalPlan::Limit(Limit {
-                    skip,
-                    fetch: Some(fetch),
-                    input: Arc::new((*projection.input).clone()),
-                });
-                // Push down limit directly (projection doesn't change number of rows)
-                LogicalPlan::Projection(Projection::try_new_with_schema(
-                    projection.expr.clone(),
-                    Arc::new(new_input),
-                    projection.schema.clone(),
-                )?)
-            }
-
             LogicalPlan::Union(union) => {
                 let new_inputs = union
                     .inputs
@@ -190,6 +178,24 @@ impl OptimizerRule for LimitPushDown {
             LogicalPlan::Join(join) => {
                 let limit = fetch + skip;
                 let new_join = match join.join_type {
+                    JoinType::Left | JoinType::Right | JoinType::Full
+                        if is_no_join_condition(join) =>
+                    {
+                        // push left and right
+                        push_down_join(join, Some(limit), Some(limit))
+                    }
+                    JoinType::LeftSemi | JoinType::LeftAnti
+                        if is_no_join_condition(join) =>
+                    {
+                        // push left
+                        push_down_join(join, Some(limit), None)
+                    }
+                    JoinType::RightSemi | JoinType::RightAnti
+                        if is_no_join_condition(join) =>
+                    {
+                        // push right
+                        push_down_join(join, None, Some(limit))
+                    }
                     JoinType::Left => push_down_join(join, Some(limit), None),
                     JoinType::Right => push_down_join(join, None, Some(limit)),
                     _ => push_down_join(join, None, None),
@@ -208,6 +214,14 @@ impl OptimizerRule for LimitPushDown {
                 });
                 plan.with_new_inputs(&[new_sort])?
             }
+            LogicalPlan::Projection(_) | LogicalPlan::SubqueryAlias(_) => {
+                // commute
+                let new_limit =
+                    plan.with_new_inputs(&[
+                        (*(child_plan.inputs().get(0).unwrap())).clone()
+                    ])?;
+                child_plan.with_new_inputs(&[new_limit])?
+            }
             _ => plan.clone(),
         };
 
@@ -215,7 +229,7 @@ impl OptimizerRule for LimitPushDown {
     }
 
     fn name(&self) -> &str {
-        "limit_push_down"
+        "push_down_limit"
     }
 }
 
@@ -240,7 +254,7 @@ mod test {
     };
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        let optimized_plan = LimitPushDown::new()
+        let optimized_plan = PushDownLimit::new()
             .optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
 
@@ -605,6 +619,142 @@ mod test {
     }
 
     #[test]
+    fn limit_should_push_down_join_without_condition() -> Result<()> {
+        let table_scan_1 = test_table_scan()?;
+        let table_scan_2 = test_table_scan_with_name("test2")?;
+        let left_keys: Vec<&str> = Vec::new();
+        let right_keys: Vec<&str> = Vec::new();
+        let plan = LogicalPlanBuilder::from(table_scan_1.clone())
+            .join(
+                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                JoinType::Left,
+                (left_keys.clone(), right_keys.clone()),
+                None,
+            )?
+            .limit(0, Some(1000))?
+            .build()?;
+
+        let expected = "Limit: skip=0, fetch=1000\
+        \n  Left Join: \
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test, fetch=1000\
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test2, fetch=1000";
+
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let plan = LogicalPlanBuilder::from(table_scan_1.clone())
+            .join(
+                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                JoinType::Right,
+                (left_keys.clone(), right_keys.clone()),
+                None,
+            )?
+            .limit(0, Some(1000))?
+            .build()?;
+
+        let expected = "Limit: skip=0, fetch=1000\
+        \n  Right Join: \
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test, fetch=1000\
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test2, fetch=1000";
+
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let plan = LogicalPlanBuilder::from(table_scan_1.clone())
+            .join(
+                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                JoinType::Full,
+                (left_keys.clone(), right_keys.clone()),
+                None,
+            )?
+            .limit(0, Some(1000))?
+            .build()?;
+
+        let expected = "Limit: skip=0, fetch=1000\
+        \n  Full Join: \
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test, fetch=1000\
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test2, fetch=1000";
+
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let plan = LogicalPlanBuilder::from(table_scan_1.clone())
+            .join(
+                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                JoinType::LeftSemi,
+                (left_keys.clone(), right_keys.clone()),
+                None,
+            )?
+            .limit(0, Some(1000))?
+            .build()?;
+
+        let expected = "Limit: skip=0, fetch=1000\
+        \n  LeftSemi Join: \
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test, fetch=1000\
+        \n    TableScan: test2";
+
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let plan = LogicalPlanBuilder::from(table_scan_1.clone())
+            .join(
+                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                JoinType::LeftAnti,
+                (left_keys.clone(), right_keys.clone()),
+                None,
+            )?
+            .limit(0, Some(1000))?
+            .build()?;
+
+        let expected = "Limit: skip=0, fetch=1000\
+        \n  LeftAnti Join: \
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test, fetch=1000\
+        \n    TableScan: test2";
+
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let plan = LogicalPlanBuilder::from(table_scan_1.clone())
+            .join(
+                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                JoinType::RightSemi,
+                (left_keys.clone(), right_keys.clone()),
+                None,
+            )?
+            .limit(0, Some(1000))?
+            .build()?;
+
+        let expected = "Limit: skip=0, fetch=1000\
+        \n  RightSemi Join: \
+        \n    TableScan: test\
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test2, fetch=1000";
+
+        assert_optimized_plan_eq(&plan, expected)?;
+
+        let plan = LogicalPlanBuilder::from(table_scan_1)
+            .join(
+                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                JoinType::RightAnti,
+                (left_keys, right_keys),
+                None,
+            )?
+            .limit(0, Some(1000))?
+            .build()?;
+
+        let expected = "Limit: skip=0, fetch=1000\
+        \n  RightAnti Join: \
+        \n    TableScan: test\
+        \n    Limit: skip=0, fetch=1000\
+        \n      TableScan: test2, fetch=1000";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
     fn limit_should_push_down_left_outer_join() -> Result<()> {
         let table_scan_1 = test_table_scan()?;
         let table_scan_2 = test_table_scan_with_name("test2")?;
@@ -770,6 +920,23 @@ mod test {
 
         let expected = "Limit: skip=1000, fetch=0\
         \n  TableScan: test, fetch=0";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn push_down_subquery_alias() -> Result<()> {
+        let scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(scan)
+            .alias("a")?
+            .limit(0, Some(1))?
+            .limit(1000, None)?
+            .build()?;
+
+        let expected = "SubqueryAlias: a\
+        \n  Limit: skip=1000, fetch=0\
+        \n    TableScan: test, fetch=0";
 
         assert_optimized_plan_eq(&plan, expected)
     }
