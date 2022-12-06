@@ -419,7 +419,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub fn query_to_plan_with_alias(
         &self,
         query: Query,
-        param_data_types: &Vec<DataType>,
         alias: Option<String>,
         ctes: &mut HashMap<String, LogicalPlan>,
         outer_query_schema: Option<&DFSchema>,
@@ -990,10 +989,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[using_columns],
                 )?;
 
-                Ok(LogicalPlan::Filter(Filter::try_new(
+                Ok(LogicalPlan::Filter(Filter::try_new_with_params(
                     filter_expr,
                     Arc::new(plan),
-                    &[], // todo: get this list from the ctes after refactoing it
+                    &vec![], // todo: this will come from the refactored ctes that include the param data types
                 )?))
             }
             None => Ok(plan),
@@ -6072,14 +6071,30 @@ mod tests {
 
     #[test]
     fn test_prepare_statement_to_plan_multi_params() {
-        let sql = "PREPARE my_plan(INT, DOUBLE, STRING, INT) AS SELECT id, age  FROM person WHERE age IN ($1, $4) AND salary > $2 OR first_name = $3";
+        let sql = "PREPARE my_plan(INT, STRING, DOUBLE, INT, DOUBLE) AS SELECT id, age  FROM person WHERE age IN ($1, $4) AND salary > $3 and salary < $5 OR first_name < $2";
 
-        let expected_plan = "Prepare: \"my_plan\" [Int32, Float64, Utf8, Int32] \
+        let expected_plan = "Prepare: \"my_plan\" [Int32, Utf8, Float64, Int32, Float64] \
         \n  Projection: person.id, person.age\
-        \n    Filter: person.age IN ([$1, $4]) AND person.salary > $2 OR person.first_name = $3\
+        \n    Filter: person.age IN ([$1, $4]) AND person.salary > $3 AND person.salary < $5 OR person.first_name < $2\
         \n      TableScan: person";
 
-        let expected_dt = "[Int32, Float64, Utf8, Int32]";
+        let expected_dt = "[Int32, Utf8, Float64, Int32, Float64]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    fn test_prepare_statement_to_plan_having() {
+        let sql = "PREPARE my_plan(INT, DOUBLE) AS SELECT id, sum(age)  FROM person WHERE salary > $2 GROUP BY id HAVING sum(age) < $1";
+
+        let expected_plan = "Prepare: \"my_plan\" [Int32, Float64] \
+        \n  Projection: person.id, SUM(person.age)\
+        \n    Filter: SUM(person.age) < $1\
+        \n      Aggregate: groupBy=[[person.id]], aggr=[[SUM(person.age)]]\
+        \n        Filter: person.salary > $2\
+        \n          TableScan: person";
+
+        let expected_dt = "[Int32, Float64]";
 
         prepare_stmt_quick_test(sql, expected_plan, expected_dt);
     }
