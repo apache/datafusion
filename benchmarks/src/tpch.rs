@@ -192,7 +192,7 @@ pub fn get_answer_schema(n: usize) -> Schema {
         7 => Schema::new(vec![
             Field::new("supp_nation", DataType::Utf8, true),
             Field::new("cust_nation", DataType::Utf8, true),
-            Field::new("l_year", DataType::Int32, true),
+            Field::new("l_year", DataType::Float64, true),
             Field::new("revenue", DataType::Decimal128(15, 2), true),
         ]),
 
