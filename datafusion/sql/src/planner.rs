@@ -72,9 +72,7 @@ use datafusion_expr::{
 };
 
 use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
-use crate::utils::{
-    make_decimal_type, normalize_ident, normalize_ident_owned, resolve_columns,
-};
+use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
 
 use super::{
     parser::DFParser,
@@ -279,7 +277,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ..
             } if with_options.is_empty() => {
                 let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
-                plan = Self::apply_expr_alias(plan, &columns)?;
+                plan = Self::apply_expr_alias(plan, columns)?;
 
                 Ok(LogicalPlan::CreateView(CreateView {
                     name: object_name_to_table_reference(name)?,
@@ -446,7 +444,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
-                let cte_name = normalize_ident(&cte.alias.name);
+                let cte_name = normalize_ident(cte.alias.name.clone());
                 if planner_context.ctes.contains_key(&cte_name) {
                     return Err(DataFusionError::SQL(ParserError(format!(
                         "WITH query name {:?} specified more than once",
@@ -661,7 +659,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .any(|x| x.option == ColumnOption::Null);
             fields.push(Field::new(
-                &normalize_ident(&column.name),
+                &normalize_ident(column.name),
                 data_type,
                 allow_null,
             ));
@@ -880,7 +878,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
-                    .map(|x| Column::from_name(normalize_ident(&x)))
+                    .map(|x| Column::from_name(normalize_ident(x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
                     .join_using(&right, join_type, keys)?
@@ -908,7 +906,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // normalize name and alias
                 let table_ref = object_name_to_table_reference(name)?;
                 let table_name = table_ref.display_string();
-                let table_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
+                let table_alias = alias.as_ref().map(|a| normalize_ident(a.name.clone()));
                 let cte = planner_context.ctes.get(&table_name);
                 (
                     match (
@@ -942,7 +940,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     planner_context,
                     outer_query_schema,
                 )?;
-                let normalized_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
+                let normalized_alias =
+                    alias.as_ref().map(|a| normalize_ident(a.name.clone()));
                 let plan = match normalized_alias {
                     Some(alias) => subquery_alias_owned(logical_plan, &alias)?,
                     _ => logical_plan,
@@ -993,19 +992,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )))
         } else {
             subquery_alias_owned(
-                Self::apply_expr_alias(plan, &alias.columns)?,
-                &normalize_ident(&alias.name),
+                Self::apply_expr_alias(plan, alias.columns)?,
+                &normalize_ident(alias.name),
             )
         }
     }
 
-    fn apply_expr_alias(plan: LogicalPlan, idents: &Vec<Ident>) -> Result<LogicalPlan> {
+    fn apply_expr_alias(plan: LogicalPlan, idents: Vec<Ident>) -> Result<LogicalPlan> {
         if idents.is_empty() {
             Ok(plan)
         } else {
             let fields = plan.schema().fields().clone();
             LogicalPlanBuilder::from(plan)
-                .project(fields.iter().zip(idents.iter()).map(|(field, ident)| {
+                .project(fields.iter().zip(idents.into_iter()).map(|(field, ident)| {
                     col(field.name()).alias(normalize_ident(ident))
                 }))?
                 .build()
@@ -1630,7 +1629,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     from_schema,
                     &[select_expr.clone()],
                 )?;
-                let expr = Alias(Box::new(select_expr), normalize_ident(&alias));
+                let expr = Alias(Box::new(select_expr), normalize_ident(alias));
                 Ok(vec![normalize_col(expr, plan)?])
             }
             SelectItem::Wildcard => {
@@ -1912,13 +1911,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                     Ok(Expr::Column(Column {
                         relation: None,
-                        name: normalize_ident(&id),
+                        name: normalize_ident(id),
                     }))
                 }
             }
 
-            SQLExpr::MapAccess { ref column, keys } => {
-                if let SQLExpr::Identifier(ref id) = column.as_ref() {
+            SQLExpr::MapAccess { column, keys } => {
+                if let SQLExpr::Identifier(id) = *column {
                     plan_indexed(col(&normalize_ident(id)), keys)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
@@ -1935,7 +1934,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::CompoundIdentifier(ids) => {
                 if ids[0].value.starts_with('@') {
-                    let var_names: Vec<_> = ids.into_iter().map(|s| normalize_ident(&s)).collect();
+                    let var_names: Vec<_> = ids.into_iter().map(normalize_ident).collect();
                     let ty = self
                         .schema_provider
                         .get_variable_type(&var_names)
@@ -2260,7 +2259,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // (e.g. "foo.bar") for function names yet
                     function.name.to_string()
                 } else {
-                    normalize_ident(&function.name.0[0])
+                    normalize_ident(function.name.0[0].clone())
                 };
 
                 // first, check SQL reserved words
@@ -3026,7 +3025,7 @@ fn idents_to_table_reference(idents: Vec<Ident>) -> Result<OwnedTableReference> 
     impl IdentTaker {
         fn take(&mut self) -> String {
             let ident = self.0.pop().expect("no more identifiers");
-            normalize_ident_owned(ident)
+            normalize_ident(ident)
         }
     }
 
@@ -3069,7 +3068,7 @@ pub fn object_name_to_qualifier(sql_table_name: &ObjectName) -> String {
         .rev()
         .zip(columns)
         .map(|(ident, column_name)| {
-            format!(r#"{} = '{}'"#, column_name, normalize_ident(ident))
+            format!(r#"{} = '{}'"#, column_name, normalize_ident(ident.clone()))
         })
         .collect::<Vec<_>>()
         .join(" AND ")
