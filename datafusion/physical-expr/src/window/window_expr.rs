@@ -130,5 +130,5 @@ pub trait WindowExpr: Send + Sync + Debug {
     }
 
     // Get window frame of this WindowExpr, None if absent
-    fn get_window_frame(&self) -> Option<&Arc<WindowFrame>>;
+    fn get_window_frame(&self) -> &Arc<WindowFrame>;
 }

@@ -134,7 +134,7 @@ impl WindowExpr for BuiltInWindowExpr {
         concat(&results).map_err(DataFusionError::ArrowError)
     }
 
-    fn get_window_frame(&self) -> Option<&Arc<WindowFrame>> {
-        self.window_frame.as_ref()
+    fn get_window_frame(&self) -> &Arc<WindowFrame> {
+        &self.window_frame
     }
 }
