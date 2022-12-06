@@ -120,7 +120,7 @@ impl Default for PlannerContext {
 }
 
 impl PlannerContext {
-    /// Create a new PlannerContext
+    /// Create an empty PlannerContext
     pub fn new() -> Self {
         Self {
             prepare_param_data_types: vec![],
@@ -128,7 +128,7 @@ impl PlannerContext {
         }
     }
 
-    /// Create a new PlannerContext
+    /// Create a new PlannerContext with provided prepare_param_data_types
     pub fn new_with_prepare_param_data_types(
         prepare_param_data_types: Vec<DataType>,
     ) -> Self {

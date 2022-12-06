@@ -126,7 +126,6 @@ impl LogicalPlanBuilder {
         mut values: Vec<Vec<Expr>>,
         param_data_types: &[DataType],
     ) -> Result<Self> {
-        // todo: hanlde for Placeholder expr
         if values.is_empty() {
             return Err(DataFusionError::Plan("Values list cannot be empty".into()));
         }
