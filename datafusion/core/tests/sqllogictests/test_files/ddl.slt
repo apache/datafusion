@@ -182,5 +182,234 @@ DROP VIEW foo, bar;
 statement ok
 DROP VIEW foo;
 
+# Ok to drop
 statement ok
 DROP VIEW bar;
+
+# not ok to drop after already dropped
+statement error
+DROP VIEW bar;
+
+# ok to drop with IF EXISTS after already dropped
+statement ok
+DROP VIEW IF EXISTS bar;
+
+# can't drop non existent view
+statement error
+DROP VIEW non_existent_view
+
+##########
+# Create / drop views agaist tables
+##########
+
+statement ok
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION 'tests/aggregate_simple.csv';
+
+# create_table_as
+statement ok
+CREATE TABLE my_table AS SELECT * FROM aggregate_simple
+
+query II rowsort
+SELECT * FROM my_table order by c1 LIMIT 1
+----
+0.00001 1.0e-12 true
+
+statement ok
+DROP TABLE my_table;
+
+# not ok to drop after already dropped
+statement error
+DROP TABLE my_table;
+
+# ok to drop after already dropped with IF EXISTS
+statement ok
+DROP TABLE IF EXISTS my_table;
+
+# Can't drop non existent table
+statement error
+DROP TABLE non_existent_table;
+
+
+# create_table_with_schema_as_select
+statement ok
+CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT *,c3 as c4_tmp FROM aggregate_simple;
+
+query II rowsort
+SELECT * FROM my_table order by c1 LIMIT 1
+----
+0.00001 1.0e-12 true 1
+
+statement ok
+DROP TABLE my_table;
+
+statement ok
+DROP TABLE aggregate_simple
+
+# create_table_with_schema_as_select_mismatch
+statement error
+CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT * FROM aggregate_simple;
+
+
+# create_table_with_schema_as_values
+statement ok
+CREATE TABLE my_table(c1 int, c2 float, c3 varchar) AS VALUES(1, 2, 'hello')
+
+query II rowsort
+SELECT * FROM my_table;
+----
+1 2.0 hello
+
+statement ok
+DROP TABLE my_table;
+
+
+# TODO enable information schema
+
+statement ok
+CREATE TABLE y AS VALUES (1,2),(3,4);
+
+statement ok
+CREATE OR REPLACE TABLE y AS VALUES (5,6);
+
+query II
+SELECT * FROM y
+----
+5 6
+
+# 'IF NOT EXISTS' cannot coexist with 'REPLACE'
+statement error
+CREATE OR REPLACE TABLE if not exists y AS VALUES (7,8);
+
+statement ok
+DROP TABLE y
+
+
+# drop_view_cant_drop_table
+statement ok
+CREATE TABLE t AS SELECT 1
+
+statement error
+DROP VIEW t
+
+statement ok
+DROP TABLE t
+
+# drop_table_cant_drop_view
+statement ok
+CREATE VIEW v AS SELECT 1;
+
+statement error
+DROP TABLE v;
+
+statement ok
+DROP VIEW v;
+
+
+# csv_query_create_external_table
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+        c1  VARCHAR NOT NULL,
+        c2  TINYINT NOT NULL,
+        c3  SMALLINT NOT NULL,
+        c4  SMALLINT NOT NULL,
+        c5  INTEGER NOT NULL,
+        c6  BIGINT NOT NULL,
+        c7  SMALLINT NOT NULL,
+        c8  INT NOT NULL,
+        c9  INT UNSIGNED NOT NULL,
+        c10 BIGINT UNSIGNED NOT NULL,
+        c11 FLOAT NOT NULL,
+        c12 DOUBLE NOT NULL,
+        c13 VARCHAR NOT NULL
+    )
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+
+query IIIIIIIIIIIII
+SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, 10, c11, c12, c13 FROM aggregate_test_100 LIMIT 1;
+----
+c 2 1 18109 2033001162 -6513304855495910254 25 43062 1491205016 10 0.110830784 0.9294097332465232 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW
+
+
+
+# create_external_table_with_timestamps
+statement ok
+CREATE EXTERNAL TABLE csv_with_timestamps (
+name VARCHAR,
+ts TIMESTAMP
+) STORED AS CSV LOCATION 'tests/data/timestamps.csv';
+
+query CC
+SELECT * from csv_with_timestamps
+----
+Jorge 2018-12-13T12:12:10.011000000
+Andrew 2018-11-13T17:11:10.011000000
+
+statement ok
+DROP TABLE csv_with_timestamps
+
+# create_partitioned_external_table
+#
+# this test covers creating a partitioned file. The input files are in this structure:
+#
+# tests/data/partitioned_table/c_date=2018-12-13/timestamps.csv
+# tests/data/partitioned_table/c_date=2018-11-13/timestamps.csv
+
+statement ok
+CREATE EXTERNAL TABLE csv_with_timestamps (
+  name VARCHAR,
+  ts TIMESTAMP,
+  c_date DATE,
+)
+STORED AS CSV
+PARTITIONED BY (c_date)
+LOCATION 'tests/data/partitioned_table';
+
+query CCC
+SELECT * from csv_with_timestamps where c_date='2018-11-13'
+----
+Jorge 2018-12-13T12:12:10.011000000 2018-11-13
+Andrew 2018-11-13T17:11:10.011000000 2018-11-13
+
+statement ok
+DROP TABLE csv_with_timestamps
+
+
+# sql_create_duplicate_table
+# Can not recreate the same table
+statement ok
+CREATE TABLE y AS VALUES (1,2,3);
+
+statement error
+CREATE TABLE y AS VALUES (1,2,3);
+
+statement ok
+DROP TABLE y;
+
+
+# Can not recreate the same view
+statement ok
+CREATE VIEW y AS VALUES (1,2,3);
+
+statement error
+CREATE VIEW y AS VALUES (1,2,3);
+
+statement ok
+DROP VIEW y;
+
+
+
+# create_pipe_delimited_csv_table()
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION 'tests/aggregate_simple_pipe.csv';
+
+
+query CCC
+SELECT * FROM aggregate_simple order by c1 LIMIT 1;
+----
+0.00001 1.0e-12 true
+
+statement ok
+DROP TABLE aggregate_simple
