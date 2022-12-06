@@ -24,9 +24,8 @@ use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchema, DataFusionError};
 use datafusion_expr::Expr as DFExpr;
-use datafusion_sql::planner::SqlToRel;
+use datafusion_sql::planner::{PlannerContext, SqlToRel};
 use sqlparser::ast::{Expr, SetExpr, Statement as SQLStatement};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<String> {
@@ -66,7 +65,11 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<
         let logical_exprs = row
             .into_iter()
             .map(|expr| {
-                sql_to_rel.sql_to_rex(expr, &DFSchema::empty(), &mut HashMap::new())
+                sql_to_rel.sql_to_rex(
+                    expr,
+                    &DFSchema::empty(),
+                    &mut PlannerContext::new(),
+                )
             })
             .collect::<std::result::Result<Vec<DFExpr>, DataFusionError>>()?;
         // Directly use `select` to get `RecordBatch`
