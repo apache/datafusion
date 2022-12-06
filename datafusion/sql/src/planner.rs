@@ -3015,12 +3015,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
 /// Create a [`OwnedTableReference`] after normalizing the specified ObjectName
 ///
-/// For example, TODO make doc example
-/// ['foo'] ->
-/// ['"foo.bar"]] ->
-/// ['foo', 'Bar'] ->
-/// ['foo', 'bar'] ->
-/// ['foo', '"Bar"'] ->
+/// Examples
+/// ```text
+/// ['foo']          -> Bare { table: "foo" }
+/// ['"foo.bar"]]    -> Bare { table: "foo.bar" }
+/// ['foo', 'Bar']   -> Partial { schema: "foo", table: "bar" } <-- note lower case "bar"
+/// ['foo', 'bar']   -> Partial { schema: "foo", table: "bar" }
+/// ['foo', '"Bar"'] -> Partial { schema: "foo", table: "Bar" }
+/// ```
 pub fn object_name_to_table_reference(
     object_name: ObjectName,
 ) -> Result<OwnedTableReference> {
