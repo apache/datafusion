@@ -23,6 +23,7 @@ use crate::{aggregate_function, function, window_function};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{DFField, DFSchema, DataFusionError, ExprSchema, Result};
+use log::debug;
 
 /// trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {
@@ -33,7 +34,7 @@ pub trait ExprSchemable {
     fn get_type_with_params<S: ExprSchema>(
         &self,
         schema: &S,
-        param_data_types: &Vec<DataType>,
+        param_data_types: &[DataType],
     ) -> Result<DataType>;
 
     /// given a schema, return the nullability of the expr
@@ -60,13 +61,13 @@ impl ExprSchemable for Expr {
     /// schema, or when the expression is incorrectly typed
     /// (e.g. `[utf8] + [bool]`).
     fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType> {
-        self.get_type_with_params(schema, &vec![])
+        self.get_type_with_params(schema, &[])
     }
 
     fn get_type_with_params<S: ExprSchema>(
         &self,
         schema: &S,
-        param_data_types: &Vec<DataType>,
+        param_data_types: &[DataType],
     ) -> Result<DataType> {
         match self {
             Expr::Alias(expr, _) | Expr::Sort { expr, .. } | Expr::Negative(expr) => {
@@ -158,7 +159,6 @@ impl ExprSchemable for Expr {
                         )))
                     }
                 };
-                println!("==== index: {}", idx);
 
                 if param_data_types.len() <= idx {
                     return Err(DataFusionError::Internal(format!(
@@ -167,8 +167,14 @@ impl ExprSchemable for Expr {
                     )));
                 }
 
+                let param_type = param_data_types[idx].clone();
+                debug!(
+                    "type of param {} param_data_types[idx]: {:?}",
+                    param, param_type
+                );
+
                 // Return data type of the index in the param_data_types
-                Ok(param_data_types[idx].clone())
+                Ok(param_type)
             }
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),

@@ -45,7 +45,9 @@ use datafusion_common::{
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::builder::{ project, subquery_alias, subquery_alias_owned};
+use datafusion_expr::logical_plan::builder::{
+    project, subquery_alias, subquery_alias_owned,
+};
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
@@ -125,6 +127,16 @@ impl PlannerContext {
             ctes: HashMap::new(),
         }
     }
+
+    /// Create a new PlannerContext
+    pub fn new_with_prepare_param_data_types(
+        prepare_param_data_types: Vec<DataType>,
+    ) -> Self {
+        Self {
+            prepare_param_data_types,
+            ctes: HashMap::new(),
+        }
+    }
 }
 
 /// SQL query planner
@@ -195,6 +207,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Generate a logical plan from an SQL statement
     pub fn sql_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
+        self.sql_statement_to_plan_with_context(statement, &mut PlannerContext::new())
+    }
+
+    /// Generate a logical plan from an SQL statement
+    pub fn sql_statement_to_plan_with_context(
+        &self,
+        statement: Statement,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
         let sql = Some(statement.to_string());
         match statement {
             Statement::Explain {
@@ -205,9 +226,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 describe_alias: _,
                 ..
             } => self.explain_statement_to_plan(verbose, analyze, *statement),
-            Statement::Query(query) => {
-                self.query_to_plan(*query, &mut PlannerContext::new())
-            }
+            Statement::Query(query) => self.query_to_plan(*query, planner_context),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
             Statement::SetVariable {
                 local,
@@ -230,7 +249,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 && table_properties.is_empty()
                 && with_options.is_empty() =>
             {
-                let plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
+                let plan = self.query_to_plan(*query, planner_context)?;
                 let input_schema = plan.schema();
 
                 let plan = if !columns.is_empty() {
@@ -347,13 +366,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 data_types,
                 statement,
             } => {
-                let plan = self.sql_statement_to_plan(*statement)?;
+                // Convert parser data types to DataFusion data types
+                let data_types: Vec<DataType> = data_types
+                    .into_iter()
+                    .map(|t| self.convert_data_type(&t))
+                    .collect::<Result<_>>()?;
+
+                // Create planner context with parameters
+                let mut planner_context =
+                    PlannerContext::new_with_prepare_param_data_types(data_types.clone());
+
+                // Build logical plan for inner statement of the prepare statement
+                let plan = self.sql_statement_to_plan_with_context(
+                    *statement,
+                    &mut planner_context,
+                )?;
                 Ok(LogicalPlan::Prepare(Prepare {
                     name: name.to_string(),
-                    data_types: data_types
-                        .into_iter()
-                        .map(|t| self.convert_data_type(&t))
-                        .collect::<Result<_>>()?,
+                    data_types,
                     input: Arc::new(plan),
                 }))
             }
@@ -490,7 +520,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SetExpr::Select(s) => {
                 self.select_to_plan(*s, planner_context, alias, outer_query_schema)
             }
-            SetExpr::Values(v) => self.sql_values_to_plan(v),
+            SetExpr::Values(v) => {
+                self.sql_values_to_plan(v, &planner_context.prepare_param_data_types)
+            }
             SetExpr::SetOperation {
                 op,
                 left,
@@ -1048,7 +1080,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(LogicalPlan::Filter(Filter::try_new_with_params(
                     filter_expr,
                     Arc::new(plan),
-                    &vec![], // todo: this will come from the refactored ctes that include the param data types
+                    &planner_context.prepare_param_data_types,
                 )?))
             }
             None => Ok(plan),
@@ -1107,6 +1139,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // process `from` clause
         let plan =
             self.plan_from_tables(select.from, planner_context, outer_query_schema)?;
+
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
         // build from schema for unqualifier column ambiguous check
         // we should get only one field for unqualifier column from schema.
@@ -1234,7 +1267,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
             LogicalPlanBuilder::from(plan)
-                .filter(having_expr_post_aggr)?
+                .filter_with_params(
+                    having_expr_post_aggr,
+                    &planner_context.prepare_param_data_types,
+                )?
                 .build()?
         } else {
             plan
@@ -1816,7 +1852,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    fn sql_values_to_plan(&self, values: SQLValues) -> Result<LogicalPlan> {
+    fn sql_values_to_plan(
+        &self,
+        values: SQLValues,
+        param_data_types: &[DataType],
+    ) -> Result<LogicalPlan> {
         // values should not be based on any other schema
         let schema = DFSchema::empty();
         let values = values
@@ -1872,7 +1912,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<_>>>()
             })
             .collect::<Result<Vec<_>>>()?;
-        LogicalPlanBuilder::values(values)?.build()
+        LogicalPlanBuilder::values(values, param_data_types)?.build()
     }
 
     fn sql_expr_to_logical_expr(
@@ -6167,7 +6207,10 @@ mod tests {
 
     #[test]
     fn test_prepare_statement_to_plan_multi_params() {
-        let sql = "PREPARE my_plan(INT, STRING, DOUBLE, INT, DOUBLE) AS SELECT id, age  FROM person WHERE age IN ($1, $4) AND salary > $3 and salary < $5 OR first_name < $2";
+        let sql = "PREPARE my_plan(INT, STRING, DOUBLE, INT, DOUBLE) AS 
+        SELECT id, age  
+        FROM person 
+        WHERE age IN ($1, $4) AND salary > $3 and salary < $5 OR first_name < $2";
 
         let expected_plan = "Prepare: \"my_plan\" [Int32, Utf8, Float64, Int32, Float64] \
         \n  Projection: person.id, person.age\
@@ -6181,16 +6224,22 @@ mod tests {
 
     #[test]
     fn test_prepare_statement_to_plan_having() {
-        let sql = "PREPARE my_plan(INT, DOUBLE) AS SELECT id, sum(age)  FROM person WHERE salary > $2 GROUP BY id HAVING sum(age) < $1";
+        let sql = "PREPARE my_plan(INT, DOUBLE, DOUBLE, DOUBLE) AS 
+        SELECT id, SUM(age)  
+        FROM person \
+        WHERE salary > $2 
+        GROUP BY id 
+        HAVING sum(age) < $1 AND SUM(age) > 10 OR SUM(age) in ($3, $4)\
+        ";
 
-        let expected_plan = "Prepare: \"my_plan\" [Int32, Float64] \
+        let expected_plan = "Prepare: \"my_plan\" [Int32, Float64, Float64, Float64] \
         \n  Projection: person.id, SUM(person.age)\
-        \n    Filter: SUM(person.age) < $1\
+        \n    Filter: SUM(person.age) < $1 AND SUM(person.age) > Int64(10) OR SUM(person.age) IN ([$3, $4])\
         \n      Aggregate: groupBy=[[person.id]], aggr=[[SUM(person.age)]]\
         \n        Filter: person.salary > $2\
         \n          TableScan: person";
 
-        let expected_dt = "[Int32, Float64]";
+        let expected_dt = "[Int32, Float64, Float64, Float64]";
 
         prepare_stmt_quick_test(sql, expected_plan, expected_dt);
     }

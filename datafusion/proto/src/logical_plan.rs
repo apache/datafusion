@@ -39,8 +39,8 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_common::{context, Column, DataFusionError};
-use datafusion_expr::logical_plan::Prepare;
 use datafusion_expr::logical_plan::builder::{project, subquery_alias_owned};
+use datafusion_expr::logical_plan::Prepare;
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
@@ -320,7 +320,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .collect::<Result<Vec<_>, _>>()
                             .map_err(|e| e.into())
                     }?;
-                LogicalPlanBuilder::values(values)?.build()
+                LogicalPlanBuilder::values(values, &[])?.build()
             }
             LogicalPlanType::Projection(projection) => {
                 let input: LogicalPlan =

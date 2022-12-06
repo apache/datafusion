@@ -120,7 +120,12 @@ impl LogicalPlanBuilder {
     /// By default, it assigns the names column1, column2, etc. to the columns of a VALUES table.
     /// The column names are not specified by the SQL standard and different database systems do it differently,
     /// so it's usually better to override the default names with a table alias list.
-    pub fn values(mut values: Vec<Vec<Expr>>) -> Result<Self> {
+    ///
+    /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
+    pub fn values(
+        mut values: Vec<Vec<Expr>>,
+        param_data_types: &[DataType],
+    ) -> Result<Self> {
         // todo: hanlde for Placeholder expr
         if values.is_empty() {
             return Err(DataFusionError::Plan("Values list cannot be empty".into()));
@@ -155,9 +160,7 @@ impl LogicalPlanBuilder {
                         nulls.push((i, j));
                         Ok(field_types[j].clone())
                     } else {
-                        println!("====== expr: {:?}", expr);
-                        let data_type = expr.get_type(&empty_schema)?;
-                        println!("========= data_type: {:?}", data_type);
+                        let data_type = expr.get_type_with_params(&empty_schema, param_data_types)?;
                         if let Some(prev_data_type) = &field_types[j] {
                             if prev_data_type != &data_type {
                                 let err = format!("Inconsistent data type across values list at row {} column {}", i, j);
@@ -277,11 +280,23 @@ impl LogicalPlanBuilder {
 
     /// Apply a filter
     pub fn filter(&self, expr: impl Into<Expr>) -> Result<Self> {
+        self.filter_with_params(expr, &[])
+    }
+
+    ///  Apply a filter wit provided data types for params of prepared statement
+    pub fn filter_with_params(
+        &self,
+        expr: impl Into<Expr>,
+        param_data_types: &[DataType],
+    ) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
-        Ok(Self::from(LogicalPlan::Filter(Filter::try_new(
-            expr,
-            Arc::new(self.plan.clone()),
-        )?)))
+        Ok(Self::from(LogicalPlan::Filter(
+            Filter::try_new_with_params(
+                expr,
+                Arc::new(self.plan.clone()),
+                param_data_types,
+            )?,
+        )))
     }
 
     pub fn prepare(&self, name: String, data_types: Vec<DataType>) -> Result<Self> {
