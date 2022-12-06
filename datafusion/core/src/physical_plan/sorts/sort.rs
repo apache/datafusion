@@ -30,7 +30,7 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, CompositeMetricsSet, MemTrackingMetrics, MetricsSet,
 };
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStream;
+use crate::physical_plan::sorts::sort_preserving_merge::merge_streams;
 use crate::physical_plan::sorts::SortedStream;
 use crate::physical_plan::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::physical_plan::{
@@ -191,13 +191,13 @@ impl ExternalSorter {
             let tracking_metrics = self
                 .metrics_set
                 .new_final_tracking(partition, self.runtime.clone());
-            Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
+            Ok(merge_streams(
                 streams,
                 self.schema.clone(),
                 &self.expr,
                 tracking_metrics,
                 self.session_config.batch_size(),
-            )?))
+            )?)
         } else if in_mem_batches.len() > 0 {
             let tracking_metrics = self
                 .metrics_set
