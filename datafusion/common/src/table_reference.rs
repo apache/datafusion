@@ -158,15 +158,16 @@ impl<'a> TableReference<'a> {
         }
     }
 
-    /// Split `s` on periods.
+    /// Forms a [`TableReferece`] by splitting `s` on periods `.`.
     ///
     /// Note that this function does NOT handle periods or name
     /// normalization correctly (e.g. `"foo.bar"` will be parsed as
     /// `"foo`.`bar"`. and `Foo` will be parsed as `Foo` (not `foo`).
     ///
-    /// Instead, you should use SQL parser for this
+    /// If you need to handle such identifiers correctly, you should
+    /// use a SQL oarser or form the [`OwnedTableReference`] directly.
     ///
-    /// The improvement is tracked in TODO FILE DATAFUSION TICKET
+    /// See more detail in <https://github.com/apache/arrow-datafusion/issues/4532>
     pub fn parse_str(s: &'a str) -> Self {
         let parts: Vec<&str> = s.split('.').collect();
 
@@ -186,9 +187,9 @@ impl<'a> TableReference<'a> {
     }
 }
 
-/// parse any string with "." :(
+/// Parse a string into a TableReference, by splittig on `.`
 ///
-/// See caveats on parse_str
+/// See caveats on [`TableReference::parse_str`]
 impl<'a> From<&'a str> for TableReference<'a> {
     fn from(s: &'a str) -> Self {
         Self::parse_str(s)
