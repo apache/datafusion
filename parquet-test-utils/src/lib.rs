@@ -150,6 +150,7 @@ impl TestParquetFile {
             table_partition_cols: vec![],
             config_options: config_options.into_shareable(),
             output_ordering: None,
+            infinite_data_source: false,
         };
 
         let df_schema = self.schema.clone().to_dfschema_ref()?;

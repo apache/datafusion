@@ -276,6 +276,7 @@ mod tests {
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
+                infinite_data_source: false,
             },
             None,
             None,

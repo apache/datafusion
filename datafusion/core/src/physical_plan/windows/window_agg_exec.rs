@@ -49,7 +49,7 @@ use std::task::{Context, Poll};
 #[derive(Debug)]
 pub struct WindowAggExec {
     /// Input plan
-    input: Arc<dyn ExecutionPlan>,
+    pub input: Arc<dyn ExecutionPlan>,
     /// Window function expression
     window_expr: Vec<Arc<dyn WindowExpr>>,
     /// Schema after the window is run

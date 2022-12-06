@@ -194,7 +194,7 @@ impl BatchPartitioner {
 #[derive(Debug)]
 pub struct RepartitionExec {
     /// Input execution plan
-    input: Arc<dyn ExecutionPlan>,
+    pub input: Arc<dyn ExecutionPlan>,
 
     /// Partitioning scheme to use
     partitioning: Partitioning,
@@ -283,7 +283,9 @@ impl ExecutionPlan for RepartitionExec {
             self.partitioning.clone(),
         )?))
     }
-
+    fn unbounded_output(&self) -> bool {
+        self.input.unbounded_output()
+    }
     fn output_partitioning(&self) -> Partitioning {
         self.partitioning.clone()
     }

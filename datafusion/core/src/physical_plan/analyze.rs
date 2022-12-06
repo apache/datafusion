@@ -41,7 +41,7 @@ pub struct AnalyzeExec {
     /// control how much extra to print
     verbose: bool,
     /// The input plan (the plan being analyzed)
-    input: Arc<dyn ExecutionPlan>,
+    pub input: Arc<dyn ExecutionPlan>,
     /// The output schema for RecordBatches of this exec node
     schema: SchemaRef,
 }

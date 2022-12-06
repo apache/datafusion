@@ -53,7 +53,7 @@ use tokio::macros::support::thread_rng_n;
 #[derive(Debug)]
 pub struct UnionExec {
     /// Input execution plan
-    inputs: Vec<Arc<dyn ExecutionPlan>>,
+    pub inputs: Vec<Arc<dyn ExecutionPlan>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Schema of Union
@@ -121,6 +121,12 @@ impl ExecutionPlan for UnionExec {
 
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    /// For [UnionExec], the inputs can be numerous. We need to propagate if there is at least
+    /// one unbounded data source.
+    fn unbounded_output(&self) -> bool {
+        self.inputs.iter().any(|plan| plan.unbounded_output())
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

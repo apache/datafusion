@@ -85,6 +85,9 @@ impl ExecutionPlan for CoalesceBatchesExec {
         // The coalesce batches operator does not make any changes to the schema of its input
         self.input.schema()
     }
+    fn unbounded_output(&self) -> bool {
+        self.input.unbounded_output()
+    }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]

@@ -80,6 +80,9 @@ impl ExecutionPlan for CoalescePartitionsExec {
         vec![self.input.clone()]
     }
 
+    fn unbounded_output(&self) -> bool {
+        self.input.unbounded_output()
+    }
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)

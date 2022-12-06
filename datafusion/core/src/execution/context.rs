@@ -99,6 +99,8 @@ use url::Url;
 
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
+use crate::physical_optimizer::pipeline_checker::PipelineChecker;
+use crate::physical_optimizer::reorder_joins_according_to_source_type::ReorderJoinsSourceType;
 use uuid::Uuid;
 
 use super::options::{
@@ -620,13 +622,11 @@ impl SessionContext {
 
         let listing_options = options.to_listing_options(target_partitions);
 
-        let resolved_schema = match options.schema {
-            Some(s) => s,
-            None => {
-                listing_options
-                    .infer_schema(&self.state(), &table_path)
-                    .await?
-            }
+        let unbounded_table = options.infinite;
+        let resolved_schema = match (options.schema, unbounded_table) {
+            (None, false) => listing_options.infer_schema(&self.state(), &table_path).await?,
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support inferring schema for an infinite data source.".to_string()))
         };
 
         let config = ListingTableConfig::new(table_path)
@@ -647,13 +647,11 @@ impl SessionContext {
 
         let listing_options = options.to_listing_options(target_partitions);
 
-        let resolved_schema = match options.schema {
-            Some(s) => s,
-            None => {
-                listing_options
-                    .infer_schema(&self.state(), &table_path)
-                    .await?
-            }
+        let unbounded_table = options.infinite;
+        let resolved_schema = match (options.schema, unbounded_table) {
+            (None, false) => listing_options.infer_schema(&self.state(), &table_path).await?,
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support inferring schema for an infinite data source.".to_string()))
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(listing_options)
@@ -680,13 +678,11 @@ impl SessionContext {
         let table_path = ListingTableUrl::parse(table_path)?;
         let target_partitions = self.copied_config().target_partitions();
         let listing_options = options.to_listing_options(target_partitions);
-        let resolved_schema = match options.schema {
-            Some(s) => Arc::new(s.to_owned()),
-            None => {
-                listing_options
-                    .infer_schema(&self.state(), &table_path)
-                    .await?
-            }
+        let unbounded_table = options.infinite;
+        let resolved_schema = match (options.schema, unbounded_table) {
+            (None, false) => listing_options.infer_schema(&self.state(), &table_path).await?,
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support inferring schema for an infinite data source.".to_string()))
         };
         let config = ListingTableConfig::new(table_path.clone())
             .with_listing_options(listing_options)
@@ -757,9 +753,11 @@ impl SessionContext {
         sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let resolved_schema = match provided_schema {
-            None => options.infer_schema(&self.state(), &table_path).await?,
-            Some(s) => s,
+        let unbounded_table = options.infinite_data_source;
+        let resolved_schema = match (provided_schema, unbounded_table) {
+            (None, false) => options.infer_schema(&self.state(), &table_path).await?,
+            (Some(s), _) => s,
+            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support inferring schema for an infinite data source.".to_string()))
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
@@ -779,7 +777,6 @@ impl SessionContext {
     ) -> Result<()> {
         let listing_options =
             options.to_listing_options(self.copied_config().target_partitions());
-
         self.register_listing_table(
             name,
             table_path,
@@ -807,7 +804,7 @@ impl SessionContext {
             name,
             table_path,
             listing_options,
-            options.schema,
+            options.schema.map(|s| Arc::new(s.to_owned())),
             None,
         )
         .await?;
@@ -844,7 +841,7 @@ impl SessionContext {
             name,
             table_path,
             listing_options,
-            options.schema,
+            options.schema.map(|s| Arc::new(s.to_owned())),
             None,
         )
         .await?;
@@ -1573,6 +1570,7 @@ impl SessionState {
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
             Arc::new(JoinSelection::new()),
+            Arc::new(ReorderJoinsSourceType::new()),
         ];
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
         if config
@@ -1595,6 +1593,7 @@ impl SessionState {
         // Repartition rule could introduce additional RepartitionExec with RoundRobin partitioning.
         // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
+        physical_optimizers.push(Arc::new(PipelineChecker::new()));
 
         SessionState {
             session_id,

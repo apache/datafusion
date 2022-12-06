@@ -668,7 +668,7 @@ fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: &Path) -> Result<(
 #[derive(Debug)]
 pub struct SortExec {
     /// Input schema
-    input: Arc<dyn ExecutionPlan>,
+    pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
     /// Containing all metrics set created during sort

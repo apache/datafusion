@@ -110,6 +110,11 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Specifies the output partitioning scheme of this plan
     fn output_partitioning(&self) -> Partitioning;
 
+    /// Specifies the output generation must be done without reading the whole data
+    fn unbounded_output(&self) -> bool {
+        false
+    }
+
     /// If the output of this operator is sorted, returns `Some(keys)`
     /// with the description of how it was sorted.
     ///

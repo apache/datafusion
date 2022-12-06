@@ -509,6 +509,76 @@ impl ExecutionPlan for StatisticsExec {
     }
 }
 
+/// A mock execution plan that simply returns the provided data source characteristic
+#[derive(Debug, Clone)]
+pub struct UnboundableExec {
+    unbounded: bool,
+    schema: Arc<Schema>,
+}
+impl UnboundableExec {
+    pub fn new(unbounded: bool, schema: Schema) -> Self {
+        Self {
+            unbounded,
+            schema: Arc::new(schema),
+        }
+    }
+}
+impl ExecutionPlan for UnboundableExec {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(2)
+    }
+
+    fn unbounded_output(&self) -> bool {
+        self.unbounded
+    }
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        unimplemented!("This plan only serves for testing statistics")
+    }
+
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(f, "UnboundableExec: unbounded={}", self.unbounded,)
+            }
+        }
+    }
+
+    fn statistics(&self) -> Statistics {
+        Statistics::default()
+    }
+}
+
 /// Execution plan that emits streams that block forever.
 ///
 /// This is useful to test shutdown / cancelation behavior of certain execution plans.

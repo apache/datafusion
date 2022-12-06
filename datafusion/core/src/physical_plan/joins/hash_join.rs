@@ -306,6 +306,10 @@ impl ExecutionPlan for HashJoinExec {
         }
     }
 
+    fn unbounded_output(&self) -> bool {
+        self.right.unbounded_output()
+    }
+
     fn output_partitioning(&self) -> Partitioning {
         let left_columns_len = self.left.schema().fields.len();
         match self.mode {

@@ -23,8 +23,13 @@ pub mod coalesce_batches;
 pub mod enforcement;
 pub mod join_selection;
 pub mod optimizer;
+pub mod pipeline_checker;
 pub mod pruning;
+pub mod reorder_joins_according_to_source_type;
 pub mod repartition;
 mod utils;
+
+#[cfg(test)]
+pub mod test_utils;
 
 pub use optimizer::PhysicalOptimizerRule;
