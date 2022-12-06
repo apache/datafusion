@@ -406,7 +406,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         query: Query,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        self.query_to_plan_with_alias(query, None, planner_context, None)
+        self.query_to_plan_with_schema(query, planner_context, None)
     }
 
     /// Generate a logical plan from a SQL subquery
@@ -416,19 +416,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
         outer_query_schema: &DFSchema,
     ) -> Result<LogicalPlan> {
-        self.query_to_plan_with_alias(
-            query,
-            None,
-            planner_context,
-            Some(outer_query_schema),
-        )
+        self.query_to_plan_with_schema(query, planner_context, Some(outer_query_schema))
     }
 
-    /// Generate a logic plan from an SQL query with optional alias
-    pub fn query_to_plan_with_alias(
+    /// Generate a logic plan from an SQL query.
+    /// It's implementation of `subquery_to_plan` and `query_to_plan`.
+    /// It shouldn't be invoked directly.
+    fn query_to_plan_with_schema(
         &self,
         query: Query,
-        alias: Option<String>,
         planner_context: &mut PlannerContext,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
@@ -452,12 +448,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     ))));
                 }
                 // create logical plan & pass backreferencing CTEs
-                let logical_plan = self.query_to_plan_with_alias(
-                    *cte.query,
-                    None,
-                    &mut planner_context.clone(),
-                    outer_query_schema,
-                )?;
+                // CTE expr don't need extend outer_query_schema
+                let logical_plan =
+                    self.query_to_plan(*cte.query, &mut planner_context.clone())?;
 
                 // Each `WITH` block can change the column names in the last
                 // projection (e.g. "WITH table(t1, t2) AS SELECT 1, 2").
@@ -467,7 +460,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
         let plan =
-            self.set_expr_to_plan(*set_expr, alias, planner_context, outer_query_schema)?;
+            self.set_expr_to_plan(*set_expr, planner_context, outer_query_schema)?;
         let plan = self.order_by(plan, query.order_by)?;
         self.limit(plan, query.offset, query.limit)
     }
@@ -475,13 +468,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn set_expr_to_plan(
         &self,
         set_expr: SetExpr,
-        alias: Option<String>,
         planner_context: &mut PlannerContext,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         match set_expr {
             SetExpr::Select(s) => {
-                self.select_to_plan(*s, planner_context, alias, outer_query_schema)
+                self.select_to_plan(*s, planner_context, outer_query_schema)
             }
             SetExpr::Values(v) => self.sql_values_to_plan(v),
             SetExpr::SetOperation {
@@ -495,18 +487,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     SetQuantifier::Distinct | SetQuantifier::None => false,
                 };
 
-                let left_plan = self.set_expr_to_plan(
-                    *left,
-                    None,
-                    planner_context,
-                    outer_query_schema,
-                )?;
-                let right_plan = self.set_expr_to_plan(
-                    *right,
-                    None,
-                    planner_context,
-                    outer_query_schema,
-                )?;
+                let left_plan =
+                    self.set_expr_to_plan(*left, planner_context, outer_query_schema)?;
+                let right_plan =
+                    self.set_expr_to_plan(*right, planner_context, outer_query_schema)?;
                 match (op, all) {
                     (SetOperator::Union, true) => LogicalPlanBuilder::from(left_plan)
                         .union(right_plan)?
@@ -924,12 +908,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             TableFactor::Derived {
                 subquery, alias, ..
             } => {
-                let logical_plan = self.query_to_plan_with_alias(
-                    *subquery,
-                    None,
-                    planner_context,
-                    outer_query_schema,
-                )?;
+                let logical_plan = self.query_to_plan(*subquery, planner_context)?;
                 (logical_plan, alias)
             }
             TableFactor::NestedJoin {
@@ -1068,7 +1047,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         select: Select,
         planner_context: &mut PlannerContext,
-        alias: Option<String>,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         // check for unsupported syntax first
@@ -1238,13 +1216,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // final projection
-        let mut plan = project(plan, select_exprs_post_aggr)?;
-        plan = match alias {
-            Some(alias) => {
-                LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(plan, &alias)?)
-            }
-            None => plan,
-        };
+        let plan = project(plan, select_exprs_post_aggr)?;
 
         // process distinct clause
         let plan = if select.distinct {
