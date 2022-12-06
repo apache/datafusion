@@ -15,8 +15,9 @@
 # specific language governing permissions and limitations
 # under the License.
 
+##########
 ## DDL Tests
-##
+##########
 
 statement ok
 CREATE TABLE users AS VALUES(1,2),(2,3);
@@ -65,6 +66,9 @@ DROP TABLE user;
 statement error
 insert into user values(1, 20);
 
+##########
+# Multipart identifier test (CREATE/DROP TABLE)
+##########
 
 # Verify that creating tables with periods in their name works
 # (note "foo.bar" is the table name, NOT table "bar" in schema "foo")
@@ -77,3 +81,78 @@ select * from "foo.bar";
 ----
 1 2
 2 3
+
+# Can not select from non existent foo.bar table
+statement error
+select * from foo.bar;
+
+# Error if wrong capitalization to select
+statement error
+select * from "Foo.bar";
+
+# Should be able to drop the table
+statement ok
+drop table "foo.bar";
+
+##########
+# Multipart identifier test (CREATE/DROP VIEW)
+##########
+
+# Verify that creating views with periods in their name works
+# (note "foo.bar" is the table name, NOT table "bar" in schema "foo")
+statement ok
+CREATE VIEW "foo.bar" AS VALUES(1,2),(2,3);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo.bar";
+----
+1 2
+2 3
+
+# Can not select from non existent foo.bar view
+statement error
+select * from foo.bar;
+
+# Error if wrong capitalization to select
+statement error
+select * from "Foo.bar";
+
+# Should be able to drop the view
+statement ok
+drop view "foo.bar";
+
+
+##########
+# Drop view error tests
+##########
+
+statement ok
+CREATE VIEW foo AS VALUES(1,2),(2,3);
+
+statement ok
+CREATE VIEW bar AS VALUES(3,4),(4,5);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo";
+----
+1 2
+2 3
+
+query II rowsort
+select * from "bar";
+----
+3 4
+4 5
+
+# multiple drops not supported
+statement error
+DROP VIEW foo, bar;
+
+# multiple drops not supported
+statement ok
+DROP VIEW foo;
+
+statement ok
+DROP VIEW bar;
