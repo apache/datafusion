@@ -11,6 +11,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 
+use datafusion::sql::TableReference;
 use substrait::protobuf::{
     aggregate_function::AggregationInvocation,
     expression::{
@@ -297,8 +298,26 @@ pub async fn from_substrait_rel(ctx: &mut SessionContext, rel: &Rel, extensions:
         }
         Some(RelType::Read(read)) => match &read.as_ref().read_type {
             Some(ReadType::NamedTable(nt)) => {
-                let table_name: String = nt.names[0].clone();
-                let t = ctx.table(&*table_name)?;
+                let table_reference = match nt.names.len() {
+                    0 => {
+                        return Err(DataFusionError::Internal(
+                            "No table name found in NamedTable".to_string(),
+                        ));
+                    }
+                    1 => TableReference::Bare {
+                        table: &nt.names[0],
+                    },
+                    2 => TableReference::Partial {
+                        schema: &nt.names[0],
+                        table: &nt.names[1],
+                    },
+                    _ => TableReference::Full {
+                        catalog: &nt.names[0],
+                        schema: &nt.names[1],
+                        table: &nt.names[2],
+                    },
+                };
+                let t = ctx.table(table_reference)?;
                 match &read.projection {
                     Some(MaskExpression { select, .. }) => match &select.as_ref() {
                         Some(projection) => {
