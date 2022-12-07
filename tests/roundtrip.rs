@@ -126,6 +126,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn case_without_base_expression() -> Result<()> {
+        roundtrip("SELECT (CASE WHEN a >= 0 THEN 'positive' ELSE 'negative' END) FROM data").await
+    }
+
+    #[tokio::test]
+    async fn case_with_base_expression() -> Result<()> {
+        roundtrip("SELECT (CASE a
+                            WHEN 0 THEN 'zero'
+                            WHEN 1 THEN 'one'
+                            ELSE 'other'
+                           END) FROM data").await
+    }
+
+    #[tokio::test]
     async fn roundtrip_inner_join() -> Result<()> {
         roundtrip("SELECT data.a FROM data JOIN data2 ON data.a = data2.a").await
     }

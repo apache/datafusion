@@ -408,6 +408,35 @@ pub async fn from_substrait_rex(e: &Expression, input_schema: &DFSchema, extensi
                 "unsupported field ref type".to_string(),
             )),
         },
+        Some(RexType::IfThen(if_then)) => {
+            // Parse `ifs`
+            // If the first element does not have a `then` part, then we can assume it's a base expression
+            let mut when_then_expr: Vec<(Box<Expr>, Box<Expr>)> = vec![];
+            let mut expr = None;
+            for (i, if_expr) in if_then.ifs.iter().enumerate() {
+                if i == 0 {
+                    // Check if the first element is type base expression
+                    if if_expr.then.is_none() {
+                        expr = Some(Box::new(from_substrait_rex(&if_expr.r#if.as_ref().unwrap(), input_schema, extensions).await?.as_ref().clone()));
+                        continue;
+                    }
+                }
+                when_then_expr.push(
+                    (
+                        Box::new(from_substrait_rex(&if_expr.r#if.as_ref().unwrap(), input_schema, extensions).await?.as_ref().clone()),
+                        Box::new(from_substrait_rex(&if_expr.then.as_ref().unwrap(), input_schema, extensions).await?.as_ref().clone())
+                    ),
+                );
+            }
+            // Parse `else`
+            let else_expr = match &if_then.r#else {
+                Some(e) => Some(Box::new(
+                                                from_substrait_rex(&e, input_schema, extensions).await?.as_ref().clone(),
+                                            )),
+                None => None
+            };
+            Ok(Arc::new(Expr::Case { expr: expr, when_then_expr: when_then_expr, else_expr: else_expr }))
+        },
         Some(RexType::ScalarFunction(f)) => {
             assert!(f.arguments.len() == 2);
             let op = match extensions.get(&f.function_reference) {
@@ -459,7 +488,7 @@ pub async fn from_substrait_rex(e: &Expression, input_schema: &DFSchema, extensi
             Some(LiteralType::Fp64(f)) => {
                 Ok(Arc::new(Expr::Literal(ScalarValue::Float64(Some(*f)))))
             }
-            Some(LiteralType::String(s)) => Ok(Arc::new(Expr::Literal(ScalarValue::LargeUtf8(
+            Some(LiteralType::String(s)) => Ok(Arc::new(Expr::Literal(ScalarValue::Utf8(
                 Some(s.clone()),
             )))),
             Some(LiteralType::Binary(b)) => Ok(Arc::new(Expr::Literal(ScalarValue::Binary(Some(

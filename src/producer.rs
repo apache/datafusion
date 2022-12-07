@@ -12,10 +12,11 @@ use substrait::protobuf::{
     aggregate_rel::{Grouping, Measure},
     expression::{
         field_reference::ReferenceType,
+        if_then::IfClause,
         literal::LiteralType,
         mask_expression::{StructItem, StructSelect},
         reference_segment,
-        FieldReference, Literal, MaskExpression, ReferenceSegment, RexType, ScalarFunction,
+        FieldReference, IfThen, Literal, MaskExpression, ReferenceSegment, RexType, ScalarFunction,
     },
     extensions::{self, simple_extension_declaration::{MappingType, ExtensionFunction}},
     function_argument::ArgType,
@@ -430,6 +431,36 @@ pub fn to_substrait_rex(expr: &Expr, schema: &DFSchemaRef, extension_info: &mut 
             let r = to_substrait_rex(right, schema, extension_info)?;
 
             Ok(make_binary_op_scalar_func(&l, &r, *op, extension_info))
+        }
+        Expr::Case { expr, when_then_expr, else_expr } => {
+            let mut ifs: Vec<IfClause> = vec![];
+            // Parse base
+            if let Some(e) = expr { // Base expression exists
+                ifs.push(IfClause {
+                    r#if: Some(to_substrait_rex(e, schema, extension_info)?),
+                    then: None,
+                });
+            }
+            // Parse `when`s
+            for (r#if, then) in when_then_expr {
+                ifs.push(IfClause {
+                    r#if: Some(to_substrait_rex(r#if, schema, extension_info)?),
+                    then: Some(to_substrait_rex(then, schema, extension_info)?),
+                });
+            }
+
+            // Parse outer `else`
+            let r#else: Option<Box<Expression>> = match else_expr {
+                Some(e) => Some(Box::new(to_substrait_rex(e, schema, extension_info)?)),
+                None => None,
+            };
+            
+            Ok(Expression {
+                rex_type: Some(RexType::IfThen(Box::new(IfThen {
+                    ifs: ifs,
+                    r#else: r#else
+                }))),
+            })
         }
         Expr::Literal(value) => {
             let literal_type = match value {
