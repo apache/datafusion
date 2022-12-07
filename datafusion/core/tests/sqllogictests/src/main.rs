@@ -187,15 +187,17 @@ fn format_batches(batches: Vec<RecordBatch>) -> Result<String> {
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<String> {
     let sql = sql.into();
     // Check if the sql is `insert`
-    if let Ok(statements) = DFParser::parse_sql(&sql) {
-        if let Statement::Statement(statement) = &statements[0] {
-            if let SQLStatement::Insert { .. } = &**statement {
+    if let Ok(mut statements) = DFParser::parse_sql(&sql) {
+        let statement0 = statements.pop_front().expect("at least one SQL statement");
+        if let Statement::Statement(statement) = statement0 {
+            let statement = *statement;
+            if matches!(&statement, SQLStatement::Insert { .. }) {
                 return insert(ctx, statement).await;
             }
         }
     }
-    let df = ctx.sql(sql.as_str()).await.unwrap();
-    let results: Vec<RecordBatch> = df.collect().await.unwrap();
+    let df = ctx.sql(sql.as_str()).await?;
+    let results: Vec<RecordBatch> = df.collect().await?;
     let formatted_batches = format_batches(results)?;
     Ok(formatted_batches)
 }

@@ -248,8 +248,8 @@ pub struct EmptyRelationNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateExternalTableNode {
-    #[prost(string, tag = "1")]
-    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "12")]
+    pub name: ::core::option::Option<OwnedTableReference>,
     #[prost(string, tag = "2")]
     pub location: ::prost::alloc::string::String,
     #[prost(string, tag = "3")]
@@ -294,8 +294,8 @@ pub struct CreateCatalogNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateViewNode {
-    #[prost(string, tag = "1")]
-    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "5")]
+    pub name: ::core::option::Option<OwnedTableReference>,
     #[prost(message, optional, boxed, tag = "2")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(bool, tag = "3")]
@@ -1147,6 +1147,46 @@ pub struct StringifiedPlan {
     pub plan_type: ::core::option::Option<PlanType>,
     #[prost(string, tag = "2")]
     pub plan: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BareTableReference {
+    #[prost(string, tag = "1")]
+    pub table: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartialTableReference {
+    #[prost(string, tag = "1")]
+    pub schema: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub table: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FullTableReference {
+    #[prost(string, tag = "1")]
+    pub catalog: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub schema: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub table: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnedTableReference {
+    #[prost(oneof = "owned_table_reference::TableReferenceEnum", tags = "1, 2, 3")]
+    pub table_reference_enum: ::core::option::Option<
+        owned_table_reference::TableReferenceEnum,
+    >,
+}
+/// Nested message and enum types in `OwnedTableReference`.
+pub mod owned_table_reference {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum TableReferenceEnum {
+        #[prost(message, tag = "1")]
+        Bare(super::BareTableReference),
+        #[prost(message, tag = "2")]
+        Partial(super::PartialTableReference),
+        #[prost(message, tag = "3")]
+        Full(super::FullTableReference),
+    }
 }
 /// PhysicalPlanNode is a nested type
 #[derive(Clone, PartialEq, ::prost::Message)]

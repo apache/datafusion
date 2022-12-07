@@ -1,0 +1,186 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## DDL Tests
+##########
+
+statement ok
+CREATE TABLE users AS VALUES(1,2),(2,3);
+
+query II rowsort
+select * from users;
+----
+1 2
+2 3
+
+statement ok
+insert into users values(2, 4);
+
+query II rowsort
+select * from users;
+----
+1 2
+2 3
+2 4
+
+statement ok
+insert into users values(1 + 10, 20);
+
+query II rowsort
+select * from users;
+----
+1 2
+2 3
+2 4
+11 20
+
+
+# Dropping table
+statement ok
+DROP TABLE users;
+
+# Table is gone
+statement error
+select * from users;
+
+# Can not drop it again
+statement error
+DROP TABLE user;
+
+# Can not insert into a undefined table
+statement error
+insert into user values(1, 20);
+
+##########
+# Multipart identifier test (CREATE/DROP TABLE)
+##########
+
+# Verify that creating tables with periods in their name works
+# (note "foo.bar" is the table name, NOT table "bar" in schema "foo")
+statement ok
+CREATE TABLE "foo.bar" AS VALUES(1,2),(2,3);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo.bar";
+----
+1 2
+2 3
+
+# Can not select from non existent foo.bar table
+statement error
+select * from foo.bar;
+
+# Error if wrong capitalization to select
+statement error
+select * from "Foo.bar";
+
+# Should be able to drop the table
+statement ok
+drop table "foo.bar";
+
+# Verify that creating tables with three periods also works
+statement ok
+CREATE TABLE "foo.bar.baz" AS VALUES(8,9);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo.bar.baz";
+----
+8 9
+
+# And drop
+statement ok
+drop table "foo.bar.baz"
+
+##########
+# Multipart identifier test (CREATE/DROP VIEW)
+##########
+
+# Verify that creating views with periods in their name works
+# (note "foo.bar" is the table name, NOT table "bar" in schema "foo")
+statement ok
+CREATE VIEW "foo.bar" AS VALUES(1,2),(2,3);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo.bar";
+----
+1 2
+2 3
+
+# Can not select from non existent foo.bar view
+statement error
+select * from foo.bar;
+
+# Error if wrong capitalization to select
+statement error
+select * from "Foo.bar";
+
+# Should be able to drop the view
+statement ok
+drop view "foo.bar";
+
+# Verify that creating views with three periods also works
+statement ok
+CREATE VIEW "foo.bar.baz" AS VALUES(8,9);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo.bar.baz";
+----
+8 9
+
+# And drop
+statement ok
+drop view "foo.bar.baz"
+
+
+##########
+# Drop view error tests
+##########
+
+statement ok
+CREATE VIEW foo AS VALUES(1,2),(2,3);
+
+statement ok
+CREATE VIEW bar AS VALUES(3,4),(4,5);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo";
+----
+1 2
+2 3
+
+query II rowsort
+select * from "bar";
+----
+3 4
+4 5
+
+# multiple drops not supported
+statement error
+DROP VIEW foo, bar;
+
+# multiple drops not supported
+statement ok
+DROP VIEW foo;
+
+statement ok
+DROP VIEW bar;
