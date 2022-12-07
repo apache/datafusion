@@ -29,7 +29,8 @@ use arrow::datatypes::{
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    ScalarValue,
 };
 use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_expr::{
@@ -198,6 +199,36 @@ impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
             protobuf::WindowFrameUnits::Rows => Self::Rows,
             protobuf::WindowFrameUnits::Range => Self::Range,
             protobuf::WindowFrameUnits::Groups => Self::Groups,
+        }
+    }
+}
+
+impl TryFrom<protobuf::OwnedTableReference> for OwnedTableReference {
+    type Error = Error;
+
+    fn try_from(value: protobuf::OwnedTableReference) -> Result<Self, Self::Error> {
+        use protobuf::owned_table_reference::TableReferenceEnum;
+        let table_reference_enum = value
+            .table_reference_enum
+            .ok_or_else(|| Error::required("table_reference_enum"))?;
+
+        match table_reference_enum {
+            TableReferenceEnum::Bare(protobuf::BareTableReference { table }) => {
+                Ok(OwnedTableReference::Bare { table })
+            }
+            TableReferenceEnum::Partial(protobuf::PartialTableReference {
+                schema,
+                table,
+            }) => Ok(OwnedTableReference::Partial { schema, table }),
+            TableReferenceEnum::Full(protobuf::FullTableReference {
+                catalog,
+                schema,
+                table,
+            }) => Ok(OwnedTableReference::Full {
+                catalog,
+                schema,
+                table,
+            }),
         }
     }
 }

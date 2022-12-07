@@ -20,7 +20,7 @@ use crate::catalog::schema::SchemaProvider;
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
-use datafusion_common::{DFSchema, DataFusionError};
+use datafusion_common::{DFSchema, DataFusionError, OwnedTableReference};
 use datafusion_expr::CreateExternalTable;
 use futures::TryStreamExt;
 use itertools::Itertools;
@@ -115,16 +115,20 @@ impl ListingSchemaProvider {
             let table_path = table.to_str().ok_or_else(|| {
                 DataFusionError::Internal("Cannot parse file name!".to_string())
             })?;
+
             if !self.table_exist(table_name) {
                 let table_url = format!("{}/{}", self.authority, table_path);
 
+                let name = OwnedTableReference::Bare {
+                    table: table_name.to_string(),
+                };
                 let provider = self
                     .factory
                     .create(
                         state,
                         &CreateExternalTable {
                             schema: Arc::new(DFSchema::empty()),
-                            name: table_name.to_string(),
+                            name,
                             location: table_url,
                             file_type: self.format.clone(),
                             has_header: self.has_header,
