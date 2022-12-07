@@ -17,17 +17,18 @@
 
 use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
-use arrow::array::{
-    Array, ArrayRef, Date64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray,
-};
+use arrow::array::{Array, ArrayRef};
 use arrow::compute::unary;
 use arrow::datatypes::{
     DataType, Date32Type, Date64Type, Schema, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::record_batch::RecordBatch;
-use datafusion_common::cast::as_date32_array;
+use datafusion_common::cast::{
+    as_date32_array, as_date64_array, as_timestamp_microsecond_array,
+    as_timestamp_millisecond_array, as_timestamp_nanosecond_array,
+    as_timestamp_second_array,
+};
 use datafusion_common::scalar::{
     date32_add, date64_add, microseconds_add, milliseconds_add, nanoseconds_add,
     seconds_add,
@@ -194,26 +195,20 @@ pub fn evaluate_array(
             })) as ArrayRef
         }
         DataType::Date64 => {
-            let array = array.as_any().downcast_ref::<Date64Array>().unwrap();
+            let array = as_date64_array(&array)?;
             Arc::new(unary::<Date64Type, _, Date64Type>(array, |ms| {
                 date64_add(ms, scalar, sign).unwrap()
             })) as ArrayRef
         }
         DataType::Timestamp(TimeUnit::Second, _) => {
-            let array = array
-                .as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .unwrap();
+            let array = as_timestamp_second_array(&array)?;
             Arc::new(unary::<TimestampSecondType, _, TimestampSecondType>(
                 array,
                 |ts_s| seconds_add(ts_s, scalar, sign).unwrap(),
             )) as ArrayRef
         }
         DataType::Timestamp(TimeUnit::Millisecond, _) => {
-            let array = array
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .unwrap();
+            let array = as_timestamp_millisecond_array(&array)?;
             Arc::new(
                 unary::<TimestampMillisecondType, _, TimestampMillisecondType>(
                     array,
@@ -222,10 +217,7 @@ pub fn evaluate_array(
             ) as ArrayRef
         }
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
-            let array = array
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .unwrap();
+            let array = as_timestamp_microsecond_array(&array)?;
             Arc::new(
                 unary::<TimestampMicrosecondType, _, TimestampMicrosecondType>(
                     array,
@@ -234,10 +226,7 @@ pub fn evaluate_array(
             ) as ArrayRef
         }
         DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-            let array = array
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap();
+            let array = as_timestamp_nanosecond_array(&array)?;
             Arc::new(
                 unary::<TimestampNanosecondType, _, TimestampNanosecondType>(
                     array,

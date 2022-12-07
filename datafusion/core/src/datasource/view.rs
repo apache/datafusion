@@ -61,8 +61,8 @@ impl ViewTable {
     }
 
     /// Get definition ref
-    pub fn definition(&self) -> &Option<String> {
-        &self.definition
+    pub fn definition(&self) -> Option<&String> {
+        self.definition.as_ref()
     }
 
     /// Get logical_plan ref
@@ -104,7 +104,7 @@ impl TableProvider for ViewTable {
     async fn scan(
         &self,
         state: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -474,8 +474,7 @@ mod tests {
         let formatted = arrow::util::pretty::pretty_format_batches(&plan)
             .unwrap()
             .to_string();
-        // TODO: limit_push_down support SubqueryAlias
-        assert!(formatted.contains("GlobalLimitExec: skip=0, fetch=10"));
+        assert!(formatted.contains("ParquetExec: limit=Some(10)"));
         Ok(())
     }
 

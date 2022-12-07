@@ -849,11 +849,11 @@ async fn test_interval_expressions() -> Result<()> {
     // day nano intervals
     test_expression!(
         "interval '1'",
-        "0 years 0 mons 0 days 0 hours 0 mins 1.00 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 1.000 secs"
     );
     test_expression!(
         "interval '1 second'",
-        "0 years 0 mons 0 days 0 hours 0 mins 1.00 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 1.000 secs"
     );
     test_expression!(
         "interval '500 milliseconds'",
@@ -861,47 +861,47 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '5 second'",
-        "0 years 0 mons 0 days 0 hours 0 mins 5.00 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 5.000 secs"
     );
     test_expression!(
         "interval '0.5 minute'",
-        "0 years 0 mons 0 days 0 hours 0 mins 30.00 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 30.000 secs"
     );
     test_expression!(
         "interval '.5 minute'",
-        "0 years 0 mons 0 days 0 hours 0 mins 30.00 secs"
+        "0 years 0 mons 0 days 0 hours 0 mins 30.000 secs"
     );
     test_expression!(
         "interval '5 minute'",
-        "0 years 0 mons 0 days 0 hours 5 mins 0.00 secs"
+        "0 years 0 mons 0 days 0 hours 5 mins 0.000 secs"
     );
     test_expression!(
         "interval '5 minute 1 second'",
-        "0 years 0 mons 0 days 0 hours 5 mins 1.00 secs"
+        "0 years 0 mons 0 days 0 hours 5 mins 1.000 secs"
     );
     test_expression!(
         "interval '1 hour'",
-        "0 years 0 mons 0 days 1 hours 0 mins 0.00 secs"
+        "0 years 0 mons 0 days 1 hours 0 mins 0.000 secs"
     );
     test_expression!(
         "interval '5 hour'",
-        "0 years 0 mons 0 days 5 hours 0 mins 0.00 secs"
+        "0 years 0 mons 0 days 5 hours 0 mins 0.000 secs"
     );
     test_expression!(
         "interval '1 day'",
-        "0 years 0 mons 1 days 0 hours 0 mins 0.00 secs"
+        "0 years 0 mons 1 days 0 hours 0 mins 0.000 secs"
     );
     test_expression!(
         "interval '1 week'",
-        "0 years 0 mons 7 days 0 hours 0 mins 0.00 secs"
+        "0 years 0 mons 7 days 0 hours 0 mins 0.000 secs"
     );
     test_expression!(
         "interval '2 weeks'",
-        "0 years 0 mons 14 days 0 hours 0 mins 0.00 secs"
+        "0 years 0 mons 14 days 0 hours 0 mins 0.000 secs"
     );
     test_expression!(
         "interval '1 day 1'",
-        "0 years 0 mons 1 days 0 hours 0 mins 1.00 secs"
+        "0 years 0 mons 1 days 0 hours 0 mins 1.000 secs"
     );
     test_expression!(
         "interval '0.5'",
@@ -909,11 +909,11 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '0.5 day 1'",
-        "0 years 0 mons 0 days 12 hours 0 mins 1.00 secs"
+        "0 years 0 mons 0 days 12 hours 0 mins 1.000 secs"
     );
     test_expression!(
         "interval '0.49 day'",
-        "0 years 0 mons 0 days 11 hours 45 mins 36.00 secs"
+        "0 years 0 mons 0 days 11 hours 45 mins 36.000 secs"
     );
     test_expression!(
         "interval '0.499 day'",
@@ -933,12 +933,12 @@ async fn test_interval_expressions() -> Result<()> {
     );
     test_expression!(
         "interval '5 day'",
-        "0 years 0 mons 5 days 0 hours 0 mins 0.00 secs"
+        "0 years 0 mons 5 days 0 hours 0 mins 0.000 secs"
     );
     // Hour is ignored, this matches PostgreSQL
     test_expression!(
         "interval '5 day' hour",
-        "0 years 0 mons 5 days 0 hours 0 mins 0.00 secs"
+        "0 years 0 mons 5 days 0 hours 0 mins 0.000 secs"
     );
     test_expression!(
         "interval '5 day 4 hours 3 minutes 2 seconds 100 milliseconds'",
@@ -947,11 +947,11 @@ async fn test_interval_expressions() -> Result<()> {
     // month intervals
     test_expression!(
         "interval '0.5 month'",
-        "0 years 0 mons 15 days 0 hours 0 mins 0.00 secs"
+        "0 years 0 mons 15 days 0 hours 0 mins 0.000 secs"
     );
     test_expression!(
         "interval '0.5' month",
-        "0 years 0 mons 15 days 0 hours 0 mins 0.00 secs"
+        "0 years 0 mons 15 days 0 hours 0 mins 0.000 secs"
     );
     test_expression!(
         "interval '1 month'",
@@ -1000,19 +1000,19 @@ async fn test_interval_expressions() -> Result<()> {
     // complex
     test_expression!(
         "interval '1 year 1 day'",
-        "0 years 12 mons 1 days 0 hours 0 mins 0.00 secs"
+        "0 years 12 mons 1 days 0 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 year 1 day 1 hour'",
-        "0 years 12 mons 1 days 1 hours 0 mins 0.00 secs"
+        "0 years 12 mons 1 days 1 hours 0 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 year 1 day 1 hour 1 minute'",
-        "0 years 12 mons 1 days 1 hours 1 mins 0.00 secs"
+        "0 years 12 mons 1 days 1 hours 1 mins 0.000000000 secs"
     );
     test_expression!(
         "interval '1 year 1 day 1 hour 1 minute 1 second'",
-        "0 years 12 mons 1 days 1 hours 1 mins 1.00 secs"
+        "0 years 12 mons 1 days 1 hours 1 mins 1.000000000 secs"
     );
 
     Ok(())
@@ -1285,12 +1285,36 @@ async fn test_extract_date_part() -> Result<()> {
         "12"
     );
     test_expression!(
-        "EXTRACT(second FROM to_timestamp('2020-09-08T12:00:12+00:00'))",
-        "12"
+        "EXTRACT(second FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "12.12345678"
     );
     test_expression!(
-        "date_part('second', to_timestamp('2020-09-08T12:00:12+00:00'))",
-        "12"
+        "EXTRACT(millisecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "12123.45678"
+    );
+    test_expression!(
+        "EXTRACT(microsecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "12123456.78"
+    );
+    // test_expression!(
+    //     "EXTRACT(nanosecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+    //     "1212345678"
+    // );
+    test_expression!(
+        "date_part('second', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "12.12345678"
+    );
+    test_expression!(
+        "date_part('millisecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "12123.45678"
+    );
+    test_expression!(
+        "date_part('microsecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "12123456.78"
+    );
+    test_expression!(
+        "date_part('nanosecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "12123456780"
     );
     Ok(())
 }

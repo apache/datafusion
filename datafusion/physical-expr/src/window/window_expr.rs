@@ -21,6 +21,7 @@ use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::WindowFrame;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -99,15 +100,35 @@ pub trait WindowExpr: Send + Sync + Debug {
             .collect()
     }
 
+    /// get order by columns, empty if absent
+    fn order_by_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
+        self.order_by()
+            .iter()
+            .map(|e| e.evaluate_to_sort_column(batch))
+            .collect::<Result<Vec<SortColumn>>>()
+    }
+
     /// get sort columns that can be used for peer evaluation, empty if absent
     fn sort_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
         let mut sort_columns = self.partition_columns(batch)?;
-        let order_by_columns = self
-            .order_by()
-            .iter()
-            .map(|e| e.evaluate_to_sort_column(batch))
-            .collect::<Result<Vec<SortColumn>>>()?;
+        let order_by_columns = self.order_by_columns(batch)?;
         sort_columns.extend(order_by_columns);
         Ok(sort_columns)
     }
+
+    /// Get values columns(argument of Window Function)
+    /// and order by columns (columns of the ORDER BY expression)used in evaluators
+    fn get_values_orderbys(
+        &self,
+        record_batch: &RecordBatch,
+    ) -> Result<(Vec<ArrayRef>, Vec<ArrayRef>)> {
+        let values = self.evaluate_args(record_batch)?;
+        let order_by_columns = self.order_by_columns(record_batch)?;
+        let order_bys: Vec<ArrayRef> =
+            order_by_columns.iter().map(|s| s.values.clone()).collect();
+        Ok((values, order_bys))
+    }
+
+    // Get window frame of this WindowExpr, None if absent
+    fn get_window_frame(&self) -> &Arc<WindowFrame>;
 }

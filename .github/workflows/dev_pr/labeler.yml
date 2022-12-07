@@ -43,3 +43,6 @@ optimizer:
 core:
   - datafusion/core/**/*
 
+sqllogictest:
+  - datafusion/core/tests/sqllogictests/**/*
+

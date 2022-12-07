@@ -23,10 +23,13 @@
 use crate::{downcast_value, DataFusionError};
 use arrow::{
     array::{
-        Array, BooleanArray, Date32Array, Decimal128Array, DictionaryArray, Float32Array,
-        Float64Array, GenericBinaryArray, GenericListArray, Int32Array, Int64Array,
-        LargeListArray, ListArray, OffsetSizeTrait, PrimitiveArray, StringArray,
-        StructArray, UInt32Array, UInt64Array,
+        Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+        DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array,
+        Float64Array, GenericBinaryArray, GenericListArray, GenericStringArray,
+        Int32Array, Int64Array, LargeListArray, ListArray, MapArray, NullArray,
+        OffsetSizeTrait, PrimitiveArray, StringArray, StructArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray, UInt32Array, UInt64Array, UnionArray,
     },
     datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType},
 };
@@ -126,4 +129,78 @@ pub fn as_primitive_array<T: ArrowPrimitiveType>(
     array: &dyn Array,
 ) -> Result<&PrimitiveArray<T>, DataFusionError> {
     Ok(downcast_value!(array, PrimitiveArray, T))
+}
+
+// Downcast ArrayRef to MapArray
+pub fn as_map_array(array: &dyn Array) -> Result<&MapArray, DataFusionError> {
+    Ok(downcast_value!(array, MapArray))
+}
+
+// Downcast ArrayRef to NullArray
+pub fn as_null_array(array: &dyn Array) -> Result<&NullArray, DataFusionError> {
+    Ok(downcast_value!(array, NullArray))
+}
+
+// Downcast ArrayRef to NullArray
+pub fn as_union_array(array: &dyn Array) -> Result<&UnionArray, DataFusionError> {
+    Ok(downcast_value!(array, UnionArray))
+}
+
+// Downcast ArrayRef to TimestampNanosecondArray
+pub fn as_timestamp_nanosecond_array(
+    array: &dyn Array,
+) -> Result<&TimestampNanosecondArray, DataFusionError> {
+    Ok(downcast_value!(array, TimestampNanosecondArray))
+}
+
+// Downcast ArrayRef to TimestampMillisecondArray
+pub fn as_timestamp_millisecond_array(
+    array: &dyn Array,
+) -> Result<&TimestampMillisecondArray, DataFusionError> {
+    Ok(downcast_value!(array, TimestampMillisecondArray))
+}
+
+// Downcast ArrayRef to TimestampMicrosecondArray
+pub fn as_timestamp_microsecond_array(
+    array: &dyn Array,
+) -> Result<&TimestampMicrosecondArray, DataFusionError> {
+    Ok(downcast_value!(array, TimestampMicrosecondArray))
+}
+
+// Downcast ArrayRef to TimestampSecondArray
+pub fn as_timestamp_second_array(
+    array: &dyn Array,
+) -> Result<&TimestampSecondArray, DataFusionError> {
+    Ok(downcast_value!(array, TimestampSecondArray))
+}
+
+// Downcast ArrayRef to BinaryArray
+pub fn as_binary_array(array: &dyn Array) -> Result<&BinaryArray, DataFusionError> {
+    Ok(downcast_value!(array, BinaryArray))
+}
+
+// Downcast ArrayRef to FixedSizeListArray
+pub fn as_fixed_size_list_array(
+    array: &dyn Array,
+) -> Result<&FixedSizeListArray, DataFusionError> {
+    Ok(downcast_value!(array, FixedSizeListArray))
+}
+
+// Downcast ArrayRef to FixedSizeListArray
+pub fn as_fixed_size_binary_array(
+    array: &dyn Array,
+) -> Result<&FixedSizeBinaryArray, DataFusionError> {
+    Ok(downcast_value!(array, FixedSizeBinaryArray))
+}
+
+// Downcast ArrayRef to Date64Array
+pub fn as_date64_array(array: &dyn Array) -> Result<&Date64Array, DataFusionError> {
+    Ok(downcast_value!(array, Date64Array))
+}
+
+// Downcast ArrayRef to GenericBinaryArray
+pub fn as_generic_string_array<T: OffsetSizeTrait>(
+    array: &dyn Array,
+) -> Result<&GenericStringArray<T>, DataFusionError> {
+    Ok(downcast_value!(array, GenericStringArray, T))
 }

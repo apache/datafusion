@@ -41,7 +41,7 @@ pub struct AggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
-    window_frame: Option<Arc<WindowFrame>>,
+    window_frame: Arc<WindowFrame>,
 }
 
 impl AggregateWindowExpr {
@@ -50,7 +50,7 @@ impl AggregateWindowExpr {
         aggregate: Arc<dyn AggregateExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
-        window_frame: Option<Arc<WindowFrame>>,
+        window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
             aggregate,
@@ -58,6 +58,11 @@ impl AggregateWindowExpr {
             order_by: order_by.to_vec(),
             window_frame,
         }
+    }
+
+    /// Get aggregate expr of AggregateWindowExpr
+    pub fn get_aggregate_expr(&self) -> &Arc<dyn AggregateExpr> {
+        &self.aggregate
     }
 }
 
@@ -87,43 +92,23 @@ impl WindowExpr for AggregateWindowExpr {
         let partition_columns = self.partition_columns(batch)?;
         let partition_points =
             self.evaluate_partition_points(batch.num_rows(), &partition_columns)?;
-        let values = self.evaluate_args(batch)?;
-
         let sort_options: Vec<SortOptions> =
             self.order_by.iter().map(|o| o.options).collect();
-        let columns = self.sort_columns(batch)?;
-        let order_columns: Vec<&ArrayRef> = columns.iter().map(|s| &s.values).collect();
-        // Sort values, this will make the same partitions consecutive. Also, within the partition
-        // range, values will be sorted.
-        let order_bys = &order_columns[self.partition_by.len()..];
-        let window_frame = if !order_bys.is_empty() && self.window_frame.is_none() {
-            // OVER (ORDER BY a) case
-            // We create an implicit window for ORDER BY.
-            Some(Arc::new(WindowFrame::default()))
-        } else {
-            self.window_frame.clone()
-        };
         let mut row_wise_results: Vec<ScalarValue> = vec![];
         for partition_range in &partition_points {
             let mut accumulator = self.aggregate.create_accumulator()?;
             let length = partition_range.end - partition_range.start;
-            let slice_order_bys = order_bys
-                .iter()
-                .map(|v| v.slice(partition_range.start, length))
-                .collect::<Vec<_>>();
-            let value_slice = values
-                .iter()
-                .map(|v| v.slice(partition_range.start, length))
-                .collect::<Vec<_>>();
+            let (values, order_bys) =
+                self.get_values_orderbys(&batch.slice(partition_range.start, length))?;
 
-            let mut window_frame_ctx = WindowFrameContext::new(&window_frame);
+            let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
             let mut last_range: (usize, usize) = (0, 0);
 
             // We iterate on each row to perform a running calculation.
             // First, cur_range is calculated, then it is compared with last_range.
             for i in 0..length {
                 let cur_range = window_frame_ctx.calculate_range(
-                    &slice_order_bys,
+                    &order_bys,
                     &sort_options,
                     length,
                     i,
@@ -135,7 +120,7 @@ impl WindowExpr for AggregateWindowExpr {
                     // Accumulate any new rows that have entered the window:
                     let update_bound = cur_range.1 - last_range.1;
                     if update_bound > 0 {
-                        let update: Vec<ArrayRef> = value_slice
+                        let update: Vec<ArrayRef> = values
                             .iter()
                             .map(|v| v.slice(last_range.1, update_bound))
                             .collect();
@@ -144,7 +129,7 @@ impl WindowExpr for AggregateWindowExpr {
                     // Remove rows that have now left the window:
                     let retract_bound = cur_range.0 - last_range.0;
                     if retract_bound > 0 {
-                        let retract: Vec<ArrayRef> = value_slice
+                        let retract: Vec<ArrayRef> = values
                             .iter()
                             .map(|v| v.slice(last_range.0, retract_bound))
                             .collect();
@@ -165,5 +150,9 @@ impl WindowExpr for AggregateWindowExpr {
 
     fn order_by(&self) -> &[PhysicalSortExpr] {
         &self.order_by
+    }
+
+    fn get_window_frame(&self) -> &Arc<WindowFrame> {
+        &self.window_frame
     }
 }

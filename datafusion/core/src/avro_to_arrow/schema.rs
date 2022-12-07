@@ -21,7 +21,7 @@ use apache_avro::schema::{Alias, Name};
 use apache_avro::types::Value;
 use apache_avro::Schema as AvroSchema;
 use arrow::datatypes::Field;
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 
 /// Converts an avro schema to an arrow schema
@@ -34,7 +34,7 @@ pub fn to_arrow_schema(avro_schema: &apache_avro::Schema) -> Result<Schema> {
                     &field.schema,
                     Some(&field.name),
                     false,
-                    Some(&external_props(&field.schema)),
+                    Some(external_props(&field.schema)),
                 )?)
             }
         }
@@ -50,14 +50,14 @@ fn schema_to_field(
     name: Option<&str>,
     nullable: bool,
 ) -> Result<Field> {
-    schema_to_field_with_props(schema, name, nullable, None)
+    schema_to_field_with_props(schema, name, nullable, Default::default())
 }
 
 fn schema_to_field_with_props(
     schema: &AvroSchema,
     name: Option<&str>,
     nullable: bool,
-    props: Option<&BTreeMap<String, String>>,
+    props: Option<HashMap<String, String>>,
 ) -> Result<Field> {
     let mut nullable = nullable;
     let field_type: DataType = match schema {
@@ -112,7 +112,7 @@ fn schema_to_field_with_props(
             let fields: Result<Vec<Field>> = fields
                 .iter()
                 .map(|field| {
-                    let mut props = BTreeMap::new();
+                    let mut props = HashMap::new();
                     if let Some(doc) = &field.doc {
                         props.insert("avro::doc".to_string(), doc.clone());
                     }
@@ -123,7 +123,7 @@ fn schema_to_field_with_props(
                         &field.schema,
                         Some(&format!("{}.{}", name.fullname(None), field.name)),
                         false,
-                        Some(&props),
+                        Some(props),
                     )
                 })
                 .collect();
@@ -141,7 +141,7 @@ fn schema_to_field_with_props(
         AvroSchema::Fixed { size, .. } => DataType::FixedSizeBinary(*size as i32),
         AvroSchema::Decimal {
             precision, scale, ..
-        } => DataType::Decimal128(*precision as u8, *scale as u8),
+        } => DataType::Decimal128(*precision as u8, *scale as i8),
         AvroSchema::Uuid => DataType::FixedSizeBinary(16),
         AvroSchema::Date => DataType::Date32,
         AvroSchema::TimeMillis => DataType::Time32(TimeUnit::Millisecond),
@@ -155,7 +155,7 @@ fn schema_to_field_with_props(
     let name = name.unwrap_or_else(|| default_field_name(&data_type));
 
     let mut field = Field::new(name, field_type, nullable);
-    field.set_metadata(props.cloned());
+    field.set_metadata(props.unwrap_or_default());
     Ok(field)
 }
 
@@ -234,8 +234,8 @@ fn index_type(len: usize) -> DataType {
     }
 }
 
-fn external_props(schema: &AvroSchema) -> BTreeMap<String, String> {
-    let mut props = BTreeMap::new();
+fn external_props(schema: &AvroSchema) -> HashMap<String, String> {
+    let mut props = HashMap::new();
     match &schema {
         AvroSchema::Record {
             doc: Some(ref doc), ..
@@ -278,16 +278,6 @@ fn external_props(schema: &AvroSchema) -> BTreeMap<String, String> {
         _ => {}
     }
     props
-}
-
-#[allow(dead_code)]
-fn get_metadata(
-    _schema: AvroSchema,
-    props: BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    let mut metadata: BTreeMap<String, String> = Default::default();
-    metadata.extend(props);
-    metadata
 }
 
 /// Returns the fully qualified name for a field

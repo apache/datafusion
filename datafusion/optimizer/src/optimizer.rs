@@ -25,11 +25,11 @@ use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
-use crate::filter_push_down::FilterPushDown;
 use crate::inline_table_scan::InlineTableScan;
-use crate::limit_push_down::LimitPushDown;
-use crate::projection_push_down::ProjectionPushDown;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
+use crate::push_down_filter::PushDownFilter;
+use crate::push_down_limit::PushDownLimit;
+use crate::push_down_projection::PushDownProjection;
 use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
@@ -184,8 +184,9 @@ impl Optimizer {
             rules.push(Arc::new(FilterNullJoinKeys::default()));
         }
         rules.push(Arc::new(EliminateOuterJoin::new()));
-        rules.push(Arc::new(FilterPushDown::new()));
-        rules.push(Arc::new(LimitPushDown::new()));
+        // Filters can't be pushed down past Limits, we should do PushDownFilter after LimitPushDown
+        rules.push(Arc::new(PushDownLimit::new()));
+        rules.push(Arc::new(PushDownFilter::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
 
         // The previous optimizations added expressions and projections,
@@ -193,7 +194,7 @@ impl Optimizer {
         rules.push(Arc::new(SimplifyExpressions::new()));
         rules.push(Arc::new(UnwrapCastInComparison::new()));
         rules.push(Arc::new(CommonSubexprEliminate::new()));
-        rules.push(Arc::new(ProjectionPushDown::new()));
+        rules.push(Arc::new(PushDownProjection::new()));
 
         Self::with_rules(rules)
     }
@@ -299,7 +300,6 @@ mod tests {
     use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError};
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, LogicalPlan, LogicalPlanBuilder, Projection};
-    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     #[test]
@@ -345,9 +345,9 @@ mod tests {
             "Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
              original schema: DFSchema { fields: [], metadata: {} }, \
              new schema: DFSchema { fields: [\
-             DFField { qualifier: Some(\"test\"), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None } }, \
-             DFField { qualifier: Some(\"test\"), field: Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None } }, \
-             DFField { qualifier: Some(\"test\"), field: Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None } }], \
+             DFField { qualifier: Some(\"test\"), field: Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
+             DFField { qualifier: Some(\"test\"), field: Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }, \
+             DFField { qualifier: Some(\"test\"), field: Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} } }], \
              metadata: {} }. \
              This was likely caused by a bug in DataFusion's code \
              and we would welcome that you file an bug report in our issue tracker",
@@ -385,11 +385,11 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let metadata: BTreeMap<_, _> = [("key".into(), format!("value {}", i))]
+                let metadata = [("key".into(), format!("value {}", i))]
                     .into_iter()
                     .collect();
 
-                let new_arrow_field = f.field().clone().with_metadata(Some(metadata));
+                let new_arrow_field = f.field().clone().with_metadata(metadata);
                 if let Some(qualifier) = f.qualifier() {
                     DFField::from_qualified(qualifier, new_arrow_field)
                 } else {

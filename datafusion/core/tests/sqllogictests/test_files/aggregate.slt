@@ -1,0 +1,1015 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# FIX: custom absolute values
+# csv_query_avg_multi_batch
+
+# csv_query_avg
+query R
+SELECT avg(c12) FROM aggregate_test_100
+----
+0.5089725099127211
+
+# csv_query_covariance_1
+query R
+SELECT covar_pop(c2, c12) FROM aggregate_test_100
+----
+-0.07916932235380847
+
+# csv_query_covariance_2
+query R
+SELECT covar(c2, c12) FROM aggregate_test_100
+----
+-0.07996901247859442
+
+# csv_query_correlation
+query R
+SELECT corr(c2, c12) FROM aggregate_test_100
+----
+-0.19064544190576607
+
+# csv_query_variance_1
+query R
+SELECT var_pop(c2) FROM aggregate_test_100
+----
+1.8675
+
+# csv_query_variance_2
+query R
+SELECT var_pop(c6) FROM aggregate_test_100
+----
+2.615633434202189e37
+
+# csv_query_variance_3
+query R
+SELECT var_pop(c12) FROM aggregate_test_100
+----
+0.09234223721582163
+
+# csv_query_variance_4
+query R
+SELECT var(c2) FROM aggregate_test_100
+----
+1.8863636363636365
+
+# csv_query_variance_5
+query R
+SELECT var_samp(c2) FROM aggregate_test_100
+----
+1.8863636363636365
+
+# csv_query_stddev_1
+query R
+SELECT stddev_pop(c2) FROM aggregate_test_100
+----
+1.3665650368716449
+
+# csv_query_stddev_2
+query R 
+SELECT stddev_pop(c6) FROM aggregate_test_100
+----
+5.114326382039172e18
+
+# csv_query_stddev_3
+query R
+SELECT stddev_pop(c12) FROM aggregate_test_100
+----
+0.30387865541334363
+
+# csv_query_stddev_4
+query R
+SELECT stddev(c12) FROM aggregate_test_100
+----
+0.3054095399405338
+
+# csv_query_stddev_5
+query R
+SELECT stddev_samp(c12) FROM aggregate_test_100
+----
+0.3054095399405338
+
+# csv_query_stddev_6
+query R
+select stddev(sq.column1) from (values (1.1), (2.0), (3.0)) as sq
+----
+0.9504384952922168
+
+# csv_query_approx_median_1
+query I
+SELECT approx_median(c2) FROM aggregate_test_100
+----
+3
+
+# csv_query_approx_median_2
+query I
+SELECT approx_median(c6) FROM aggregate_test_100
+----
+1146409980542786560
+
+# csv_query_approx_median_3
+query R
+SELECT approx_median(c12) FROM aggregate_test_100
+----
+0.5550065410522981
+
+# csv_query_median_1
+query I
+SELECT median(c2) FROM aggregate_test_100
+----
+3
+
+# csv_query_median_2
+query I
+SELECT median(c6) FROM aggregate_test_100
+----
+1125553990140691277
+
+# csv_query_median_3
+query R
+SELECT median(c12) FROM aggregate_test_100
+----
+0.5513900544385053
+
+# median_i8
+query I
+SELECT median(a) FROM median_i8
+----
+-14
+
+# median_i16
+query I
+SELECT median(a) FROM median_i16
+----
+-16334
+
+# median_i32
+query I
+SELECT median(a) FROM median_i32
+----
+-1073741774
+
+# median_i64
+query I
+SELECT median(a) FROM median_i64
+----
+-4611686018427387854
+
+# median_u8
+query I
+SELECT median(a) FROM median_u8
+----
+50
+
+# median_u16
+query I
+SELECT median(a) FROM median_u16
+----
+50
+
+# median_u32
+query I
+SELECT median(a) FROM median_u32
+----
+50
+
+# median_u64
+query I
+SELECT median(a) FROM median_u64
+----
+50
+
+# median_f32
+query R
+SELECT median(a) FROM median_f32
+----
+3.3
+
+# median_f64
+query R
+SELECT median(a) FROM median_f64
+----
+3.3
+
+# median_f64_nan
+query T
+SELECT median(a) FROM median_f64_nan
+----
+NaN
+
+# approx_median_f64_nan
+query T
+SELECT approx_median(a) FROM median_f64_nan
+----
+NaN
+
+# csv_query_external_table_count
+query I
+SELECT COUNT(c12) FROM aggregate_test_100
+----
+100
+
+# csv_query_external_table_sum
+query II
+SELECT SUM(CAST(c7 AS BIGINT)), SUM(CAST(c8 AS BIGINT)) FROM aggregate_test_100
+----
+13060 3017641
+
+# csv_query_count
+query I
+SELECT count(c12) FROM aggregate_test_100
+----
+100
+
+# csv_query_count_distinct
+query I
+SELECT count(distinct c2) FROM aggregate_test_100
+----
+5
+
+# csv_query_count_distinct_expr
+query I
+SELECT count(distinct c2 % 2) FROM aggregate_test_100
+----
+2
+
+# csv_query_count_star
+query I
+SELECT COUNT(*) FROM aggregate_test_100
+----
+100
+
+# csv_query_count_literal
+query I
+SELECT COUNT(2) FROM aggregate_test_100
+----
+100
+
+# csv_query_approx_count
+# FIX: https://github.com/apache/arrow-datafusion/issues/3353
+# query II
+# SELECT approx_distinct(c9) AS count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
+# ----
+# 100 99
+
+# csv_query_approx_count_dupe_expr_aliased
+query II
+SELECT approx_distinct(c9) AS a, approx_distinct(c9) AS b FROM aggregate_test_100
+----
+100 100
+
+## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
+## data, asserting the estimated quantiles are ±5% their actual values.
+##
+## Actual quantiles calculated with:
+##
+## ```r
+## read_csv("./testing/data/csv/aggregate_test_100.csv") |>
+##     select_if(is.numeric) |>
+##     summarise_all(~ quantile(., c(0.1, 0.5, 0.9)))
+## ```
+##
+## Giving:
+##
+## ```text
+##      c2    c3      c4           c5       c6    c7     c8          c9     c10   c11    c12
+##   <dbl> <dbl>   <dbl>        <dbl>    <dbl> <dbl>  <dbl>       <dbl>   <dbl> <dbl>  <dbl>
+## 1     1 -95.3 -22925. -1882606710  -7.25e18  18.9  2671.  472608672. 1.83e18 0.109 0.0714
+## 2     3  15.5   4599    377164262   1.13e18 134.  30634  2365817608. 9.30e18 0.491 0.551
+## 3     5 102.   25334.  1991374996.  7.37e18 231   57518. 3776538487. 1.61e19 0.834 0.946
+## ```
+##
+## Column `c12` is omitted due to a large relative error (~10%) due to the small
+## float values.
+
+#csv_query_approx_percentile_cont (c2)
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.1) AS DOUBLE) / 1.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.5) AS DOUBLE) / 3.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c2, 0.9) AS DOUBLE) / 5.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+# csv_query_approx_percentile_cont (c3)
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.1) AS DOUBLE) / -95.3) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.5) AS DOUBLE) / 15.5) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c3, 0.9) AS DOUBLE) / 102.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+# csv_query_approx_percentile_cont (c4)
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.1) AS DOUBLE) / -22925.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.5) AS DOUBLE) / 4599.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c4, 0.9) AS DOUBLE) / 25334.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+# csv_query_approx_percentile_cont (c5)
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.1) AS DOUBLE) / -1882606710.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.5) AS DOUBLE) / 377164262.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c5, 0.9) AS DOUBLE) / 1991374996.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+# csv_query_approx_percentile_cont (c6)
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.1) AS DOUBLE) / -7250000000000000000) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.5) AS DOUBLE) / 1130000000000000000) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c6, 0.9) AS DOUBLE) / 7370000000000000000) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+# csv_query_approx_percentile_cont (c7)
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.1) AS DOUBLE) / 18.9) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.5) AS DOUBLE) / 134.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c7, 0.9) AS DOUBLE) / 231.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+# csv_query_approx_percentile_cont (c8)
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.1) AS DOUBLE) / 2671.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.5) AS DOUBLE) / 30634.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c8, 0.9) AS DOUBLE) / 57518.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+# csv_query_approx_percentile_cont (c9)
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.1) AS DOUBLE) / 472608672.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.5) AS DOUBLE) / 2365817608.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c9, 0.9) AS DOUBLE) / 3776538487.0) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+# csv_query_approx_percentile_cont (c10)
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.1) AS DOUBLE) / 1830000000000000000) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.5) AS DOUBLE) / 9300000000000000000) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c10, 0.9) AS DOUBLE) / 16100000000000000000) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+# csv_query_approx_percentile_cont (c11)
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.1) AS DOUBLE) /  0.109) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.5) AS DOUBLE) / 0.491) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+query T
+SELECT (ABS(1 - CAST(approx_percentile_cont(c11, 0.9) AS DOUBLE) / 0.834) < 0.05) AS q FROM aggregate_test_100
+----
+true
+
+# csv_query_cube_avg
+query TIR
+SELECT c1, c2, AVG(c3) FROM aggregate_test_100_by_sql GROUP BY CUBE (c1, c2) ORDER BY c1, c2
+----
+a 1 -17.6
+a 2 -15.333333333333334
+a 3 -4.5
+a 4 -32.0
+a 5 -32.0
+a   -18.333333333333332
+b 1 31.666666666666668
+b 2 25.5
+b 3 -42.0
+b 4 -44.6
+b 5 -0.2
+b   -5.842105263157895
+c 1 47.5
+c 2 -55.57142857142857
+c 3 47.5
+c 4 -10.75
+c 5 12.0
+c   -1.3333333333333333
+d 1 -8.142857142857142
+d 2 109.33333333333333
+d 3 41.333333333333336
+d 4 54.0
+d 5 -49.5
+d   25.444444444444443
+e 1 75.66666666666667
+e 2 37.8
+e 3 48.0
+e 4 37.285714285714285
+e 5 -11.0
+e   40.333333333333336
+  1 16.681818181818183
+  2 8.363636363636363
+  3 20.789473684210527
+  4 1.2608695652173914
+  5 -13.857142857142858
+    7.81
+
+# csv_query_rollup_avg
+query TIIR
+SELECT c1, c2, c3, AVG(c4) FROM aggregate_test_100_by_sql WHERE c1 IN ('a', 'b', NULL) GROUP BY ROLLUP (c1, c2, c3) ORDER BY c1, c2, c3
+----
+a 1 -85  -15154.0
+a 1 -56  8692.0
+a 1 -25  15295.0
+a 1 -5   12636.0
+a 1 83   -14704.0
+a 1      1353.0
+a 2 -48  -18025.0
+a 2 -43  13080.0
+a 2 45   15673.0
+a 2      3576.0
+a 3 -72  -11122.0
+a 3 -12  -9168.0
+a 3 13   22338.5
+a 3 14   28162.0
+a 3 17   -22796.0
+a 3      4958.833333333333
+a 4 -101 11640.0
+a 4 -54  -2376.0
+a 4 -38  20744.0
+a 4 65  -28462.0
+a 4      386.5
+a 5 -101 -12484.0
+a 5 -31  -12907.0
+a 5 36   -16974.0
+a 5      -14121.666666666666
+a        306.04761904761904
+b 1 12   7652.0
+b 1 29   -18218.0
+b 1 54   -18410.0
+b 1      -9658.666666666666
+b 2 -60  -21739.0
+b 2 31   23127.0
+b 2 63   21456.0
+b 2 68   15874.0
+b 2      9679.5
+b 3 -101 -13217.0
+b 3 17   14457.0
+b 3      620.0
+b 4 -117 19316.0
+b 4 -111 -1967.0
+b 4 -59  25286.0
+b 4 17   -28070.0
+b 4 47   20690.0
+b 4      7051.0
+b 5 -82  22080.0
+b 5 -44  15788.0
+b 5 -5   24896.0
+b 5 62   16337.0
+b 5 68   21576.0
+b 5      20135.4
+b        7732.315789473684
+         3833.525
+
+# csv_query_approx_percentile_cont_with_weight
+query TI
+SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 73
+b 68
+c 122
+d 124
+e 115
+
+# csv_query_approx_percentile_cont_with_weight (2)
+query TI
+SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 73
+b 68
+c 122
+d 124
+e 115
+
+# csv_query_approx_percentile_cont_with_histogram_bins
+query TI
+SELECT c1, approx_percentile_cont(c3, 0.95, 200) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 73
+b 68
+c 122
+d 124
+e 115
+
+query TI
+SELECT c1, approx_percentile_cont_with_weight(c3, c2, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 74
+b 68
+c 123
+d 124
+e 115
+
+# csv_query_sum_crossjoin
+query TTI
+SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY a.c1, b.c1 ORDER BY a.c1, b.c1
+----
+a a 1260
+a b 1140
+a c 1260
+a d 1080
+a e 1260
+b a 1302
+b b 1178
+b c 1302
+b d 1116
+b e 1302
+c a 1176
+c b 1064
+c c 1176
+c d 1008
+c e 1176
+d a 924
+d b 836
+d c 924
+d d 792
+d e 924
+e a 1323
+e b 1197
+e c 1323
+e d 1134
+e e 1323
+
+# csv_query_cube_sum_crossjoin
+query TTI
+SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY CUBE (a.c1, b.c1) ORDER BY a.c1, b.c1
+----
+a a 1260
+a b 1140
+a c 1260
+a d 1080
+a e 1260
+a   6000
+b a 1302
+b b 1178
+b c 1302
+b d 1116
+b e 1302
+b   6200
+c a 1176
+c b 1064
+c c 1176
+c d 1008
+c e 1176
+c   5600
+d a 924
+d b 836
+d c 924
+d d 792
+d e 924
+d   4400
+e a 1323
+e b 1197
+e c 1323
+e d 1134
+e e 1323
+e   6300
+  a 5985
+  b 5415
+  c 5985
+  d 5130
+  e 5985
+    28500
+
+# csv_query_cube_distinct_count
+query TII
+SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY CUBE (c1,c2) ORDER BY c1,c2
+----
+a 1 5
+a 2 3
+a 3 5
+a 4 4
+a 5 3
+a   19
+b 1 3
+b 2 4
+b 3 2
+b 4 5
+b 5 5
+b   17
+c 1 4
+c 2 7
+c 3 4
+c 4 4
+c 5 2
+c   21
+d 1 7
+d 2 3
+d 3 3
+d 4 3
+d 5 2
+d   18
+e 1 3
+e 2 4
+e 3 4
+e 4 7
+e 5 2
+e   18
+  1 22
+  2 20
+  3 17
+  4 23
+  5 14
+    80
+
+# csv_query_rollup_distinct_count
+query TII
+SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY ROLLUP (c1,c2) ORDER BY c1,c2
+----
+a 1 5
+a 2 3
+a 3 5
+a 4 4
+a 5 3
+a   19
+b 1 3
+b 2 4
+b 3 2
+b 4 5
+b 5 5
+b   17
+c 1 4
+c 2 7
+c 3 4
+c 4 4
+c 5 2
+c   21
+d 1 7
+d 2 3
+d 3 3
+d 4 3
+d 5 2
+d   18
+e 1 3
+e 2 4
+e 3 4
+e 4 7
+e 5 2
+e  18
+   80
+
+# csv_query_rollup_sum_crossjoin
+query TTI
+SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY ROLLUP (a.c1, b.c1) ORDER BY a.c1, b.c1
+----
+a a 1260
+a b 1140
+a c 1260
+a d 1080
+a e 1260
+a   6000
+b a 1302
+b b 1178
+b c 1302
+b d 1116
+b e 1302
+b   6200
+c a 1176
+c b 1064
+c c 1176
+c d 1008
+c e 1176
+c   5600
+d a 924
+d b 836
+d c 924
+d d 792
+d e 924
+d   4400
+e a 1323
+e b 1197
+e c 1323
+e d 1134
+e e 1323
+e   6300
+    28500
+
+# query_count_without_from
+query I
+SELECT count(1 + 1)
+----
+1
+
+# FIX: "CSV Writer does not support List(Field { name: \"item\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }) data type")
+# csv_query_array_agg
+# query T
+# SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test
+# ----
+# [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm0keZ5G8BffGwgF2RwQD59TFzMStxCB]
+
+# FIX: see above
+# csv_query_array_agg_empty
+# query I
+# SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
+# ----
+# []
+
+# FIX: see above
+# csv_query_array_agg_one
+# query I
+# SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test
+# ----
+# [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm]
+
+# csv_query_array_agg_with_overflow
+query IIRIII
+select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by c2 order by c2
+----
+1 367  16.681818181818183  125 -99  22
+2 184  8.363636363636363   122 -117 22
+3 395  20.789473684210527  123 -101 19
+4 29   1.2608695652173914  123 -117 23
+5 -194 -13.857142857142858 118 -101 14
+
+# TODO: csv_query_array_agg_unsupported
+# statement error
+# SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100;
+
+# csv_query_array_cube_agg_with_overflow
+query TIIRIII 
+select c1, c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by CUBE (c1,c2) order by c1, c2
+----
+a 1 -88  -17.6               83  -85  5
+a 2 -46  -15.333333333333334 45  -48  3
+a 3 -27  -4.5                17  -72  6
+a 4 -128 -32.0               65  -101 4
+a 5 -96  -32.0               36  -101 3
+a   -385 -18.333333333333332 83  -101 21
+b 1 95   31.666666666666668  54  12   3
+b 2 102  25.5                68  -60  4
+b 3 -84  -42.0               17  -101 2
+b 4 -223 -44.6               47  -117 5
+b 5 -1   -0.2                68  -82  5
+b   -111 -5.842105263157895  68  -117 19
+c 1 190  47.5                103 -24  4
+c 2 -389 -55.57142857142857  29  -117 7
+c 3 190  47.5                97  -2   4
+c 4 -43  -10.75              123 -90  4
+c 5 24   12.0                118 -94  2
+c   -28  -1.3333333333333333 123 -117 21
+d 1 -57  -8.142857142857142  125 -99  7
+d 2 328  109.33333333333333  122 93   3
+d 3 124  41.333333333333336  123 -76  3
+d 4 162  54.0                102 5    3
+d 5 -99  -49.5               -40 -59  2
+d   458  25.444444444444443  125 -99  18
+e 1 227  75.66666666666667   120 36   3
+e 2 189  37.8                97  -61  5
+e 3 192  48.0                112 -95  4
+e 4 261  37.285714285714285  97  -56  7
+e 5 -22  -11.0               64  -86  2
+e   847  40.333333333333336  120 -95  21
+  1 367  16.681818181818183  125 -99  22
+  2 184  8.363636363636363   122 -117 22
+  3 395  20.789473684210527  123 -101 19
+  4 29   1.2608695652173914  123 -117 23
+  5 -194 -13.857142857142858 118 -101 14
+    781  7.81                125 -117 100
+
+# csv_query_array_agg_distinct
+# query T
+# SELECT array_agg(distinct c2) FROM aggregate_test_100
+# ----
+# [4, 2, 3, 5, 1]
+
+# TODO: aggregate_timestamps_sum
+
+# aggregate_timestamps_count
+# query IIII
+# SELECT count(nanos), count(micros), count(millis), count(secs) FROM t
+# ----
+# 3 3 3 3 
+
+# aggregate_timestamps_min
+# query TTTT
+# SELECT min(nanos), min(micros), min(millis), min(secs) FROM t
+# ----
+# 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123450 2011-12-13T11:13:10.123 2011-12-13T11:13:10
+
+# # aggregate_timestamps_max
+# query TTTT
+# SELECT max(nanos), max(micros), max(millis), max(secs) FROM t
+# ----
+# 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10.432 2021-01-01T05:11:10
+
+# TODO: aggregate_times_sum
+
+# TODO: aggregate_times_count
+
+# TODO: aggregate_times_min
+
+# TODO: aggregate_times_max
+
+# TODO: aggregate_timestamps_avg
+
+# aggregate_time_min_and_max
+query TT
+select min(t), max(t) from  (select '00:00:00' as t union select '00:00:01' union select '00:00:02')
+----
+00:00:00 00:00:02
+
+# aggregate_decimal_min
+query R
+select min(c1) from d_table
+----
+-100.009
+
+# aggregate_decimal_max
+query R
+select max(c1) from d_table
+----
+110.009
+
+# aggregate_decimal_sum
+query R
+select sum(c1) from d_table
+----
+100.000
+
+# FIX: doesn't check datatype
+# aggregate_decimal_avg
+query R
+select avg(c1) from d_table
+----
+5.0000000
+
+# FIX: different test table
+# aggregate
+# query I
+# SELECT SUM(c1), SUM(c2) FROM test
+# ----
+# 60 220
+
+# TODO: aggregate_empty
+
+# TODO: aggregate_avg
+
+# TODO: aggregate_max
+
+# TODO: aggregate_min
+
+# TODO: aggregate_grouped
+
+# TODO: aggregate_grouped_avg
+
+# TODO: aggregate_grouped_empty
+
+# TODO: aggregate_grouped_max
+
+# TODO: aggregate_grouped_min
+
+# TODO: aggregate_avg_add
+
+# TODO: case_sensitive_identifiers_aggregates
+
+# TODO: count_basic
+
+# TODO: count_partitioned
+
+# TODO: count_aggregated
+
+# TODO: count_aggregated_cube
+
+# TODO: simple_avg
+
+# TODO: simple_mean
+
+# query_sum_distinct - 2 different aggregate functions: avg and sum(distinct)
+query RI
+SELECT AVG(c1), SUM(DISTINCT c2) FROM test
+----
+1.75 3
+
+# query_sum_distinct - 2 sum(distinct) functions
+query II
+SELECT SUM(DISTINCT c1), SUM(DISTINCT c2) FROM test
+----
+4 3
+
+# # query_count_distinct
+query I
+SELECT COUNT(DISTINCT c1) FROM test
+----
+3
+
+# TODO: count_distinct_integers_aggregated_single_partition
+
+# TODO: count_distinct_integers_aggregated_multiple_partitions
+
+# TODO: aggregate_with_alias
+
+# FIX: CSV Writer error
+# array_agg_zero
+# query I
+# SELECT ARRAY_AGG([])
+# ----
+# []
+
+# FIX: CSV Writer error
+# array_agg_one
+# query I
+# SELECT ARRAY_AGG([1])
+# ----
+# [[1]]
+
+# test_approx_percentile_cont_decimal_support
+query TI
+SELECT c1, approx_percentile_cont(c2, cast(0.85 as decimal(10,2))) apc FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 4
+b 5
+c 4
+d 4
+e 4

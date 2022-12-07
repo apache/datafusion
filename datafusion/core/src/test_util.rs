@@ -18,7 +18,7 @@
 //! Utility functions to make testing DataFusion based crates easier
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 
 use crate::datasource::datasource::TableProviderFactory;
@@ -229,9 +229,9 @@ pub fn scan_empty_with_partitions(
 /// Get the schema for the aggregate_test_* csv files
 pub fn aggr_test_schema() -> SchemaRef {
     let mut f1 = Field::new("c1", DataType::Utf8, false);
-    f1.set_metadata(Some(BTreeMap::from_iter(
+    f1.set_metadata(HashMap::from_iter(
         vec![("testing".into(), "test".into())].into_iter(),
-    )));
+    ));
     let schema = Schema::new(vec![
         f1,
         Field::new("c2", DataType::UInt32, false),
@@ -254,9 +254,9 @@ pub fn aggr_test_schema() -> SchemaRef {
 /// Get the schema for the aggregate_test_* csv files with an additional filed not present in the files.
 pub fn aggr_test_schema_with_missing_col() -> SchemaRef {
     let mut f1 = Field::new("c1", DataType::Utf8, false);
-    f1.set_metadata(Some(BTreeMap::from_iter(
+    f1.set_metadata(HashMap::from_iter(
         vec![("testing".into(), "test".into())].into_iter(),
-    )));
+    ));
     let schema = Schema::new(vec![
         f1,
         Field::new("c2", DataType::UInt32, false),
@@ -321,7 +321,7 @@ impl TableProvider for TestTableProvider {
     async fn scan(
         &self,
         _ctx: &SessionState,
-        _projection: &Option<Vec<usize>>,
+        _projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {

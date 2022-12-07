@@ -17,26 +17,27 @@
 
 //! DateTime expressions
 
+use arrow::compute::cast;
 use arrow::{
-    array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait, PrimitiveArray},
-    compute::kernels::cast_utils::string_to_timestamp_nanos,
-    datatypes::{
-        ArrowPrimitiveType, DataType, IntervalDayTimeType, TimestampMicrosecondType,
-        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-    },
+    array::TimestampNanosecondArray, compute::kernels::temporal, datatypes::TimeUnit,
+    temporal_conversions::timestamp_ns_to_datetime,
 };
 use arrow::{
-    array::{
-        Date64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampNanosecondArray, TimestampSecondArray,
+    array::{Array, ArrayRef, Float64Array, OffsetSizeTrait, PrimitiveArray},
+    compute::kernels::cast_utils::string_to_timestamp_nanos,
+    datatypes::{
+        ArrowNumericType, ArrowPrimitiveType, ArrowTemporalType, DataType,
+        IntervalDayTimeType, TimestampMicrosecondType, TimestampMillisecondType,
+        TimestampNanosecondType, TimestampSecondType,
     },
-    compute::kernels::temporal,
-    datatypes::TimeUnit,
-    temporal_conversions::timestamp_ns_to_datetime,
 };
 use chrono::prelude::*;
 use chrono::Duration;
-use datafusion_common::cast::as_date32_array;
+use datafusion_common::cast::{
+    as_date32_array, as_date64_array, as_generic_string_array,
+    as_timestamp_microsecond_array, as_timestamp_millisecond_array,
+    as_timestamp_nanosecond_array, as_timestamp_second_array,
+};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_common::{ScalarType, ScalarValue};
 use datafusion_expr::ColumnarValue;
@@ -69,12 +70,7 @@ where
         )));
     }
 
-    let array = args[0]
-        .as_any()
-        .downcast_ref::<GenericStringArray<T>>()
-        .ok_or_else(|| {
-            DataFusionError::Internal("failed to downcast to string".to_string())
-        })?;
+    let array = as_generic_string_array::<T>(args[0])?;
 
     // first map is the iterator, second is for the `Option<_>`
     array
@@ -292,10 +288,7 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             ))
         }
         ColumnarValue::Array(array) => {
-            let array = array
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap();
+            let array = as_timestamp_nanosecond_array(array)?;
             let array = array
                 .iter()
                 .map(f)
@@ -384,10 +377,7 @@ pub fn date_bin(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
         ColumnarValue::Array(array) => match array.data_type() {
             DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<TimestampNanosecondArray>()
-                    .unwrap()
+                let array = as_timestamp_nanosecond_array(array)?
                     .iter()
                     .map(f)
                     .collect::<TimestampNanosecondArray>();
@@ -413,42 +403,36 @@ pub fn date_bin(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 macro_rules! extract_date_part {
     ($ARRAY: expr, $FN:expr) => {
         match $ARRAY.data_type() {
-            DataType::Date32 => match as_date32_array($ARRAY) {
-                Ok(array) => Ok($FN(array)?),
-                Err(e) => Err(e),
-            },
+            DataType::Date32 => {
+                let array = as_date32_array($ARRAY)?;
+                Ok($FN(array)
+                    .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
+            }
             DataType::Date64 => {
-                let array = $ARRAY.as_any().downcast_ref::<Date64Array>().unwrap();
-                Ok($FN(array)?)
+                let array = as_date64_array($ARRAY)?;
+                Ok($FN(array)
+                    .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
             }
             DataType::Timestamp(time_unit, None) => match time_unit {
                 TimeUnit::Second => {
-                    let array = $ARRAY
-                        .as_any()
-                        .downcast_ref::<TimestampSecondArray>()
-                        .unwrap();
-                    Ok($FN(array)?)
+                    let array = as_timestamp_second_array($ARRAY)?;
+                    Ok($FN(array)
+                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
                 }
                 TimeUnit::Millisecond => {
-                    let array = $ARRAY
-                        .as_any()
-                        .downcast_ref::<TimestampMillisecondArray>()
-                        .unwrap();
-                    Ok($FN(array)?)
+                    let array = as_timestamp_millisecond_array($ARRAY)?;
+                    Ok($FN(array)
+                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
                 }
                 TimeUnit::Microsecond => {
-                    let array = $ARRAY
-                        .as_any()
-                        .downcast_ref::<TimestampMicrosecondArray>()
-                        .unwrap();
-                    Ok($FN(array)?)
+                    let array = as_timestamp_microsecond_array($ARRAY)?;
+                    Ok($FN(array)
+                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
                 }
                 TimeUnit::Nanosecond => {
-                    let array = $ARRAY
-                        .as_any()
-                        .downcast_ref::<TimestampNanosecondArray>()
-                        .unwrap();
-                    Ok($FN(array)?)
+                    let array = as_timestamp_nanosecond_array($ARRAY)?;
+                    Ok($FN(array)
+                        .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
                 }
             },
             datatype => Err(DataFusionError::Internal(format!(
@@ -493,7 +477,10 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         "dow" => extract_date_part!(&array, temporal::num_days_from_sunday),
         "hour" => extract_date_part!(&array, temporal::hour),
         "minute" => extract_date_part!(&array, temporal::minute),
-        "second" => extract_date_part!(&array, temporal::second),
+        "second" => extract_date_part!(&array, seconds),
+        "millisecond" => extract_date_part!(&array, millis),
+        "microsecond" => extract_date_part!(&array, micros),
+        "nanosecond" => extract_date_part!(&array, nanos),
         _ => Err(DataFusionError::Execution(format!(
             "Date part '{}' not supported",
             date_part
@@ -501,20 +488,67 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }?;
 
     Ok(if is_scalar {
-        ColumnarValue::Scalar(ScalarValue::try_from_array(
-            &(Arc::new(arr) as ArrayRef),
-            0,
-        )?)
+        ColumnarValue::Scalar(ScalarValue::try_from_array(&arr?, 0)?)
     } else {
-        ColumnarValue::Array(Arc::new(arr))
+        ColumnarValue::Array(arr?)
     })
+}
+
+fn to_ticks<T>(array: &PrimitiveArray<T>, frac: i32) -> Result<Float64Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    let zipped = temporal::second(array)?
+        .values()
+        .iter()
+        .zip(temporal::nanosecond(array)?.values().iter())
+        .map(|o| ((*o.0 as f64 + (*o.1 as f64) / 1_000_000_000.0) * (frac as f64)))
+        .collect::<Vec<f64>>();
+
+    Ok(Float64Array::from(zipped))
+}
+
+fn seconds<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    to_ticks(array, 1)
+}
+
+fn millis<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    to_ticks(array, 1_000)
+}
+
+fn micros<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    to_ticks(array, 1_000_000)
+}
+
+fn nanos<T>(array: &PrimitiveArray<T>) -> Result<Float64Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<T::Native>,
+{
+    to_ticks(array, 1_000_000_000)
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Int64Array, IntervalDayTimeArray, StringBuilder};
+    use arrow::array::{
+        ArrayRef, Int64Array, IntervalDayTimeArray, StringBuilder,
+        TimestampMicrosecondArray,
+    };
 
     use super::*;
 

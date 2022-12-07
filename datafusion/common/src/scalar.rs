@@ -26,7 +26,8 @@ use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
 use crate::cast::{
-    as_decimal128_array, as_dictionary_array, as_list_array, as_struct_array,
+    as_decimal128_array, as_dictionary_array, as_fixed_size_binary_array,
+    as_fixed_size_list_array, as_list_array, as_struct_array,
 };
 use crate::delta::shift_months;
 use crate::error::{DataFusionError, Result};
@@ -59,7 +60,7 @@ pub enum ScalarValue {
     /// 64bit float
     Float64(Option<f64>),
     /// 128bit decimal, using the i128 to represent the decimal, precision scale
-    Decimal128(Option<i128>, u8, u8),
+    Decimal128(Option<i128>, u8, i8),
     /// signed 8bit int
     Int8(Option<i8>),
     /// signed 16bit int
@@ -977,9 +978,9 @@ macro_rules! eq_array_primitive {
 
 impl ScalarValue {
     /// Create a decimal Scalar from value/precision and scale.
-    pub fn try_new_decimal128(value: i128, precision: u8, scale: u8) -> Result<Self> {
+    pub fn try_new_decimal128(value: i128, precision: u8, scale: i8) -> Result<Self> {
         // make sure the precision and scale is valid
-        if precision <= DECIMAL128_MAX_PRECISION && scale <= precision {
+        if precision <= DECIMAL128_MAX_PRECISION && scale.unsigned_abs() <= precision {
             return Ok(ScalarValue::Decimal128(Some(value), precision, scale));
         }
         Err(DataFusionError::Internal(format!(
@@ -1561,7 +1562,7 @@ impl ScalarValue {
                     _ => unreachable!("Invalid dictionary keys type: {:?}", key_type),
                 }
             }
-            DataType::FixedSizeBinary(_) => {
+            DataType::FixedSizeBinary(size) => {
                 let array = scalars
                     .map(|sv| {
                         if let ScalarValue::FixedSizeBinary(_, v) = sv {
@@ -1575,8 +1576,10 @@ impl ScalarValue {
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let array =
-                    FixedSizeBinaryArray::try_from_sparse_iter(array.into_iter())?;
+                let array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                    array.into_iter(),
+                    *size,
+                )?;
                 Arc::new(array)
             }
             // explicitly enumerate unsupported types so newly added
@@ -1620,7 +1623,7 @@ impl ScalarValue {
     fn iter_to_decimal_array(
         scalars: impl IntoIterator<Item = ScalarValue>,
         precision: u8,
-        scale: u8,
+        scale: i8,
     ) -> Result<Decimal128Array> {
         let array = scalars
             .into_iter()
@@ -1701,7 +1704,7 @@ impl ScalarValue {
     fn build_decimal_array(
         value: Option<i128>,
         precision: u8,
-        scale: u8,
+        scale: i8,
         size: usize,
     ) -> Decimal128Array {
         std::iter::repeat(value)
@@ -1796,16 +1799,18 @@ impl ScalarValue {
                     Arc::new(repeat(None::<&str>).take(size).collect::<BinaryArray>())
                 }
             },
-            ScalarValue::FixedSizeBinary(_, e) => match e {
+            ScalarValue::FixedSizeBinary(s, e) => match e {
                 Some(value) => Arc::new(
-                    FixedSizeBinaryArray::try_from_sparse_iter(
+                    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
                         repeat(Some(value.as_slice())).take(size),
+                        *s,
                     )
                     .unwrap(),
                 ),
                 None => Arc::new(
-                    FixedSizeBinaryArray::try_from_sparse_iter(
+                    FixedSizeBinaryArray::try_from_sparse_iter_with_size(
                         repeat(None::<&[u8]>).take(size),
+                        *s,
                     )
                     .unwrap(),
                 ),
@@ -1961,7 +1966,7 @@ impl ScalarValue {
         array: &ArrayRef,
         index: usize,
         precision: u8,
-        scale: u8,
+        scale: i8,
     ) -> Result<ScalarValue> {
         let array = as_decimal128_array(array)?;
         if array.is_null(index) {
@@ -2105,8 +2110,7 @@ impl ScalarValue {
                 Self::Struct(Some(field_values), Box::new(fields.clone()))
             }
             DataType::FixedSizeList(nested_type, _len) => {
-                let list_array =
-                    array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+                let list_array = as_fixed_size_list_array(array)?;
                 let value = match list_array.is_null(index) {
                     true => None,
                     false => {
@@ -2120,10 +2124,7 @@ impl ScalarValue {
                 ScalarValue::new_list(value, nested_type.data_type().clone())
             }
             DataType::FixedSizeBinary(_) => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<FixedSizeBinaryArray>()
-                    .unwrap();
+                let array = as_fixed_size_binary_array(array)?;
                 let size = match array.data_type() {
                     DataType::FixedSizeBinary(size) => *size,
                     _ => unreachable!(),
@@ -2156,9 +2157,9 @@ impl ScalarValue {
     fn eq_array_decimal(
         array: &ArrayRef,
         index: usize,
-        value: &Option<i128>,
+        value: Option<&i128>,
         precision: u8,
-        scale: u8,
+        scale: i8,
     ) -> Result<bool> {
         let array = as_decimal128_array(array)?;
         if array.precision() != precision || array.scale() != scale {
@@ -2192,8 +2193,14 @@ impl ScalarValue {
     pub fn eq_array(&self, array: &ArrayRef, index: usize) -> bool {
         match self {
             ScalarValue::Decimal128(v, precision, scale) => {
-                ScalarValue::eq_array_decimal(array, index, v, *precision, *scale)
-                    .unwrap()
+                ScalarValue::eq_array_decimal(
+                    array,
+                    index,
+                    v.as_ref(),
+                    *precision,
+                    *scale,
+                )
+                .unwrap()
             }
             ScalarValue::Boolean(val) => {
                 eq_array_primitive!(array, index, BooleanArray, val)

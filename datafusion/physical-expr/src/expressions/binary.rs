@@ -61,13 +61,11 @@ use kernels::{
 };
 use kernels_arrow::{
     add_decimal, add_decimal_scalar, divide_decimal_scalar, divide_opt_decimal,
-    eq_decimal_scalar, gt_decimal_scalar, gt_eq_decimal_scalar, is_distinct_from,
-    is_distinct_from_bool, is_distinct_from_decimal, is_distinct_from_null,
-    is_distinct_from_utf8, is_not_distinct_from, is_not_distinct_from_bool,
-    is_not_distinct_from_decimal, is_not_distinct_from_null, is_not_distinct_from_utf8,
-    lt_decimal_scalar, lt_eq_decimal_scalar, modulus_decimal, modulus_decimal_scalar,
-    multiply_decimal, multiply_decimal_scalar, neq_decimal_scalar, subtract_decimal,
-    subtract_decimal_scalar,
+    is_distinct_from, is_distinct_from_bool, is_distinct_from_decimal,
+    is_distinct_from_null, is_distinct_from_utf8, is_not_distinct_from,
+    is_not_distinct_from_bool, is_not_distinct_from_decimal, is_not_distinct_from_null,
+    is_not_distinct_from_utf8, modulus_decimal, modulus_decimal_scalar, multiply_decimal,
+    multiply_decimal_scalar, subtract_decimal, subtract_decimal_scalar,
 };
 
 use arrow::datatypes::{DataType, Schema, TimeUnit};
@@ -124,11 +122,8 @@ impl std::fmt::Display for BinaryExpr {
 macro_rules! compute_decimal_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $OP_TYPE:expr) => {{
         let ll = as_decimal128_array($LEFT).unwrap();
-        if let ScalarValue::Decimal128(Some(_), _, _) = $RIGHT {
-            Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
-                ll,
-                $RIGHT.try_into()?,
-            )?))
+        if let ScalarValue::Decimal128(Some(v_i128), _, _) = $RIGHT {
+            Ok(Arc::new(paste::expr! {[<$OP _dyn_scalar>]}(ll, v_i128)?))
         } else {
             // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE type
             Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
@@ -2290,7 +2285,7 @@ mod tests {
     fn create_decimal_array(
         array: &[Option<i128>],
         precision: u8,
-        scale: u8,
+        scale: i8,
     ) -> Decimal128Array {
         let mut decimal_builder = Decimal128Builder::with_capacity(array.len());
         for value in array.iter().copied() {
@@ -2304,6 +2299,82 @@ mod tests {
 
     #[test]
     fn comparison_decimal_expr_test() -> Result<()> {
+        // scalar of decimal compare with decimal array
+        let value_i128 = 123;
+        let decimal_scalar = ScalarValue::Decimal128(Some(value_i128), 25, 3);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Decimal128(25, 3),
+            true,
+        )]));
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value_i128),
+                None,
+                Some(value_i128 - 1),
+                Some(value_i128 + 1),
+            ],
+            25,
+            3,
+        )) as ArrayRef;
+        // array = scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &decimal_array,
+            &decimal_scalar,
+            Operator::Eq,
+            &BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+        )
+        .unwrap();
+        // array != scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &decimal_array,
+            &decimal_scalar,
+            Operator::NotEq,
+            &BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+        )
+        .unwrap();
+        //  array < scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &decimal_array,
+            &decimal_scalar,
+            Operator::Lt,
+            &BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+
+        //  array <= scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &decimal_array,
+            &decimal_scalar,
+            Operator::LtEq,
+            &BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+        // array > scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &decimal_array,
+            &decimal_scalar,
+            Operator::Gt,
+            &BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        // array >= scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &decimal_array,
+            &decimal_scalar,
+            Operator::GtEq,
+            &BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        // scalar of different data type with decimal array
         let decimal_scalar = ScalarValue::Decimal128(Some(123_456), 10, 3);
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
         // scalar == array

@@ -778,13 +778,13 @@ mod tests {
     use crate::type_coercion::coerce;
     use arrow::{
         array::{
-            Array, ArrayRef, BinaryArray, BooleanArray, FixedSizeListArray, Float32Array,
-            Float64Array, Int32Array, StringArray, UInt32Array, UInt64Array,
+            Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array,
+            Int32Array, StringArray, UInt32Array, UInt64Array,
         },
         datatypes::Field,
         record_batch::RecordBatch,
     };
-    use datafusion_common::cast::as_uint64_array;
+    use datafusion_common::cast::{as_fixed_size_list_array, as_uint64_array};
     use datafusion_common::{Result, ScalarValue};
 
     /// $FUNC function to test
@@ -2807,10 +2807,7 @@ mod tests {
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
 
         // downcast works
-        let result = result
-            .as_any()
-            .downcast_ref::<FixedSizeListArray>()
-            .unwrap();
+        let result = as_fixed_size_list_array(&result)?;
 
         // value is correct
         assert_eq!(format!("{:?}", result.value(0)), expected);

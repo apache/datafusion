@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-examples"
 description = "DataFusion usage examples"
-version = "14.0.0"
+version = "15.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -34,8 +34,8 @@ path = "examples/avro_sql.rs"
 required-features = ["datafusion/avro"]
 
 [dev-dependencies]
-arrow = "27.0.0"
-arrow-flight = "27.0.0"
+arrow = "28.0.0"
+arrow-flight = "28.0.0"
 async-trait = "0.1.41"
 datafusion = { path = "../datafusion/core" }
 datafusion-common = { path = "../datafusion/common" }

@@ -64,7 +64,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "SortExec: [c1@1 ASC NULLS LAST]",
+        "SortExec: [c1@0 ASC NULLS LAST]",
         "metrics=[output_rows=5, elapsed_compute="
     );
     assert_metrics!(
@@ -573,7 +573,7 @@ async fn csv_explain_verbose_plans() {
     // Since the plan contains path that are environmentally
     // dependant(e.g. full path of the test file), only verify
     // important content
-    assert_contains!(&actual, "logical_plan after projection_push_down");
+    assert_contains!(&actual, "logical_plan after push_down_projection");
     assert_contains!(&actual, "physical_plan");
     assert_contains!(&actual, "FilterExec: c2@1 > 10");
     assert_contains!(actual, "ProjectionExec: expr=[c1@0 as c1]");
@@ -696,7 +696,7 @@ async fn test_physical_plan_display_indent() {
         "                CoalesceBatchesExec: target_batch_size=4096",
         "                  FilterExec: c12@1 < 10",
         "                    RepartitionExec: partitioning=RoundRobinBatch(9000)",
-        "                      CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c12]",
+        "                      CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c12]",
     ];
 
     let normalizer = ExplainNormalizer::new();
@@ -739,12 +739,12 @@ async fn test_physical_plan_display_indent_multi_children() {
         "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 9000)",
         "          ProjectionExec: expr=[c1@0 as c1]",
         "            RepartitionExec: partitioning=RoundRobinBatch(9000)",
-        "              CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1]",
+        "              CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1]",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 9000)",
         "          ProjectionExec: expr=[c1@0 as c2]",
         "            RepartitionExec: partitioning=RoundRobinBatch(9000)",
-        "              CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c2]",
+        "              CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1]",
     ];
 
     let normalizer = ExplainNormalizer::new();
@@ -787,7 +787,7 @@ async fn csv_explain() {
               \n  CoalesceBatchesExec: target_batch_size=4096\
               \n    FilterExec: c2@1 > 10\
               \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
-              \n        CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None, projection=[c1, c2]\
+              \n        CsvExec: files={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, has_header=true, limit=None, projection=[c1, c2]\
               \n",
         ]];
     assert_eq!(expected, actual);
@@ -906,4 +906,26 @@ async fn explain_physical_plan_only() {
         \n",
     ]];
     assert_eq!(expected, actual);
+}
+
+#[tokio::test]
+async fn explain_nested() {
+    async fn test_nested_explain(explain_phy_plan_flag: bool) {
+        let config = SessionConfig::new()
+            .set_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY, explain_phy_plan_flag);
+        let ctx = SessionContext::with_config(config);
+        let sql = "EXPLAIN explain select 1";
+        let plan = ctx.create_logical_plan(sql).unwrap();
+
+        let plan = ctx.create_physical_plan(&plan).await;
+
+        assert!(plan
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Explain must be root of the plan"));
+    }
+
+    test_nested_explain(true).await;
+    test_nested_explain(false).await;
 }

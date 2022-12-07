@@ -635,11 +635,11 @@ pub struct WindowExprNode {
     pub partition_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "6")]
     pub order_by: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    /// repeated LogicalExprNode filter = 7;
+    #[prost(message, optional, tag = "8")]
+    pub window_frame: ::core::option::Option<WindowFrame>,
     #[prost(oneof = "window_expr_node::WindowFunction", tags = "1, 2")]
     pub window_function: ::core::option::Option<window_expr_node::WindowFunction>,
-    /// repeated LogicalExprNode filter = 7;
-    #[prost(oneof = "window_expr_node::WindowFrame", tags = "8")]
-    pub window_frame: ::core::option::Option<window_expr_node::WindowFrame>,
 }
 /// Nested message and enum types in `WindowExprNode`.
 pub mod window_expr_node {
@@ -650,12 +650,6 @@ pub mod window_expr_node {
         /// udaf = 3
         #[prost(enumeration = "super::BuiltInWindowFunction", tag = "2")]
         BuiltInFunction(i32),
-    }
-    /// repeated LogicalExprNode filter = 7;
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum WindowFrame {
-        #[prost(message, tag = "8")]
-        Frame(super::WindowFrame),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -801,10 +795,10 @@ pub struct Timestamp {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Decimal {
-    #[prost(uint64, tag = "1")]
-    pub whole: u64,
-    #[prost(uint64, tag = "2")]
-    pub fractional: u64,
+    #[prost(uint32, tag = "3")]
+    pub precision: u32,
+    #[prost(int32, tag = "4")]
+    pub scale: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct List {
@@ -1153,6 +1147,696 @@ pub struct StringifiedPlan {
     pub plan_type: ::core::option::Option<PlanType>,
     #[prost(string, tag = "2")]
     pub plan: ::prost::alloc::string::String,
+}
+/// PhysicalPlanNode is a nested type
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalPlanNode {
+    #[prost(
+        oneof = "physical_plan_node::PhysicalPlanType",
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21"
+    )]
+    pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
+}
+/// Nested message and enum types in `PhysicalPlanNode`.
+pub mod physical_plan_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum PhysicalPlanType {
+        #[prost(message, tag = "1")]
+        ParquetScan(super::ParquetScanExecNode),
+        #[prost(message, tag = "2")]
+        CsvScan(super::CsvScanExecNode),
+        #[prost(message, tag = "3")]
+        Empty(super::EmptyExecNode),
+        #[prost(message, tag = "4")]
+        Projection(::prost::alloc::boxed::Box<super::ProjectionExecNode>),
+        #[prost(message, tag = "6")]
+        GlobalLimit(::prost::alloc::boxed::Box<super::GlobalLimitExecNode>),
+        #[prost(message, tag = "7")]
+        LocalLimit(::prost::alloc::boxed::Box<super::LocalLimitExecNode>),
+        #[prost(message, tag = "8")]
+        Aggregate(::prost::alloc::boxed::Box<super::AggregateExecNode>),
+        #[prost(message, tag = "9")]
+        HashJoin(::prost::alloc::boxed::Box<super::HashJoinExecNode>),
+        #[prost(message, tag = "10")]
+        Sort(::prost::alloc::boxed::Box<super::SortExecNode>),
+        #[prost(message, tag = "11")]
+        CoalesceBatches(::prost::alloc::boxed::Box<super::CoalesceBatchesExecNode>),
+        #[prost(message, tag = "12")]
+        Filter(::prost::alloc::boxed::Box<super::FilterExecNode>),
+        #[prost(message, tag = "13")]
+        Merge(::prost::alloc::boxed::Box<super::CoalescePartitionsExecNode>),
+        #[prost(message, tag = "14")]
+        Repartition(::prost::alloc::boxed::Box<super::RepartitionExecNode>),
+        #[prost(message, tag = "15")]
+        Window(::prost::alloc::boxed::Box<super::WindowAggExecNode>),
+        #[prost(message, tag = "16")]
+        CrossJoin(::prost::alloc::boxed::Box<super::CrossJoinExecNode>),
+        #[prost(message, tag = "17")]
+        AvroScan(super::AvroScanExecNode),
+        #[prost(message, tag = "18")]
+        Extension(super::PhysicalExtensionNode),
+        #[prost(message, tag = "19")]
+        Union(super::UnionExecNode),
+        #[prost(message, tag = "20")]
+        Explain(super::ExplainExecNode),
+        #[prost(message, tag = "21")]
+        SortPreservingMerge(
+            ::prost::alloc::boxed::Box<super::SortPreservingMergeExecNode>,
+        ),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalExtensionNode {
+    #[prost(bytes = "vec", tag = "1")]
+    pub node: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, repeated, tag = "2")]
+    pub inputs: ::prost::alloc::vec::Vec<PhysicalPlanNode>,
+}
+/// physical expressions
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalExprNode {
+    #[prost(
+        oneof = "physical_expr_node::ExprType",
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17"
+    )]
+    pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
+}
+/// Nested message and enum types in `PhysicalExprNode`.
+pub mod physical_expr_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum ExprType {
+        /// column references
+        #[prost(message, tag = "1")]
+        Column(super::PhysicalColumn),
+        #[prost(message, tag = "2")]
+        Literal(super::ScalarValue),
+        /// binary expressions
+        #[prost(message, tag = "3")]
+        BinaryExpr(::prost::alloc::boxed::Box<super::PhysicalBinaryExprNode>),
+        /// aggregate expressions
+        #[prost(message, tag = "4")]
+        AggregateExpr(super::PhysicalAggregateExprNode),
+        /// null checks
+        #[prost(message, tag = "5")]
+        IsNullExpr(::prost::alloc::boxed::Box<super::PhysicalIsNull>),
+        #[prost(message, tag = "6")]
+        IsNotNullExpr(::prost::alloc::boxed::Box<super::PhysicalIsNotNull>),
+        #[prost(message, tag = "7")]
+        NotExpr(::prost::alloc::boxed::Box<super::PhysicalNot>),
+        #[prost(message, tag = "8")]
+        Case(::prost::alloc::boxed::Box<super::PhysicalCaseNode>),
+        #[prost(message, tag = "9")]
+        Cast(::prost::alloc::boxed::Box<super::PhysicalCastNode>),
+        #[prost(message, tag = "10")]
+        Sort(::prost::alloc::boxed::Box<super::PhysicalSortExprNode>),
+        #[prost(message, tag = "11")]
+        Negative(::prost::alloc::boxed::Box<super::PhysicalNegativeNode>),
+        #[prost(message, tag = "12")]
+        InList(::prost::alloc::boxed::Box<super::PhysicalInListNode>),
+        #[prost(message, tag = "13")]
+        ScalarFunction(super::PhysicalScalarFunctionNode),
+        #[prost(message, tag = "14")]
+        TryCast(::prost::alloc::boxed::Box<super::PhysicalTryCastNode>),
+        /// window expressions
+        #[prost(message, tag = "15")]
+        WindowExpr(::prost::alloc::boxed::Box<super::PhysicalWindowExprNode>),
+        #[prost(message, tag = "16")]
+        ScalarUdf(super::PhysicalScalarUdfNode),
+        #[prost(message, tag = "17")]
+        DateTimeIntervalExpr(
+            ::prost::alloc::boxed::Box<super::PhysicalDateTimeIntervalExprNode>,
+        ),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalScalarUdfNode {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub args: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(message, optional, tag = "4")]
+    pub return_type: ::core::option::Option<ArrowType>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalAggregateExprNode {
+    #[prost(enumeration = "AggregateFunction", tag = "1")]
+    pub aggr_function: i32,
+    #[prost(message, repeated, tag = "2")]
+    pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(bool, tag = "3")]
+    pub distinct: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalWindowExprNode {
+    #[prost(message, optional, boxed, tag = "4")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "1, 2")]
+    pub window_function: ::core::option::Option<
+        physical_window_expr_node::WindowFunction,
+    >,
+}
+/// Nested message and enum types in `PhysicalWindowExprNode`.
+pub mod physical_window_expr_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum WindowFunction {
+        #[prost(enumeration = "super::AggregateFunction", tag = "1")]
+        AggrFunction(i32),
+        /// udaf = 3
+        #[prost(enumeration = "super::BuiltInWindowFunction", tag = "2")]
+        BuiltInFunction(i32),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalIsNull {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalIsNotNull {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalNot {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalAliasNode {
+    #[prost(message, optional, tag = "1")]
+    pub expr: ::core::option::Option<PhysicalExprNode>,
+    #[prost(string, tag = "2")]
+    pub alias: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalBinaryExprNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub l: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub r: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(string, tag = "3")]
+    pub op: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalDateTimeIntervalExprNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub l: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub r: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(string, tag = "3")]
+    pub op: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalSortExprNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(bool, tag = "2")]
+    pub asc: bool,
+    #[prost(bool, tag = "3")]
+    pub nulls_first: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalWhenThen {
+    #[prost(message, optional, tag = "1")]
+    pub when_expr: ::core::option::Option<PhysicalExprNode>,
+    #[prost(message, optional, tag = "2")]
+    pub then_expr: ::core::option::Option<PhysicalExprNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalInListNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, repeated, tag = "2")]
+    pub list: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(bool, tag = "3")]
+    pub negated: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalCaseNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, repeated, tag = "2")]
+    pub when_then_expr: ::prost::alloc::vec::Vec<PhysicalWhenThen>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub else_expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalScalarFunctionNode {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(enumeration = "ScalarFunction", tag = "2")]
+    pub fun: i32,
+    #[prost(message, repeated, tag = "3")]
+    pub args: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(message, optional, tag = "4")]
+    pub return_type: ::core::option::Option<ArrowType>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalTryCastNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub arrow_type: ::core::option::Option<ArrowType>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalCastNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub arrow_type: ::core::option::Option<ArrowType>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalNegativeNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FilterExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, tag = "2")]
+    pub expr: ::core::option::Option<PhysicalExprNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FileGroup {
+    #[prost(message, repeated, tag = "1")]
+    pub files: ::prost::alloc::vec::Vec<PartitionedFile>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ScanLimit {
+    /// wrap into a message to make it optional
+    #[prost(uint32, tag = "1")]
+    pub limit: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FileScanExecConf {
+    #[prost(message, repeated, tag = "1")]
+    pub file_groups: ::prost::alloc::vec::Vec<FileGroup>,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<Schema>,
+    #[prost(uint32, repeated, tag = "4")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
+    #[prost(message, optional, tag = "5")]
+    pub limit: ::core::option::Option<ScanLimit>,
+    #[prost(message, optional, tag = "6")]
+    pub statistics: ::core::option::Option<Statistics>,
+    #[prost(string, repeated, tag = "7")]
+    pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag = "8")]
+    pub object_store_url: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParquetScanExecNode {
+    #[prost(message, optional, tag = "1")]
+    pub base_conf: ::core::option::Option<FileScanExecConf>,
+    #[prost(message, optional, tag = "2")]
+    pub pruning_predicate: ::core::option::Option<LogicalExprNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CsvScanExecNode {
+    #[prost(message, optional, tag = "1")]
+    pub base_conf: ::core::option::Option<FileScanExecConf>,
+    #[prost(bool, tag = "2")]
+    pub has_header: bool,
+    #[prost(string, tag = "3")]
+    pub delimiter: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AvroScanExecNode {
+    #[prost(message, optional, tag = "1")]
+    pub base_conf: ::core::option::Option<FileScanExecConf>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HashJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "3")]
+    pub on: ::prost::alloc::vec::Vec<JoinOn>,
+    #[prost(enumeration = "JoinType", tag = "4")]
+    pub join_type: i32,
+    #[prost(enumeration = "PartitionMode", tag = "6")]
+    pub partition_mode: i32,
+    #[prost(bool, tag = "7")]
+    pub null_equals_null: bool,
+    #[prost(message, optional, tag = "8")]
+    pub filter: ::core::option::Option<JoinFilter>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnionExecNode {
+    #[prost(message, repeated, tag = "1")]
+    pub inputs: ::prost::alloc::vec::Vec<PhysicalPlanNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExplainExecNode {
+    #[prost(message, optional, tag = "1")]
+    pub schema: ::core::option::Option<Schema>,
+    #[prost(message, repeated, tag = "2")]
+    pub stringified_plans: ::prost::alloc::vec::Vec<StringifiedPlan>,
+    #[prost(bool, tag = "3")]
+    pub verbose: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CrossJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalColumn {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub index: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct JoinOn {
+    #[prost(message, optional, tag = "1")]
+    pub left: ::core::option::Option<PhysicalColumn>,
+    #[prost(message, optional, tag = "2")]
+    pub right: ::core::option::Option<PhysicalColumn>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EmptyExecNode {
+    #[prost(bool, tag = "1")]
+    pub produce_one_row: bool,
+    #[prost(message, optional, tag = "2")]
+    pub schema: ::core::option::Option<Schema>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProjectionExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "2")]
+    pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(string, repeated, tag = "3")]
+    pub expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WindowAggExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "2")]
+    pub window_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(string, repeated, tag = "3")]
+    pub window_expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "4")]
+    pub input_schema: ::core::option::Option<Schema>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AggregateExecNode {
+    #[prost(message, repeated, tag = "1")]
+    pub group_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(message, repeated, tag = "2")]
+    pub aggr_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(enumeration = "AggregateMode", tag = "3")]
+    pub mode: i32,
+    #[prost(message, optional, boxed, tag = "4")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(string, repeated, tag = "5")]
+    pub group_expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "6")]
+    pub aggr_expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// we need the input schema to the partial aggregate to pass to the final aggregate
+    #[prost(message, optional, tag = "7")]
+    pub input_schema: ::core::option::Option<Schema>,
+    #[prost(message, repeated, tag = "8")]
+    pub null_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(bool, repeated, tag = "9")]
+    pub groups: ::prost::alloc::vec::Vec<bool>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GlobalLimitExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    /// The number of rows to skip before fetch
+    #[prost(uint32, tag = "2")]
+    pub skip: u32,
+    /// Maximum number of rows to fetch; negative means no limit
+    #[prost(int64, tag = "3")]
+    pub fetch: i64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LocalLimitExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(uint32, tag = "2")]
+    pub fetch: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SortExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "2")]
+    pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    /// Maximum number of highest/lowest rows to fetch; negative means no limit
+    #[prost(int64, tag = "3")]
+    pub fetch: i64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SortPreservingMergeExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "2")]
+    pub expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CoalesceBatchesExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(uint32, tag = "2")]
+    pub target_batch_size: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CoalescePartitionsExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalHashRepartition {
+    #[prost(message, repeated, tag = "1")]
+    pub hash_expr: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(uint64, tag = "2")]
+    pub partition_count: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RepartitionExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(oneof = "repartition_exec_node::PartitionMethod", tags = "2, 3, 4")]
+    pub partition_method: ::core::option::Option<repartition_exec_node::PartitionMethod>,
+}
+/// Nested message and enum types in `RepartitionExecNode`.
+pub mod repartition_exec_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum PartitionMethod {
+        #[prost(uint64, tag = "2")]
+        RoundRobin(u64),
+        #[prost(message, tag = "3")]
+        Hash(super::PhysicalHashRepartition),
+        #[prost(uint64, tag = "4")]
+        Unknown(u64),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct JoinFilter {
+    #[prost(message, optional, tag = "1")]
+    pub expression: ::core::option::Option<PhysicalExprNode>,
+    #[prost(message, repeated, tag = "2")]
+    pub column_indices: ::prost::alloc::vec::Vec<ColumnIndex>,
+    #[prost(message, optional, tag = "3")]
+    pub schema: ::core::option::Option<Schema>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ColumnIndex {
+    #[prost(uint32, tag = "1")]
+    pub index: u32,
+    #[prost(enumeration = "JoinSide", tag = "2")]
+    pub side: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartitionedFile {
+    #[prost(string, tag = "1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub size: u64,
+    #[prost(uint64, tag = "3")]
+    pub last_modified_ns: u64,
+    #[prost(message, repeated, tag = "4")]
+    pub partition_values: ::prost::alloc::vec::Vec<ScalarValue>,
+    #[prost(message, optional, tag = "5")]
+    pub range: ::core::option::Option<FileRange>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FileRange {
+    #[prost(int64, tag = "1")]
+    pub start: i64,
+    #[prost(int64, tag = "2")]
+    pub end: i64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartitionStats {
+    #[prost(int64, tag = "1")]
+    pub num_rows: i64,
+    #[prost(int64, tag = "2")]
+    pub num_batches: i64,
+    #[prost(int64, tag = "3")]
+    pub num_bytes: i64,
+    #[prost(message, repeated, tag = "4")]
+    pub column_stats: ::prost::alloc::vec::Vec<ColumnStats>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Statistics {
+    #[prost(int64, tag = "1")]
+    pub num_rows: i64,
+    #[prost(int64, tag = "2")]
+    pub total_byte_size: i64,
+    #[prost(message, repeated, tag = "3")]
+    pub column_stats: ::prost::alloc::vec::Vec<ColumnStats>,
+    #[prost(bool, tag = "4")]
+    pub is_exact: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ColumnStats {
+    #[prost(message, optional, tag = "1")]
+    pub min_value: ::core::option::Option<ScalarValue>,
+    #[prost(message, optional, tag = "2")]
+    pub max_value: ::core::option::Option<ScalarValue>,
+    #[prost(uint32, tag = "3")]
+    pub null_count: u32,
+    #[prost(uint32, tag = "4")]
+    pub distinct_count: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartitionLocation {
+    /// partition_id of the map stage who produces the shuffle.
+    #[prost(uint32, tag = "1")]
+    pub map_partition_id: u32,
+    /// partition_id of the shuffle, a composition of(job_id + map_stage_id + partition_id).
+    #[prost(message, optional, tag = "2")]
+    pub partition_id: ::core::option::Option<PartitionId>,
+    #[prost(message, optional, tag = "3")]
+    pub executor_meta: ::core::option::Option<ExecutorMetadata>,
+    #[prost(message, optional, tag = "4")]
+    pub partition_stats: ::core::option::Option<PartitionStats>,
+    #[prost(string, tag = "5")]
+    pub path: ::prost::alloc::string::String,
+}
+/// Unique identifier for a materialized partition of data
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartitionId {
+    #[prost(string, tag = "1")]
+    pub job_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub stage_id: u32,
+    #[prost(uint32, tag = "4")]
+    pub partition_id: u32,
+}
+/// Used by scheduler
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExecutorMetadata {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub host: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "3")]
+    pub port: u32,
+    #[prost(uint32, tag = "4")]
+    pub grpc_port: u32,
+    #[prost(message, optional, tag = "5")]
+    pub specification: ::core::option::Option<ExecutorSpecification>,
+}
+/// Used by grpc
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExecutorRegistration {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "3")]
+    pub port: u32,
+    #[prost(uint32, tag = "4")]
+    pub grpc_port: u32,
+    #[prost(message, optional, tag = "5")]
+    pub specification: ::core::option::Option<ExecutorSpecification>,
+    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see <https://github.com/tokio-rs/prost/issues/430> and <https://github.com/tokio-rs/prost/pull/455>)
+    /// this syntax is ugly but is binary compatible with the "optional" keyword (see <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
+    #[prost(oneof = "executor_registration::OptionalHost", tags = "2")]
+    pub optional_host: ::core::option::Option<executor_registration::OptionalHost>,
+}
+/// Nested message and enum types in `ExecutorRegistration`.
+pub mod executor_registration {
+    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see <https://github.com/tokio-rs/prost/issues/430> and <https://github.com/tokio-rs/prost/pull/455>)
+    /// this syntax is ugly but is binary compatible with the "optional" keyword (see <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum OptionalHost {
+        #[prost(string, tag = "2")]
+        Host(::prost::alloc::string::String),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExecutorHeartbeat {
+    #[prost(string, tag = "1")]
+    pub executor_id: ::prost::alloc::string::String,
+    /// Unix epoch-based timestamp in seconds
+    #[prost(uint64, tag = "2")]
+    pub timestamp: u64,
+    #[prost(message, repeated, tag = "3")]
+    pub metrics: ::prost::alloc::vec::Vec<ExecutorMetric>,
+    #[prost(message, optional, tag = "4")]
+    pub status: ::core::option::Option<ExecutorStatus>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExecutorSpecification {
+    #[prost(message, repeated, tag = "1")]
+    pub resources: ::prost::alloc::vec::Vec<ExecutorResource>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExecutorResource {
+    /// TODO add more resources
+    #[prost(oneof = "executor_resource::Resource", tags = "1")]
+    pub resource: ::core::option::Option<executor_resource::Resource>,
+}
+/// Nested message and enum types in `ExecutorResource`.
+pub mod executor_resource {
+    /// TODO add more resources
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Resource {
+        #[prost(uint32, tag = "1")]
+        TaskSlots(u32),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExecutorMetric {
+    /// TODO add more metrics
+    #[prost(oneof = "executor_metric::Metric", tags = "1")]
+    pub metric: ::core::option::Option<executor_metric::Metric>,
+}
+/// Nested message and enum types in `ExecutorMetric`.
+pub mod executor_metric {
+    /// TODO add more metrics
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Metric {
+        #[prost(uint64, tag = "1")]
+        AvailableMemory(u64),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExecutorStatus {
+    #[prost(oneof = "executor_status::Status", tags = "1, 2, 3")]
+    pub status: ::core::option::Option<executor_status::Status>,
+}
+/// Nested message and enum types in `ExecutorStatus`.
+pub mod executor_status {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Status {
+        #[prost(string, tag = "1")]
+        Active(::prost::alloc::string::String),
+        #[prost(string, tag = "2")]
+        Dead(::prost::alloc::string::String),
+        #[prost(string, tag = "3")]
+        Unknown(::prost::alloc::string::String),
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1567,6 +2251,64 @@ impl UnionMode {
         match self {
             UnionMode::Sparse => "sparse",
             UnionMode::Dense => "dense",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum PartitionMode {
+    CollectLeft = 0,
+    Partitioned = 1,
+    Auto = 2,
+}
+impl PartitionMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            PartitionMode::CollectLeft => "COLLECT_LEFT",
+            PartitionMode::Partitioned => "PARTITIONED",
+            PartitionMode::Auto => "AUTO",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AggregateMode {
+    Partial = 0,
+    Final = 1,
+    FinalPartitioned = 2,
+}
+impl AggregateMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            AggregateMode::Partial => "PARTIAL",
+            AggregateMode::Final => "FINAL",
+            AggregateMode::FinalPartitioned => "FINAL_PARTITIONED",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum JoinSide {
+    LeftSide = 0,
+    RightSide = 1,
+}
+impl JoinSide {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            JoinSide::LeftSide => "LEFT_SIDE",
+            JoinSide::RightSide => "RIGHT_SIDE",
         }
     }
 }

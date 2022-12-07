@@ -51,10 +51,14 @@ pub trait PartitionEvaluator {
     }
 
     /// evaluate the partition evaluator against the partitions
-    fn evaluate(&self, partition_points: Vec<Range<usize>>) -> Result<Vec<ArrayRef>> {
+    fn evaluate(
+        &self,
+        values: &[ArrayRef],
+        partition_points: Vec<Range<usize>>,
+    ) -> Result<Vec<ArrayRef>> {
         partition_points
             .into_iter()
-            .map(|partition| self.evaluate_partition(partition))
+            .map(|partition| self.evaluate_partition(values, partition))
             .collect()
     }
 
@@ -75,7 +79,15 @@ pub trait PartitionEvaluator {
     }
 
     /// evaluate the partition evaluator against the partition
-    fn evaluate_partition(&self, _partition: Range<usize>) -> Result<ArrayRef>;
+    fn evaluate_partition(
+        &self,
+        _values: &[ArrayRef],
+        _partition: Range<usize>,
+    ) -> Result<ArrayRef> {
+        Err(DataFusionError::NotImplemented(
+            "evaluate_partition is not implemented by default".into(),
+        ))
+    }
 
     /// evaluate the partition evaluator against the partition but with rank
     fn evaluate_partition_with_rank(
@@ -89,7 +101,11 @@ pub trait PartitionEvaluator {
     }
 
     /// evaluate window function result inside given range
-    fn evaluate_inside_range(&self, _range: Range<usize>) -> Result<ScalarValue> {
+    fn evaluate_inside_range(
+        &self,
+        _values: &[ArrayRef],
+        _range: Range<usize>,
+    ) -> Result<ScalarValue> {
         Err(DataFusionError::NotImplemented(
             "evaluate_inside_range is not implemented by default".into(),
         ))

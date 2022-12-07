@@ -480,7 +480,7 @@ impl DefaultPhysicalPlanner {
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
                     let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
-                    source.scan(session_state, projection, &unaliased, *fetch).await
+                    source.scan(session_state, projection.as_ref(), &unaliased, *fetch).await
                 }
                 LogicalPlan::Values(Values {
                     values,
@@ -522,8 +522,8 @@ impl DefaultPhysicalPlanner {
                     let partition_keys = window_expr_common_partition_keys(window_expr)?;
 
                     let can_repartition = !partition_keys.is_empty()
-                        && session_state.config.target_partitions > 1
-                        && session_state.config.repartition_windows;
+                        && session_state.config.target_partitions() > 1
+                        && session_state.config.repartition_window_functions();
 
                     let physical_partition_keys = if can_repartition
                     {
@@ -661,8 +661,8 @@ impl DefaultPhysicalPlanner {
                     let final_group: Vec<Arc<dyn PhysicalExpr>> = initial_aggr.output_group_expr();
 
                     let can_repartition = !groups.is_empty()
-                        && session_state.config.target_partitions > 1
-                        && session_state.config.repartition_aggregations;
+                        && session_state.config.target_partitions() > 1
+                        && session_state.config.repartition_aggregations();
 
                     let (initial_aggr, next_partition_mode): (
                         Arc<dyn ExecutionPlan>,
@@ -836,7 +836,7 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
                     // If we have a `LIMIT` can run sort/limts in parallel (similar to TopK)
-                    Ok(if fetch.is_some() && session_state.config.target_partitions > 1 {
+                    Ok(if fetch.is_some() && session_state.config.target_partitions() > 1 {
                         let sort = SortExec::new_with_partitioning(
                             sort_expr,
                             physical_input,
@@ -937,8 +937,8 @@ impl DefaultPhysicalPlanner {
                         .read()
                         .get_bool(OPT_PREFER_HASH_JOIN)
                         .unwrap_or_default();
-                    if session_state.config.target_partitions > 1
-                        && session_state.config.repartition_joins
+                    if session_state.config.target_partitions() > 1
+                        && session_state.config.repartition_joins()
                         && !prefer_hash_join
                     {
                         // Use SortMergeJoin if hash join is not preferred
@@ -957,11 +957,11 @@ impl DefaultPhysicalPlanner {
                                 *null_equals_null,
                             )?))
                         }
-                    } else if session_state.config.target_partitions > 1
-                        && session_state.config.repartition_joins
+                    } else if session_state.config.target_partitions() > 1
+                        && session_state.config.repartition_joins()
                         && prefer_hash_join {
                          let partition_mode = {
-                            if session_state.config.collect_statistics {
+                            if session_state.config.collect_statistics() {
                                 PartitionMode::Auto
                             } else {
                                 PartitionMode::Partitioned
@@ -1484,15 +1484,14 @@ pub fn create_window_expr_with_name(
                     )),
                 })
                 .collect::<Result<Vec<_>>>()?;
-            if let Some(ref window_frame) = window_frame {
-                if !is_window_valid(window_frame) {
-                    return Err(DataFusionError::Execution(format!(
+            if !is_window_valid(window_frame) {
+                return Err(DataFusionError::Execution(format!(
                         "Invalid window frame: start bound ({}) cannot be larger than end bound ({})",
                         window_frame.start_bound, window_frame.end_bound
                     )));
-                }
             }
-            let window_frame = window_frame.clone().map(Arc::new);
+
+            let window_frame = Arc::new(window_frame.clone());
             windows::create_window_expr(
                 fun,
                 name,
@@ -1772,7 +1771,7 @@ mod tests {
 
     async fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
         let mut session_state = make_session_state();
-        session_state.config.target_partitions = 4;
+        session_state.config = session_state.config.with_target_partitions(4);
         // optimize the logical plan
         let logical_plan = session_state.optimize(logical_plan)?;
         let planner = DefaultPhysicalPlanner::default();
@@ -1997,7 +1996,7 @@ mod tests {
                 nullable: false, \
                 dict_id: 0, \
                 dict_is_ordered: false, \
-                metadata: None } }\
+                metadata: {} } }\
         ], metadata: {} }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
@@ -2006,7 +2005,7 @@ mod tests {
                 nullable: false, \
                 dict_id: 0, \
                 dict_is_ordered: false, \
-                metadata: None }\
+                metadata: {} }\
         ], metadata: {} }";
         match plan {
             Ok(_) => panic!("Expected planning failure"),
@@ -2053,7 +2052,7 @@ mod tests {
             .build()?;
         let e = plan(&logical_plan).await.unwrap_err().to_string();
 
-        assert_contains!(&e, "The data type inlist should be same, the value type is Boolean, one of list expr type is Struct([Field { name: \"foo\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: None }])");
+        assert_contains!(&e, "The data type inlist should be same, the value type is Boolean, one of list expr type is Struct([Field { name: \"foo\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }])");
 
         Ok(())
     }

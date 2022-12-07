@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-row"
 description = "Row backed by raw bytes for DataFusion query engine"
-version = "14.0.0"
+version = "15.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"
@@ -37,8 +37,8 @@ path = "src/lib.rs"
 jit = ["datafusion-jit"]
 
 [dependencies]
-arrow = "27.0.0"
-datafusion-common = { path = "../common", version = "14.0.0" }
-datafusion-jit = { path = "../jit", version = "14.0.0", optional = true }
+arrow = "28.0.0"
+datafusion-common = { path = "../common", version = "15.0.0" }
+datafusion-jit = { path = "../jit", version = "15.0.0", optional = true }
 paste = "^1.0"
 rand = "0.8"

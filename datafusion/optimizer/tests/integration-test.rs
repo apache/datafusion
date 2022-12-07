@@ -274,12 +274,12 @@ fn join_keys_in_subquery_alias() {
     let plan = test_sql(sql).unwrap();
     let expected = "Projection: a.col_int32, a.col_uint32, a.col_utf8, a.col_date32, a.col_date64, a.col_ts_nano_none, a.col_ts_nano_utc, b.key\
     \n  Inner Join: a.col_int32 = b.key\
-    \n    Filter: a.col_int32 IS NOT NULL\
-    \n      SubqueryAlias: a\
+    \n    SubqueryAlias: a\
+    \n      Filter: test.col_int32 IS NOT NULL\
     \n        TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]\
-    \n    Filter: b.key IS NOT NULL\
-    \n      SubqueryAlias: b\
-    \n        Projection: test.col_int32 AS key\
+    \n    SubqueryAlias: b\
+    \n      Projection: test.col_int32 AS key\
+    \n        Filter: test.col_int32 IS NOT NULL\
     \n          TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{:?}", plan));
 }
@@ -288,20 +288,31 @@ fn join_keys_in_subquery_alias() {
 fn join_keys_in_subquery_alias_1() {
     let sql = "SELECT * FROM test AS A, ( SELECT test.col_int32 AS key FROM test JOIN test AS C on test.col_int32 = C.col_int32 ) AS B where A.col_int32 = B.key;";
     let plan = test_sql(sql).unwrap();
-    let expected =  "Projection: a.col_int32, a.col_uint32, a.col_utf8, a.col_date32, a.col_date64, a.col_ts_nano_none, a.col_ts_nano_utc, b.key\
+    let expected = "Projection: a.col_int32, a.col_uint32, a.col_utf8, a.col_date32, a.col_date64, a.col_ts_nano_none, a.col_ts_nano_utc, b.key\
     \n  Inner Join: a.col_int32 = b.key\
-    \n    Filter: a.col_int32 IS NOT NULL\
-    \n      SubqueryAlias: a\
+    \n    SubqueryAlias: a\
+    \n      Filter: test.col_int32 IS NOT NULL\
     \n        TableScan: test projection=[col_int32, col_uint32, col_utf8, col_date32, col_date64, col_ts_nano_none, col_ts_nano_utc]\
-    \n    Filter: b.key IS NOT NULL\
-    \n      SubqueryAlias: b\
-    \n        Projection: test.col_int32 AS key\
-    \n          Inner Join: test.col_int32 = c.col_int32\
+    \n    SubqueryAlias: b\
+    \n      Projection: test.col_int32 AS key\
+    \n        Inner Join: test.col_int32 = c.col_int32\
+    \n          Filter: test.col_int32 IS NOT NULL\
+    \n            TableScan: test projection=[col_int32]\
+    \n          SubqueryAlias: c\
     \n            Filter: test.col_int32 IS NOT NULL\
-    \n              TableScan: test projection=[col_int32]\
-    \n            Filter: c.col_int32 IS NOT NULL\
-    \n              SubqueryAlias: c\
-    \n                TableScan: test projection=[col_int32]";
+    \n              TableScan: test projection=[col_int32]";
+    assert_eq!(expected, format!("{:?}", plan));
+}
+
+#[test]
+fn push_down_filter_groupby_expr_contains_alias() {
+    let sql = "SELECT * FROM (SELECT (col_int32 + col_uint32) AS c, count(*) FROM test GROUP BY 1) where c > 3";
+    let plan = test_sql(sql).unwrap();
+    let expected = "Projection: c, COUNT(UInt8(1))\
+    \n  Projection: test.col_int32 + test.col_uint32 AS c, COUNT(UInt8(1))\
+    \n    Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[COUNT(UInt8(1))]]\
+    \n      Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
+    \n        TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{:?}", plan));
 }
 

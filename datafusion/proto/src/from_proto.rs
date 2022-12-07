@@ -265,9 +265,9 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 protobuf::IntervalUnit::try_from(interval_unit)?.into(),
             ),
             arrow_type::ArrowTypeEnum::Decimal(protobuf::Decimal {
-                whole,
-                fractional,
-            }) => DataType::Decimal128(*whole as u8, *fractional as u8),
+                precision,
+                scale,
+            }) => DataType::Decimal128(*precision as u8, *scale as i8),
             arrow_type::ArrowTypeEnum::List(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
@@ -579,7 +579,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 Self::Decimal128(
                     Some(i128::from_be_bytes(array)),
                     val.p as u8,
-                    val.s as u8,
+                    val.s as i8,
                 )
             }
             Value::Date64Value(v) => Self::Date64(Some(*v)),
@@ -773,19 +773,17 @@ pub fn parse_expr(
             let window_frame = expr
                 .window_frame
                 .as_ref()
-                .map::<Result<WindowFrame, _>, _>(|e| match e {
-                    window_expr_node::WindowFrame::Frame(frame) => {
-                        let window_frame: WindowFrame = frame.clone().try_into()?;
-                        if WindowFrameUnits::Range == window_frame.units
-                            && order_by.len() != 1
-                        {
-                            Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
-                        } else {
-                            Ok(window_frame)
-                        }
+                .map::<Result<WindowFrame, _>, _>(|window_frame| {
+                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
+                    if WindowFrameUnits::Range == window_frame.units
+                        && order_by.len() != 1
+                    {
+                        Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
+                    } else {
+                        Ok(window_frame)
                     }
                 })
-                .transpose()?;
+                .transpose()?.ok_or_else(||{DataFusionError::Execution("expects somothing".to_string())})?;
 
             match window_function {
                 window_expr_node::WindowFunction::AggrFunction(i) => {
@@ -806,11 +804,15 @@ pub fn parse_expr(
                         .ok_or_else(|| Error::unknown("BuiltInWindowFunction", *i))?
                         .into();
 
+                    let args = parse_optional_expr(&expr.expr, registry)?
+                        .map(|e| vec![e])
+                        .unwrap_or_else(Vec::new);
+
                     Ok(Expr::WindowFunction {
                         fun: datafusion_expr::window_function::WindowFunction::BuiltInWindowFunction(
                             built_in_function,
                         ),
-                        args: vec![parse_required_expr(&expr.expr, registry, "expr")?],
+                        args,
                         partition_by,
                         order_by,
                         window_frame,
@@ -894,10 +896,16 @@ pub fn parse_expr(
                 .when_then_expr
                 .iter()
                 .map(|e| {
-                    let when_expr =
-                        parse_required_expr_inner(&e.when_expr, registry, "when_expr")?;
-                    let then_expr =
-                        parse_required_expr_inner(&e.then_expr, registry, "then_expr")?;
+                    let when_expr = parse_required_expr_inner(
+                        e.when_expr.as_ref(),
+                        registry,
+                        "when_expr",
+                    )?;
+                    let then_expr = parse_required_expr_inner(
+                        e.then_expr.as_ref(),
+                        registry,
+                        "then_expr",
+                    )?;
                     Ok((Box::new(when_expr), Box::new(then_expr)))
                 })
                 .collect::<Result<Vec<(Box<Expr>, Box<Expr>)>, Error>>()?;
@@ -1234,16 +1242,14 @@ impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
                 })?;
         match bound_type {
             protobuf::WindowFrameBoundType::CurrentRow => Ok(Self::CurrentRow),
-            protobuf::WindowFrameBoundType::Preceding => {
-                // FIXME implement bound value parsing
-                // https://github.com/apache/arrow-datafusion/issues/361
-                Ok(Self::Preceding(ScalarValue::UInt64(Some(1))))
-            }
-            protobuf::WindowFrameBoundType::Following => {
-                // FIXME implement bound value parsing
-                // https://github.com/apache/arrow-datafusion/issues/361
-                Ok(Self::Following(ScalarValue::UInt64(Some(1))))
-            }
+            protobuf::WindowFrameBoundType::Preceding => match bound.bound_value {
+                Some(x) => Ok(Self::Preceding(ScalarValue::try_from(&x)?)),
+                None => Ok(Self::Preceding(ScalarValue::UInt64(None))),
+            },
+            protobuf::WindowFrameBoundType::Following => match bound.bound_value {
+                Some(x) => Ok(Self::Following(ScalarValue::try_from(&x)?)),
+                None => Ok(Self::Following(ScalarValue::UInt64(None))),
+            },
         }
     }
 }
@@ -1352,7 +1358,7 @@ fn parse_required_expr(
 }
 
 fn parse_required_expr_inner(
-    p: &Option<protobuf::LogicalExprNode>,
+    p: Option<&protobuf::LogicalExprNode>,
     registry: &dyn FunctionRegistry,
     field: impl Into<String>,
 ) -> Result<Expr, Error> {

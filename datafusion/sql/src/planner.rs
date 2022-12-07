@@ -22,7 +22,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::{convert::TryInto, vec};
 
-use arrow::datatypes::*;
+use arrow_schema::*;
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayAgg, ExactNumberInfo, SetQuantifier};
 use sqlparser::ast::{
@@ -38,7 +38,7 @@ use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::parsers::parse_interval;
 use datafusion_common::TableReference;
-use datafusion_common::{context, ToDFSchema};
+use datafusion_common::ToDFSchema;
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
@@ -46,7 +46,7 @@ use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::builder::{
-    project_with_alias, with_alias, wrap_projection_for_join_if_necessary,
+    project, subquery_alias, subquery_alias_owned, wrap_projection_for_join_if_necessary,
 };
 use datafusion_expr::logical_plan::Join as HashJoin;
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
@@ -101,6 +101,32 @@ pub trait ContextProvider {
 #[derive(Debug, Default)]
 pub struct ParserOptions {
     parse_float_as_decimal: bool,
+}
+
+#[derive(Debug, Clone)]
+/// Struct to store Common Table Expression (CTE) provided with WITH clause and
+/// Parameter Data Types provided with PREPARE statement
+pub struct PlannerContext {
+    /// Data type provided with prepare statement
+    pub prepare_param_data_types: Vec<DataType>,
+    /// Map of CTE name to logical plan of the WITH clause
+    pub ctes: HashMap<String, LogicalPlan>,
+}
+
+impl Default for PlannerContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PlannerContext {
+    /// Create a new PlannerContext
+    pub fn new() -> Self {
+        Self {
+            prepare_param_data_types: vec![],
+            ctes: HashMap::new(),
+        }
+    }
 }
 
 /// SQL query planner
@@ -181,7 +207,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 describe_alias: _,
                 ..
             } => self.explain_statement_to_plan(verbose, analyze, *statement),
-            Statement::Query(query) => self.query_to_plan(*query, &mut HashMap::new()),
+            Statement::Query(query) => {
+                self.query_to_plan(*query, &mut PlannerContext::new())
+            }
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
             Statement::SetVariable {
                 local,
@@ -204,7 +232,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 && table_properties.is_empty()
                 && with_options.is_empty() =>
             {
-                let plan = self.query_to_plan(*query, &mut HashMap::new())?;
+                let plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
                 let input_schema = plan.schema();
 
                 let plan = if !columns.is_empty() {
@@ -248,25 +276,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 with_options,
                 ..
             } if with_options.is_empty() => {
-                let mut plan = self.query_to_plan(*query, &mut HashMap::new())?;
-
-                if !columns.is_empty() {
-                    plan = LogicalPlanBuilder::from(plan.clone())
-                        .project(
-                            plan.schema().fields().iter().zip(columns.into_iter()).map(
-                                |(field, ident)| {
-                                    col(field.name()).alias(normalize_ident(&ident))
-                                },
-                            ),
-                        )
-                        .map_err(|e| {
-                            context!("Failed to apply alias to inline projection.\n", e)
-                        })?
-                        .build()
-                        .map_err(|e| {
-                            context!("Failed to build plan for 'CREATE VIEW'.\n", e)
-                        })?;
-                }
+                let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
+                plan = Self::apply_expr_alias(plan, &columns)?;
 
                 Ok(LogicalPlan::CreateView(CreateView {
                     name: name.to_string(),
@@ -387,19 +398,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub fn query_to_plan(
         &self,
         query: Query,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        self.query_to_plan_with_alias(query, None, ctes, None)
+        self.query_to_plan_with_alias(query, None, planner_context, None)
     }
 
     /// Generate a logical plan from a SQL subquery
     pub fn subquery_to_plan(
         &self,
         query: Query,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
         outer_query_schema: &DFSchema,
     ) -> Result<LogicalPlan> {
-        self.query_to_plan_with_alias(query, None, ctes, Some(outer_query_schema))
+        self.query_to_plan_with_alias(
+            query,
+            None,
+            planner_context,
+            Some(outer_query_schema),
+        )
     }
 
     /// Generate a logic plan from an SQL query with optional alias
@@ -407,7 +423,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         query: Query,
         alias: Option<String>,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         let set_expr = query.body;
@@ -423,7 +439,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
                 let cte_name = normalize_ident(&cte.alias.name);
-                if ctes.contains_key(&cte_name) {
+                if planner_context.ctes.contains_key(&cte_name) {
                     return Err(DataFusionError::SQL(ParserError(format!(
                         "WITH query name {:?} specified more than once",
                         cte_name
@@ -433,7 +449,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let logical_plan = self.query_to_plan_with_alias(
                     *cte.query,
                     Some(cte_name.clone()),
-                    &mut ctes.clone(),
+                    &mut planner_context.clone(),
                     outer_query_schema,
                 )?;
 
@@ -441,10 +457,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // projection (e.g. "WITH table(t1, t2) AS SELECT 1, 2").
                 let logical_plan = self.apply_table_alias(logical_plan, cte.alias)?;
 
-                ctes.insert(cte_name, logical_plan);
+                planner_context.ctes.insert(cte_name, logical_plan);
             }
         }
-        let plan = self.set_expr_to_plan(*set_expr, alias, ctes, outer_query_schema)?;
+        let plan =
+            self.set_expr_to_plan(*set_expr, alias, planner_context, outer_query_schema)?;
         let plan = self.order_by(plan, query.order_by)?;
         self.limit(plan, query.offset, query.limit)
     }
@@ -453,12 +470,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         set_expr: SetExpr,
         alias: Option<String>,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         match set_expr {
             SetExpr::Select(s) => {
-                self.select_to_plan(*s, ctes, alias, outer_query_schema)
+                self.select_to_plan(*s, planner_context, alias, outer_query_schema)
             }
             SetExpr::Values(v) => self.sql_values_to_plan(v),
             SetExpr::SetOperation {
@@ -472,10 +489,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     SetQuantifier::Distinct | SetQuantifier::None => false,
                 };
 
-                let left_plan =
-                    self.set_expr_to_plan(*left, None, ctes, outer_query_schema)?;
-                let right_plan =
-                    self.set_expr_to_plan(*right, None, ctes, outer_query_schema)?;
+                let left_plan = self.set_expr_to_plan(
+                    *left,
+                    None,
+                    planner_context,
+                    outer_query_schema,
+                )?;
+                let right_plan = self.set_expr_to_plan(
+                    *right,
+                    None,
+                    planner_context,
+                    outer_query_schema,
+                )?;
                 match (op, all) {
                     (SetOperator::Union, true) => LogicalPlanBuilder::from(left_plan)
                         .union(right_plan)?
@@ -497,7 +522,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
             }
-            SetExpr::Query(q) => self.query_to_plan(*q, ctes),
+            SetExpr::Query(q) => self.query_to_plan(*q, planner_context),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Query {} not implemented yet",
                 set_expr
@@ -635,19 +660,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn plan_from_tables(
         &self,
         mut from: Vec<TableWithJoins>,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         match from.len() {
             0 => Ok(LogicalPlanBuilder::empty(true).build()?),
             1 => {
                 let from = from.remove(0);
-                self.plan_table_with_joins(from, ctes, outer_query_schema)
+                self.plan_table_with_joins(from, planner_context, outer_query_schema)
             }
             _ => {
                 let plans = from
                     .into_iter()
-                    .map(|t| self.plan_table_with_joins(t, ctes, outer_query_schema))
+                    .map(|t| {
+                        self.plan_table_with_joins(t, planner_context, outer_query_schema)
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 let mut left = plans[0].clone();
                 for right in plans.iter().skip(1) {
@@ -661,24 +688,41 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn plan_table_with_joins(
         &self,
         t: TableWithJoins,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
-        let left = self.create_relation(t.relation, ctes, outer_query_schema)?;
+        // From clause may exist CTEs, we should separate them from global CTEs.
+        // CTEs in from clause are allowed to be duplicated.
+        // Such as `select * from (WITH source AS (select 1 as e) SELECT * FROM source) t1, (WITH source AS (select 1 as e) SELECT * FROM source) t2;` which is valid.
+        // So always use original global CTEs to plan CTEs in from clause.
+        // Btw, don't need to add CTEs in from to global CTEs.
+        let origin_planner_context = planner_context.clone();
+        let left =
+            self.create_relation(t.relation, planner_context, outer_query_schema)?;
         match t.joins.len() {
-            0 => Ok(left),
+            0 => {
+                *planner_context = origin_planner_context;
+                Ok(left)
+            }
             _ => {
                 let mut joins = t.joins.into_iter();
+                *planner_context = origin_planner_context.clone();
                 let mut left = self.parse_relation_join(
                     left,
                     joins.next().unwrap(), // length of joins > 0
-                    ctes,
+                    planner_context,
                     outer_query_schema,
                 )?;
                 for join in joins {
-                    left =
-                        self.parse_relation_join(left, join, ctes, outer_query_schema)?;
+                    *planner_context = origin_planner_context.clone();
+                    left = self.parse_relation_join(
+                        left,
+                        join,
+                        planner_context,
+                        outer_query_schema,
+                    )?;
                 }
+                *planner_context = origin_planner_context;
                 Ok(left)
             }
         }
@@ -688,22 +732,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         left: LogicalPlan,
         join: Join,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
-        let right = self.create_relation(join.relation, ctes, outer_query_schema)?;
+        let right =
+            self.create_relation(join.relation, planner_context, outer_query_schema)?;
         match join.join_operator {
             JoinOperator::LeftOuter(constraint) => {
-                self.parse_join(left, right, constraint, JoinType::Left, ctes)
+                self.parse_join(left, right, constraint, JoinType::Left, planner_context)
             }
             JoinOperator::RightOuter(constraint) => {
-                self.parse_join(left, right, constraint, JoinType::Right, ctes)
+                self.parse_join(left, right, constraint, JoinType::Right, planner_context)
             }
             JoinOperator::Inner(constraint) => {
-                self.parse_join(left, right, constraint, JoinType::Inner, ctes)
+                self.parse_join(left, right, constraint, JoinType::Inner, planner_context)
             }
             JoinOperator::FullOuter(constraint) => {
-                self.parse_join(left, right, constraint, JoinType::Full, ctes)
+                self.parse_join(left, right, constraint, JoinType::Full, planner_context)
             }
             JoinOperator::CrossJoin => self.parse_cross_join(left, &right),
             other => Err(DataFusionError::NotImplemented(format!(
@@ -727,7 +772,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         right: LogicalPlan,
         constraint: JoinConstraint,
         join_type: JoinType,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         match constraint {
             JoinConstraint::On(sql_expr) => {
@@ -735,7 +780,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let join_schema = left.schema().join(right.schema())?;
 
                 // parse ON expression
-                let expr = self.sql_to_rex(sql_expr, &join_schema, ctes)?;
+                let expr = self.sql_to_rex(sql_expr, &join_schema, planner_context)?;
 
                 // ambiguous check
                 ensure_any_column_reference_is_unambiguous(
@@ -828,7 +873,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn create_relation(
         &self,
         relation: TableFactor,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         let (plan, alias) = match relation {
@@ -841,13 +886,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let table_name = normalize_sql_object_name(sql_object_name);
                 let table_ref: TableReference = table_name.as_str().into();
                 let table_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
-                let cte = ctes.get(&table_name);
+                let cte = planner_context.ctes.get(&table_name);
                 (
                     match (cte, self.schema_provider.get_table_provider(table_ref)) {
                         (Some(cte_plan), _) => match table_alias {
-                            Some(cte_alias) => {
-                                Ok(with_alias(cte_plan.clone(), cte_alias))
-                            }
+                            Some(cte_alias) => subquery_alias(cte_plan, &cte_alias),
                             _ => Ok(cte_plan.clone()),
                         },
                         (_, Ok(provider)) => {
@@ -867,16 +910,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             TableFactor::Derived {
                 subquery, alias, ..
             } => {
-                let normalized_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
                 let logical_plan = self.query_to_plan_with_alias(
                     *subquery,
                     None,
-                    ctes,
+                    planner_context,
                     outer_query_schema,
                 )?;
-
+                let normalized_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
                 let plan = match normalized_alias {
-                    Some(alias) => with_alias(logical_plan, alias),
+                    Some(alias) => subquery_alias_owned(logical_plan, &alias)?,
                     _ => logical_plan,
                 };
                 (plan, alias)
@@ -885,7 +927,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table_with_joins,
                 alias,
             } => (
-                self.plan_table_with_joins(*table_with_joins, ctes, outer_query_schema)?,
+                self.plan_table_with_joins(
+                    *table_with_joins,
+                    planner_context,
+                    outer_query_schema,
+                )?,
                 alias,
             ),
             // @todo Support TableFactory::TableFunction?
@@ -920,14 +966,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 columns_alias.len(),
             )))
         } else {
-            Ok(LogicalPlanBuilder::from(plan.clone())
-                .project_with_alias(
-                    plan.schema().fields().iter().zip(columns_alias.iter()).map(
-                        |(field, ident)| col(field.name()).alias(normalize_ident(ident)),
-                    ),
-                    Some(normalize_ident(&alias.name)),
-                )?
-                .build()?)
+            subquery_alias_owned(
+                Self::apply_expr_alias(plan, &alias.columns)?,
+                &normalize_ident(&alias.name),
+            )
+        }
+    }
+
+    fn apply_expr_alias(plan: LogicalPlan, idents: &Vec<Ident>) -> Result<LogicalPlan> {
+        if idents.is_empty() {
+            Ok(plan)
+        } else {
+            let fields = plan.schema().fields().clone();
+            LogicalPlanBuilder::from(plan)
+                .project(fields.iter().zip(idents.iter()).map(|(field, ident)| {
+                    col(field.name()).alias(normalize_ident(ident))
+                }))?
+                .build()
         }
     }
 
@@ -938,7 +993,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         selection: Option<SQLExpr>,
         plan: LogicalPlan,
         outer_query_schema: Option<&DFSchema>,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         match selection {
             Some(predicate_expr) => {
@@ -953,7 +1008,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 let x: Vec<&DFSchemaRef> = all_schemas.iter().collect();
 
-                let filter_expr = self.sql_to_rex(predicate_expr, &join_schema, ctes)?;
+                let filter_expr =
+                    self.sql_to_rex(predicate_expr, &join_schema, planner_context)?;
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 let filter_expr = normalize_col_with_schemas(
@@ -1002,7 +1058,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn select_to_plan(
         &self,
         select: Select,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
         alias: Option<String>,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
@@ -1021,23 +1077,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         // process `from` clause
-        let plan = self.plan_from_tables(select.from, ctes, outer_query_schema)?;
+        let plan =
+            self.plan_from_tables(select.from, planner_context, outer_query_schema)?;
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
         // build from schema for unqualifier column ambiguous check
         // we should get only one field for unqualifier column from schema.
         let from_schema = self.build_schema_for_ambiguous_check(&plan)?;
 
         // process `where` clause
-        let plan =
-            self.plan_selection(select.selection, plan, outer_query_schema, ctes)?;
+        let plan = self.plan_selection(
+            select.selection,
+            plan,
+            outer_query_schema,
+            planner_context,
+        )?;
 
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
             &plan,
             select.projection,
             empty_from,
-            outer_query_schema,
-            ctes,
+            planner_context,
             &from_schema,
         )?;
 
@@ -1053,8 +1113,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let having_expr_opt = select
             .having
             .map::<Result<Expr>, _>(|having_expr| {
-                let having_expr =
-                    self.sql_expr_to_logical_expr(having_expr, &combined_schema, ctes)?;
+                let having_expr = self.sql_expr_to_logical_expr(
+                    having_expr,
+                    &combined_schema,
+                    planner_context,
+                )?;
                 // This step "dereferences" any aliases in the HAVING clause.
                 //
                 // This is how we support queries with HAVING expressions that
@@ -1092,7 +1155,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .into_iter()
             .map(|e| {
                 let group_by_expr =
-                    self.sql_expr_to_logical_expr(e, &combined_schema, ctes)?;
+                    self.sql_expr_to_logical_expr(e, &combined_schema, planner_context)?;
                 // aliases from the projection can conflict with same-named expressions in the input
                 let mut alias_map = alias_map.clone();
                 for f in plan.schema().fields() {
@@ -1117,7 +1180,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.aggregate(
                     plan,
                     &select_exprs,
-                    &having_expr_opt,
+                    having_expr_opt.as_ref(),
                     group_by_exprs,
                     aggr_exprs,
                 )?
@@ -1166,7 +1229,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // final projection
-        let plan = project_with_alias(plan, select_exprs_post_aggr, alias)?;
+        let mut plan = project(plan, select_exprs_post_aggr)?;
+        plan = match alias {
+            Some(alias) => subquery_alias_owned(plan, &alias)?,
+            None => plan,
+        };
 
         // process distinct clause
         let plan = if select.distinct {
@@ -1180,7 +1247,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let x = select
                 .distribute_by
                 .iter()
-                .map(|e| self.sql_expr_to_logical_expr(e.clone(), &combined_schema, ctes))
+                .map(|e| {
+                    self.sql_expr_to_logical_expr(
+                        e.clone(),
+                        &combined_schema,
+                        planner_context,
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?;
             LogicalPlanBuilder::from(plan)
                 .repartition(Partitioning::DistributeBy(x))?
@@ -1198,8 +1271,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         plan: &LogicalPlan,
         projection: Vec<SelectItem>,
         empty_from: bool,
-        outer_query_schema: Option<&DFSchema>,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
         from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
         projection
@@ -1209,8 +1281,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     expr,
                     plan,
                     empty_from,
-                    outer_query_schema,
-                    ctes,
+                    planner_context,
                     from_schema,
                 )
             })
@@ -1255,7 +1326,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         input: LogicalPlan,
         select_exprs: &[Expr],
-        having_expr_opt: &Option<Expr>,
+        having_expr_opt: Option<&Expr>,
         group_by_exprs: Vec<Expr>,
         aggr_exprs: Vec<Expr>,
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
@@ -1352,7 +1423,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Some(skip_expr) => match self.sql_to_rex(
                 skip_expr.value,
                 input.schema(),
-                &mut HashMap::new(),
+                &mut PlannerContext::new(),
             )? {
                 Expr::Literal(ScalarValue::Int64(Some(s))) => {
                     if s < 0 {
@@ -1375,7 +1446,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let n = match self.sql_to_rex(
                     limit_expr,
                     input.schema(),
-                    &mut HashMap::new(),
+                    &mut PlannerContext::new(),
                 )? {
                     Expr::Literal(ScalarValue::Int64(Some(n))) => Ok(n as usize),
                     _ => Err(DataFusionError::Plan(
@@ -1437,7 +1508,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let field = schema.field(field_index - 1);
                 Expr::Column(field.qualified_column())
             }
-            e => self.sql_expr_to_logical_expr(e, schema, &mut HashMap::new())?,
+            e => self.sql_expr_to_logical_expr(e, schema, &mut PlannerContext::new())?,
         };
         Ok({
             let asc = asc.unwrap_or(true);
@@ -1517,27 +1588,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         sql: SelectItem,
         plan: &LogicalPlan,
         empty_from: bool,
-        outer_query_schema: Option<&DFSchema>,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
         from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
-        let input_schema = match outer_query_schema {
-            Some(x) => {
-                let mut input_schema = plan.schema().as_ref().clone();
-                input_schema.merge(x);
-                input_schema
-            }
-            _ => plan.schema().as_ref().clone(),
-        };
-
         match sql {
             SelectItem::UnnamedExpr(expr) => {
-                let expr = self.sql_to_rex(expr, &input_schema, ctes)?;
+                let expr = self.sql_to_rex(expr, plan.schema(), planner_context)?;
                 self.column_reference_ambiguous_check(from_schema, &[expr.clone()])?;
                 Ok(vec![normalize_col(expr, plan)?])
             }
             SelectItem::ExprWithAlias { expr, alias } => {
-                let select_expr = self.sql_to_rex(expr, &input_schema, ctes)?;
+                let select_expr =
+                    self.sql_to_rex(expr, plan.schema(), planner_context)?;
                 self.column_reference_ambiguous_check(
                     from_schema,
                     &[select_expr.clone()],
@@ -1567,9 +1629,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         sql: SQLExpr,
         schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let mut expr = self.sql_expr_to_logical_expr(sql, schema, ctes)?;
+        let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
         expr = self.rewrite_partial_qualifier(expr, schema);
         self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
         Ok(expr)
@@ -1607,19 +1669,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         sql: FunctionArg,
         schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         match sql {
             FunctionArg::Named {
                 name: _,
                 arg: FunctionArgExpr::Expr(arg),
-            } => self.sql_expr_to_logical_expr(arg, schema, ctes),
+            } => self.sql_expr_to_logical_expr(arg, schema, planner_context),
             FunctionArg::Named {
                 name: _,
                 arg: FunctionArgExpr::Wildcard,
             } => Ok(Expr::Wildcard),
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
-                self.sql_expr_to_logical_expr(arg, schema, ctes)
+                self.sql_expr_to_logical_expr(arg, schema, planner_context)
             }
             FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(Expr::Wildcard),
             _ => Err(DataFusionError::NotImplemented(format!(
@@ -1635,7 +1697,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         op: BinaryOperator,
         right: SQLExpr,
         schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let operator = match op {
             BinaryOperator::Gt => Ok(Operator::Gt),
@@ -1668,9 +1730,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }?;
 
         Ok(Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(self.sql_expr_to_logical_expr(left, schema, ctes)?),
+            Box::new(self.sql_expr_to_logical_expr(left, schema, planner_context)?),
             operator,
-            Box::new(self.sql_expr_to_logical_expr(right, schema, ctes)?),
+            Box::new(self.sql_expr_to_logical_expr(right, schema, planner_context)?),
         )))
     }
 
@@ -1679,13 +1741,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         op: UnaryOperator,
         expr: SQLExpr,
         schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         match op {
             UnaryOperator::Not => Ok(Expr::Not(Box::new(
-                self.sql_expr_to_logical_expr(expr, schema, ctes)?,
+                self.sql_expr_to_logical_expr(expr, schema, planner_context)?,
             ))),
-            UnaryOperator::Plus => Ok(self.sql_expr_to_logical_expr(expr, schema, ctes)?),
+            UnaryOperator::Plus => {
+                Ok(self.sql_expr_to_logical_expr(expr, schema, planner_context)?)
+            }
             UnaryOperator::Minus => {
                 match expr {
                     // optimization: if it's a number literal, we apply the negative operator
@@ -1701,7 +1765,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             })?)),
                     },
                     // not a literal, apply negative operator on expression
-                    _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(expr, schema, ctes)?))),
+                    _ => Ok(Expr::Negative(Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?))),
                 }
             }
             _ => Err(DataFusionError::NotImplemented(format!(
@@ -1732,7 +1796,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             op,
                             *expr,
                             &schema,
-                            &mut HashMap::new(),
+                            &mut PlannerContext::new(),
                         ),
                         SQLExpr::BinaryOp { left, op, right } => self
                             .parse_sql_binary_op(
@@ -1740,7 +1804,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 op,
                                 *right,
                                 &schema,
-                                &mut HashMap::new(),
+                                &mut PlannerContext::new(),
                             ),
                         SQLExpr::TypedString { data_type, value } => {
                             Ok(Expr::Cast(Cast::new(
@@ -1752,7 +1816,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Box::new(self.sql_expr_to_logical_expr(
                                 *expr,
                                 &schema,
-                                &mut HashMap::new(),
+                                &mut PlannerContext::new(),
                             )?),
                             self.convert_data_type(&data_type)?,
                         ))),
@@ -1771,7 +1835,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         sql: SQLExpr,
         schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         match sql {
             SQLExpr::Value(Value::Number(n, _)) => self.parse_sql_number(&n),
@@ -1782,7 +1846,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fun: BuiltinScalarFunction::DatePart,
                 args: vec![
                     Expr::Literal(ScalarValue::Utf8(Some(format!("{}", field)))),
-                    self.sql_expr_to_logical_expr(*expr, schema, ctes)?,
+                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
                 ],
             }),
 
@@ -1838,7 +1902,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::ArrayIndex { obj, indexes } => {
-                let expr = self.sql_expr_to_logical_expr(*obj, schema, ctes)?;
+                let expr = self.sql_expr_to_logical_expr(*obj, schema, planner_context)?;
                 plan_indexed(expr, indexes)
             }
 
@@ -1899,20 +1963,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 else_result,
             } => {
                 let expr = if let Some(e) = operand {
-                    Some(Box::new(self.sql_expr_to_logical_expr(*e, schema, ctes)?))
+                    Some(Box::new(self.sql_expr_to_logical_expr(*e, schema, planner_context)?))
                 } else {
                     None
                 };
                 let when_expr = conditions
                     .into_iter()
-                    .map(|e| self.sql_expr_to_logical_expr(e, schema, ctes))
+                    .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                     .collect::<Result<Vec<_>>>()?;
                 let then_expr = results
                     .into_iter()
-                    .map(|e| self.sql_expr_to_logical_expr(e, schema, ctes))
+                    .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                     .collect::<Result<Vec<_>>>()?;
                 let else_expr = if let Some(e) = else_result {
-                    Some(Box::new(self.sql_expr_to_logical_expr(*e, schema, ctes)?))
+                    Some(Box::new(self.sql_expr_to_logical_expr(*e, schema, planner_context)?))
                 } else {
                     None
                 };
@@ -1932,7 +1996,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 data_type,
             } => Ok(Expr::Cast(Cast::new(
-                Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
                 self.convert_data_type(&data_type)?,
             ))),
 
@@ -1940,7 +2004,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 data_type,
             } => Ok(Expr::TryCast {
-                expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
                 data_type: self.convert_data_type(&data_type)?,
             }),
 
@@ -1953,38 +2017,38 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))),
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
-                self.sql_expr_to_logical_expr(*expr, schema, ctes)?,
+                self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
             ))),
 
             SQLExpr::IsNotNull(expr) => Ok(Expr::IsNotNull(Box::new(
-                self.sql_expr_to_logical_expr(*expr, schema, ctes)?,
+                self.sql_expr_to_logical_expr(*expr, schema, planner_context)?,
             ))),
 
             SQLExpr::IsDistinctFrom(left, right) => Ok(Expr::BinaryExpr(BinaryExpr::new(
-                Box::new(self.sql_expr_to_logical_expr(*left, schema, ctes)?),
+                Box::new(self.sql_expr_to_logical_expr(*left, schema, planner_context)?),
                 Operator::IsDistinctFrom,
-                Box::new(self.sql_expr_to_logical_expr(*right, schema, ctes)?),
+                Box::new(self.sql_expr_to_logical_expr(*right, schema, planner_context)?),
             ))),
 
             SQLExpr::IsNotDistinctFrom(left, right) => Ok(Expr::BinaryExpr(BinaryExpr::new(
-                Box::new(self.sql_expr_to_logical_expr(*left, schema, ctes)?),
+                Box::new(self.sql_expr_to_logical_expr(*left, schema, planner_context)?),
                 Operator::IsNotDistinctFrom,
-                Box::new(self.sql_expr_to_logical_expr(*right, schema, ctes)?),
+                Box::new(self.sql_expr_to_logical_expr(*right, schema, planner_context)?),
             ))),
 
-            SQLExpr::IsTrue(expr) => Ok(Expr::IsTrue(Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?))),
+            SQLExpr::IsTrue(expr) => Ok(Expr::IsTrue(Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?))),
 
-            SQLExpr::IsFalse(expr) => Ok(Expr::IsFalse(Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?))),
+            SQLExpr::IsFalse(expr) => Ok(Expr::IsFalse(Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?))),
 
-            SQLExpr::IsNotTrue(expr) => Ok(Expr::IsNotTrue(Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?))),
+            SQLExpr::IsNotTrue(expr) => Ok(Expr::IsNotTrue(Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?))),
 
-            SQLExpr::IsNotFalse(expr) => Ok(Expr::IsNotFalse(Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?))),
+            SQLExpr::IsNotFalse(expr) => Ok(Expr::IsNotFalse(Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?))),
 
-            SQLExpr::IsUnknown(expr) => Ok(Expr::IsUnknown(Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?))),
+            SQLExpr::IsUnknown(expr) => Ok(Expr::IsUnknown(Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?))),
 
-            SQLExpr::IsNotUnknown(expr) => Ok(Expr::IsNotUnknown(Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?))),
+            SQLExpr::IsNotUnknown(expr) => Ok(Expr::IsNotUnknown(Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?))),
 
-            SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(op, *expr, schema, ctes),
+            SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(op, *expr, schema, planner_context),
 
             SQLExpr::Between {
                 expr,
@@ -1992,10 +2056,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 low,
                 high,
             } => Ok(Expr::Between(Between::new(
-                Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
                 negated,
-                Box::new(self.sql_expr_to_logical_expr(*low, schema, ctes)?),
-                Box::new(self.sql_expr_to_logical_expr(*high, schema, ctes)?),
+                Box::new(self.sql_expr_to_logical_expr(*low, schema, planner_context)?),
+                Box::new(self.sql_expr_to_logical_expr(*high, schema, planner_context)?),
             ))),
 
             SQLExpr::InList {
@@ -2005,18 +2069,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } => {
                 let list_expr = list
                     .into_iter()
-                    .map(|e| self.sql_expr_to_logical_expr(e, schema, ctes))
+                    .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                     .collect::<Result<Vec<_>>>()?;
 
                 Ok(Expr::InList {
-                    expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                    expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
                     list: list_expr,
                     negated,
                 })
             }
 
             SQLExpr::Like { negated, expr, pattern, escape_char } => {
-                let pattern = self.sql_expr_to_logical_expr(*pattern, schema, ctes)?;
+                let pattern = self.sql_expr_to_logical_expr(*pattern, schema, planner_context)?;
                 let pattern_type = pattern.get_type(schema)?;
                 if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
                     return Err(DataFusionError::Plan(
@@ -2025,14 +2089,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 Ok(Expr::Like(Like::new(
                     negated,
-                    Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                    Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
                     Box::new(pattern),
                     escape_char,
                 )))
             }
 
             SQLExpr::ILike { negated, expr, pattern, escape_char } => {
-                let pattern = self.sql_expr_to_logical_expr(*pattern, schema, ctes)?;
+                let pattern = self.sql_expr_to_logical_expr(*pattern, schema, planner_context)?;
                 let pattern_type = pattern.get_type(schema)?;
                 if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
                     return Err(DataFusionError::Plan(
@@ -2041,14 +2105,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 Ok(Expr::ILike(Like::new(
                     negated,
-                    Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                    Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
                     Box::new(pattern),
                     escape_char,
                 )))
             }
 
             SQLExpr::SimilarTo { negated, expr, pattern, escape_char } => {
-                let pattern = self.sql_expr_to_logical_expr(*pattern, schema, ctes)?;
+                let pattern = self.sql_expr_to_logical_expr(*pattern, schema, planner_context)?;
                 let pattern_type = pattern.get_type(schema)?;
                 if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
                     return Err(DataFusionError::Plan(
@@ -2057,7 +2121,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 Ok(Expr::SimilarTo(Like::new(
                     negated,
-                    Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
+                    Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
                     Box::new(pattern),
                     escape_char
                 )))
@@ -2067,7 +2131,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 left,
                 op,
                 right,
-            } => self.parse_sql_binary_op(*left, op, *right, schema, ctes),
+            } => self.parse_sql_binary_op(*left, op, *right, schema, planner_context),
 
             #[cfg(feature = "unicode_expressions")]
             SQLExpr::Substring {
@@ -2077,24 +2141,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } => {
                 let args = match (substring_from, substring_for) {
                     (Some(from_expr), Some(for_expr)) => {
-                        let arg = self.sql_expr_to_logical_expr(*expr, schema, ctes)?;
+                        let arg = self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
                         let from_logic =
-                            self.sql_expr_to_logical_expr(*from_expr, schema, ctes)?;
+                            self.sql_expr_to_logical_expr(*from_expr, schema, planner_context)?;
                         let for_logic =
-                            self.sql_expr_to_logical_expr(*for_expr, schema, ctes)?;
+                            self.sql_expr_to_logical_expr(*for_expr, schema, planner_context)?;
                         vec![arg, from_logic, for_logic]
                     }
                     (Some(from_expr), None) => {
-                        let arg = self.sql_expr_to_logical_expr(*expr, schema, ctes)?;
+                        let arg = self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
                         let from_logic =
-                            self.sql_expr_to_logical_expr(*from_expr, schema, ctes)?;
+                            self.sql_expr_to_logical_expr(*from_expr, schema, planner_context)?;
                         vec![arg, from_logic]
                     }
                     (None, Some(for_expr)) => {
-                        let arg = self.sql_expr_to_logical_expr(*expr, schema, ctes)?;
+                        let arg = self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
                         let from_logic = Expr::Literal(ScalarValue::Int64(Some(1)));
                         let for_logic =
-                            self.sql_expr_to_logical_expr(*for_expr, schema, ctes)?;
+                            self.sql_expr_to_logical_expr(*for_expr, schema, planner_context)?;
                         vec![arg, from_logic, for_logic]
                     }
                     (None, None) => {
@@ -2140,10 +2204,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     None => BuiltinScalarFunction::Trim
                 };
-                let arg = self.sql_expr_to_logical_expr(*expr, schema, ctes)?;
+                let arg = self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
                 let args = match trim_what {
                     Some(to_trim) => {
-                        let to_trim = self.sql_expr_to_logical_expr(*to_trim, schema, ctes)?;
+                        let to_trim = self.sql_expr_to_logical_expr(*to_trim, schema, planner_context)?;
                         vec![arg, to_trim]
                     }
                     None => vec![arg],
@@ -2152,10 +2216,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::AggregateExpressionWithFilter { expr, filter } => {
-                match self.sql_expr_to_logical_expr(*expr, schema, ctes)? {
+                match self.sql_expr_to_logical_expr(*expr, schema, planner_context)? {
                     Expr::AggregateFunction {
                         fun, args, distinct, ..
-                    } => Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, ctes)?)) }),
+                    } => Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, planner_context)?)) }),
                     _ => Err(DataFusionError::Internal("AggregateExpressionWithFilter expression was not an AggregateFunction".to_string()))
                 }
             }
@@ -2189,7 +2253,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let partition_by = window
                         .partition_by
                         .into_iter()
-                        .map(|e| self.sql_expr_to_logical_expr(e, schema, ctes))
+                        .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                         .collect::<Result<Vec<_>>>()?;
                     let order_by = window
                         .order_by
@@ -2211,6 +2275,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             }
                         })
                         .transpose()?;
+                    let window_frame = if let Some(window_frame) = window_frame {
+                        window_frame
+                    } else {
+                        WindowFrame::new(!order_by.is_empty())
+                    };
                     let fun = WindowFunction::from_str(&name)?;
                     match fun {
                         WindowFunction::AggregateFunction(
@@ -2282,25 +2351,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Floor{expr, field: _field} => {
                 let fun = BuiltinScalarFunction::Floor;
-                let args = vec![self.sql_expr_to_logical_expr(*expr, schema, ctes)?];
+                let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
                 Ok(Expr::ScalarFunction { fun, args })
             }
 
             SQLExpr::Ceil{expr, field: _field} => {
                 let fun = BuiltinScalarFunction::Ceil;
-                let args = vec![self.sql_expr_to_logical_expr(*expr, schema, ctes)?];
+                let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
                 Ok(Expr::ScalarFunction { fun, args })
             }
 
-            SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(*e, schema, ctes),
+            SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(*e, schema, planner_context),
 
-            SQLExpr::Exists { subquery, negated } => self.parse_exists_subquery(*subquery, negated, schema, ctes),
+            SQLExpr::Exists { subquery, negated } => self.parse_exists_subquery(*subquery, negated, schema, planner_context),
 
-            SQLExpr::InSubquery { expr, subquery, negated } => self.parse_in_subquery(*expr, *subquery, negated, schema, ctes),
+            SQLExpr::InSubquery { expr, subquery, negated } => self.parse_in_subquery(*expr, *subquery, negated, schema, planner_context),
 
-            SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(*subquery, schema, ctes),
+            SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(*subquery, schema, planner_context),
 
-            SQLExpr::ArrayAgg(array_agg) => self.parse_array_agg(array_agg, schema, ctes),
+            SQLExpr::ArrayAgg(array_agg) => self.parse_array_agg(array_agg, schema, planner_context),
 
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node in sqltorel: {:?}",
@@ -2314,13 +2383,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         subquery: Query,
         negated: bool,
         input_schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         Ok(Expr::Exists {
             subquery: Subquery {
                 subquery: Arc::new(self.subquery_to_plan(
                     subquery,
-                    ctes,
+                    planner_context,
                     input_schema,
                 )?),
             },
@@ -2334,14 +2403,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         subquery: Query,
         negated: bool,
         input_schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         Ok(Expr::InSubquery {
-            expr: Box::new(self.sql_to_rex(expr, input_schema, ctes)?),
+            expr: Box::new(self.sql_to_rex(expr, input_schema, planner_context)?),
             subquery: Subquery {
                 subquery: Arc::new(self.subquery_to_plan(
                     subquery,
-                    ctes,
+                    planner_context,
                     input_schema,
                 )?),
             },
@@ -2353,10 +2422,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         subquery: Query,
         input_schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         Ok(Expr::ScalarSubquery(Subquery {
-            subquery: Arc::new(self.subquery_to_plan(subquery, ctes, input_schema)?),
+            subquery: Arc::new(self.subquery_to_plan(
+                subquery,
+                planner_context,
+                input_schema,
+            )?),
         }))
     }
 
@@ -2364,7 +2437,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         array_agg: ArrayAgg,
         input_schema: &DFSchema,
-        ctes: &mut HashMap<String, LogicalPlan>,
+        planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         // Some dialects have special syntax for array_agg. DataFusion only supports it like a function.
         let ArrayAgg {
@@ -2395,7 +2468,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ));
         }
 
-        let args = vec![self.sql_expr_to_logical_expr(*expr, input_schema, ctes)?];
+        let args =
+            vec![self.sql_expr_to_logical_expr(*expr, input_schema, planner_context)?];
         // next, aggregate built-ins
         let fun = AggregateFunction::ArrayAgg;
 
@@ -2413,7 +2487,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
         args.into_iter()
-            .map(|a| self.sql_fn_arg_to_logical_expr(a, schema, &mut HashMap::new()))
+            .map(|a| {
+                self.sql_fn_arg_to_logical_expr(a, schema, &mut PlannerContext::new())
+            })
             .collect::<Result<Vec<Expr>>>()
     }
 
@@ -2431,7 +2507,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
                         Ok(Expr::Literal(COUNT_STAR_EXPANSION.clone()))
                     }
-                    _ => self.sql_fn_arg_to_logical_expr(a, schema, &mut HashMap::new()),
+                    _ => self.sql_fn_arg_to_logical_expr(
+                        a,
+                        schema,
+                        &mut PlannerContext::new(),
+                    ),
                 })
                 .collect::<Result<Vec<Expr>>>()?,
             _ => self.function_args_to_expr(args, schema)?,
@@ -2683,8 +2763,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut values = Vec::with_capacity(elements.len());
 
         for element in elements {
-            let value =
-                self.sql_expr_to_logical_expr(element, schema, &mut HashMap::new())?;
+            let value = self.sql_expr_to_logical_expr(
+                element,
+                schema,
+                &mut PlannerContext::new(),
+            )?;
             match value {
                 Expr::Literal(scalar) => {
                     values.push(scalar);
@@ -2742,7 +2825,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(Expr::Literal(ScalarValue::Decimal128(
                     Some(n),
                     p as u8,
-                    s as u8,
+                    s as i8,
                 )))
             } else {
                 let number = n.parse::<i128>().map_err(|_| {
@@ -3175,7 +3258,7 @@ mod tests {
             let sql = "SELECT CAST(10 AS DECIMAL(0))";
             let err = logical_plan(sql).expect_err("query should have failed");
             assert_eq!(
-                r##"Internal("Decimal(precision = 0, scale = 0) should satisty `0 < precision <= 38`, and `scale <= precision`.")"##,
+                r##"Internal("Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
                 format!("{:?}", err)
             );
         }
@@ -3184,7 +3267,7 @@ mod tests {
             let sql = "SELECT CAST(10 AS DECIMAL(39))";
             let err = logical_plan(sql).expect_err("query should have failed");
             assert_eq!(
-                r##"Internal("Decimal(precision = 39, scale = 0) should satisty `0 < precision <= 38`, and `scale <= precision`.")"##,
+                r##"Internal("Decimal(precision = 39, scale = 0) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
                 format!("{:?}", err)
             );
         }
@@ -3193,7 +3276,7 @@ mod tests {
             let sql = "SELECT CAST(10 AS DECIMAL(5, 10))";
             let err = logical_plan(sql).expect_err("query should have failed");
             assert_eq!(
-                r##"Internal("Decimal(precision = 5, scale = 10) should satisty `0 < precision <= 38`, and `scale <= precision`.")"##,
+                r##"Internal("Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 38`, and `scale <= precision`.")"##,
                 format!("{:?}", err)
             );
         }
@@ -4728,8 +4811,8 @@ mod tests {
     fn empty_over() {
         let sql = "SELECT order_id, MAX(order_id) OVER () from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.order_id)\
-        \n  WindowAggr: windowExpr=[[MAX(orders.order_id)]]\
+        Projection: orders.order_id, MAX(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n  WindowAggr: windowExpr=[[MAX(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4738,8 +4821,8 @@ mod tests {
     fn empty_over_with_alias() {
         let sql = "SELECT order_id oid, MAX(order_id) OVER () max_oid from orders";
         let expected = "\
-        Projection: orders.order_id AS oid, MAX(orders.order_id) AS max_oid\
-        \n  WindowAggr: windowExpr=[[MAX(orders.order_id)]]\
+        Projection: orders.order_id AS oid, MAX(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS max_oid\
+        \n  WindowAggr: windowExpr=[[MAX(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4748,8 +4831,8 @@ mod tests {
     fn empty_over_dup_with_alias() {
         let sql = "SELECT order_id oid, MAX(order_id) OVER () max_oid, MAX(order_id) OVER () max_oid_dup from orders";
         let expected = "\
-        Projection: orders.order_id AS oid, MAX(orders.order_id) AS max_oid, MAX(orders.order_id) AS max_oid_dup\
-        \n  WindowAggr: windowExpr=[[MAX(orders.order_id)]]\
+        Projection: orders.order_id AS oid, MAX(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS max_oid, MAX(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS max_oid_dup\
+        \n  WindowAggr: windowExpr=[[MAX(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4758,9 +4841,9 @@ mod tests {
     fn empty_over_dup_with_different_sort() {
         let sql = "SELECT order_id oid, MAX(order_id) OVER (), MAX(order_id) OVER (ORDER BY order_id) from orders";
         let expected = "\
-        Projection: orders.order_id AS oid, MAX(orders.order_id), MAX(orders.order_id) ORDER BY [orders.order_id ASC NULLS LAST]\
-        \n  WindowAggr: windowExpr=[[MAX(orders.order_id)]]\
-        \n    WindowAggr: windowExpr=[[MAX(orders.order_id) ORDER BY [orders.order_id ASC NULLS LAST]]]\
+        Projection: orders.order_id AS oid, MAX(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MAX(orders.order_id) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
+        \n  WindowAggr: windowExpr=[[MAX(orders.order_id) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        \n    WindowAggr: windowExpr=[[MAX(orders.order_id) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n      TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4769,8 +4852,8 @@ mod tests {
     fn empty_over_plus() {
         let sql = "SELECT order_id, MAX(qty * 1.1) OVER () from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty * Float64(1.1))\
-        \n  WindowAggr: windowExpr=[[MAX(orders.qty * Float64(1.1))]]\
+        Projection: orders.order_id, MAX(orders.qty * Float64(1.1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n  WindowAggr: windowExpr=[[MAX(orders.qty * Float64(1.1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4780,8 +4863,8 @@ mod tests {
         let sql =
             "SELECT order_id, MAX(qty) OVER (), min(qty) over (), aVg(qty) OVER () from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty), MIN(orders.qty), AVG(orders.qty)\
-        \n  WindowAggr: windowExpr=[[MAX(orders.qty), MIN(orders.qty), AVG(orders.qty)]]\
+        Projection: orders.order_id, MAX(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, AVG(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n  WindowAggr: windowExpr=[[MAX(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, AVG(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4799,8 +4882,8 @@ mod tests {
     fn over_partition_by() {
         let sql = "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id) from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id]\
-        \n  WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id]]]\
+        Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n  WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4821,9 +4904,9 @@ mod tests {
     fn over_order_by() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST], MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST]\
-        \n  WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST]]]\
-        \n    WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST]]]\
+        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
+        \n  WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n    WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n      TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4832,9 +4915,9 @@ mod tests {
     fn over_order_by_with_window_frame_double_end() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS BETWEEN 3 PRECEDING and 3 FOLLOWING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING, MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST]\
+        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING, MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
         \n  WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING]]\
-        \n    WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST]]]\
+        \n    WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n      TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4843,9 +4926,9 @@ mod tests {
     fn over_order_by_with_window_frame_single_end() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id ROWS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW, MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST]\
+        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW, MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
         \n  WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
-        \n    WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST]]]\
+        \n    WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n      TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4876,9 +4959,9 @@ mod tests {
     fn over_order_by_with_window_frame_single_end_groups() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id GROUPS 3 PRECEDING), MIN(qty) OVER (ORDER BY order_id DESC) from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW, MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST]\
+        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW, MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
         \n  WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
-        \n    WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST]]]\
+        \n    WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n      TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4899,9 +4982,9 @@ mod tests {
     fn over_order_by_two_sort_keys() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), MIN(qty) OVER (ORDER BY (order_id + 1)) from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST], MIN(orders.qty) ORDER BY [orders.order_id + Int64(1) ASC NULLS LAST]\
-        \n  WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST]]]\
-        \n    WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id + Int64(1) ASC NULLS LAST]]]\
+        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, MIN(orders.qty) ORDER BY [orders.order_id + Int64(1) ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
+        \n  WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n    WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id + Int64(1) ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n      TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4923,10 +5006,10 @@ mod tests {
     fn over_order_by_sort_keys_sorting() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST], SUM(orders.qty), MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST]\
-        \n  WindowAggr: windowExpr=[[SUM(orders.qty)]]\
-        \n    WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST]]]\
-        \n      WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST]]]\
+        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
+        \n  WindowAggr: windowExpr=[[SUM(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        \n    WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n      WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n        TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4948,10 +5031,10 @@ mod tests {
     fn over_order_by_sort_keys_sorting_prefix_compacting() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST], SUM(orders.qty), MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST]\
-        \n  WindowAggr: windowExpr=[[SUM(orders.qty)]]\
-        \n    WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST]]]\
-        \n      WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST]]]\
+        Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
+        \n  WindowAggr: windowExpr=[[SUM(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        \n    WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n      WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n        TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4977,10 +5060,10 @@ mod tests {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY qty, order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders ORDER BY order_id";
         let expected = "\
         Sort: orders.order_id ASC NULLS LAST\
-        \n  Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST], SUM(orders.qty), MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST]\
-        \n    WindowAggr: windowExpr=[[SUM(orders.qty)]]\
-        \n      WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST]]]\
-        \n        WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST]]]\
+        \n  Projection: orders.order_id, MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, SUM(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
+        \n    WindowAggr: windowExpr=[[SUM(orders.qty) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        \n      WindowAggr: windowExpr=[[MAX(orders.qty) ORDER BY [orders.qty ASC NULLS LAST, orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n        WindowAggr: windowExpr=[[MIN(orders.qty) ORDER BY [orders.order_id ASC NULLS LAST, orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n          TableScan: orders";
         quick_test(sql, expected);
     }
@@ -4999,8 +5082,8 @@ mod tests {
         let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty) from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST]\
-        \n  WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST]]]\
+        Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
+        \n  WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n    TableScan: orders";
         quick_test(sql, expected);
     }
@@ -5019,8 +5102,8 @@ mod tests {
         let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty) from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST]\
-        \n  WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST]]]\
+        Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
+        \n  WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n    TableScan: orders";
         quick_test(sql, expected);
     }
@@ -5042,9 +5125,9 @@ mod tests {
         let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id, qty ORDER BY qty), MIN(qty) OVER (PARTITION BY qty ORDER BY order_id) from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST], MIN(orders.qty) PARTITION BY [orders.qty] ORDER BY [orders.order_id ASC NULLS LAST]\
-        \n  WindowAggr: windowExpr=[[MIN(orders.qty) PARTITION BY [orders.qty] ORDER BY [orders.order_id ASC NULLS LAST]]]\
-        \n    WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST]]]\
+        Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, MIN(orders.qty) PARTITION BY [orders.qty] ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
+        \n  WindowAggr: windowExpr=[[MIN(orders.qty) PARTITION BY [orders.qty] ORDER BY [orders.order_id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n    WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n      TableScan: orders";
         quick_test(sql, expected);
     }
@@ -5065,9 +5148,9 @@ mod tests {
         let sql =
             "SELECT order_id, MAX(qty) OVER (PARTITION BY order_id ORDER BY qty), MIN(qty) OVER (PARTITION BY order_id, qty ORDER BY price) from orders";
         let expected = "\
-        Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST], MIN(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.price ASC NULLS LAST]\
-        \n  WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST]]]\
-        \n    WindowAggr: windowExpr=[[MIN(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.price ASC NULLS LAST]]]\
+        Projection: orders.order_id, MAX(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, MIN(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.price ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\
+        \n  WindowAggr: windowExpr=[[MAX(orders.qty) PARTITION BY [orders.order_id] ORDER BY [orders.qty ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+        \n    WindowAggr: windowExpr=[[MIN(orders.qty) PARTITION BY [orders.order_id, orders.qty] ORDER BY [orders.price ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n      TableScan: orders";
         quick_test(sql, expected);
     }
@@ -5077,8 +5160,8 @@ mod tests {
         let sql =
             "SELECT order_id, APPROX_MEDIAN(qty) OVER(PARTITION BY order_id) from orders";
         let expected = "\
-        Projection: orders.order_id, APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id]\
-        \n  WindowAggr: windowExpr=[[APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id]]]\
+        Projection: orders.order_id, APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n  WindowAggr: windowExpr=[[APPROXMEDIAN(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n    TableScan: orders";
         quick_test(sql, expected);
     }
@@ -5566,8 +5649,8 @@ mod tests {
             from
                 person
             group by rollup(state, last_name)";
-        let expected = "Projection: SUM(person.age) AS total_sum, person.state, person.last_name, GROUPING(person.state) + GROUPING(person.last_name) AS x, RANK() PARTITION BY [GROUPING(person.state) + GROUPING(person.last_name), CASE WHEN GROUPING(person.last_name) = Int64(0) THEN person.state END] ORDER BY [SUM(person.age) DESC NULLS FIRST] AS the_rank\
-        \n  WindowAggr: windowExpr=[[RANK() PARTITION BY [GROUPING(person.state) + GROUPING(person.last_name), CASE WHEN GROUPING(person.last_name) = Int64(0) THEN person.state END] ORDER BY [SUM(person.age) DESC NULLS FIRST]]]\
+        let expected = "Projection: SUM(person.age) AS total_sum, person.state, person.last_name, GROUPING(person.state) + GROUPING(person.last_name) AS x, RANK() PARTITION BY [GROUPING(person.state) + GROUPING(person.last_name), CASE WHEN GROUPING(person.last_name) = Int64(0) THEN person.state END] ORDER BY [SUM(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS the_rank\
+        \n  WindowAggr: windowExpr=[[RANK() PARTITION BY [GROUPING(person.state) + GROUPING(person.last_name), CASE WHEN GROUPING(person.last_name) = Int64(0) THEN person.state END] ORDER BY [SUM(person.age) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
         \n    Aggregate: groupBy=[[ROLLUP (person.state, person.last_name)]], aggr=[[SUM(person.age), GROUPING(person.state), GROUPING(person.last_name)]]\
         \n      TableScan: person";
         quick_test(sql, expected);

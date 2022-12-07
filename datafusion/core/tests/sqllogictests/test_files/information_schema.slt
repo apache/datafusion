@@ -1,0 +1,74 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# target_partitions defaults to num_cores, so set
+# to a known value that is unlikely to be
+# the real number of cores on a system
+statement ok
+SET datafusion.execution.target_partitions=7
+
+# show all variables
+query R
+SHOW ALL
+----
+datafusion.catalog.create_default_catalog_and_schema true
+datafusion.catalog.information_schema true
+datafusion.catalog.location NULL
+datafusion.catalog.type NULL
+datafusion.execuction_collect_statistics false
+datafusion.execution.batch_size 8192
+datafusion.execution.coalesce_batches true
+datafusion.execution.coalesce_target_batch_size 4096
+datafusion.execution.parquet.enable_page_index false
+datafusion.execution.parquet.metadata_size_hint NULL
+datafusion.execution.parquet.pruning true
+datafusion.execution.parquet.pushdown_filters false
+datafusion.execution.parquet.reorder_filters false
+datafusion.execution.parquet.skip_metadata true
+datafusion.execution.target_partitions 7
+datafusion.execution.time_zone +00:00
+datafusion.explain.logical_plan_only false
+datafusion.explain.physical_plan_only false
+datafusion.optimizer.filter_null_join_keys false
+datafusion.optimizer.hash_join_single_partition_threshold 1048576
+datafusion.optimizer.max_passes 3
+datafusion.optimizer.prefer_hash_join true
+datafusion.optimizer.repartition_aggregations true
+datafusion.optimizer.repartition_joins true
+datafusion.optimizer.repartition_windows true
+datafusion.optimizer.skip_failed_rules true
+datafusion.optimizer.top_down_join_key_reordering true
+
+# show_variable_in_config_options
+query R
+SHOW datafusion.execution.batch_size
+----
+datafusion.execution.batch_size 8192
+
+# show_time_zone_default_utc
+# https://github.com/apache/arrow-datafusion/issues/3255
+query R
+SHOW TIME ZONE
+----
+datafusion.execution.time_zone +00:00
+
+# show_timezone_default_utc
+# https://github.com/apache/arrow-datafusion/issues/3255
+query R
+SHOW TIMEZONE
+----
+datafusion.execution.time_zone +00:00

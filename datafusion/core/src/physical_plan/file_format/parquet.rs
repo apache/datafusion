@@ -72,6 +72,16 @@ use super::get_output_ordering;
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
+    /// Override for `Self::with_pushdown_filters`. If None, uses
+    /// values from base_config
+    pushdown_filters: Option<bool>,
+    /// Override for `Self::with_reorder_filters`. If None, uses
+    /// values from base_config
+    reorder_filters: Option<bool>,
+    /// Override for `Self::with_enable_page_index`. If None, uses
+    /// values from base_config
+    enable_page_index: Option<bool>,
+    /// Base configuraton for this scan
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
@@ -131,6 +141,9 @@ impl ParquetExec {
         let (projected_schema, projected_statistics) = base_config.project();
 
         Self {
+            pushdown_filters: None,
+            reorder_filters: None,
+            enable_page_index: None,
             base_config,
             projected_schema,
             projected_statistics,
@@ -172,20 +185,20 @@ impl ParquetExec {
     /// `ParquetRecordBatchStream`. These filters are applied by the
     /// parquet decoder to skip unecessairly decoding other columns
     /// which would not pass the predicate. Defaults to false
-    pub fn with_pushdown_filters(self, pushdown_filters: bool) -> Self {
-        self.base_config
-            .config_options
-            .write()
-            .set_bool(OPT_PARQUET_PUSHDOWN_FILTERS, pushdown_filters);
+    pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
+        self.pushdown_filters = Some(pushdown_filters);
         self
     }
 
     /// Return the value described in [`Self::with_pushdown_filters`]
     pub fn pushdown_filters(&self) -> bool {
-        self.base_config
-            .config_options
-            .read()
-            .get_bool(OPT_PARQUET_PUSHDOWN_FILTERS)
+        self.pushdown_filters
+            .or_else(|| {
+                self.base_config
+                    .config_options
+                    .read()
+                    .get_bool(OPT_PARQUET_PUSHDOWN_FILTERS)
+            })
             // default to false
             .unwrap_or_default()
     }
@@ -194,20 +207,20 @@ impl ParquetExec {
     /// minimize the cost of filter evaluation by reordering the
     /// predicate [`Expr`]s. If false, the predicates are applied in
     /// the same order as specified in the query. Defaults to false.
-    pub fn with_reorder_filters(self, reorder_filters: bool) -> Self {
-        self.base_config
-            .config_options
-            .write()
-            .set_bool(OPT_PARQUET_REORDER_FILTERS, reorder_filters);
+    pub fn with_reorder_filters(mut self, reorder_filters: bool) -> Self {
+        self.reorder_filters = Some(reorder_filters);
         self
     }
 
     /// Return the value described in [`Self::with_reorder_filters`]
     pub fn reorder_filters(&self) -> bool {
-        self.base_config
-            .config_options
-            .read()
-            .get_bool(OPT_PARQUET_REORDER_FILTERS)
+        self.reorder_filters
+            .or_else(|| {
+                self.base_config
+                    .config_options
+                    .read()
+                    .get_bool(OPT_PARQUET_REORDER_FILTERS)
+            })
             // default to false
             .unwrap_or_default()
     }
@@ -216,20 +229,20 @@ impl ParquetExec {
     /// This is used to optimise filter pushdown
     /// via `RowSelector` and `RowFilter` by
     /// eliminating unnecessary IO and decoding
-    pub fn with_enable_page_index(self, enable_page_index: bool) -> Self {
-        self.base_config
-            .config_options
-            .write()
-            .set_bool(OPT_PARQUET_ENABLE_PAGE_INDEX, enable_page_index);
+    pub fn with_enable_page_index(mut self, enable_page_index: bool) -> Self {
+        self.enable_page_index = Some(enable_page_index);
         self
     }
 
     /// Return the value described in [`Self::with_enable_page_index`]
     pub fn enable_page_index(&self) -> bool {
-        self.base_config
-            .config_options
-            .read()
-            .get_bool(OPT_PARQUET_ENABLE_PAGE_INDEX)
+        self.enable_page_index
+            .or_else(|| {
+                self.base_config
+                    .config_options
+                    .read()
+                    .get_bool(OPT_PARQUET_ENABLE_PAGE_INDEX)
+            })
             // default to false
             .unwrap_or_default()
     }
@@ -701,12 +714,12 @@ pub(crate) fn parquet_to_arrow_decimal_type(
     let type_ptr = parquet_column.self_type_ptr();
     match type_ptr.get_basic_info().logical_type() {
         Some(LogicalType::Decimal { scale, precision }) => {
-            Some(DataType::Decimal128(precision as u8, scale as u8))
+            Some(DataType::Decimal128(precision as u8, scale as i8))
         }
         _ => match type_ptr.get_basic_info().converted_type() {
             ConvertedType::DECIMAL => Some(DataType::Decimal128(
                 type_ptr.get_precision() as u8,
-                type_ptr.get_scale() as u8,
+                type_ptr.get_scale() as i8,
             )),
             _ => None,
         },
@@ -1286,7 +1299,8 @@ mod tests {
     async fn parquet_exec_with_projection() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = "alltypes_plain.parquet";
-        let format = ParquetFormat::default();
+        let ctx = SessionContext::new();
+        let format = ParquetFormat::new(ctx.config_options());
         let parquet_exec =
             scan_format(&format, &testdata, filename, Some(vec![0, 1, 2]), None)
                 .await
@@ -1369,7 +1383,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let store = Arc::new(LocalFileSystem::new()) as _;
-        let file_schema = ParquetFormat::default()
+        let file_schema = ParquetFormat::new(session_ctx.config_options())
             .infer_schema(&store, &[meta.clone()])
             .await?;
 
@@ -1416,7 +1430,7 @@ mod tests {
 
         let meta = local_unpartitioned_file(filename);
 
-        let schema = ParquetFormat::default()
+        let schema = ParquetFormat::new(session_ctx.config_options())
             .infer_schema(&store, &[meta.clone()])
             .await
             .unwrap();

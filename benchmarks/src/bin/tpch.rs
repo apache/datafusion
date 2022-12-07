@@ -396,7 +396,8 @@ async fn get_table(
             }
             "parquet" => {
                 let path = format!("{}/{}", path, table);
-                let format = ParquetFormat::default().with_enable_pruning(true);
+                let format = ParquetFormat::new(ctx.config_options())
+                    .with_enable_pruning(Some(true));
 
                 (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
             }
@@ -409,7 +410,7 @@ async fn get_table(
     let options = ListingOptions::new(format)
         .with_file_extension(extension)
         .with_target_partitions(target_partitions)
-        .with_collect_stat(ctx.config.collect_statistics);
+        .with_collect_stat(ctx.config.collect_statistics());
 
     let table_path = ListingTableUrl::parse(path)?;
     let config = ListingTableConfig::new(table_path).with_listing_options(options);
@@ -1136,21 +1137,17 @@ mod ci {
                                 Box::new(trim(col(Field::name(field)))),
                                 DataType::Float64,
                             )));
-                            Expr::Alias(
-                                Box::new(Expr::Cast(Cast::new(
-                                    inner_cast,
-                                    Field::data_type(field).to_owned(),
-                                ))),
-                                Field::name(field).to_string(),
-                            )
-                        }
-                        _ => Expr::Alias(
-                            Box::new(Expr::Cast(Cast::new(
-                                Box::new(trim(col(Field::name(field)))),
+                            Expr::Cast(Cast::new(
+                                inner_cast,
                                 Field::data_type(field).to_owned(),
-                            ))),
-                            Field::name(field).to_string(),
-                        ),
+                            ))
+                            .alias(Field::name(field))
+                        }
+                        _ => Expr::Cast(Cast::new(
+                            Box::new(trim(col(Field::name(field)))),
+                            Field::data_type(field).to_owned(),
+                        ))
+                        .alias(Field::name(field)),
                     }
                 })
                 .collect::<Vec<Expr>>(),

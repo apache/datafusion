@@ -21,6 +21,11 @@ use crate::{
         catalog::{CatalogList, MemoryCatalogList},
         information_schema::CatalogWithInformationSchema,
     },
+    config::{
+        OPT_COLLECT_STATISTICS, OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA,
+        OPT_INFORMATION_SCHEMA, OPT_PARQUET_ENABLE_PRUNING, OPT_REPARTITION_AGGREGATIONS,
+        OPT_REPARTITION_JOINS, OPT_REPARTITION_WINDOWS, OPT_TARGET_PARTITIONS,
+    },
     datasource::listing::{ListingOptions, ListingTable},
     datasource::{MemTable, ViewTable},
     logical_expr::{PlanType, ToStringifiedPlan},
@@ -226,6 +231,11 @@ impl SessionContext {
     /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.state.read().runtime_env.clone()
+    }
+
+    /// Return a handle to the shared configuration options
+    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
+        self.state.read().config_options()
     }
 
     /// Return the session_id of this Session
@@ -606,7 +616,7 @@ impl SessionContext {
         options: AvroReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let target_partitions = self.copied_config().target_partitions;
+        let target_partitions = self.copied_config().target_partitions();
 
         let listing_options = options.to_listing_options(target_partitions);
 
@@ -633,7 +643,7 @@ impl SessionContext {
         options: NdJsonReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let target_partitions = self.copied_config().target_partitions;
+        let target_partitions = self.copied_config().target_partitions();
 
         let listing_options = options.to_listing_options(target_partitions);
 
@@ -668,7 +678,7 @@ impl SessionContext {
         options: CsvReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let target_partitions = self.copied_config().target_partitions;
+        let target_partitions = self.copied_config().target_partitions();
         let listing_options = options.to_listing_options(target_partitions);
         let resolved_schema = match options.schema {
             Some(s) => Arc::new(s.to_owned()),
@@ -693,9 +703,7 @@ impl SessionContext {
         options: ParquetReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let target_partitions = self.copied_config().target_partitions;
-
-        let listing_options = options.to_listing_options(target_partitions);
+        let listing_options = options.to_listing_options(&self.state.read().config);
 
         // with parquet we resolve the schema in all cases
         let resolved_schema = listing_options
@@ -770,7 +778,7 @@ impl SessionContext {
         options: CsvReadOptions<'_>,
     ) -> Result<()> {
         let listing_options =
-            options.to_listing_options(self.copied_config().target_partitions);
+            options.to_listing_options(self.copied_config().target_partitions());
 
         self.register_listing_table(
             name,
@@ -793,7 +801,7 @@ impl SessionContext {
         options: NdJsonReadOptions<'_>,
     ) -> Result<()> {
         let listing_options =
-            options.to_listing_options(self.copied_config().target_partitions);
+            options.to_listing_options(self.copied_config().target_partitions());
 
         self.register_listing_table(
             name,
@@ -814,13 +822,7 @@ impl SessionContext {
         table_path: &str,
         options: ParquetReadOptions<'_>,
     ) -> Result<()> {
-        let (target_partitions, parquet_pruning) = {
-            let conf = self.copied_config();
-            (conf.target_partitions, conf.parquet_pruning)
-        };
-        let listing_options = options
-            .parquet_pruning(parquet_pruning)
-            .to_listing_options(target_partitions);
+        let listing_options = options.to_listing_options(&self.state.read().config);
 
         self.register_listing_table(name, table_path, listing_options, None, None)
             .await?;
@@ -836,7 +838,7 @@ impl SessionContext {
         options: AvroReadOptions<'_>,
     ) -> Result<()> {
         let listing_options =
-            options.to_listing_options(self.copied_config().target_partitions);
+            options.to_listing_options(self.copied_config().target_partitions());
 
         self.register_listing_table(
             name,
@@ -861,7 +863,7 @@ impl SessionContext {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         let name = name.into();
-        let information_schema = self.copied_config().information_schema;
+        let information_schema = self.copied_config().information_schema();
         let state = self.state.read();
         let catalog = if information_schema {
             Arc::new(CatalogWithInformationSchema::new(
@@ -942,17 +944,25 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<DataFrame>> {
         let table_ref = table_ref.into();
+        let provider = self.table_provider(table_ref)?;
+        let plan = LogicalPlanBuilder::scan(
+            table_ref.table(),
+            provider_as_source(Arc::clone(&provider)),
+            None,
+        )?
+        .build()?;
+        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+    }
+
+    /// Return a [`TabelProvider`] for the specified table.
+    pub fn table_provider<'a>(
+        &self,
+        table_ref: impl Into<TableReference<'a>>,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let table_ref = table_ref.into();
         let schema = self.state.read().schema_for_ref(table_ref)?;
         match schema.table(table_ref.table()) {
-            Some(ref provider) => {
-                let plan = LogicalPlanBuilder::scan(
-                    table_ref.table(),
-                    provider_as_source(Arc::clone(provider)),
-                    None,
-                )?
-                .build()?;
-                Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
-            }
+            Some(ref provider) => Ok(Arc::clone(provider)),
             _ => Err(DataFusionError::Plan(format!(
                 "No table named '{}'",
                 table_ref.table()
@@ -1142,30 +1152,11 @@ impl Hasher for IdHasher {
 /// Configuration options for session context
 #[derive(Clone)]
 pub struct SessionConfig {
-    /// Number of partitions for query execution. Increasing partitions can increase concurrency.
-    pub target_partitions: usize,
     /// Default catalog name for table resolution
     default_catalog: String,
-    /// Default schema name for table resolution
+    /// Default schema name for table resolution (not in ConfigOptions
+    /// due to `resolve_table_ref` which passes back references)
     default_schema: String,
-    /// Whether the default catalog and schema should be created automatically
-    create_default_catalog_and_schema: bool,
-    /// Should DataFusion provide access to `information_schema`
-    /// virtual tables for displaying schema information
-    information_schema: bool,
-    /// Should DataFusion repartition data using the join keys to execute joins in parallel
-    /// using the provided `target_partitions` level
-    pub repartition_joins: bool,
-    /// Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel
-    /// using the provided `target_partitions` level
-    pub repartition_aggregations: bool,
-    /// Should DataFusion repartition data using the partition keys to execute window functions in
-    /// parallel using the provided `target_partitions` level
-    pub repartition_windows: bool,
-    /// Should DataFusion parquet reader using the predicate to prune data
-    pub parquet_pruning: bool,
-    /// Should DataFusion collect statistics after listing files
-    pub collect_statistics: bool,
     /// Configuration options
     pub config_options: Arc<RwLock<ConfigOptions>>,
     /// Opaque extensions.
@@ -1175,16 +1166,8 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            target_partitions: num_cpus::get(),
             default_catalog: DEFAULT_CATALOG.to_owned(),
             default_schema: DEFAULT_SCHEMA.to_owned(),
-            create_default_catalog_and_schema: true,
-            information_schema: false,
-            repartition_joins: true,
-            repartition_aggregations: true,
-            repartition_windows: true,
-            parquet_pruning: true,
-            collect_statistics: false,
             config_options: Arc::new(RwLock::new(ConfigOptions::new())),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
@@ -1225,6 +1208,12 @@ impl SessionConfig {
         self.set(key, ScalarValue::UInt64(Some(value)))
     }
 
+    /// Set a generic `usize` configuration option
+    pub fn set_usize(self, key: &str, value: usize) -> Self {
+        let value: u64 = value.try_into().expect("convert usize to u64");
+        self.set(key, ScalarValue::UInt64(Some(value)))
+    }
+
     /// Set a generic `str` configuration option
     pub fn set_str(self, key: &str, value: &str) -> Self {
         self.set(key, ScalarValue::Utf8(Some(value.to_string())))
@@ -1237,12 +1226,67 @@ impl SessionConfig {
         self.set_u64(OPT_BATCH_SIZE, n.try_into().unwrap())
     }
 
-    /// Customize target_partitions
-    pub fn with_target_partitions(mut self, n: usize) -> Self {
+    /// Customize [`OPT_TARGET_PARTITIONS`]
+    pub fn with_target_partitions(self, n: usize) -> Self {
         // partition count must be greater than zero
         assert!(n > 0);
-        self.target_partitions = n;
-        self
+        self.set_usize(OPT_TARGET_PARTITIONS, n)
+    }
+
+    /// get target_partitions
+    pub fn target_partitions(&self) -> usize {
+        self.config_options
+            .read()
+            .get_usize(OPT_TARGET_PARTITIONS)
+            .expect("target partitions must be set")
+    }
+
+    /// Is the information schema enabled?
+    pub fn information_schema(&self) -> bool {
+        self.config_options
+            .read()
+            .get_bool(OPT_INFORMATION_SCHEMA)
+            .unwrap_or_default()
+    }
+
+    /// Should the context create the default catalog and schema?
+    pub fn create_default_catalog_and_schema(&self) -> bool {
+        self.config_options
+            .read()
+            .get_bool(OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA)
+            .unwrap_or_default()
+    }
+
+    /// Are joins repartitioned during execution?
+    pub fn repartition_joins(&self) -> bool {
+        self.config_options
+            .read()
+            .get_bool(OPT_REPARTITION_JOINS)
+            .unwrap_or_default()
+    }
+
+    /// Are aggregates repartitioned during execution?
+    pub fn repartition_aggregations(&self) -> bool {
+        self.config_options
+            .read()
+            .get_bool(OPT_REPARTITION_AGGREGATIONS)
+            .unwrap_or_default()
+    }
+
+    /// Are window functions repartitioned during execution?
+    pub fn repartition_window_functions(&self) -> bool {
+        self.config_options
+            .read()
+            .get_bool(OPT_REPARTITION_WINDOWS)
+            .unwrap_or_default()
+    }
+
+    /// Are statistics collected during execution?
+    pub fn collect_statistics(&self) -> bool {
+        self.config_options
+            .read()
+            .get_bool(OPT_COLLECT_STATISTICS)
+            .unwrap_or_default()
     }
 
     /// Selects a name for the default catalog and schema
@@ -1257,44 +1301,66 @@ impl SessionConfig {
     }
 
     /// Controls whether the default catalog and schema will be automatically created
-    pub fn create_default_catalog_and_schema(mut self, create: bool) -> Self {
-        self.create_default_catalog_and_schema = create;
+    pub fn with_create_default_catalog_and_schema(self, create: bool) -> Self {
+        self.config_options
+            .write()
+            .set_bool(OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA, create);
         self
     }
 
     /// Enables or disables the inclusion of `information_schema` virtual tables
-    pub fn with_information_schema(mut self, enabled: bool) -> Self {
-        self.information_schema = enabled;
+    pub fn with_information_schema(self, enabled: bool) -> Self {
+        self.config_options
+            .write()
+            .set_bool(OPT_INFORMATION_SCHEMA, enabled);
         self
     }
 
     /// Enables or disables the use of repartitioning for joins to improve parallelism
-    pub fn with_repartition_joins(mut self, enabled: bool) -> Self {
-        self.repartition_joins = enabled;
+    pub fn with_repartition_joins(self, enabled: bool) -> Self {
+        self.config_options
+            .write()
+            .set_bool(OPT_REPARTITION_JOINS, enabled);
         self
     }
 
     /// Enables or disables the use of repartitioning for aggregations to improve parallelism
-    pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
-        self.repartition_aggregations = enabled;
+    pub fn with_repartition_aggregations(self, enabled: bool) -> Self {
+        self.config_options
+            .write()
+            .set_bool(OPT_REPARTITION_AGGREGATIONS, enabled);
         self
     }
 
     /// Enables or disables the use of repartitioning for window functions to improve parallelism
-    pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
-        self.repartition_windows = enabled;
+    pub fn with_repartition_windows(self, enabled: bool) -> Self {
+        self.config_options
+            .write()
+            .set_bool(OPT_REPARTITION_WINDOWS, enabled);
         self
     }
 
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
-    pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
-        self.parquet_pruning = enabled;
+    pub fn with_parquet_pruning(self, enabled: bool) -> Self {
+        self.config_options
+            .write()
+            .set_bool(OPT_PARQUET_ENABLE_PRUNING, enabled);
         self
     }
 
+    /// Returns true if pruning predicate should be used to skip parquet row groups
+    pub fn parquet_pruning(&self) -> bool {
+        self.config_options
+            .read()
+            .get_bool(OPT_PARQUET_ENABLE_PRUNING)
+            .unwrap_or(false)
+    }
+
     /// Enables or disables the collection of statistics after listing files
-    pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
-        self.collect_statistics = enabled;
+    pub fn with_collect_statistics(self, enabled: bool) -> Self {
+        self.config_options
+            .write()
+            .set_bool(OPT_COLLECT_STATISTICS, enabled);
         self
     }
 
@@ -1323,27 +1389,27 @@ impl SessionConfig {
         }
         map.insert(
             TARGET_PARTITIONS.to_owned(),
-            format!("{}", self.target_partitions),
+            format!("{}", self.target_partitions()),
         );
         map.insert(
             REPARTITION_JOINS.to_owned(),
-            format!("{}", self.repartition_joins),
+            format!("{}", self.repartition_joins()),
         );
         map.insert(
             REPARTITION_AGGREGATIONS.to_owned(),
-            format!("{}", self.repartition_aggregations),
+            format!("{}", self.repartition_aggregations()),
         );
         map.insert(
             REPARTITION_WINDOWS.to_owned(),
-            format!("{}", self.repartition_windows),
+            format!("{}", self.repartition_window_functions()),
         );
         map.insert(
             PARQUET_PRUNING.to_owned(),
-            format!("{}", self.parquet_pruning),
+            format!("{}", self.parquet_pruning()),
         );
         map.insert(
             COLLECT_STATISTICS.to_owned(),
-            format!("{}", self.collect_statistics),
+            format!("{}", self.collect_statistics()),
         );
 
         map
@@ -1470,7 +1536,7 @@ impl SessionState {
         let session_id = Uuid::new_v4().to_string();
 
         let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
-        if config.create_default_catalog_and_schema {
+        if config.create_default_catalog_and_schema() {
             let default_catalog = MemoryCatalogProvider::new();
 
             default_catalog
@@ -1482,7 +1548,8 @@ impl SessionState {
 
             Self::register_default_schema(&config, &runtime, &default_catalog);
 
-            let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema {
+            let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema()
+            {
                 Arc::new(CatalogWithInformationSchema::new(
                     Arc::downgrade(&catalog_list),
                     Arc::downgrade(&config.config_options),
@@ -1733,6 +1800,11 @@ impl SessionState {
         let logical_plan = self.optimize(logical_plan)?;
         planner.create_physical_plan(&logical_plan, self).await
     }
+
+    /// return the configuration options
+    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
+        self.config.config_options()
+    }
 }
 
 impl ContextProvider for SessionState {
@@ -1810,22 +1882,14 @@ impl FunctionRegistry for SessionState {
     }
 }
 
-/// Task Context Properties
-pub enum TaskProperties {
-    ///SessionConfig
-    SessionConfig(SessionConfig),
-    /// Name-value pairs of task properties
-    KVPairs(HashMap<String, String>),
-}
-
 /// Task Execution Context
 pub struct TaskContext {
     /// Session Id
     session_id: String,
     /// Optional Task Identify
     task_id: Option<String>,
-    /// Task properties
-    properties: TaskProperties,
+    /// Session configuration
+    session_config: SessionConfig,
     /// Scalar functions associated with this task context
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions associated with this task context
@@ -1844,10 +1908,43 @@ impl TaskContext {
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
+        let session_config = if task_props.is_empty() {
+            SessionConfig::new()
+        } else {
+            SessionConfig::new()
+                .with_batch_size(task_props.get(OPT_BATCH_SIZE).unwrap().parse().unwrap())
+                .with_target_partitions(
+                    task_props.get(TARGET_PARTITIONS).unwrap().parse().unwrap(),
+                )
+                .with_repartition_joins(
+                    task_props.get(REPARTITION_JOINS).unwrap().parse().unwrap(),
+                )
+                .with_repartition_aggregations(
+                    task_props
+                        .get(REPARTITION_AGGREGATIONS)
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
+                )
+                .with_repartition_windows(
+                    task_props
+                        .get(REPARTITION_WINDOWS)
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
+                )
+                .with_parquet_pruning(
+                    task_props.get(PARQUET_PRUNING).unwrap().parse().unwrap(),
+                )
+                .with_collect_statistics(
+                    task_props.get(COLLECT_STATISTICS).unwrap().parse().unwrap(),
+                )
+        };
+
         Self {
             task_id: Some(task_id),
             session_id,
-            properties: TaskProperties::KVPairs(task_props),
+            session_config,
             scalar_functions,
             aggregate_functions,
             runtime,
@@ -1855,44 +1952,8 @@ impl TaskContext {
     }
 
     /// Return the SessionConfig associated with the Task
-    pub fn session_config(&self) -> SessionConfig {
-        let task_props = &self.properties;
-        match task_props {
-            TaskProperties::KVPairs(props) => {
-                let session_config = SessionConfig::new();
-                if props.is_empty() {
-                    session_config
-                } else {
-                    session_config
-                        .with_batch_size(
-                            props.get(OPT_BATCH_SIZE).unwrap().parse().unwrap(),
-                        )
-                        .with_target_partitions(
-                            props.get(TARGET_PARTITIONS).unwrap().parse().unwrap(),
-                        )
-                        .with_repartition_joins(
-                            props.get(REPARTITION_JOINS).unwrap().parse().unwrap(),
-                        )
-                        .with_repartition_aggregations(
-                            props
-                                .get(REPARTITION_AGGREGATIONS)
-                                .unwrap()
-                                .parse()
-                                .unwrap(),
-                        )
-                        .with_repartition_windows(
-                            props.get(REPARTITION_WINDOWS).unwrap().parse().unwrap(),
-                        )
-                        .with_parquet_pruning(
-                            props.get(PARQUET_PRUNING).unwrap().parse().unwrap(),
-                        )
-                        .with_collect_statistics(
-                            props.get(COLLECT_STATISTICS).unwrap().parse().unwrap(),
-                        )
-                }
-            }
-            TaskProperties::SessionConfig(session_config) => session_config.clone(),
-        }
+    pub fn session_config(&self) -> &SessionConfig {
+        &self.session_config
     }
 
     /// Return the session_id of this [TaskContext]
@@ -1914,24 +1975,7 @@ impl TaskContext {
 /// Create a new task context instance from SessionContext
 impl From<&SessionContext> for TaskContext {
     fn from(session: &SessionContext) -> Self {
-        let session_id = session.session_id.clone();
-        let (config, scalar_functions, aggregate_functions) = {
-            let session_state = session.state.read();
-            (
-                session_state.config.clone(),
-                session_state.scalar_functions.clone(),
-                session_state.aggregate_functions.clone(),
-            )
-        };
-        let runtime = session.runtime_env();
-        Self {
-            task_id: None,
-            session_id,
-            properties: TaskProperties::SessionConfig(config),
-            scalar_functions,
-            aggregate_functions,
-            runtime,
-        }
+        TaskContext::from(&*session.state.read())
     }
 }
 
@@ -1939,14 +1983,14 @@ impl From<&SessionContext> for TaskContext {
 impl From<&SessionState> for TaskContext {
     fn from(state: &SessionState) -> Self {
         let session_id = state.session_id.clone();
-        let config = state.config.clone();
+        let session_config = state.config.clone();
         let scalar_functions = state.scalar_functions.clone();
         let aggregate_functions = state.aggregate_functions.clone();
         let runtime = state.runtime_env.clone();
         Self {
             task_id: None,
             session_id,
-            properties: TaskProperties::SessionConfig(config),
+            session_config,
             scalar_functions,
             aggregate_functions,
             runtime,
@@ -2290,7 +2334,7 @@ mod tests {
     #[tokio::test]
     async fn disabled_default_catalog_and_schema() -> Result<()> {
         let ctx = SessionContext::with_config(
-            SessionConfig::new().create_default_catalog_and_schema(false),
+            SessionConfig::new().with_create_default_catalog_and_schema(false),
         );
 
         assert!(matches!(
@@ -2309,7 +2353,7 @@ mod tests {
     #[tokio::test]
     async fn custom_catalog_and_schema() {
         let config = SessionConfig::new()
-            .create_default_catalog_and_schema(true)
+            .with_create_default_catalog_and_schema(true)
             .with_default_catalog_and_schema("my_catalog", "my_schema");
         catalog_and_schema_test(config).await;
     }
@@ -2317,7 +2361,7 @@ mod tests {
     #[tokio::test]
     async fn custom_catalog_and_schema_no_default() {
         let config = SessionConfig::new()
-            .create_default_catalog_and_schema(false)
+            .with_create_default_catalog_and_schema(false)
             .with_default_catalog_and_schema("my_catalog", "my_schema");
         catalog_and_schema_test(config).await;
     }
@@ -2325,7 +2369,7 @@ mod tests {
     #[tokio::test]
     async fn custom_catalog_and_schema_and_information_schema() {
         let config = SessionConfig::new()
-            .create_default_catalog_and_schema(true)
+            .with_create_default_catalog_and_schema(true)
             .with_information_schema(true)
             .with_default_catalog_and_schema("my_catalog", "my_schema");
         catalog_and_schema_test(config).await;
