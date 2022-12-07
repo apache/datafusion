@@ -561,6 +561,8 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
             false => None,
             true => Some(Time64(unit.clone())),
         },
+        (Timestamp(_, tz), Utf8) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
+        (Utf8, Timestamp(_, tz)) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
                 // can't cast across timezones
@@ -885,6 +887,30 @@ mod tests {
             DataType::Time64(TimeUnit::Nanosecond),
             Operator::Eq,
             DataType::Time64(TimeUnit::Nanosecond)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Second, None),
+            Operator::Lt,
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            Operator::Lt,
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            Operator::Lt,
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            Operator::Lt,
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
