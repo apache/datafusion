@@ -27,12 +27,12 @@ select * from person;
 ----
 1 jane smith 20 MA 100000.45 2000-11-12T00:00:00.000000000 99
 
-# TODO: support error instead of panikng
+# TODO: support error instead of panicking
 # thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value: SQL(ParserError("Expected AS, found: SELECT"))', datafusion/core/tests/sqllogictests/src/main.rs:197:42
 # statement error
 # PREPARE AS SELECT id, age  FROM person WHERE age = $foo
 
-# TODO: this statement shoudl work after we support EXECUTE statement and caching this logicalplan somewhere
+# TODO: this statement should work after we support EXECUTE statement and caching this prepare logical plan somewhere
 # statement ok
 # PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
 
