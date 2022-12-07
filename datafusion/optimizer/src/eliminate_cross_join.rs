@@ -17,9 +17,9 @@
 
 //! Optimizer rule to eliminate cross join to inner join if join predicates are available in filters.
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DFSchema, DataFusionError, Result};
+use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::{
-    and,
+    and, build_join_schema,
     expr::BinaryExpr,
     logical_plan::{CrossJoin, Filter, Join, JoinType, LogicalPlan},
     or,
@@ -28,7 +28,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{Expr, Operator};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 //use std::collections::HashMap;
 use datafusion_expr::logical_plan::JoinConstraint;
@@ -207,7 +207,11 @@ fn find_inner_join(
         if !join_keys.is_empty() {
             all_join_keys.extend(join_keys.clone());
             let right = rights.remove(i);
-            let join_schema = Arc::new(build_join_schema(left, &right)?);
+            let join_schema = Arc::new(build_join_schema(
+                left.schema(),
+                right.schema(),
+                &JoinType::Inner,
+            )?);
             return Ok(LogicalPlan::Join(Join {
                 left: Arc::new(left.clone()),
                 right: Arc::new(right),
@@ -221,24 +225,17 @@ fn find_inner_join(
         }
     }
     let right = rights.remove(0);
-    let join_schema = Arc::new(build_join_schema(left, &right)?);
+    let join_schema = Arc::new(build_join_schema(
+        left.schema(),
+        right.schema(),
+        &JoinType::Inner,
+    )?);
 
     Ok(LogicalPlan::CrossJoin(CrossJoin {
         left: Arc::new(left.clone()),
         right: Arc::new(right),
         schema: join_schema,
     }))
-}
-
-fn build_join_schema(left: &LogicalPlan, right: &LogicalPlan) -> Result<DFSchema> {
-    // build join schema
-    let mut fields = vec![];
-    let mut metadata = HashMap::new();
-    fields.extend(left.schema().fields().clone());
-    fields.extend(right.schema().fields().clone());
-    metadata.extend(left.schema().metadata().clone());
-    metadata.extend(right.schema().metadata().clone());
-    DFSchema::new_with_metadata(fields, metadata)
 }
 
 fn intersect(
