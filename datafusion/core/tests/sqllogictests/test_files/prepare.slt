@@ -1,0 +1,40 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Prepare Statement Tests
+##########
+
+statement ok
+create table person (id int, first_name varchar, last_name varchar, age int, state varchar, salary double, birthday timestamp, "😀" int) as values (1, 'jane', 'smith', 20, 'MA', 100000.45, '2000-11-12T00:00:00'::timestamp, 99);
+
+query C rowsort
+select * from person;
+----
+1 jane smith 20 MA 100000.45 2000-11-12T00:00:00.000000000 99
+
+# TODO: support error instead of panikng
+# thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value: SQL(ParserError("Expected AS, found: SELECT"))', datafusion/core/tests/sqllogictests/src/main.rs:197:42
+# statement error
+# PREPARE AS SELECT id, age  FROM person WHERE age = $foo
+
+# TODO: this statement shoudl work after we support EXECUTE statement and caching this logicalplan somewhere
+# statement ok
+# PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
+
+# And then we may want to add test_prepare_statement* here
+

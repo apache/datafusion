@@ -6195,6 +6195,59 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Invalid placeholder: $foo")]
+    fn test_prepare_statement_to_plan_panic_param_format() {
+        // param is not number following the $ sign
+        // panic due to error returned from the parser
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $foo";
+
+        let expected_plan = "whatever";
+        let expected_dt = "whatever";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    #[should_panic(expected = "value: SQL(ParserError(\"Expected AS, found: SELECT\"))")]
+    fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
+        // param is not number following the $ sign
+        // panic due to error returned from the parser
+        let sql = "PREPARE AS SELECT id, age  FROM person WHERE age = $foo";
+
+        let expected_plan = "whatever";
+        let expected_dt = "whatever";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "value: SchemaError(FieldNotFound { field: Column { relation: None, name: \"id\" }, valid_fields: Some([]) })"
+    )]
+    fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
+        let sql = "PREPARE my_plan(INT) AS SELECT id + $1";
+
+        let expected_plan = "whatever";
+        let expected_dt = "whatever";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "value: Internal(\"Placehoder $2 does not exist in the parameter list: [Int32]\")"
+    )]
+    fn test_prepare_statement_to_plan_panic_no_data_types() {
+        // only provide 1 data type while using 2 params
+        let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1 + $2";
+
+        let expected_plan = "whatever";
+        let expected_dt = "whatever";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
     fn test_prepare_statement_to_plan_no_param() {
         // no embedded parameter but still declare it
         let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
@@ -6223,6 +6276,35 @@ mod tests {
     }
 
     #[test]
+    fn test_prepare_statement_to_plan_params_as_constants() {
+        let sql = "PREPARE my_plan(INT) AS SELECT $1";
+
+        let expected_plan = "Prepare: \"my_plan\" [Int32] \
+        \n  Projection: $1\n    EmptyRelation";
+        let expected_dt = "[Int32]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        /////////////////////////
+        let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1";
+
+        let expected_plan = "Prepare: \"my_plan\" [Int32] \
+        \n  Projection: Int64(1) + $1\n    EmptyRelation";
+        let expected_dt = "[Int32]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        /////////////////////////
+        let sql = "PREPARE my_plan(INT, DOUBLE) AS SELECT 1 + $1 + $2";
+
+        let expected_plan = "Prepare: \"my_plan\" [Int32, Float64] \
+        \n  Projection: Int64(1) + $1 + $2\n    EmptyRelation";
+        let expected_dt = "[Int32, Float64]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
     fn test_prepare_statement_to_plan_one_param() {
         let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $1";
 
@@ -6238,17 +6320,17 @@ mod tests {
 
     #[test]
     fn test_prepare_statement_to_plan_multi_params() {
-        let sql = "PREPARE my_plan(INT, STRING, DOUBLE, INT, DOUBLE) AS 
-        SELECT id, age  
+        let sql = "PREPARE my_plan(INT, STRING, DOUBLE, INT, DOUBLE, STRING) AS 
+        SELECT id, age, $6  
         FROM person 
         WHERE age IN ($1, $4) AND salary > $3 and salary < $5 OR first_name < $2";
 
-        let expected_plan = "Prepare: \"my_plan\" [Int32, Utf8, Float64, Int32, Float64] \
-        \n  Projection: person.id, person.age\
+        let expected_plan = "Prepare: \"my_plan\" [Int32, Utf8, Float64, Int32, Float64, Utf8] \
+        \n  Projection: person.id, person.age,\
         \n    Filter: person.age IN ([$1, $4]) AND person.salary > $3 AND person.salary < $5 OR person.first_name < $2\
         \n      TableScan: person";
 
-        let expected_dt = "[Int32, Utf8, Float64, Int32, Float64]";
+        let expected_dt = "[Int32, Utf8, Float64, Int32, Float64, Utf8]";
 
         prepare_stmt_quick_test(sql, expected_plan, expected_dt);
     }
