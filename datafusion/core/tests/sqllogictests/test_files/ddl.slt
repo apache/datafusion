@@ -94,6 +94,20 @@ select * from "Foo.bar";
 statement ok
 drop table "foo.bar";
 
+# Verify that creating tables with three periods also works
+statement ok
+CREATE TABLE "foo.bar.baz" AS VALUES(8,9);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo.bar.baz";
+----
+8 9
+
+# And drop
+statement ok
+drop table "foo.bar.baz"
+
 ##########
 # Multipart identifier test (CREATE/DROP VIEW)
 ##########
@@ -121,6 +135,20 @@ select * from "Foo.bar";
 # Should be able to drop the view
 statement ok
 drop view "foo.bar";
+
+# Verify that creating views with three periods also works
+statement ok
+CREATE VIEW "foo.bar.baz" AS VALUES(8,9);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo.bar.baz";
+----
+8 9
+
+# And drop
+statement ok
+drop view "foo.bar.baz"
 
 
 ##########
