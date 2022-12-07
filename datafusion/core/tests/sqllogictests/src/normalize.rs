@@ -29,11 +29,9 @@ use arrow::{
 ///
 /// This is to make the output comparable to the semi-standard .slt format
 ///
-/// Normalizations applied:
-/// 1. Null Values (TODO)
-/// 2. [Empty Strings]
+/// Normalizations applied to [NULL Values and empty strings]
 ///
-/// [Empty Strings]: https://duckdb.org/dev/sqllogictest/result_verification#null-values-and-empty-strings
+/// [NULL Values and empty strings]: https://duckdb.org/dev/sqllogictest/result_verification#null-values-and-empty-strings
 pub fn normalize_batch(batch: RecordBatch) -> RecordBatch {
     let new_columns = batch
         .columns()
