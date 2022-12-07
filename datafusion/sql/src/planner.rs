@@ -1123,7 +1123,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             &plan,
             select.projection,
             empty_from,
-            outer_query_schema,
             planner_context,
             &from_schema,
         )?;
@@ -1298,7 +1297,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         plan: &LogicalPlan,
         projection: Vec<SelectItem>,
         empty_from: bool,
-        outer_query_schema: Option<&DFSchema>,
         planner_context: &mut PlannerContext,
         from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
@@ -1309,7 +1307,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     expr,
                     plan,
                     empty_from,
-                    outer_query_schema,
                     planner_context,
                     from_schema,
                 )
@@ -1617,28 +1614,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         sql: SelectItem,
         plan: &LogicalPlan,
         empty_from: bool,
-        outer_query_schema: Option<&DFSchema>,
         planner_context: &mut PlannerContext,
         from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
-        let input_schema = match outer_query_schema {
-            Some(x) => {
-                let mut input_schema = plan.schema().as_ref().clone();
-                input_schema.merge(x);
-                input_schema
-            }
-            _ => plan.schema().as_ref().clone(),
-        };
-
         match sql {
             SelectItem::UnnamedExpr(expr) => {
-                let expr = self.sql_to_rex(expr, &input_schema, planner_context)?;
+                let expr = self.sql_to_rex(expr, plan.schema(), planner_context)?;
                 self.column_reference_ambiguous_check(from_schema, &[expr.clone()])?;
                 Ok(vec![normalize_col(expr, plan)?])
             }
             SelectItem::ExprWithAlias { expr, alias } => {
                 let select_expr =
-                    self.sql_to_rex(expr, &input_schema, planner_context)?;
+                    self.sql_to_rex(expr, plan.schema(), planner_context)?;
                 self.column_reference_ambiguous_check(
                     from_schema,
                     &[select_expr.clone()],
@@ -2166,7 +2153,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     negated,
                     Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
                     Box::new(pattern),
-                    escape_char,
+                    escape_char
                 )))
             }
 
@@ -2392,13 +2379,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
 
-            SQLExpr::Floor { expr, field: _field } => {
+            SQLExpr::Floor{expr, field: _field} => {
                 let fun = BuiltinScalarFunction::Floor;
                 let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
                 Ok(Expr::ScalarFunction { fun, args })
             }
 
-            SQLExpr::Ceil { expr, field: _field } => {
+            SQLExpr::Ceil{expr, field: _field} => {
                 let fun = BuiltinScalarFunction::Ceil;
                 let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
                 Ok(Expr::ScalarFunction { fun, args })
@@ -2689,7 +2676,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported Value {}",
                         value[0]
-                    )));
+                    )))
                 }
             },
             // for capture signed number e.g. +8, -8
@@ -2700,14 +2687,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported Value {}",
                         value[0]
-                    )));
+                    )))
                 }
             },
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "Unsupported Value {}",
                     value[0]
-                )));
+                )))
             }
         };
 
@@ -2939,7 +2926,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             return Err(DataFusionError::Internal(format!(
                                 "Incorrect data type for time_zone: {}",
                                 v.get_datatype(),
-                            )));
+                            )))
                         }
                         None => return Err(DataFusionError::Internal(
                             "Config Option datafusion.execution.time_zone doesn't exist"
@@ -2967,7 +2954,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             SQLDataType::Numeric(exact_number_info)
-            | SQLDataType::Decimal(exact_number_info) => {
+            |SQLDataType::Decimal(exact_number_info) => {
                 let (precision, scale) = match *exact_number_info {
                     ExactNumberInfo::None => (None, None),
                     ExactNumberInfo::Precision(precision) => (Some(precision), None),
@@ -2999,12 +2986,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharacterVarying(_)
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
-            | SQLDataType::CharLargeObject(_)
+                | SQLDataType::CharLargeObject(_)
             // precision is not supported
-            | SQLDataType::Timestamp(Some(_), _)
+                | SQLDataType::Timestamp(Some(_), _)
             // precision is not supported
-            | SQLDataType::Time(Some(_), _)
-            | SQLDataType::Dec(_)
+                | SQLDataType::Time(Some(_), _)
+                | SQLDataType::Dec(_)
             | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL type {:?}",
                 sql_type
