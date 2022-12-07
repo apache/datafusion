@@ -244,8 +244,14 @@ pub enum Expr {
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
-    /// A place holder for parameters in a prepared statement.
-    Placeholder(String),
+    /// A place holder for parameters in a prepared statement
+    /// (e.g. `$foo` or `$1`)
+    Placeholder {
+        /// The identifier of the parameter (e.g, $1 or $foo)
+        id: String,
+        /// The type the parameter will be filled in with
+        data_type: DataType,
+    },
 }
 
 /// Binary expression
@@ -530,7 +536,7 @@ impl Expr {
             Expr::Literal(..) => "Literal",
             Expr::Negative(..) => "Negative",
             Expr::Not(..) => "Not",
-            Expr::Placeholder(..) => "Placeholder",
+            Expr::Placeholder { .. } => "Placeholder",
             Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
             Expr::ScalarFunction { .. } => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
@@ -983,7 +989,7 @@ impl fmt::Debug for Expr {
                     )
                 }
             },
-            Expr::Placeholder(param) => write!(f, "{}", param),
+            Expr::Placeholder { id, .. } => write!(f, "{}", id),
         }
     }
 }
@@ -1267,7 +1273,7 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
             "Create name does not support qualified wildcard".to_string(),
         )),
-        Expr::Placeholder(param) => Ok((*param).to_string()),
+        Expr::Placeholder { id, .. } => Ok((*id).to_string()),
     }
 }
 

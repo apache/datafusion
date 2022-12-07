@@ -134,7 +134,7 @@ impl ExprVisitable for Expr {
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
-            | Expr::Placeholder(_) => Ok(visitor),
+            | Expr::Placeholder { .. } => Ok(visitor),
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 let visitor = left.accept(visitor)?;
                 right.accept(visitor)

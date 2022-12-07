@@ -356,7 +356,8 @@ message LogicalExprNode {
 }
 
 message PlaceholderNode {
-  string param = 1;
+  string id = 1;
+  ArrowType data_type = 2;
 }
 
 message LogicalExprList {

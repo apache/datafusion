@@ -291,7 +291,7 @@ impl ExprRewritable for Expr {
                     key,
                 ))
             }
-            Expr::Placeholder(param) => Expr::Placeholder(param),
+            Expr::Placeholder { id, data_type } => Expr::Placeholder { id, data_type },
         };
 
         // now rewrite this expression itself

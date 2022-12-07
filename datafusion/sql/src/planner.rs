@@ -16,7 +16,7 @@
 // under the License.
 
 //! SQL Query Planner (produces logical plan from SQL AST)
-
+use log::debug;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -1077,10 +1077,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     &[using_columns],
                 )?;
 
-                Ok(LogicalPlan::Filter(Filter::try_new_with_params(
+                Ok(LogicalPlan::Filter(Filter::try_new(
                     filter_expr,
                     Arc::new(plan),
-                    &planner_context.prepare_param_data_types,
                 )?))
             }
             None => Ok(plan),
@@ -1267,10 +1266,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
             LogicalPlanBuilder::from(plan)
-                .filter_with_params(
-                    having_expr_post_aggr,
-                    &planner_context.prepare_param_data_types,
-                )?
+                .filter(having_expr_post_aggr)?
                 .build()?
         } else {
             plan
@@ -1874,7 +1870,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }
                         SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
                         SQLExpr::Value(Value::Placeholder(param)) => {
-                            Ok(Expr::Placeholder(param))
+                            Self::create_placeholder_expr(param, param_data_types)
                         }
                         SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(
                             op,
@@ -1912,7 +1908,42 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<_>>>()
             })
             .collect::<Result<Vec<_>>>()?;
-        LogicalPlanBuilder::values(values, param_data_types)?.build()
+        LogicalPlanBuilder::values(values)?.build()
+    }
+
+    fn create_placeholder_expr(
+        param: String,
+        param_data_types: &[DataType],
+    ) -> Result<Expr> {
+        // Parse the placeholder as a number becasue it is the only support from sqlparser and postgres
+        let index = param[1..].parse::<usize>();
+        let idx = match index {
+            Ok(index) => index - 1,
+            Err(_) => {
+                return Err(DataFusionError::Internal(format!(
+                    "Invalid placeholder: {}",
+                    param
+                )))
+            }
+        };
+        // Check if the placeholder is in the parameter list
+        if param_data_types.len() <= idx {
+            return Err(DataFusionError::Internal(format!(
+                "Placehoder {} does not exist in the parameter list: {:?}",
+                param, param_data_types
+            )));
+        }
+        // Data type of the parameter
+        let param_type = param_data_types[idx].clone();
+        debug!(
+            "type of param {} param_data_types[idx]: {:?}",
+            param, param_type
+        );
+
+        Ok(Expr::Placeholder {
+            id: param,
+            data_type: param_type,
+        })
     }
 
     fn sql_expr_to_logical_expr(
@@ -1926,7 +1957,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(Value::SingleQuotedString(ref s) | Value::DoubleQuotedString(ref s)) => Ok(lit(s.clone())),
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
             SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Null)),
-            SQLExpr::Value(Value::Placeholder(param)) => Ok(Expr::Placeholder(param)),
+            SQLExpr::Value(Value::Placeholder(param)) => Self::create_placeholder_expr(param, &planner_context.prepare_param_data_types),
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::DatePart,
                 args: vec![

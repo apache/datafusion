@@ -1192,9 +1192,16 @@ pub fn parse_expr(
                     .collect::<Result<Vec<_>, Error>>()?,
             )))
         }
-        ExprType::Placeholder(PlaceholderNode { param }) => {
-            Ok(Expr::Placeholder(param.clone()))
-        }
+        ExprType::Placeholder(PlaceholderNode { id, data_type }) => match data_type {
+            None => {
+                let message = format!("Protobuf deserialization error: data type must be provided for the placeholder {}", id);
+                Err(proto_error(message))
+            }
+            Some(data_type) => Ok(Expr::Placeholder {
+                id: id.clone(),
+                data_type: data_type.try_into()?,
+            }),
+        },
     }
 }
 

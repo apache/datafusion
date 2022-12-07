@@ -369,7 +369,7 @@ mod tests {
             Box::new(lit(1)),
         ));
         let values = vec![vec![expr1, expr2]];
-        let plan = LogicalPlanBuilder::values(values, &[])?.build()?;
+        let plan = LogicalPlanBuilder::values(values)?.build()?;
 
         let expected = "\
         Values: (Int32(3) AS Int32(1) + Int32(2), Int32(1) AS Int32(2) - Int32(1))";

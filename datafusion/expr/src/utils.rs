@@ -127,7 +127,7 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
             | Expr::GetIndexedField { .. }
-            | Expr::Placeholder(_) => {}
+            | Expr::Placeholder { .. } => {}
         }
         Ok(Recursion::Continue(self))
     }

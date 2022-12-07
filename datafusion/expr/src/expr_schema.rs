@@ -23,19 +23,11 @@ use crate::{aggregate_function, function, window_function};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{DFField, DFSchema, DataFusionError, ExprSchema, Result};
-use log::debug;
 
 /// trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {
     /// given a schema, return the type of the expr
     fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType>;
-
-    /// given a schema and param data types, return the type of the expr
-    fn get_type_with_params<S: ExprSchema>(
-        &self,
-        schema: &S,
-        param_data_types: &[DataType],
-    ) -> Result<DataType>;
 
     /// given a schema, return the nullability of the expr
     fn nullable<S: ExprSchema>(&self, input_schema: &S) -> Result<bool>;
@@ -61,59 +53,49 @@ impl ExprSchemable for Expr {
     /// schema, or when the expression is incorrectly typed
     /// (e.g. `[utf8] + [bool]`).
     fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType> {
-        self.get_type_with_params(schema, &[])
-    }
-
-    fn get_type_with_params<S: ExprSchema>(
-        &self,
-        schema: &S,
-        param_data_types: &[DataType],
-    ) -> Result<DataType> {
         match self {
             Expr::Alias(expr, _) | Expr::Sort { expr, .. } | Expr::Negative(expr) => {
-                expr.get_type_with_params(schema, param_data_types)
+                expr.get_type(schema)
             }
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.get_datatype()),
-            Expr::Case(case) => case.when_then_expr[0]
-                .1
-                .get_type_with_params(schema, param_data_types),
+            Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
             Expr::Cast(Cast { data_type, .. }) | Expr::TryCast { data_type, .. } => {
                 Ok(data_type.clone())
             }
             Expr::ScalarUDF { fun, args } => {
                 let data_types = args
                     .iter()
-                    .map(|e| e.get_type_with_params(schema, param_data_types))
+                    .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
                 Ok((fun.return_type)(&data_types)?.as_ref().clone())
             }
             Expr::ScalarFunction { fun, args } => {
                 let data_types = args
                     .iter()
-                    .map(|e| e.get_type_with_params(schema, param_data_types))
+                    .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
                 function::return_type(fun, &data_types)
             }
             Expr::WindowFunction { fun, args, .. } => {
                 let data_types = args
                     .iter()
-                    .map(|e| e.get_type_with_params(schema, param_data_types))
+                    .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
                 window_function::return_type(fun, &data_types)
             }
             Expr::AggregateFunction { fun, args, .. } => {
                 let data_types = args
                     .iter()
-                    .map(|e| e.get_type_with_params(schema, param_data_types))
+                    .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
                 aggregate_function::return_type(fun, &data_types)
             }
             Expr::AggregateUDF { fun, args, .. } => {
                 let data_types = args
                     .iter()
-                    .map(|e| e.get_type_with_params(schema, param_data_types))
+                    .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
                 Ok((fun.return_type)(&data_types)?.as_ref().clone())
             }
@@ -138,44 +120,15 @@ impl ExprSchemable for Expr {
                 ref right,
                 ref op,
             }) => binary_operator_data_type(
-                &left.get_type_with_params(schema, param_data_types)?,
+                &left.get_type(schema)?,
                 op,
-                &right.get_type_with_params(schema, param_data_types)?,
+                &right.get_type(schema)?,
             ),
             Expr::Like { .. } | Expr::ILike { .. } | Expr::SimilarTo { .. } => {
                 Ok(DataType::Boolean)
             }
             // Return the type of the corresponding param defined in param_data_types of `PREPARE my_plan(param_data_types)`
-            Expr::Placeholder(param) => {
-                // param is $1, $2, $3, ...
-                // Let convert it to index: 0, 1, 2, ...
-                let index = param[1..].parse::<usize>();
-                let idx = match index {
-                    Ok(index) => index - 1,
-                    Err(_) => {
-                        return Err(DataFusionError::Internal(format!(
-                            "Invalid placeholder: {}",
-                            param
-                        )))
-                    }
-                };
-
-                if param_data_types.len() <= idx {
-                    return Err(DataFusionError::Internal(format!(
-                        "Placehoder {} does not exist in the parameter list: {:?}",
-                        param, param_data_types
-                    )));
-                }
-
-                let param_type = param_data_types[idx].clone();
-                debug!(
-                    "type of param {} param_data_types[idx]: {:?}",
-                    param, param_type
-                );
-
-                // Return data type of the index in the param_data_types
-                Ok(param_type)
-            }
+            Expr::Placeholder { data_type, .. } => Ok(data_type.clone()),
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
@@ -188,7 +141,7 @@ impl ExprSchemable for Expr {
                 Ok(DataType::Null)
             }
             Expr::GetIndexedField(GetIndexedField { key, expr }) => {
-                let data_type = expr.get_type_with_params(schema, param_data_types)?;
+                let data_type = expr.get_type(schema)?;
 
                 get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
             }
@@ -248,7 +201,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. }
-            | Expr::Placeholder(_) => Ok(true),
+            | Expr::Placeholder { .. } => Ok(true),
             Expr::InSubquery { expr, .. } => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())

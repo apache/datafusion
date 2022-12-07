@@ -344,7 +344,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
             "Create physical name does not support qualified wildcard".to_string(),
         )),
-        Expr::Placeholder(_) => Err(DataFusionError::Internal(
+        Expr::Placeholder { .. } => Err(DataFusionError::Internal(
             "Create physical name does not support placeholder".to_string(),
         )),
     }

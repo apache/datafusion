@@ -1214,22 +1214,11 @@ impl Filter {
         predicate: Expr,
         input: Arc<LogicalPlan>,
     ) -> datafusion_common::Result<Self> {
-        Self::try_new_with_params(predicate, input, &[])
-    }
-
-    /// Create a new filter operator with provided list of parmeter data types
-    pub fn try_new_with_params(
-        predicate: Expr,
-        input: Arc<LogicalPlan>,
-        param_data_types: &[DataType],
-    ) -> datafusion_common::Result<Self> {
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
         // ignore errors resolving the expression against the schema.
-        if let Ok(predicate_type) =
-            predicate.get_type_with_params(input.schema(), param_data_types)
-        {
+        if let Ok(predicate_type) = predicate.get_type(input.schema()) {
             if predicate_type != DataType::Boolean {
                 return Err(DataFusionError::Plan(format!(
                     "Cannot create filter with non-boolean predicate '{}' returning {}",

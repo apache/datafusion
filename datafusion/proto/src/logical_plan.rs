@@ -320,7 +320,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .collect::<Result<Vec<_>, _>>()
                             .map_err(|e| e.into())
                     }?;
-                LogicalPlanBuilder::values(values, &[])?.build()
+                LogicalPlanBuilder::values(values)?.build()
             }
             LogicalPlanType::Projection(projection) => {
                 let input: LogicalPlan =

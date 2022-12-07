@@ -411,7 +411,10 @@ where
                     )))
                 }
             },
-            Expr::Placeholder(param) => Ok(Expr::Placeholder(param.clone())),
+            Expr::Placeholder { id, data_type } => Ok(Expr::Placeholder {
+                id: id.clone(),
+                data_type: data_type.clone(),
+            }),
         },
     }
 }

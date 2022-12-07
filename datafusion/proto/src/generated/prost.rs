@@ -506,7 +506,9 @@ pub mod logical_expr_node {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlaceholderNode {
     #[prost(string, tag = "1")]
-    pub param: ::prost::alloc::string::String,
+    pub id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub data_type: ::core::option::Option<ArrowType>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogicalExprList {

@@ -122,7 +122,7 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
             | Expr::WindowFunction { .. }
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
-            | Expr::Placeholder(_) => {
+            | Expr::Placeholder { .. } => {
                 *self.is_applicable = false;
                 Recursion::Stop(self)
             }
