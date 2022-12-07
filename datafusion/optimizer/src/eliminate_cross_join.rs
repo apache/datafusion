@@ -18,16 +18,15 @@
 //! Optimizer rule to eliminate cross join to inner join if join predicates are available in filters.
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::logical_plan::JoinConstraint;
+use datafusion_expr::expr::{BinaryExpr, Expr};
+use datafusion_expr::logical_plan::{
+    CrossJoin, Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
+};
 use datafusion_expr::utils::{can_hash, check_all_column_from_schema};
 use datafusion_expr::{
-    and, build_join_schema,
-    expr::BinaryExpr,
-    logical_plan::{CrossJoin, Filter, Join, JoinType, LogicalPlan},
-    or, Projection,
+    and, build_join_schema, or, wrap_projection_for_join_if_necessary, ExprSchemable,
+    Operator,
 };
-use datafusion_expr::{Expr, ExprSchemable, Operator};
 use std::collections::HashSet;
 use std::sync::Arc;
 
