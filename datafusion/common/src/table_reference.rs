@@ -165,7 +165,7 @@ impl<'a> TableReference<'a> {
     /// `"foo`.`bar"`. and `Foo` will be parsed as `Foo` (not `foo`).
     ///
     /// If you need to handle such identifiers correctly, you should
-    /// use a SQL oarser or form the [`OwnedTableReference`] directly.
+    /// use a SQL parser or form the [`OwnedTableReference`] directly.
     ///
     /// See more detail in <https://github.com/apache/arrow-datafusion/issues/4532>
     pub fn parse_str(s: &'a str) -> Self {
