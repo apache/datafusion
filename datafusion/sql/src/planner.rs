@@ -1913,13 +1913,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         param: String,
         param_data_types: &[DataType],
     ) -> Result<Expr> {
-        // Parse the placeholder as a number becasue it is the only support from sqlparser and postgres
+        // Parse the placeholder as a number because it is the only support from sqlparser and postgres
         let index = param[1..].parse::<usize>();
         let idx = match index {
             Ok(index) => index - 1,
             Err(_) => {
                 return Err(DataFusionError::Internal(format!(
-                    "Invalid placeholder: {}",
+                    "Invalid placeholder, not a number: {}",
                     param
                 )))
             }

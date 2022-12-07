@@ -27,14 +27,53 @@ select * from person;
 ----
 1 jane smith 20 MA 100000.45 2000-11-12T00:00:00.000000000 99
 
-# TODO: support error instead of panicking
-# thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value: SQL(ParserError("Expected AS, found: SELECT"))', datafusion/core/tests/sqllogictests/src/main.rs:197:42
-# statement error
-# PREPARE AS SELECT id, age  FROM person WHERE age = $foo
+# Error due to syntax and semantic violation
 
-# TODO: this statement should work after we support EXECUTE statement and caching this prepare logical plan somewhere
-# statement ok
-# PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
+# Syntax error: no name specified after the keyword prepare
+statement error
+PREPARE AS SELECT id, age  FROM person WHERE age = $foo;
 
-# And then we may want to add test_prepare_statement* here
+# param following a non-number, $foo, not supported
+statement error
+PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $foo;
+
+# not specify table hence cannot specify columns
+statement error
+PREPARE my_plan(INT) AS SELECT id + $1;
+
+# not specify data types for all params
+statement error
+PREPARE my_plan(INT) AS SELECT 1 + $1 + $2;
+
+# #######################
+# TODO: all the errors below should work ok after we store the prepare logical plan somewhere
+statement error
+PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
+
+statement error
+PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10;
+
+statement error
+PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10;
+
+statement error
+PREPARE my_plan(INT) AS SELECT $1;
+
+statement error
+PREPARE my_plan(INT) AS SELECT 1 + $1;
+
+statement error
+PREPARE my_plan(INT, DOUBLE) AS SELECT 1 + $1 + $2;
+
+statement error
+PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $1;
+
+statement error
+PREPARE my_plan(INT, STRING, DOUBLE, INT, DOUBLE, STRING) AS SELECT id, age, $6 FROM person WHERE age IN ($1, $4) AND salary > $3 and salary < $5 OR first_name < $2";
+
+statement error
+PREPARE my_plan(INT, DOUBLE, DOUBLE, DOUBLE) AS SELECT id, SUM(age) FROM person WHERE salary > $2 GROUP BY id HAVING sum(age) < $1 AND SUM(age) > 10 OR SUM(age) in ($3, $4);
+
+statement error
+PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
 
