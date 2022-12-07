@@ -26,9 +26,9 @@ use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
-        JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
-        Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan, Union, Values,
-        Window,
+        JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
+        Projection, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
+        Union, Values, Window,
     },
     utils::{
         can_hash, expand_qualified_wildcard, expand_wildcard,
@@ -44,8 +44,6 @@ use datafusion_common::{
 use std::any::Any;
 use std::convert::TryFrom;
 use std::{collections::HashMap, sync::Arc};
-
-use super::Prepare;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";

@@ -127,7 +127,6 @@ impl ExprSchemable for Expr {
             Expr::Like { .. } | Expr::ILike { .. } | Expr::SimilarTo { .. } => {
                 Ok(DataType::Boolean)
             }
-            // Return the type of the corresponding param defined in param_data_types of `PREPARE my_plan(param_data_types)`
             Expr::Placeholder { data_type, .. } => Ok(data_type.clone()),
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
