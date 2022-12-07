@@ -225,7 +225,7 @@ impl SessionContext {
         batch: RecordBatch,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        self.register_table(table_name, Arc::new(table))
+        self.register_table(TableReference::Bare { table: table_name }, Arc::new(table))
     }
 
     /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
@@ -265,12 +265,12 @@ impl SessionContext {
                 if_not_exists,
                 or_replace,
             }) => {
-                let table = self.table(name.as_str());
+                let table = self.table(&name);
 
                 match (if_not_exists, or_replace, table) {
                     (true, false, Ok(_)) => self.return_empty_dataframe(),
                     (false, true, Ok(_)) => {
-                        self.deregister_table(name.as_str())?;
+                        self.deregister_table(&name)?;
                         let physical =
                             Arc::new(DataFrame::new(self.state.clone(), &input));
 
@@ -280,7 +280,7 @@ impl SessionContext {
                             batches,
                         )?);
 
-                        self.register_table(name.as_str(), table)?;
+                        self.register_table(&name, table)?;
                         self.return_empty_dataframe()
                     }
                     (true, true, Ok(_)) => Err(DataFusionError::Internal(
@@ -296,7 +296,7 @@ impl SessionContext {
                             batches,
                         )?);
 
-                        self.register_table(name.as_str(), table)?;
+                        self.register_table(&name, table)?;
                         self.return_empty_dataframe()
                     }
                     (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
@@ -312,22 +312,22 @@ impl SessionContext {
                 or_replace,
                 definition,
             }) => {
-                let view = self.table(name.as_str());
+                let view = self.table(&name);
 
                 match (or_replace, view) {
                     (true, Ok(_)) => {
-                        self.deregister_table(name.as_str())?;
+                        self.deregister_table(&name)?;
                         let table =
                             Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
-                        self.register_table(name.as_str(), table)?;
+                        self.register_table(&name, table)?;
                         self.return_empty_dataframe()
                     }
                     (_, Err(_)) => {
                         let table =
                             Arc::new(ViewTable::try_new((*input).clone(), definition)?);
 
-                        self.register_table(name.as_str(), table)?;
+                        self.register_table(&name, table)?;
                         self.return_empty_dataframe()
                     }
                     (false, Ok(_)) => Err(DataFusionError::Execution(format!(
@@ -340,7 +340,7 @@ impl SessionContext {
             LogicalPlan::DropTable(DropTable {
                 name, if_exists, ..
             }) => {
-                let result = self.find_and_deregister(name.as_str(), TableType::Base);
+                let result = self.find_and_deregister(&name, TableType::Base);
                 match (result, if_exists) {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
@@ -354,7 +354,7 @@ impl SessionContext {
             LogicalPlan::DropView(DropView {
                 name, if_exists, ..
             }) => {
-                let result = self.find_and_deregister(name.as_str(), TableType::View);
+                let result = self.find_and_deregister(&name, TableType::View);
                 match (result, if_exists) {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
@@ -497,11 +497,11 @@ impl SessionContext {
         let table_provider: Arc<dyn TableProvider> =
             self.create_custom_table(cmd).await?;
 
-        let table = self.table(cmd.name.as_str());
+        let table = self.table(&cmd.name);
         match (cmd.if_not_exists, table) {
             (true, Ok(_)) => self.return_empty_dataframe(),
             (_, Err(_)) => {
-                self.register_table(cmd.name.as_str(), table_provider)?;
+                self.register_table(&cmd.name, table_provider)?;
                 self.return_empty_dataframe()
             }
             (false, Ok(_)) => Err(DataFusionError::Execution(format!(
@@ -765,7 +765,7 @@ impl SessionContext {
             .with_listing_options(options)
             .with_schema(resolved_schema);
         let table = ListingTable::try_new(config)?.with_definition(sql_definition);
-        self.register_table(name, Arc::new(table))?;
+        self.register_table(TableReference::Bare { table: name }, Arc::new(table))?;
         Ok(())
     }
 

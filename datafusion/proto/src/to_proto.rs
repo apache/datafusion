@@ -33,7 +33,7 @@ use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
     UnionMode,
 };
-use datafusion_common::{Column, DFField, DFSchemaRef, ScalarValue};
+use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
     Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
 };
@@ -1291,6 +1291,36 @@ impl From<&IntervalUnit> for protobuf::IntervalUnit {
             IntervalUnit::YearMonth => protobuf::IntervalUnit::YearMonth,
             IntervalUnit::DayTime => protobuf::IntervalUnit::DayTime,
             IntervalUnit::MonthDayNano => protobuf::IntervalUnit::MonthDayNano,
+        }
+    }
+}
+
+impl From<OwnedTableReference> for protobuf::OwnedTableReference {
+    fn from(t: OwnedTableReference) -> Self {
+        use protobuf::owned_table_reference::TableReferenceEnum;
+        let table_reference_enum = match t {
+            OwnedTableReference::Bare { table } => {
+                TableReferenceEnum::Bare(protobuf::BareTableReference { table })
+            }
+            OwnedTableReference::Partial { schema, table } => {
+                TableReferenceEnum::Partial(protobuf::PartialTableReference {
+                    schema,
+                    table,
+                })
+            }
+            OwnedTableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => TableReferenceEnum::Full(protobuf::FullTableReference {
+                catalog,
+                schema,
+                table,
+            }),
+        };
+
+        protobuf::OwnedTableReference {
+            table_reference_enum: Some(table_reference_enum),
         }
     }
 }

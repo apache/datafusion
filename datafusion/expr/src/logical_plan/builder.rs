@@ -870,16 +870,16 @@ pub fn project_with_column_index(
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
     let left_col_num = left_plan.schema().fields().len();
 
-    // the 2 queries should have same number of columns
-    {
-        let right_col_num = right_plan.schema().fields().len();
-        if right_col_num != left_col_num {
-            return Err(DataFusionError::Plan(format!(
-                "Union queries must have the same number of columns, (left is {}, right is {})",
-                left_col_num, right_col_num)
-            ));
-        }
+    // check union plan length same.
+    let right_col_num = right_plan.schema().fields().len();
+    if right_col_num != left_col_num {
+        return Err(DataFusionError::Plan(format!(
+            "Union queries must have the same number of columns, (left is {}, right is {})",
+            left_col_num, right_col_num)
+        ));
     }
+
+    // create union schema
     let union_schema = (0..left_col_num)
         .map(|i| {
             let left_field = left_plan.schema().field(i);

@@ -25,7 +25,9 @@ use crate::utils::{
 };
 use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
+use datafusion_common::{
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -1068,7 +1070,7 @@ pub struct CreateCatalogSchema {
 #[derive(Clone)]
 pub struct DropTable {
     /// The table name
-    pub name: String,
+    pub name: OwnedTableReference,
     /// If the table exists
     pub if_exists: bool,
     /// Dummy schema
@@ -1079,7 +1081,7 @@ pub struct DropTable {
 #[derive(Clone)]
 pub struct DropView {
     /// The view name
-    pub name: String,
+    pub name: OwnedTableReference,
     /// If the view exists
     pub if_exists: bool,
     /// Dummy schema
@@ -1319,7 +1321,7 @@ pub struct Union {
 #[derive(Clone)]
 pub struct CreateMemoryTable {
     /// The table name
-    pub name: String,
+    pub name: OwnedTableReference,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
@@ -1332,7 +1334,7 @@ pub struct CreateMemoryTable {
 #[derive(Clone)]
 pub struct CreateView {
     /// The table name
-    pub name: String,
+    pub name: OwnedTableReference,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
@@ -1347,7 +1349,7 @@ pub struct CreateExternalTable {
     /// The table schema
     pub schema: DFSchemaRef,
     /// The table name
-    pub name: String,
+    pub name: OwnedTableReference,
     /// The physical location
     pub location: String,
     /// The file type of physical file

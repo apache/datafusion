@@ -546,3 +546,11 @@ pub(crate) fn normalize_ident(id: &Ident) -> String {
         None => id.value.to_ascii_lowercase(),
     }
 }
+
+// Normalize an owned identifier to a lowercase string unless the identifier is quoted.
+pub(crate) fn normalize_ident_owned(id: Ident) -> String {
+    match id.quote_style {
+        Some(_) => id.value,
+        None => id.value.to_ascii_lowercase(),
+    }
+}

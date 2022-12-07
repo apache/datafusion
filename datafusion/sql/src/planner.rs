@@ -37,11 +37,11 @@ use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::parsers::parse_interval;
-use datafusion_common::TableReference;
 use datafusion_common::ToDFSchema;
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
+use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
@@ -72,7 +72,9 @@ use datafusion_expr::{
 };
 
 use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
-use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
+use crate::utils::{
+    make_decimal_type, normalize_ident, normalize_ident_owned, resolve_columns,
+};
 
 use super::{
     parser::DFParser,
@@ -279,7 +281,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
 
                 Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                    name: name.to_string(),
+                    name: object_name_to_table_reference(name)?,
                     input: Arc::new(plan),
                     if_not_exists,
                     or_replace,
@@ -297,7 +299,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 plan = Self::apply_expr_alias(plan, &columns)?;
 
                 Ok(LogicalPlan::CreateView(CreateView {
-                    name: name.to_string(),
+                    name: object_name_to_table_reference(name)?,
                     input: Arc::new(plan),
                     or_replace,
                     definition: sql,
@@ -308,7 +310,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .to_string(),
             )),
             Statement::ShowCreate { obj_type, obj_name } => match obj_type {
-                ShowCreateObject::Table => self.show_create_table_to_plan(&obj_name),
+                ShowCreateObject::Table => self.show_create_table_to_plan(obj_name),
                 _ => Err(DataFusionError::NotImplemented(
                     "Only `SHOW CREATE TABLE  ...` statement is supported".to_string(),
                 )),
@@ -333,34 +335,39 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Statement::Drop {
                 object_type,
                 if_exists,
-                names,
+                mut names,
                 cascade: _,
                 restrict: _,
                 purge: _,
+            } => {
                 // We don't support cascade and purge for now.
                 // nor do we support multiple object names
-            } => match object_type {
-                ObjectType::Table => Ok(LogicalPlan::DropTable(DropTable {
-                    name: names
-                        .get(0)
-                        .ok_or_else(|| ParserError("Missing table name.".to_string()))?
-                        .to_string(),
-                    if_exists,
-                    schema: DFSchemaRef::new(DFSchema::empty()),
-                })),
-                ObjectType::View => Ok(LogicalPlan::DropView(DropView {
-                    name: names
-                        .get(0)
-                        .ok_or_else(|| ParserError("Missing table name.".to_string()))?
-                        .to_string(),
-                    if_exists,
-                    schema: DFSchemaRef::new(DFSchema::empty()),
-                })),
-                _ => Err(DataFusionError::NotImplemented(
-                    "Only `DROP TABLE/VIEW  ...` statement is supported currently"
-                        .to_string(),
-                )),
-            },
+                let name = match names.len() {
+                    0 => Err(ParserError("Missing table name.".to_string()).into()),
+                    1 => object_name_to_table_reference(names.pop().unwrap()),
+                    _ => {
+                        Err(ParserError("Multiple objects not supported".to_string())
+                            .into())
+                    }
+                }?;
+
+                match object_type {
+                    ObjectType::Table => Ok(LogicalPlan::DropTable(DropTable {
+                        name,
+                        if_exists,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    })),
+                    ObjectType::View => Ok(LogicalPlan::DropView(DropView {
+                        name,
+                        if_exists,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    })),
+                    _ => Err(DataFusionError::NotImplemented(
+                        "Only `DROP TABLE/VIEW  ...` statement is supported currently"
+                            .to_string(),
+                    )),
+                }
+            }
             Statement::Prepare {
                 name,
                 data_types,
@@ -400,7 +407,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 full,
                 table_name,
                 filter,
-            } => self.show_columns_to_plan(extended, full, &table_name, filter.as_ref()),
+            } => self.show_columns_to_plan(extended, full, table_name, filter),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL statement: {:?}",
                 sql
@@ -579,13 +586,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         statement: DescribeTable,
     ) -> Result<LogicalPlan> {
-        let table_name = statement.table_name.to_string();
-        let table_ref: TableReference = table_name.as_str().into();
+        let DescribeTable { table_name } = statement;
+
+        let where_clause = object_name_to_qualifier(&table_name);
+        let table_ref = object_name_to_table_reference(table_name)?;
 
         // check if table_name exists
-        let _ = self.schema_provider.get_table_provider(table_ref)?;
-
-        let where_clause = object_name_to_qualifier(&statement.table_name);
+        let _ = self
+            .schema_provider
+            .get_table_provider((&table_ref).into())?;
 
         if self.has_table("information_schema", "tables") {
             let sql = format!(
@@ -636,6 +645,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let schema = self.build_schema(columns)?;
+
+        // External tables do not support schemas at the moment, so the name is just a table name
+        let name = OwnedTableReference::Bare { table: name };
 
         Ok(LogicalPlan::CreateExternalTable(PlanCreateExternalTable {
             schema: schema.to_dfschema_ref()?,
@@ -936,18 +948,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         let (plan, alias) = match relation {
-            TableFactor::Table {
-                name: ref sql_object_name,
-                alias,
-                ..
-            } => {
+            TableFactor::Table { name, alias, .. } => {
                 // normalize name and alias
-                let table_name = normalize_sql_object_name(sql_object_name);
-                let table_ref: TableReference = table_name.as_str().into();
+                let table_ref = object_name_to_table_reference(name)?;
+                let table_name = table_ref.display_string();
                 let table_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
                 let cte = planner_context.ctes.get(&table_name);
                 (
-                    match (cte, self.schema_provider.get_table_provider(table_ref)) {
+                    match (
+                        cte,
+                        self.schema_provider.get_table_provider((&table_ref).into()),
+                    ) {
                         (Some(cte_plan), _) => match table_alias {
                             Some(cte_alias) => subquery_alias(cte_plan, &cte_alias),
                             _ => Ok(cte_plan.clone()),
@@ -1157,7 +1168,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             &plan,
             select.projection,
             empty_from,
-            outer_query_schema,
             planner_context,
             &from_schema,
         )?;
@@ -1332,7 +1342,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         plan: &LogicalPlan,
         projection: Vec<SelectItem>,
         empty_from: bool,
-        outer_query_schema: Option<&DFSchema>,
         planner_context: &mut PlannerContext,
         from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
@@ -1343,7 +1352,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     expr,
                     plan,
                     empty_from,
-                    outer_query_schema,
                     planner_context,
                     from_schema,
                 )
@@ -1651,28 +1659,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         sql: SelectItem,
         plan: &LogicalPlan,
         empty_from: bool,
-        outer_query_schema: Option<&DFSchema>,
         planner_context: &mut PlannerContext,
         from_schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
-        let input_schema = match outer_query_schema {
-            Some(x) => {
-                let mut input_schema = plan.schema().as_ref().clone();
-                input_schema.merge(x);
-                input_schema
-            }
-            _ => plan.schema().as_ref().clone(),
-        };
-
         match sql {
             SelectItem::UnnamedExpr(expr) => {
-                let expr = self.sql_to_rex(expr, &input_schema, planner_context)?;
+                let expr = self.sql_to_rex(expr, plan.schema(), planner_context)?;
                 self.column_reference_ambiguous_check(from_schema, &[expr.clone()])?;
                 Ok(vec![normalize_col(expr, plan)?])
             }
             SelectItem::ExprWithAlias { expr, alias } => {
                 let select_expr =
-                    self.sql_to_rex(expr, &input_schema, planner_context)?;
+                    self.sql_to_rex(expr, plan.schema(), planner_context)?;
                 self.column_reference_ambiguous_check(
                     from_schema,
                     &[select_expr.clone()],
@@ -1999,6 +1997,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // interpret names with '.' as if they were
                     // compound identifiers, but this is not a compound
                     // identifier. (e.g. it is "foo.bar" not foo.bar)
+
                     Ok(Expr::Column(Column {
                         relation: None,
                         name: normalize_ident(&id),
@@ -2023,9 +2022,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
-                let mut var_names: Vec<_> = ids.into_iter().map(|s| normalize_ident(&s)).collect();
-
-                if var_names[0].get(0..1) == Some("@") {
+                if ids[0].value.starts_with('@') {
+                    let var_names: Vec<_> = ids.into_iter().map(|s| normalize_ident(&s)).collect();
                     let ty = self
                         .schema_provider
                         .get_variable_type(&var_names)
@@ -2037,37 +2035,41 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         })?;
                     Ok(Expr::ScalarVariable(ty, var_names))
                 } else {
-                    match (var_names.pop(), var_names.pop()) {
-                        (Some(name), Some(relation)) if var_names.is_empty() => {
-                            match schema.field_with_qualified_name(&relation, &name) {
-                                Ok(_) => {
-                                    // found an exact match on a qualified name so this is a table.column identifier
-                                    Ok(Expr::Column(Column {
-                                        relation: Some(relation),
-                                        name,
-                                    }))
-                                }
-                                Err(_) => {
-                                    if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
-                                        // Access to a field of a column which is a structure, example: SELECT my_struct.key
-                                        Ok(Expr::GetIndexedField(GetIndexedField::new(
-                                            Box::new(Expr::Column(field.qualified_column())),
-                                            ScalarValue::Utf8(Some(name)),
-                                        )))
-                                    } else {
-                                        // table.column identifier
-                                        Ok(Expr::Column(Column {
-                                            relation: Some(relation),
-                                            name,
-                                        }))
-                                    }
-                                }
+                    // only support "schema.table" type identifiers here
+                    let (name, relation) = match idents_to_table_reference(ids)? {
+                        OwnedTableReference::Partial { schema, table } => (table, schema),
+                        r @ OwnedTableReference::Bare { .. } |
+                        r @ OwnedTableReference::Full { .. } => {
+                            return Err(DataFusionError::Plan(format!(
+                            "Unsupported compound identifier '{:?}'", r,
+                            )))
+                        }
+                    };
+
+                    // Try and find the reference in schema
+                    match schema.field_with_qualified_name(&relation, &name) {
+                        Ok(_) => {
+                            // found an exact match on a qualified name so this is a table.column identifier
+                            Ok(Expr::Column(Column {
+                                relation: Some(relation),
+                                name,
+                            }))
+                        }
+                        Err(_) => {
+                            if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
+                                // Access to a field of a column which is a structure, example: SELECT my_struct.key
+                                Ok(Expr::GetIndexedField(GetIndexedField::new(
+                                    Box::new(Expr::Column(field.qualified_column())),
+                                    ScalarValue::Utf8(Some(name)),
+                                )))
+                            } else {
+                                // table.column identifier
+                                Ok(Expr::Column(Column {
+                                    relation: Some(relation),
+                                    name,
+                                }))
                             }
                         }
-                        _ => Err(DataFusionError::NotImplemented(format!(
-                            "Unsupported compound identifier '{:?}'",
-                            var_names,
-                        ))),
                     }
                 }
             }
@@ -2239,7 +2241,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     negated,
                     Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
                     Box::new(pattern),
-                    escape_char,
+                    escape_char
                 )))
             }
 
@@ -2465,13 +2467,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
 
-            SQLExpr::Floor { expr, field: _field } => {
+            SQLExpr::Floor{expr, field: _field} => {
                 let fun = BuiltinScalarFunction::Floor;
                 let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
                 Ok(Expr::ScalarFunction { fun, args })
             }
 
-            SQLExpr::Ceil { expr, field: _field } => {
+            SQLExpr::Ceil{expr, field: _field} => {
                 let fun = BuiltinScalarFunction::Ceil;
                 let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
                 Ok(Expr::ScalarFunction { fun, args })
@@ -2762,7 +2764,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported Value {}",
                         value[0]
-                    )));
+                    )))
                 }
             },
             // for capture signed number e.g. +8, -8
@@ -2773,14 +2775,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported Value {}",
                         value[0]
-                    )));
+                    )))
                 }
             },
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "Unsupported Value {}",
                     value[0]
-                )));
+                )))
             }
         };
 
@@ -2795,8 +2797,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         extended: bool,
         full: bool,
-        sql_table_name: &ObjectName,
-        filter: Option<&ShowStatementFilter>,
+        sql_table_name: ObjectName,
+        filter: Option<ShowStatementFilter>,
     ) -> Result<LogicalPlan> {
         if filter.is_some() {
             return Err(DataFusionError::Plan(
@@ -2810,13 +2812,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .to_string(),
             ));
         }
-        let table_name = normalize_sql_object_name(sql_table_name);
-        let table_ref: TableReference = table_name.as_str().into();
-
-        let _ = self.schema_provider.get_table_provider(table_ref)?;
-
         // Figure out the where clause
-        let where_clause = object_name_to_qualifier(sql_table_name);
+        let where_clause = object_name_to_qualifier(&sql_table_name);
+
+        // Do a table lookup to verify the table exists
+        let table_ref = object_name_to_table_reference(sql_table_name)?;
+        let _ = self
+            .schema_provider
+            .get_table_provider((&table_ref).into())?;
 
         // treat both FULL and EXTENDED as the same
         let select_list = if full || extended {
@@ -2837,7 +2840,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn show_create_table_to_plan(
         &self,
-        sql_table_name: &ObjectName,
+        sql_table_name: ObjectName,
     ) -> Result<LogicalPlan> {
         if !self.has_table("information_schema", "tables") {
             return Err(DataFusionError::Plan(
@@ -2845,13 +2848,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .to_string(),
             ));
         }
-        let table_name = normalize_sql_object_name(sql_table_name);
-        let table_ref: TableReference = table_name.as_str().into();
-
-        let _ = self.schema_provider.get_table_provider(table_ref)?;
-
         // Figure out the where clause
-        let where_clause = object_name_to_qualifier(sql_table_name);
+        let where_clause = object_name_to_qualifier(&sql_table_name);
+
+        // Do a table lookup to verify the table exists
+        let table_ref = object_name_to_table_reference(sql_table_name)?;
+        let _ = self
+            .schema_provider
+            .get_table_provider((&table_ref).into())?;
 
         let query = format!(
             "SELECT table_catalog, table_schema, table_name, definition FROM information_schema.views WHERE {}",
@@ -3010,7 +3014,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             return Err(DataFusionError::Internal(format!(
                                 "Incorrect data type for time_zone: {}",
                                 v.get_datatype(),
-                            )));
+                            )))
                         }
                         None => return Err(DataFusionError::Internal(
                             "Config Option datafusion.execution.time_zone doesn't exist"
@@ -3038,7 +3042,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             SQLDataType::Numeric(exact_number_info)
-            | SQLDataType::Decimal(exact_number_info) => {
+            |SQLDataType::Decimal(exact_number_info) => {
                 let (precision, scale) = match *exact_number_info {
                     ExactNumberInfo::None => (None, None),
                     ExactNumberInfo::Precision(precision) => (Some(precision), None),
@@ -3070,12 +3074,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharacterVarying(_)
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
-            | SQLDataType::CharLargeObject(_)
+                | SQLDataType::CharLargeObject(_)
             // precision is not supported
-            | SQLDataType::Timestamp(Some(_), _)
+                | SQLDataType::Timestamp(Some(_), _)
             // precision is not supported
-            | SQLDataType::Time(Some(_), _)
-            | SQLDataType::Dec(_)
+                | SQLDataType::Time(Some(_), _)
+                | SQLDataType::Dec(_)
             | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL type {:?}",
                 sql_type
@@ -3084,14 +3088,63 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 }
 
-/// Normalize a SQL object name
-fn normalize_sql_object_name(sql_object_name: &ObjectName) -> String {
-    sql_object_name
-        .0
-        .iter()
-        .map(normalize_ident)
-        .collect::<Vec<String>>()
-        .join(".")
+/// Create a [`OwnedTableReference`] after normalizing the specified ObjectName
+///
+/// Examples
+/// ```text
+/// ['foo']          -> Bare { table: "foo" }
+/// ['"foo.bar"]]    -> Bare { table: "foo.bar" }
+/// ['foo', 'Bar']   -> Partial { schema: "foo", table: "bar" } <-- note lower case "bar"
+/// ['foo', 'bar']   -> Partial { schema: "foo", table: "bar" }
+/// ['foo', '"Bar"'] -> Partial { schema: "foo", table: "Bar" }
+/// ```
+pub fn object_name_to_table_reference(
+    object_name: ObjectName,
+) -> Result<OwnedTableReference> {
+    // use destructure to make it clear no fields on ObjectName are ignored
+    let ObjectName(idents) = object_name;
+    idents_to_table_reference(idents)
+}
+
+/// Create a [`OwnedTableReference`] after normalizing the specified identifier
+fn idents_to_table_reference(idents: Vec<Ident>) -> Result<OwnedTableReference> {
+    struct IdentTaker(Vec<Ident>);
+    /// take the next identifier from the back of idents, panic'ing if
+    /// there are none left
+    impl IdentTaker {
+        fn take(&mut self) -> String {
+            let ident = self.0.pop().expect("no more identifiers");
+            normalize_ident_owned(ident)
+        }
+    }
+
+    let mut taker = IdentTaker(idents);
+
+    match taker.0.len() {
+        1 => {
+            let table = taker.take();
+            Ok(OwnedTableReference::Bare { table })
+        }
+        2 => {
+            let table = taker.take();
+            let schema = taker.take();
+            Ok(OwnedTableReference::Partial { schema, table })
+        }
+        3 => {
+            let table = taker.take();
+            let schema = taker.take();
+            let catalog = taker.take();
+            Ok(OwnedTableReference::Full {
+                catalog,
+                schema,
+                table,
+            })
+        }
+        _ => Err(DataFusionError::Plan(format!(
+            "Unsupported compound identifier '{:?}'",
+            taker.0,
+        ))),
+    }
 }
 
 /// Construct a WHERE qualifier suitable for e.g. information_schema filtering
@@ -4567,21 +4620,21 @@ mod tests {
     #[test]
     fn create_external_table_csv() {
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'";
-        let expected = "CreateExternalTable: \"t\"";
+        let expected = "CreateExternalTable: Bare { table: \"t\" }";
         quick_test(sql, expected);
     }
 
     #[test]
     fn create_external_table_custom() {
         let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
-        let expected = r#"CreateExternalTable: "dt""#;
+        let expected = r#"CreateExternalTable: Bare { table: "dt" }"#;
         quick_test(sql, expected);
     }
 
     #[test]
     fn create_external_table_csv_no_schema() {
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv'";
-        let expected = "CreateExternalTable: \"t\"";
+        let expected = "CreateExternalTable: Bare { table: \"t\" }";
         quick_test(sql, expected);
     }
 
@@ -4595,7 +4648,7 @@ mod tests {
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS JSON COMPRESSION TYPE BZIP2 LOCATION 'foo.json.bz2'",
         ];
         for sql in sqls {
-            let expected = "CreateExternalTable: \"t\"";
+            let expected = "CreateExternalTable: Bare { table: \"t\" }";
             quick_test(sql, expected);
         }
 
@@ -4629,7 +4682,7 @@ mod tests {
     #[test]
     fn create_external_table_parquet_no_schema() {
         let sql = "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet'";
-        let expected = "CreateExternalTable: \"t\"";
+        let expected = "CreateExternalTable: Bare { table: \"t\" }";
         quick_test(sql, expected);
     }
 
@@ -6326,7 +6379,7 @@ mod tests {
         WHERE age IN ($1, $4) AND salary > $3 and salary < $5 OR first_name < $2";
 
         let expected_plan = "Prepare: \"my_plan\" [Int32, Utf8, Float64, Int32, Float64, Utf8] \
-        \n  Projection: person.id, person.age,\
+        \n  Projection: person.id, person.age, $6\
         \n    Filter: person.age IN ([$1, $4]) AND person.salary > $3 AND person.salary < $5 OR person.first_name < $2\
         \n      TableScan: person";
 

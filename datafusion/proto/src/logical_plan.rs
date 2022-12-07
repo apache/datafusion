@@ -38,7 +38,7 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
-use datafusion_common::{context, Column, DataFusionError};
+use datafusion_common::{context, Column, DataFusionError, OwnedTableReference};
 use datafusion_expr::logical_plan::builder::{project, subquery_alias_owned};
 use datafusion_expr::logical_plan::Prepare;
 use datafusion_expr::{
@@ -263,6 +263,20 @@ impl From<JoinConstraint> for protobuf::JoinConstraint {
             JoinConstraint::Using => protobuf::JoinConstraint::Using,
         }
     }
+}
+
+fn from_owned_table_reference(
+    table_ref: Option<&protobuf::OwnedTableReference>,
+    error_context: &str,
+) -> Result<OwnedTableReference, DataFusionError> {
+    let table_ref = table_ref.ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "Protobuf deserialization error, {} was missing required field name.",
+            error_context
+        ))
+    })?;
+
+    Ok(table_ref.clone().try_into()?)
 }
 
 impl AsLogicalPlan for LogicalPlanNode {
@@ -581,7 +595,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 Ok(LogicalPlan::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
-                    name: create_extern_table.name.clone(),
+                    name: from_owned_table_reference(create_extern_table.name.as_ref(), "CreateExternalTable")?,
                     location: create_extern_table.location.clone(),
                     file_type: create_extern_table.file_type.clone(),
                     has_header: create_extern_table.has_header,
@@ -610,7 +624,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 };
 
                 Ok(LogicalPlan::CreateView(CreateView {
-                    name: create_view.name.clone(),
+                    name: from_owned_table_reference(
+                        create_view.name.as_ref(),
+                        "CreateView",
+                    )?,
                     input: Arc::new(plan),
                     or_replace: create_view.or_replace,
                     definition,
@@ -1228,7 +1245,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
                     protobuf::CreateExternalTableNode {
-                        name: name.clone(),
+                        name: Some(name.clone().into()),
                         location: location.clone(),
                         file_type: file_type.clone(),
                         has_header: *has_header,
@@ -1250,7 +1267,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
-                        name: name.clone(),
+                        name: Some(name.clone().into()),
                         input: Some(Box::new(LogicalPlanNode::try_from_logical_plan(
                             input,
                             extension_codec,
