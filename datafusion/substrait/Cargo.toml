@@ -21,12 +21,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-datafusion = "13.0"
-substrait = "0.2"
-tokio = "1.17"
 async-recursion = "1.0"
+datafusion = "13.0"
 prost = "0.9"
 prost-types = "0.9"
+substrait = "0.2"
+tokio = "1.17"
 
 [build-dependencies]
 prost-build = { version = "0.9" }

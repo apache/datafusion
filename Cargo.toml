@@ -17,20 +17,7 @@
 
 [workspace]
 exclude = ["datafusion-cli"]
-members = [
-    "datafusion/common",
-    "datafusion/core",
-    "datafusion/expr",
-    "datafusion/jit",
-    "datafusion/optimizer",
-    "datafusion/physical-expr",
-    "datafusion/proto",
-    "datafusion/row",
-    "datafusion/sql",
-    "datafusion-examples",
-    "test-utils",
-    "parquet-test-utils",
-    "benchmarks",
+members = ["datafusion/common", "datafusion/core", "datafusion/expr", "datafusion/jit", "datafusion/optimizer", "datafusion/physical-expr", "datafusion/proto", "datafusion/row", "datafusion/sql", "datafusion-examples", "test-utils", "parquet-test-utils", "benchmarks",
 ]
 
 [profile.release]
