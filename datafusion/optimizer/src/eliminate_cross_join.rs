@@ -17,20 +17,18 @@
 
 //! Optimizer rule to eliminate cross join to inner join if join predicates are available in filters.
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{DFSchema, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
+use datafusion_expr::logical_plan::JoinConstraint;
 use datafusion_expr::utils::{can_hash, check_all_column_from_schema};
 use datafusion_expr::{
-    and,
+    and, build_join_schema,
     expr::BinaryExpr,
     logical_plan::{CrossJoin, Filter, Join, JoinType, LogicalPlan},
     or, Projection,
 };
 use datafusion_expr::{Expr, ExprSchemable, Operator};
-use std::collections::{HashMap, HashSet};
-
-//use std::collections::HashMap;
-use datafusion_expr::logical_plan::JoinConstraint;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[derive(Default)]
@@ -235,7 +233,11 @@ fn find_inner_join(
         if !join_keys.is_empty() {
             all_join_keys.extend(join_keys.clone());
             let right_input = rights.remove(i);
-            let join_schema = Arc::new(build_join_schema(left_input, &right_input)?);
+            let join_schema = Arc::new(build_join_schema(
+                left_input.schema(),
+                right_input.schema(),
+                &JoinType::Inner,
+            )?);
 
             // Wrap projection
             let (left_on, right_on): (Vec<Expr>, Vec<Expr>) =
@@ -264,24 +266,17 @@ fn find_inner_join(
         }
     }
     let right = rights.remove(0);
-    let join_schema = Arc::new(build_join_schema(left_input, &right)?);
+    let join_schema = Arc::new(build_join_schema(
+        left_input.schema(),
+        right.schema(),
+        &JoinType::Inner,
+    )?);
 
     Ok(LogicalPlan::CrossJoin(CrossJoin {
         left: Arc::new(left_input.clone()),
         right: Arc::new(right),
         schema: join_schema,
     }))
-}
-
-fn build_join_schema(left: &LogicalPlan, right: &LogicalPlan) -> Result<DFSchema> {
-    // build join schema
-    let mut fields = vec![];
-    let mut metadata = HashMap::new();
-    fields.extend(left.schema().fields().clone());
-    fields.extend(right.schema().fields().clone());
-    metadata.extend(left.schema().metadata().clone());
-    metadata.extend(right.schema().metadata().clone());
-    DFSchema::new_with_metadata(fields, metadata)
 }
 
 fn intersect(
