@@ -6248,7 +6248,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Invalid placeholder: $foo")]
+    #[should_panic(
+        expected = "value: Internal(\"Invalid placeholder, not a number: $foo\""
+    )]
     fn test_prepare_statement_to_plan_panic_param_format() {
         // param is not number following the $ sign
         // panic due to error returned from the parser
