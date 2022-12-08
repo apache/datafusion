@@ -6414,11 +6414,10 @@ mod tests {
         let sql = "PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);";
 
         let expected_plan = "Prepare: \"my_plan\" [Utf8, Utf8] \
-        \n  Projection: t.num, t.letter\
-        \n    SubqueryAlias: t\
-        \n      Projection: t.column1 AS num, t.column2 AS letter\
-        \n        SubqueryAlias: t\
-        \n          Values: (Int64(1), $1), (Int64(2), $2)";
+        \n  Projection: num, letter\
+        \n    Projection: t.column1 AS num, t.column2 AS letter\
+        \n      SubqueryAlias: t\
+        \n        Values: (Int64(1), $1), (Int64(2), $2)";
 
         let expected_dt = "[Utf8, Utf8]";
 
