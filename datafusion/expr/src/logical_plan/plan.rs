@@ -1194,6 +1194,19 @@ pub struct SubqueryAlias {
     pub schema: DFSchemaRef,
 }
 
+impl SubqueryAlias {
+    pub fn try_new(plan: LogicalPlan, alias: &str) -> datafusion_common::Result<Self> {
+        let schema: Schema = plan.schema().as_ref().clone().into();
+        let schema =
+            DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
+        Ok(SubqueryAlias {
+            input: Arc::new(plan),
+            alias: alias.to_string(),
+            schema,
+        })
+    }
+}
+
 /// Filters rows from its input that do not match an
 /// expression (essentially a WHERE clause with a predicate
 /// expression).

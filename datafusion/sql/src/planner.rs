@@ -45,9 +45,7 @@ use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::builder::{
-    project, subquery_alias, subquery_alias_owned,
-};
+use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
@@ -65,7 +63,7 @@ use datafusion_expr::utils::{
 use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
     cast, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable,
-    GetIndexedField, Operator, ScalarUDF, WindowFrame, WindowFrameUnits,
+    GetIndexedField, Operator, ScalarUDF, SubqueryAlias, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
     window_function::WindowFunction, BuiltinScalarFunction, TableSource,
@@ -296,7 +294,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ..
             } if with_options.is_empty() => {
                 let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
-                plan = Self::apply_expr_alias(plan, &columns)?;
+                plan = self.apply_expr_alias(plan, &columns)?;
 
                 Ok(LogicalPlan::CreateView(CreateView {
                     name: object_name_to_table_reference(name)?,
@@ -498,7 +496,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // create logical plan & pass backreferencing CTEs
                 let logical_plan = self.query_to_plan_with_alias(
                     *cte.query,
-                    Some(cte_name.clone()),
+                    None,
                     &mut planner_context.clone(),
                     outer_query_schema,
                 )?;
@@ -952,25 +950,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // normalize name and alias
                 let table_ref = object_name_to_table_reference(name)?;
                 let table_name = table_ref.display_string();
-                let table_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
                 let cte = planner_context.ctes.get(&table_name);
                 (
                     match (
                         cte,
                         self.schema_provider.get_table_provider((&table_ref).into()),
                     ) {
-                        (Some(cte_plan), _) => match table_alias {
-                            Some(cte_alias) => subquery_alias(cte_plan, &cte_alias),
-                            _ => Ok(cte_plan.clone()),
-                        },
+                        (Some(cte_plan), _) => Ok(cte_plan.clone()),
                         (_, Ok(provider)) => {
-                            let scan =
-                                LogicalPlanBuilder::scan(&table_name, provider, None);
-                            let scan = match table_alias.as_ref() {
-                                Some(ref name) => scan?.alias(name.to_owned().as_str()),
-                                _ => scan,
-                            };
-                            scan?.build()
+                            LogicalPlanBuilder::scan(&table_name, provider, None)?.build()
                         }
                         (None, Err(e)) => Err(e),
                     }?,
@@ -986,12 +974,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     planner_context,
                     outer_query_schema,
                 )?;
-                let normalized_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
-                let plan = match normalized_alias {
-                    Some(alias) => subquery_alias_owned(logical_plan, &alias)?,
-                    _ => logical_plan,
-                };
-                (plan, alias)
+                (logical_plan, alias)
             }
             TableFactor::NestedJoin {
                 table_with_joins,
@@ -1025,27 +1008,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         plan: LogicalPlan,
         alias: TableAlias,
     ) -> Result<LogicalPlan> {
-        let columns_alias = alias.clone().columns;
-        if columns_alias.is_empty() {
-            // sqlparser-rs encodes AS t as an empty list of column alias
+        let apply_name_plan = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+            plan,
+            &normalize_ident(&alias.name),
+        )?);
+
+        self.apply_expr_alias(apply_name_plan, &alias.columns)
+    }
+
+    fn apply_expr_alias(
+        &self,
+        plan: LogicalPlan,
+        idents: &Vec<Ident>,
+    ) -> Result<LogicalPlan> {
+        if idents.is_empty() {
             Ok(plan)
-        } else if columns_alias.len() != plan.schema().fields().len() {
+        } else if idents.len() != plan.schema().fields().len() {
             Err(DataFusionError::Plan(format!(
                 "Source table contains {} columns but only {} names given as column alias",
                 plan.schema().fields().len(),
-                columns_alias.len(),
+                idents.len(),
             )))
-        } else {
-            subquery_alias_owned(
-                Self::apply_expr_alias(plan, &alias.columns)?,
-                &normalize_ident(&alias.name),
-            )
-        }
-    }
-
-    fn apply_expr_alias(plan: LogicalPlan, idents: &Vec<Ident>) -> Result<LogicalPlan> {
-        if idents.is_empty() {
-            Ok(plan)
         } else {
             let fields = plan.schema().fields().clone();
             LogicalPlanBuilder::from(plan)
@@ -1302,7 +1285,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // final projection
         let mut plan = project(plan, select_exprs_post_aggr)?;
         plan = match alias {
-            Some(alias) => subquery_alias_owned(plan, &alias)?,
+            Some(alias) => {
+                LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(plan, &alias)?)
+            }
             None => plan,
         };
 
@@ -3677,11 +3662,11 @@ mod tests {
     fn table_with_column_alias() {
         let sql = "SELECT a, b, c
                    FROM lineitem l (a, b, c)";
-        let expected = "Projection: l.a, l.b, l.c\
-        \n  SubqueryAlias: l\
-        \n    Projection: l.l_item_id AS a, l.l_description AS b, l.price AS c\
-        \n      SubqueryAlias: l\
-        \n        TableScan: lineitem";
+        let expected = "Projection: a, b, c\
+        \n  Projection: l.l_item_id AS a, l.l_description AS b, l.price AS c\
+        \n    SubqueryAlias: l\
+        \n      TableScan: lineitem";
+
         quick_test(sql, expected);
     }
 
@@ -4107,11 +4092,10 @@ mod tests {
     fn select_from_typed_string_values() {
         quick_test(
             "SELECT col1, col2 FROM (VALUES (TIMESTAMP '2021-06-10 17:01:00Z', DATE '2004-04-09')) as t (col1, col2)",
-            "Projection: t.col1, t.col2\
-            \n  SubqueryAlias: t\
-            \n    Projection: t.column1 AS col1, t.column2 AS col2\
-            \n      SubqueryAlias: t\
-            \n        Values: (CAST(Utf8(\"2021-06-10 17:01:00Z\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2004-04-09\") AS Date32))",
+            "Projection: col1, col2\
+            \n  Projection: t.column1 AS col1, t.column2 AS col2\
+            \n    SubqueryAlias: t\
+            \n      Values: (CAST(Utf8(\"2021-06-10 17:01:00Z\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2004-04-09\") AS Date32))"
         );
     }
 
@@ -5786,12 +5770,11 @@ mod tests {
         ) \
         SELECT * FROM numbers;";
 
-        let expected = "Projection: numbers.a, numbers.b, numbers.c\
-        \n  SubqueryAlias: numbers\
-        \n    Projection: numbers.Int64(1) AS a, numbers.Int64(2) AS b, numbers.Int64(3) AS c\
-        \n      SubqueryAlias: numbers\
-        \n        Projection: Int64(1), Int64(2), Int64(3)\
-        \n          EmptyRelation";
+        let expected = "Projection: a, b, c\
+        \n  Projection: numbers.Int64(1) AS a, numbers.Int64(2) AS b, numbers.Int64(3) AS c\
+        \n    SubqueryAlias: numbers\
+        \n      Projection: Int64(1), Int64(2), Int64(3)\
+        \n        EmptyRelation";
 
         quick_test(sql, expected)
     }
@@ -5805,13 +5788,11 @@ mod tests {
         ) \
         SELECT * FROM numbers;";
 
-        let expected = "Projection: numbers.a, numbers.b, numbers.c\
-        \n  SubqueryAlias: numbers\
-        \n    Projection: numbers.x AS a, numbers.y AS b, numbers.z AS c\
-        \n      SubqueryAlias: numbers\
-        \n        Projection: Int64(1) AS x, Int64(2) AS y, Int64(3) AS z\
-        \n          EmptyRelation";
-
+        let expected = "Projection: a, b, c\
+        \n  Projection: numbers.x AS a, numbers.y AS b, numbers.z AS c\
+        \n    SubqueryAlias: numbers\
+        \n      Projection: Int64(1) AS x, Int64(2) AS y, Int64(3) AS z\
+        \n        EmptyRelation";
         quick_test(sql, expected)
     }
 
@@ -6442,6 +6423,44 @@ mod tests {
         let expected_dt = "[Utf8, Utf8]";
 
         prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    fn test_table_alias() {
+        let sql = "select * from (\
+          (select id from person) t1 \
+            CROSS JOIN \
+          (select age from person) t2 \
+        ) as f";
+
+        let expected = "Projection: f.id, f.age\
+        \n  SubqueryAlias: f\
+        \n    CrossJoin:\
+        \n      SubqueryAlias: t1\
+        \n        Projection: person.id\
+        \n          TableScan: person\
+        \n      SubqueryAlias: t2\
+        \n        Projection: person.age\
+        \n          TableScan: person";
+        quick_test(sql, expected);
+
+        let sql = "select * from (\
+          (select id from person) t1 \
+            CROSS JOIN \
+          (select age from person) t2 \
+        ) as f (c1, c2)";
+
+        let expected = "Projection: c1, c2\
+        \n  Projection: f.id AS c1, f.age AS c2\
+        \n    SubqueryAlias: f\
+        \n      CrossJoin:\
+        \n        SubqueryAlias: t1\
+        \n          Projection: person.id\
+        \n            TableScan: person\
+        \n        SubqueryAlias: t2\
+        \n          Projection: person.age\
+        \n            TableScan: person";
+        quick_test(sql, expected);
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
