@@ -16,7 +16,7 @@
 # under the License.
 
 ##########
-## DDL Tests
+## Timestamp Handling Tests
 ##########
 
 statement ok
