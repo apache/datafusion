@@ -1909,6 +1909,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         LogicalPlanBuilder::values(values)?.build()
     }
 
+    /// Create a placeholder expression
+    /// This is the same as Postgres's prepare statement syntax in which a placeholder starts with `$` sign and then
+    /// number 1, 2, ... etc. For example, `$1` is the first placeholder; $2 is the second one and so on.
     fn create_placeholder_expr(
         param: String,
         param_data_types: &[DataType],
@@ -6295,6 +6298,19 @@ mod tests {
     fn test_prepare_statement_to_plan_panic_no_data_types() {
         // only provide 1 data type while using 2 params
         let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1 + $2";
+
+        let expected_plan = "whatever";
+        let expected_dt = "whatever";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "value: SQL(ParserError(\"Expected [NOT] NULL or TRUE|FALSE or [NOT] DISTINCT FROM after IS, found: $1\""
+    )]
+    fn test_prepare_statement_to_plan_panic_is_param() {
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";
 
         let expected_plan = "whatever";
         let expected_dt = "whatever";

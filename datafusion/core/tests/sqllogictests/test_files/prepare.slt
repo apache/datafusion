@@ -45,6 +45,10 @@ PREPARE my_plan(INT) AS SELECT id + $1;
 statement error
 PREPARE my_plan(INT) AS SELECT 1 + $1 + $2;
 
+# cannot use IS param
+statement error
+PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1;
+
 # #######################
 # TODO: all the errors below should work ok after we store the prepare logical plan somewhere
 statement error
