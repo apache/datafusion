@@ -966,17 +966,10 @@ pub fn project(
 
 /// Create a SubqueryAlias to wrap a LogicalPlan.
 pub fn subquery_alias(plan: &LogicalPlan, alias: &str) -> Result<LogicalPlan> {
-    subquery_alias_owned(plan.clone(), alias)
-}
-
-pub fn subquery_alias_owned(plan: LogicalPlan, alias: &str) -> Result<LogicalPlan> {
-    let schema: Schema = plan.schema().as_ref().clone().into();
-    let schema = DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
-    Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
-        input: Arc::new(plan),
-        alias: alias.to_string(),
-        schema,
-    }))
+    Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+        plan.clone(),
+        alias,
+    )?))
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
