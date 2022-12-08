@@ -416,7 +416,9 @@ impl Accumulator for ApproxPercentileAccumulator {
     }
 
     fn size(&self) -> usize {
-        // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
         std::mem::size_of_val(self) + self.digest.size()
+            - std::mem::size_of_val(&self.digest)
+            + self.return_type.size()
+            - std::mem::size_of_val(&self.return_type)
     }
 }
