@@ -68,7 +68,8 @@ use datafusion_expr::{
     GetIndexedField, Operator, ScalarUDF, SubqueryAlias, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
-    window_function::WindowFunction, BuiltinScalarFunction, TableSource,
+    window_function::{self, WindowFunction},
+    BuiltinScalarFunction, TableSource,
 };
 
 use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
@@ -2344,8 +2345,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     } else {
                         WindowFrame::new(!order_by.is_empty())
                     };
-                    let fun = WindowFunction::from_str(&name)?;
-                    match fun {
+                    let fun = self.find_window_func(&name)?;
+                    let expr = match fun {
                         WindowFunction::AggregateFunction(
                             aggregate_fun,
                         ) => {
@@ -2355,7 +2356,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 schema,
                             )?;
 
-                            return Ok(Expr::WindowFunction {
+                            Expr::WindowFunction {
                                 fun: WindowFunction::AggregateFunction(
                                     aggregate_fun,
                                 ),
@@ -2363,22 +2364,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            });
+                            }
                         }
-                        WindowFunction::BuiltInWindowFunction(
-                            window_fun,
-                        ) => {
-                            return Ok(Expr::WindowFunction {
-                                fun: WindowFunction::BuiltInWindowFunction(
-                                    window_fun,
-                                ),
+                        _ => {
+                            Expr::WindowFunction {
+                                fun,
                                 args: self.function_args_to_expr(function.args, schema)?,
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            });
+                            }
                         }
-                    }
+                    };
+                    return Ok(expr);
                 }
 
                 // next, aggregate built-ins
@@ -2440,6 +2438,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 sql
             ))),
         }
+    }
+
+    fn find_window_func(&self, name: &str) -> Result<WindowFunction> {
+        window_function::find_df_window_func(name)
+            .or_else(|| {
+                self.schema_provider
+                    .get_aggregate_meta(name)
+                    .map(WindowFunction::AggregateUDF)
+            })
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "There is no window function named {}",
+                    name
+                ))
+            })
     }
 
     fn parse_exists_subquery(
@@ -3281,6 +3294,8 @@ mod tests {
     use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
     use datafusion_common::assert_contains;
+    use datafusion_expr::{create_udaf, Volatility};
+    use datafusion_physical_expr::expressions::MaxAccumulator;
 
     use super::*;
 
@@ -5281,6 +5296,27 @@ mod tests {
     }
 
     #[test]
+    fn udaf_as_window_func() -> Result<()> {
+        let my_max = create_udaf(
+            "my_max",
+            DataType::Int32,
+            Arc::new(DataType::Int32),
+            Volatility::Immutable,
+            Arc::new(|_| Ok(Box::new(MaxAccumulator::try_new(&DataType::Int32)?))),
+            Arc::new(vec![DataType::Int32]),
+        );
+
+        let mut context = MockContextProvider::default();
+        context.udafs.insert("my_max".to_string(), Arc::new(my_max));
+
+        let sql = "SELECT order_id, MY_MAX(qty) OVER(PARTITION BY order_id) FROM orders";
+        let expected = r#"Projection: orders.order_id, AggregateUDF { name: "my_max", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" }(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+  WindowAggr: windowExpr=[[AggregateUDF { name: "my_max", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" }(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+    TableScan: orders"#;
+        quick_test_with_context(&context, sql, expected)
+    }
+
+    #[test]
     fn select_typed_date_string() {
         let sql = "SELECT date '2020-12-10' AS date";
         let expected = "Projection: CAST(Utf8(\"2020-12-10\") AS Date32) AS date\
@@ -5321,7 +5357,8 @@ mod tests {
         sql: &str,
         dialect: &dyn Dialect,
     ) -> Result<LogicalPlan> {
-        let planner = SqlToRel::new(&MockContextProvider {});
+        let context = MockContextProvider::default();
+        let planner = SqlToRel::new(&context);
         let result = DFParser::parse_sql_with_dialect(sql, dialect);
         let mut ast = result?;
         planner.statement_to_plan(ast.pop_front().unwrap())
@@ -5332,7 +5369,8 @@ mod tests {
         dialect: &dyn Dialect,
         options: ParserOptions,
     ) -> Result<LogicalPlan> {
-        let planner = SqlToRel::new_with_options(&MockContextProvider {}, options);
+        let context = MockContextProvider::default();
+        let planner = SqlToRel::new_with_options(&context, options);
         let result = DFParser::parse_sql_with_dialect(sql, dialect);
         let mut ast = result?;
         planner.statement_to_plan(ast.pop_front().unwrap())
@@ -5364,7 +5402,24 @@ mod tests {
         }
     }
 
-    struct MockContextProvider {}
+    fn quick_test_with_context<S: ContextProvider>(
+        context: &S,
+        sql: &str,
+        expected: &str,
+    ) -> Result<()> {
+        let stmt = DFParser::parse_sql_with_dialect(sql, &GenericDialect)?
+            .remove(0)
+            .unwrap();
+        let planner = SqlToRel::new(context);
+        let plan = planner.statement_to_plan(stmt)?;
+        assert_eq!(format!("{:?}", plan), expected);
+        Ok(())
+    }
+
+    #[derive(Default)]
+    struct MockContextProvider {
+        udafs: HashMap<String, Arc<AggregateUDF>>,
+    }
 
     impl ContextProvider for MockContextProvider {
         fn get_table_provider(
@@ -5450,8 +5505,8 @@ mod tests {
             unimplemented!()
         }
 
-        fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
-            unimplemented!()
+        fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+            self.udafs.get(name).map(Arc::clone)
         }
 
         fn get_variable_type(&self, _: &[String]) -> Option<DataType> {

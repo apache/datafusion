@@ -546,6 +546,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             protobuf::BuiltInWindowFunction::from(fun).into(),
                         )
                     }
+                    // TODO(LFC): Implement user-defined aggregate window function proto ser/de.
+                    WindowFunction::AggregateUDF(_) => todo!()
                 };
                 let arg_expr: Option<Box<Self>> = if !args.is_empty() {
                     let arg = &args[0];
