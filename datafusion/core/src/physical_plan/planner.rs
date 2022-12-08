@@ -938,8 +938,8 @@ impl DefaultPhysicalPlanner {
                         .get_bool(OPT_PREFER_HASH_JOIN)
                         .unwrap_or_default();
                     if join_on.is_empty() {
-                        // if there is no equal join condition for `on`, will use the
-                        // nested loop join
+                        // there is no equal join condition, use the nested loop join
+                        // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
                         Ok(Arc::new(NestedLoopJoinExec::try_new(
                             physical_left,
                             physical_right,

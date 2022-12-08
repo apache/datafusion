@@ -778,8 +778,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 let join_filter = filter.into_iter().reduce(Expr::and);
 
-                // If join_filter exists, will generate the Join plan with the JoinType
                 if left_keys.is_empty() && join_filter.is_none() {
+                    // there is no `on` condition for join, and
                     let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
                     join_filter
                         .map(|filter| join.filter(filter))

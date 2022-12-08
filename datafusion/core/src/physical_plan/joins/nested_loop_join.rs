@@ -15,26 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the nested loop join plan, it just support non-equal join and the equal join is supported by [`HashJoinExec`]
+//! Defines the nested loop join plan, it supports all [`JoinType`].
+//! The nested loop join can execute in parallel by partitions and it is
+//! determined by the [`JoinType`].
 
 use crate::physical_plan::joins::utils::{
-    adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
-    combine_join_equivalence_properties, estimate_join_statistics, ColumnIndex,
-    JoinFilter, JoinSide, OnceAsync, OnceFut,
+    adjust_indices_by_join_type, adjust_right_output_partitioning,
+    apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
+    check_join_is_valid, combine_join_equivalence_properties, estimate_join_statistics,
+    get_final_indices, need_produce_result_in_final, ColumnIndex, JoinFilter, OnceAsync,
+    OnceFut,
 };
 use crate::physical_plan::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream,
 };
 use arrow::array::{
-    new_null_array, Array, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
-    UInt32Builder, UInt64Array, UInt64Builder,
+    BooleanBufferBuilder, UInt32Array, UInt32Builder, UInt64Array, UInt64Builder,
 };
-use arrow::compute;
-use arrow::datatypes::{Schema, SchemaRef, UInt32Type, UInt64Type};
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::cast::as_boolean_array;
 use datafusion_common::Statistics;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalSortExpr};
@@ -125,8 +126,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
             | JoinType::Full => self.left.output_partitioning(),
             // use the right partition
             JoinType::Right => {
-                // if the partition of right is hash, and should adjust the column index for the
-                // right expr
+                // if the partition of right is hash,
+                // and the right partition should be adjusted the column index for the right expr
                 adjust_right_output_partitioning(
                     self.right.output_partitioning(),
                     self.left.schema().fields.len(),
@@ -184,12 +185,12 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // left side
         let left_fut = if left_is_single_partition {
             self.left_fut.once(|| {
-                // just one partition for the left side
-                load_specified_partition_input(0, self.left.clone(), context.clone())
+                // just one partition for the left side, and the first partition is all of data for left
+                load_left_specified_partition(0, self.left.clone(), context.clone())
             })
         } else {
             // the distribution of left is not single partition, just need the specified partition for left
-            OnceFut::new(load_specified_partition_input(
+            OnceFut::new(load_left_specified_partition(
                 partition,
                 self.left.clone(),
                 context.clone(),
@@ -241,7 +242,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 }
 
-// For the nested loop join, different `JoinType` need the different distribution for
+// For the nested loop join, different join type need the different distribution for
 // left and right node.
 fn distribution_from_join_type(join_type: &JoinType) -> Vec<Distribution> {
     match join_type {
@@ -267,7 +268,7 @@ fn distribution_from_join_type(join_type: &JoinType) -> Vec<Distribution> {
 }
 
 /// Asynchronously collect the result of the left child for the specified partition
-async fn load_specified_partition_input(
+async fn load_left_specified_partition(
     partition: usize,
     left: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
@@ -318,57 +319,6 @@ struct NestedLoopJoinStream {
     // null_equals_null: bool
 }
 
-fn need_produce_result_in_final(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::Left | JoinType::LeftAnti | JoinType::LeftSemi | JoinType::Full
-    )
-}
-
-/// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
-/// The resulting batch has [Schema] `schema`.
-fn build_batch_from_indices(
-    schema: &Schema,
-    left: &RecordBatch,
-    right: &RecordBatch,
-    left_indices: UInt64Array,
-    right_indices: UInt32Array,
-    column_indices: &[ColumnIndex],
-) -> ArrowResult<RecordBatch> {
-    // build the columns of the new [RecordBatch]:
-    // 1. pick whether the column is from the left or right
-    // 2. based on the pick, `take` items from the different RecordBatches
-    let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
-
-    for column_index in column_indices {
-        let array = match column_index.side {
-            JoinSide::Left => {
-                let array = left.column(column_index.index);
-                if array.is_empty() || left_indices.null_count() == left_indices.len() {
-                    // Outer join would generate a null index when finding no match at our side.
-                    // Therefore, it's possible we are empty but need to populate an n-length null array,
-                    // where n is the length of the index array.
-                    assert_eq!(left_indices.null_count(), left_indices.len());
-                    new_null_array(array.data_type(), left_indices.len())
-                } else {
-                    compute::take(array.as_ref(), &left_indices, None)?
-                }
-            }
-            JoinSide::Right => {
-                let array = right.column(column_index.index);
-                if array.is_empty() || right_indices.null_count() == right_indices.len() {
-                    assert_eq!(right_indices.null_count(), right_indices.len());
-                    new_null_array(array.data_type(), right_indices.len())
-                } else {
-                    compute::take(array.as_ref(), &right_indices, None)?
-                }
-            }
-        };
-        columns.push(array);
-    }
-    RecordBatch::try_new(Arc::new(schema.clone()), columns)
-}
-
 fn build_join_indices(
     left_index: usize,
     batch: &RecordBatch,
@@ -380,8 +330,8 @@ fn build_join_indices(
     // right indices: [0, 1, 2, 3, 4,....,right_row_count]
     let left_indices = UInt64Array::from(vec![left_index as u64; right_row_count]);
     let right_indices = UInt32Array::from_iter_values(0..(right_row_count as u32));
+    // in the nested loop join, the filter can contain non-equal and equal condition.
     if let Some(filter) = filter {
-        // Filter the indices which is satisfies the non-equal join condition, like `left.b1 = 10`
         apply_join_filter_to_indices(
             left_data,
             batch,
@@ -392,166 +342,6 @@ fn build_join_indices(
     } else {
         Ok((left_indices, right_indices))
     }
-}
-
-fn apply_join_filter_to_indices(
-    left: &RecordBatch,
-    right: &RecordBatch,
-    left_indices: UInt64Array,
-    right_indices: UInt32Array,
-    filter: &JoinFilter,
-) -> Result<(UInt64Array, UInt32Array)> {
-    if left_indices.is_empty() && right_indices.is_empty() {
-        return Ok((left_indices, right_indices));
-    };
-
-    let intermediate_batch = build_batch_from_indices(
-        filter.schema(),
-        left,
-        right,
-        PrimitiveArray::from(left_indices.data().clone()),
-        PrimitiveArray::from(right_indices.data().clone()),
-        filter.column_indices(),
-    )?;
-    let filter_result = filter
-        .expression()
-        .evaluate(&intermediate_batch)?
-        .into_array(intermediate_batch.num_rows());
-    let mask = as_boolean_array(&filter_result)?;
-
-    let left_filtered = PrimitiveArray::<UInt64Type>::from(
-        compute::filter(&left_indices, mask)?.data().clone(),
-    );
-    let right_filtered = PrimitiveArray::<UInt32Type>::from(
-        compute::filter(&right_indices, mask)?.data().clone(),
-    );
-
-    Ok((left_filtered, right_filtered))
-}
-
-// The input is the matched indices for left and right.
-// Adjust the indices according to the join type
-fn adjust_indices_by_join_type(
-    left_indices: UInt64Array,
-    right_indices: UInt32Array,
-    count_right_batch: usize,
-    join_type: JoinType,
-) -> (UInt64Array, UInt32Array) {
-    match join_type {
-        JoinType::Inner => {
-            // matched
-            (left_indices, right_indices)
-        }
-        JoinType::Left => {
-            // matched
-            (left_indices, right_indices)
-            // unmatched left row will be produced in the end of loop, and it has been set in the left visited bitmap
-        }
-        JoinType::Right | JoinType::Full => {
-            // matched
-            // unmatched right row will be produced in this batch
-            let right_unmatched_indices =
-                get_anti_indices(count_right_batch, &right_indices);
-            // combine the matched and unmatched right result together
-            append_right_indices(left_indices, right_indices, right_unmatched_indices)
-        }
-        JoinType::RightSemi => {
-            // need to remove the duplicated record in the right side
-            let right_indices = get_semi_indices(count_right_batch, &right_indices);
-            // the left_indices will not be used later for the `right semi` join
-            (left_indices, right_indices)
-        }
-        JoinType::RightAnti => {
-            // need to remove the duplicated record in the right side
-            // get the anti index for the right side
-            let right_indices = get_anti_indices(count_right_batch, &right_indices);
-            // the left_indices will not be used later for the `right anti` join
-            (left_indices, right_indices)
-        }
-        JoinType::LeftSemi | JoinType::LeftAnti => {
-            // matched or unmatched left row will be produced in the end of loop
-            // TODO: left semi can be optimized.
-            // When visit the right batch, we can output the matched left row and don't need to wait the end of loop
-            (
-                UInt64Array::from_iter_values(vec![]),
-                UInt32Array::from_iter_values(vec![]),
-            )
-        }
-    }
-}
-
-fn get_final_indices(
-    left_bit_map: &BooleanBufferBuilder,
-    join_type: JoinType,
-) -> (UInt64Array, UInt32Array) {
-    let left_size = left_bit_map.len();
-    let left_indices = if join_type == JoinType::LeftSemi {
-        (0..left_size)
-            .filter_map(|idx| (left_bit_map.get_bit(idx)).then_some(idx as u64))
-            .collect::<UInt64Array>()
-    } else {
-        // just for `Left`, `LeftAnti` and `Full` join
-        // `LeftAnti`, `Left` and `Full` will produce the unmatched left row finally
-        (0..left_size)
-            .filter_map(|idx| (!left_bit_map.get_bit(idx)).then_some(idx as u64))
-            .collect::<UInt64Array>()
-    };
-    // right_indices
-    // all the element in the right side is None
-    let mut builder = UInt32Builder::with_capacity(left_indices.len());
-    builder.append_nulls(left_indices.len());
-    let right_indices = builder.finish();
-    (left_indices, right_indices)
-}
-
-fn append_right_indices(
-    left_indices: UInt64Array,
-    right_indices: UInt32Array,
-    appended_right_indices: UInt32Array,
-) -> (UInt64Array, UInt32Array) {
-    // left_indices, right_indices and appended_right_indices must not contain the null value
-    if appended_right_indices.is_empty() {
-        (left_indices, right_indices)
-    } else {
-        let unmatched_size = appended_right_indices.len();
-        // the new left indices: left_indices + null array
-        // the new right indices: right_indices + appended_right_indices
-        let new_left_indices = left_indices
-            .iter()
-            .chain(std::iter::repeat(None).take(unmatched_size))
-            .collect::<UInt64Array>();
-        let new_right_indices = right_indices
-            .iter()
-            .chain(appended_right_indices.iter())
-            .collect::<UInt32Array>();
-        (new_left_indices, new_right_indices)
-    }
-}
-
-fn get_anti_indices(row_count: usize, input_indices: &UInt32Array) -> UInt32Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
-
-    // get the anti index
-    (0..row_count)
-        .filter_map(|idx| (!bitmap.get_bit(idx)).then_some(idx as u32))
-        .collect::<UInt32Array>()
-}
-
-fn get_semi_indices(row_count: usize, input_indices: &UInt32Array) -> UInt32Array {
-    let mut bitmap = BooleanBufferBuilder::new(row_count);
-    bitmap.append_n(row_count, false);
-    input_indices.iter().flatten().for_each(|v| {
-        bitmap.set_bit(v as usize, true);
-    });
-
-    // get the semi index
-    (0..row_count)
-        .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u32))
-        .collect::<UInt32Array>()
 }
 
 impl NestedLoopJoinStream {
@@ -586,6 +376,7 @@ impl NestedLoopJoinStream {
             .poll_next_unpin(cx)
             .map(|maybe_batch| match maybe_batch {
                 Some(Ok(right_batch)) => {
+                    // TODO: optimize this logic like the cross join, and just return a small batch for each loop
                     // get the matched left and right indices
                     // each left row will try to match every right row
                     let indices_result = (0..left_data.num_rows())
@@ -715,6 +506,7 @@ mod tests {
     use datafusion_expr::Operator;
 
     use super::*;
+    use crate::physical_plan::joins::utils::JoinSide;
     use crate::prelude::SessionContext;
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::Literal;
@@ -774,6 +566,16 @@ mod tests {
             Operator::NotEq,
             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
         )) as Arc<dyn PhysicalExpr>;
+        // filter = left.b1!=8 and right.b2!=10
+        // after filter:
+        // left table:
+        // ("a1", &vec![5]),
+        // ("b1", &vec![5]),
+        // ("c1", &vec![50]),
+        // right table:
+        // ("a2", &vec![12, 2]),
+        // ("b2", &vec![10, 2]),
+        // ("c2", &vec![40, 80]),
         let filter_expression =
             Arc::new(BinaryExpr::new(left_filter, Operator::And, right_filter))
                 as Arc<dyn PhysicalExpr>;
