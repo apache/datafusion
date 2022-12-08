@@ -194,7 +194,7 @@ fn convert_batches(batches: Vec<RecordBatch>) -> Result<DBOutput> {
     let rows = res
         .lines()
         .map(|s| {
-            s.split("\t")
+            s.split('\t')
                 .map(|s| {
                     if s.is_empty() {
                         "NULL".to_string()
