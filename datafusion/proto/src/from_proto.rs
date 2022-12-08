@@ -19,7 +19,7 @@ use crate::protobuf::plan_type::PlanTypeEnum::{
     FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
     OptimizedLogicalPlan, OptimizedPhysicalPlan,
 };
-use crate::protobuf::{self};
+use crate::protobuf::{self, PlaceholderNode};
 use crate::protobuf::{
     CubeNode, GroupingSetNode, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
     RollupNode,
@@ -1223,6 +1223,16 @@ pub fn parse_expr(
                     .collect::<Result<Vec<_>, Error>>()?,
             )))
         }
+        ExprType::Placeholder(PlaceholderNode { id, data_type }) => match data_type {
+            None => {
+                let message = format!("Protobuf deserialization error: data type must be provided for the placeholder {}", id);
+                Err(proto_error(message))
+            }
+            Some(data_type) => Ok(Expr::Placeholder {
+                id: id.clone(),
+                data_type: data_type.try_into()?,
+            }),
+        },
     }
 }
 

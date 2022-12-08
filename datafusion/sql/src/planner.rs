@@ -16,7 +16,7 @@
 // under the License.
 
 //! SQL Query Planner (produces logical plan from SQL AST)
-
+use log::debug;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -46,7 +46,6 @@ use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::builder::project;
-use datafusion_expr::logical_plan::Join as HashJoin;
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
@@ -55,6 +54,7 @@ use datafusion_expr::logical_plan::{
     Partitioning, PlanType, SetVariable, ToStringifiedPlan,
 };
 use datafusion_expr::logical_plan::{Filter, Subquery};
+use datafusion_expr::logical_plan::{Join as HashJoin, Prepare};
 use datafusion_expr::utils::{
     can_hash, check_all_column_from_schema, expand_qualified_wildcard, expand_wildcard,
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_column_exprs,
@@ -120,10 +120,20 @@ impl Default for PlannerContext {
 }
 
 impl PlannerContext {
-    /// Create a new PlannerContext
+    /// Create an empty PlannerContext
     pub fn new() -> Self {
         Self {
             prepare_param_data_types: vec![],
+            ctes: HashMap::new(),
+        }
+    }
+
+    /// Create a new PlannerContext with provided prepare_param_data_types
+    pub fn new_with_prepare_param_data_types(
+        prepare_param_data_types: Vec<DataType>,
+    ) -> Self {
+        Self {
+            prepare_param_data_types,
             ctes: HashMap::new(),
         }
     }
@@ -197,6 +207,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     /// Generate a logical plan from an SQL statement
     pub fn sql_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
+        self.sql_statement_to_plan_with_context(statement, &mut PlannerContext::new())
+    }
+
+    /// Generate a logical plan from an SQL statement
+    pub fn sql_statement_to_plan_with_context(
+        &self,
+        statement: Statement,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
         let sql = Some(statement.to_string());
         match statement {
             Statement::Explain {
@@ -207,9 +226,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 describe_alias: _,
                 ..
             } => self.explain_statement_to_plan(verbose, analyze, *statement),
-            Statement::Query(query) => {
-                self.query_to_plan(*query, &mut PlannerContext::new())
-            }
+            Statement::Query(query) => self.query_to_plan(*query, planner_context),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
             Statement::SetVariable {
                 local,
@@ -232,7 +249,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 && table_properties.is_empty()
                 && with_options.is_empty() =>
             {
-                let plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
+                let plan = self.query_to_plan(*query, planner_context)?;
                 let input_schema = plan.schema();
 
                 let plan = if !columns.is_empty() {
@@ -323,7 +340,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } => {
                 // We don't support cascade and purge for now.
                 // nor do we support multiple object names
-
                 let name = match names.len() {
                     0 => Err(ParserError("Missing table name.".to_string()).into()),
                     1 => object_name_to_table_reference(names.pop().unwrap()),
@@ -349,6 +365,32 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .to_string(),
                     )),
                 }
+            }
+            Statement::Prepare {
+                name,
+                data_types,
+                statement,
+            } => {
+                // Convert parser data types to DataFusion data types
+                let data_types: Vec<DataType> = data_types
+                    .into_iter()
+                    .map(|t| self.convert_data_type(&t))
+                    .collect::<Result<_>>()?;
+
+                // Create planner context with parameters
+                let mut planner_context =
+                    PlannerContext::new_with_prepare_param_data_types(data_types.clone());
+
+                // Build logical plan for inner statement of the prepare statement
+                let plan = self.sql_statement_to_plan_with_context(
+                    *statement,
+                    &mut planner_context,
+                )?;
+                Ok(LogicalPlan::Prepare(Prepare {
+                    name: name.to_string(),
+                    data_types,
+                    input: Arc::new(plan),
+                }))
             }
 
             Statement::ShowTables {
@@ -483,7 +525,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SetExpr::Select(s) => {
                 self.select_to_plan(*s, planner_context, alias, outer_query_schema)
             }
-            SetExpr::Values(v) => self.sql_values_to_plan(v),
+            SetExpr::Values(v) => {
+                self.sql_values_to_plan(v, &planner_context.prepare_param_data_types)
+            }
             SetExpr::SetOperation {
                 op,
                 left,
@@ -1088,6 +1132,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // process `from` clause
         let plan =
             self.plan_from_tables(select.from, planner_context, outer_query_schema)?;
+
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
         // build from schema for unqualifier column ambiguous check
         // we should get only one field for unqualifier column from schema.
@@ -1786,7 +1831,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    fn sql_values_to_plan(&self, values: SQLValues) -> Result<LogicalPlan> {
+    fn sql_values_to_plan(
+        &self,
+        values: SQLValues,
+        param_data_types: &[DataType],
+    ) -> Result<LogicalPlan> {
         // values should not be based on any other schema
         let schema = DFSchema::empty();
         let values = values
@@ -1803,6 +1852,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Ok(Expr::Literal(ScalarValue::Null))
                         }
                         SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
+                        SQLExpr::Value(Value::Placeholder(param)) => {
+                            Self::create_placeholder_expr(param, param_data_types)
+                        }
                         SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(
                             op,
                             *expr,
@@ -1842,6 +1894,44 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         LogicalPlanBuilder::values(values)?.build()
     }
 
+    /// Create a placeholder expression
+    /// This is the same as Postgres's prepare statement syntax in which a placeholder starts with `$` sign and then
+    /// number 1, 2, ... etc. For example, `$1` is the first placeholder; $2 is the second one and so on.
+    fn create_placeholder_expr(
+        param: String,
+        param_data_types: &[DataType],
+    ) -> Result<Expr> {
+        // Parse the placeholder as a number because it is the only support from sqlparser and postgres
+        let index = param[1..].parse::<usize>();
+        let idx = match index {
+            Ok(index) => index - 1,
+            Err(_) => {
+                return Err(DataFusionError::Internal(format!(
+                    "Invalid placeholder, not a number: {}",
+                    param
+                )))
+            }
+        };
+        // Check if the placeholder is in the parameter list
+        if param_data_types.len() <= idx {
+            return Err(DataFusionError::Internal(format!(
+                "Placehoder {} does not exist in the parameter list: {:?}",
+                param, param_data_types
+            )));
+        }
+        // Data type of the parameter
+        let param_type = param_data_types[idx].clone();
+        debug!(
+            "type of param {} param_data_types[idx]: {:?}",
+            param, param_type
+        );
+
+        Ok(Expr::Placeholder {
+            id: param,
+            data_type: param_type,
+        })
+    }
+
     fn sql_expr_to_logical_expr(
         &self,
         sql: SQLExpr,
@@ -1853,6 +1943,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(Value::SingleQuotedString(ref s) | Value::DoubleQuotedString(ref s)) => Ok(lit(s.clone())),
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
             SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Null)),
+            SQLExpr::Value(Value::Placeholder(param)) => Self::create_placeholder_expr(param, &planner_context.prepare_param_data_types),
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::DatePart,
                 args: vec![
@@ -5326,6 +5417,21 @@ mod tests {
         assert_eq!(format!("{:?}", plan), expected);
     }
 
+    fn prepare_stmt_quick_test(
+        sql: &str,
+        expected_plan: &str,
+        expected_data_types: &str,
+    ) {
+        let plan = logical_plan(sql).unwrap();
+        // verify plan
+        assert_eq!(format!("{:?}", plan), expected_plan);
+        // verify data types
+        if let LogicalPlan::Prepare(Prepare { data_types, .. }) = plan {
+            let dt = format!("{:?}", data_types);
+            assert_eq!(dt, expected_data_types);
+        }
+    }
+
     struct MockContextProvider {}
 
     impl ContextProvider for MockContextProvider {
@@ -6123,6 +6229,199 @@ mod tests {
             \n    SubqueryAlias: p2\
             \n      TableScan: person";
         quick_test(sql, expected);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "value: Internal(\"Invalid placeholder, not a number: $foo\""
+    )]
+    fn test_prepare_statement_to_plan_panic_param_format() {
+        // param is not number following the $ sign
+        // panic due to error returned from the parser
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $foo";
+
+        let expected_plan = "whatever";
+        let expected_dt = "whatever";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    #[should_panic(expected = "value: SQL(ParserError(\"Expected AS, found: SELECT\"))")]
+    fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
+        // param is not number following the $ sign
+        // panic due to error returned from the parser
+        let sql = "PREPARE AS SELECT id, age  FROM person WHERE age = $foo";
+
+        let expected_plan = "whatever";
+        let expected_dt = "whatever";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "value: SchemaError(FieldNotFound { field: Column { relation: None, name: \"id\" }, valid_fields: Some([]) })"
+    )]
+    fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
+        let sql = "PREPARE my_plan(INT) AS SELECT id + $1";
+
+        let expected_plan = "whatever";
+        let expected_dt = "whatever";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "value: Internal(\"Placehoder $2 does not exist in the parameter list: [Int32]\")"
+    )]
+    fn test_prepare_statement_to_plan_panic_no_data_types() {
+        // only provide 1 data type while using 2 params
+        let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1 + $2";
+
+        let expected_plan = "whatever";
+        let expected_dt = "whatever";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "value: SQL(ParserError(\"Expected [NOT] NULL or TRUE|FALSE or [NOT] DISTINCT FROM after IS, found: $1\""
+    )]
+    fn test_prepare_statement_to_plan_panic_is_param() {
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";
+
+        let expected_plan = "whatever";
+        let expected_dt = "whatever";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    fn test_prepare_statement_to_plan_no_param() {
+        // no embedded parameter but still declare it
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
+
+        let expected_plan = "Prepare: \"my_plan\" [Int32] \
+        \n  Projection: person.id, person.age\
+        \n    Filter: person.age = Int64(10)\
+        \n      TableScan: person";
+
+        let expected_dt = "[Int32]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        /////////////////////////
+        // no embedded parameter and no declare it
+        let sql = "PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10";
+
+        let expected_plan = "Prepare: \"my_plan\" [] \
+        \n  Projection: person.id, person.age\
+        \n    Filter: person.age = Int64(10)\
+        \n      TableScan: person";
+
+        let expected_dt = "[]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    fn test_prepare_statement_to_plan_params_as_constants() {
+        let sql = "PREPARE my_plan(INT) AS SELECT $1";
+
+        let expected_plan = "Prepare: \"my_plan\" [Int32] \
+        \n  Projection: $1\n    EmptyRelation";
+        let expected_dt = "[Int32]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        /////////////////////////
+        let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1";
+
+        let expected_plan = "Prepare: \"my_plan\" [Int32] \
+        \n  Projection: Int64(1) + $1\n    EmptyRelation";
+        let expected_dt = "[Int32]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        /////////////////////////
+        let sql = "PREPARE my_plan(INT, DOUBLE) AS SELECT 1 + $1 + $2";
+
+        let expected_plan = "Prepare: \"my_plan\" [Int32, Float64] \
+        \n  Projection: Int64(1) + $1 + $2\n    EmptyRelation";
+        let expected_dt = "[Int32, Float64]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    fn test_prepare_statement_to_plan_one_param() {
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $1";
+
+        let expected_plan = "Prepare: \"my_plan\" [Int32] \
+        \n  Projection: person.id, person.age\
+        \n    Filter: person.age = $1\
+        \n      TableScan: person";
+
+        let expected_dt = "[Int32]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    fn test_prepare_statement_to_plan_multi_params() {
+        let sql = "PREPARE my_plan(INT, STRING, DOUBLE, INT, DOUBLE, STRING) AS 
+        SELECT id, age, $6  
+        FROM person 
+        WHERE age IN ($1, $4) AND salary > $3 and salary < $5 OR first_name < $2";
+
+        let expected_plan = "Prepare: \"my_plan\" [Int32, Utf8, Float64, Int32, Float64, Utf8] \
+        \n  Projection: person.id, person.age, $6\
+        \n    Filter: person.age IN ([$1, $4]) AND person.salary > $3 AND person.salary < $5 OR person.first_name < $2\
+        \n      TableScan: person";
+
+        let expected_dt = "[Int32, Utf8, Float64, Int32, Float64, Utf8]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    fn test_prepare_statement_to_plan_having() {
+        let sql = "PREPARE my_plan(INT, DOUBLE, DOUBLE, DOUBLE) AS 
+        SELECT id, SUM(age)  
+        FROM person \
+        WHERE salary > $2 
+        GROUP BY id 
+        HAVING sum(age) < $1 AND SUM(age) > 10 OR SUM(age) in ($3, $4)\
+        ";
+
+        let expected_plan = "Prepare: \"my_plan\" [Int32, Float64, Float64, Float64] \
+        \n  Projection: person.id, SUM(person.age)\
+        \n    Filter: SUM(person.age) < $1 AND SUM(person.age) > Int64(10) OR SUM(person.age) IN ([$3, $4])\
+        \n      Aggregate: groupBy=[[person.id]], aggr=[[SUM(person.age)]]\
+        \n        Filter: person.salary > $2\
+        \n          TableScan: person";
+
+        let expected_dt = "[Int32, Float64, Float64, Float64]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+    }
+
+    #[test]
+    fn test_prepare_statement_to_plan_value_list() {
+        let sql = "PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);";
+
+        let expected_plan = "Prepare: \"my_plan\" [Utf8, Utf8] \
+        \n  Projection: num, letter\
+        \n    Projection: t.column1 AS num, t.column2 AS letter\
+        \n      SubqueryAlias: t\
+        \n        Values: (Int64(1), $1), (Int64(2), $2)";
+
+        let expected_dt = "[Utf8, Utf8]";
+
+        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
     }
 
     #[test]

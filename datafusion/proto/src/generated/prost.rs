@@ -33,7 +33,7 @@ pub struct DfSchema {
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -89,6 +89,8 @@ pub mod logical_plan_node {
         ViewScan(::prost::alloc::boxed::Box<super::ViewTableScanNode>),
         #[prost(message, tag = "25")]
         CustomScan(super::CustomTableScanNode),
+        #[prost(message, tag = "26")]
+        Prepare(::prost::alloc::boxed::Box<super::PrepareNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -275,6 +277,15 @@ pub struct CreateExternalTableNode {
     >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrepareNode {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub data_types: ::prost::alloc::vec::Vec<ArrowType>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateCatalogSchemaNode {
     #[prost(string, tag = "1")]
     pub schema_name: ::prost::alloc::string::String,
@@ -406,7 +417,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -488,7 +499,16 @@ pub mod logical_expr_node {
         Ilike(::prost::alloc::boxed::Box<super::ILikeNode>),
         #[prost(message, tag = "33")]
         SimilarTo(::prost::alloc::boxed::Box<super::SimilarToNode>),
+        #[prost(message, tag = "34")]
+        Placeholder(super::PlaceholderNode),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PlaceholderNode {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub data_type: ::core::option::Option<ArrowType>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogicalExprList {

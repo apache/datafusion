@@ -26,9 +26,9 @@ use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
-        JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
-        Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan, Union, Values,
-        Window,
+        JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
+        Projection, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
+        Union, Values, Window,
     },
     utils::{
         can_hash, expand_qualified_wildcard, expand_wildcard,
@@ -118,6 +118,8 @@ impl LogicalPlanBuilder {
     /// By default, it assigns the names column1, column2, etc. to the columns of a VALUES table.
     /// The column names are not specified by the SQL standard and different database systems do it differently,
     /// so it's usually better to override the default names with a table alias list.
+    ///
+    /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
     pub fn values(mut values: Vec<Vec<Expr>>) -> Result<Self> {
         if values.is_empty() {
             return Err(DataFusionError::Plan("Values list cannot be empty".into()));
@@ -277,6 +279,15 @@ impl LogicalPlanBuilder {
             expr,
             Arc::new(self.plan.clone()),
         )?)))
+    }
+
+    /// Make a builder for a prepare logical plan from the builder's plan
+    pub fn prepare(&self, name: String, data_types: Vec<DataType>) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Prepare(Prepare {
+            name,
+            data_types,
+            input: Arc::new(self.plan.clone()),
+        })))
     }
 
     /// Limit the number of rows returned
