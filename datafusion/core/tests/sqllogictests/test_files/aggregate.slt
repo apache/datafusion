@@ -229,8 +229,8 @@ create table cpu (host string, usage float) as select * from (values
 query CI rowsort
 select host, median(usage) from cpu group by host;
 ----
-host1 90.3
 host0 90.1
+host1 90.3
 
 query CI
 select median(usage) from cpu;
@@ -274,8 +274,8 @@ create table cpu (host string, usage float) as select * from (values ('host0', 9
 query CI rowsort
 select host, median(usage) from cpu group by host;
 ----
-host1 90.25
 host0 90.35
+host1 90.25
 
 statement ok
 drop table cpu
