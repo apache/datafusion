@@ -54,10 +54,9 @@ impl OptimizerRule for InlineTableScan {
                     // Recursively apply optimization
                     let plan =
                         utils::optimize_children(self, sub_plan, _optimizer_config)?;
-                    let plan = LogicalPlanBuilder::from(plan).project_with_alias(
-                        vec![Expr::Wildcard],
-                        Some(table_name.to_string()),
-                    )?;
+                    let plan = LogicalPlanBuilder::from(plan)
+                        .project(vec![Expr::Wildcard])?
+                        .alias(table_name)?;
                     plan.build()
                 } else {
                     // No plan available, return with table scan as is

@@ -169,25 +169,23 @@ mod tests {
             .expect("building plan")
     }
 
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
+    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let rule = SimplifyExpressions::new();
         let optimized_plan = rule
             .optimize(plan, &mut OptimizerConfig::new())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
+        Ok(())
     }
 
     #[test]
-    fn test_simplify_optimized_plan() {
+    fn test_simplify_optimized_plan() -> Result<()> {
         let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a")])
-            .unwrap()
-            .filter(and(col("b").gt(lit(1)), col("b").gt(lit(1))))
-            .unwrap()
-            .build()
-            .unwrap();
+            .project(vec![col("a")])?
+            .filter(and(col("b").gt(lit(1)), col("b").gt(lit(1))))?
+            .build()?;
 
         assert_optimized_plan_eq(
             &plan,
@@ -195,19 +193,16 @@ mod tests {
 	        Filter: test.b > Int32(1)\
             \n  Projection: test.a\
             \n    TableScan: test",
-        );
+        )
     }
 
     #[test]
-    fn test_simplify_optimized_plan_with_or() {
+    fn test_simplify_optimized_plan_with_or() -> Result<()> {
         let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a")])
-            .unwrap()
-            .filter(or(col("b").gt(lit(1)), col("b").gt(lit(1))))
-            .unwrap()
-            .build()
-            .unwrap();
+            .project(vec![col("a")])?
+            .filter(or(col("b").gt(lit(1)), col("b").gt(lit(1))))?
+            .build()?;
 
         assert_optimized_plan_eq(
             &plan,
@@ -215,23 +210,20 @@ mod tests {
             Filter: test.b > Int32(1)\
             \n  Projection: test.a\
             \n    TableScan: test",
-        );
+        )
     }
 
     #[test]
-    fn test_simplify_optimized_plan_with_composed_and() {
+    fn test_simplify_optimized_plan_with_composed_and() -> Result<()> {
         let table_scan = test_table_scan();
         // ((c > 5) AND (d < 6)) AND (c > 5) --> (c > 5) AND (d < 6)
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a"), col("b")])
-            .unwrap()
+            .project(vec![col("a"), col("b")])?
             .filter(and(
                 and(col("a").gt(lit(5)), col("b").lt(lit(6))),
                 col("a").gt(lit(5)),
-            ))
-            .unwrap()
-            .build()
-            .unwrap();
+            ))?
+            .build()?;
 
         assert_optimized_plan_eq(
             &plan,
@@ -239,21 +231,17 @@ mod tests {
             Filter: test.a > Int32(5) AND test.b < Int32(6)\
             \n  Projection: test.a, test.b\
 	        \n    TableScan: test",
-        );
+        )
     }
 
     #[test]
-    fn test_simplity_optimized_plan_eq_expr() {
+    fn test_simplify_optimized_plan_eq_expr() -> Result<()> {
         let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("b").eq(lit(true)))
-            .unwrap()
-            .filter(col("c").eq(lit(false)))
-            .unwrap()
-            .project(vec![col("a")])
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("b").eq(lit(true)))?
+            .filter(col("c").eq(lit(false)))?
+            .project(vec![col("a")])?
+            .build()?;
 
         let expected = "\
         Projection: test.a\
@@ -261,23 +249,18 @@ mod tests {
         \n    Filter: test.b\
         \n      TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn test_simplity_optimized_plan_not_eq_expr() {
+    fn test_simplify_optimized_plan_not_eq_expr() -> Result<()> {
         let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("b").not_eq(lit(true)))
-            .unwrap()
-            .filter(col("c").not_eq(lit(false)))
-            .unwrap()
-            .limit(0, Some(1))
-            .unwrap()
-            .project(vec![col("a")])
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("b").not_eq(lit(true)))?
+            .filter(col("c").not_eq(lit(false)))?
+            .limit(0, Some(1))?
+            .project(vec![col("a")])?
+            .build()?;
 
         let expected = "\
         Projection: test.a\
@@ -286,109 +269,95 @@ mod tests {
         \n      Filter: NOT test.b\
         \n        TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn test_simplity_optimized_plan_and_expr() {
+    fn test_simplify_optimized_plan_and_expr() -> Result<()> {
         let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("b").not_eq(lit(true)).and(col("c").eq(lit(true))))
-            .unwrap()
-            .project(vec![col("a")])
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("b").not_eq(lit(true)).and(col("c").eq(lit(true))))?
+            .project(vec![col("a")])?
+            .build()?;
 
         let expected = "\
         Projection: test.a\
         \n  Filter: NOT test.b AND test.c\
         \n    TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn test_simplity_optimized_plan_or_expr() {
+    fn test_simplify_optimized_plan_or_expr() -> Result<()> {
         let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("b").not_eq(lit(true)).or(col("c").eq(lit(false))))
-            .unwrap()
-            .project(vec![col("a")])
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("b").not_eq(lit(true)).or(col("c").eq(lit(false))))?
+            .project(vec![col("a")])?
+            .build()?;
 
         let expected = "\
         Projection: test.a\
         \n  Filter: NOT test.b OR NOT test.c\
         \n    TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn test_simplity_optimized_plan_not_expr() {
+    fn test_simplify_optimized_plan_not_expr() -> Result<()> {
         let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("b").eq(lit(false)).not())
-            .unwrap()
-            .project(vec![col("a")])
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("b").eq(lit(false)).not())?
+            .project(vec![col("a")])?
+            .build()?;
 
         let expected = "\
         Projection: test.a\
         \n  Filter: test.b\
         \n    TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn test_simplity_optimized_plan_support_projection() {
+    fn test_simplify_optimized_plan_support_projection() -> Result<()> {
         let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a"), col("d"), col("b").eq(lit(false))])
-            .unwrap()
-            .build()
-            .unwrap();
+            .project(vec![col("a"), col("d"), col("b").eq(lit(false))])?
+            .build()?;
 
         let expected = "\
         Projection: test.a, test.d, NOT test.b AS test.b = Boolean(false)\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn test_simplity_optimized_plan_support_aggregate() {
+    fn test_simplify_optimized_plan_support_aggregate() -> Result<()> {
         let table_scan = test_table_scan();
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a"), col("c"), col("b")])
-            .unwrap()
+            .project(vec![col("a"), col("c"), col("b")])?
             .aggregate(
                 vec![col("a"), col("c")],
                 vec![
                     datafusion_expr::max(col("b").eq(lit(true))),
                     datafusion_expr::min(col("b")),
                 ],
-            )
-            .unwrap()
-            .build()
-            .unwrap();
+            )?
+            .build()?;
 
         let expected = "\
         Aggregate: groupBy=[[test.a, test.c]], aggr=[[MAX(test.b) AS MAX(test.b = Boolean(true)), MIN(test.b)]]\
         \n  Projection: test.a, test.c, test.b\
         \n    TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn test_simplity_optimized_plan_support_values() {
+    fn test_simplify_optimized_plan_support_values() -> Result<()> {
         let expr1 = Expr::BinaryExpr(BinaryExpr::new(
             Box::new(lit(1)),
             Operator::Plus,
@@ -400,12 +369,12 @@ mod tests {
             Box::new(lit(1)),
         ));
         let values = vec![vec![expr1, expr2]];
-        let plan = LogicalPlanBuilder::values(values).unwrap().build().unwrap();
+        let plan = LogicalPlanBuilder::values(values)?.build()?;
 
         let expected = "\
         Values: (Int32(3) AS Int32(1) + Int32(2), Int32(1) AS Int32(2) - Int32(1))";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     // expect optimizing will result in an error, returning the error string
@@ -436,82 +405,73 @@ mod tests {
     }
 
     #[test]
-    fn to_timestamp_expr_folded() {
+    fn to_timestamp_expr_folded() -> Result<()> {
         let table_scan = test_table_scan();
         let proj = vec![to_timestamp_expr("2020-09-08T12:00:00+00:00")];
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)
-            .unwrap()
-            .build()
-            .unwrap();
+            .project(proj)?
+            .build()?;
 
         let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS totimestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
             \n  TableScan: test"
             .to_string();
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
         assert_eq!(expected, actual);
+        Ok(())
     }
 
     #[test]
-    fn to_timestamp_expr_wrong_arg() {
+    fn to_timestamp_expr_wrong_arg() -> Result<()> {
         let table_scan = test_table_scan();
         let proj = vec![to_timestamp_expr("I'M NOT A TIMESTAMP")];
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)
-            .unwrap()
-            .build()
-            .unwrap();
+            .project(proj)?
+            .build()?;
 
         let expected = "Error parsing 'I'M NOT A TIMESTAMP' as timestamp";
         let actual = get_optimized_plan_err(&plan, &Utc::now());
         assert_contains!(actual, expected);
+        Ok(())
     }
 
     #[test]
-    fn cast_expr() {
+    fn cast_expr() -> Result<()> {
         let table_scan = test_table_scan();
         let proj = vec![Expr::Cast(Cast::new(Box::new(lit("0")), DataType::Int32))];
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)
-            .unwrap()
-            .build()
-            .unwrap();
+            .project(proj)?
+            .build()?;
 
         let expected = "Projection: Int32(0) AS Utf8(\"0\")\
             \n  TableScan: test";
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
         assert_eq!(expected, actual);
+        Ok(())
     }
 
     #[test]
-    fn cast_expr_wrong_arg() {
+    fn cast_expr_wrong_arg() -> Result<()> {
         let table_scan = test_table_scan();
         let proj = vec![Expr::Cast(Cast::new(Box::new(lit("")), DataType::Int32))];
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)
-            .unwrap()
-            .build()
-            .unwrap();
+            .project(proj)?
+            .build()?;
 
         let expected = "Cannot cast string '' to value of Int32 type";
         let actual = get_optimized_plan_err(&plan, &Utc::now());
         assert_contains!(actual, expected);
+        Ok(())
     }
 
     #[test]
-    fn multiple_now_expr() {
+    fn multiple_now_expr() -> Result<()> {
         let table_scan = test_table_scan();
         let time = Utc::now();
-        let proj = vec![
-            now_expr(),
-            Expr::Alias(Box::new(now_expr()), "t2".to_string()),
-        ];
+        let proj = vec![now_expr(), now_expr().alias("t2")];
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)
-            .unwrap()
-            .build()
-            .unwrap();
+            .project(proj)?
+            .build()?;
 
         // expect the same timestamp appears in both exprs
         let actual = get_optimized_plan_formatted(&plan, &time);
@@ -523,10 +483,11 @@ mod tests {
         );
 
         assert_eq!(expected, actual);
+        Ok(())
     }
 
     #[test]
-    fn simplify_and_eval() {
+    fn simplify_and_eval() -> Result<()> {
         // demonstrate a case where the evaluation needs to run prior
         // to the simplifier for it to work
         let table_scan = test_table_scan();
@@ -534,10 +495,8 @@ mod tests {
         // (true or false) != col --> !col
         let proj = vec![lit(true).or(lit(false)).not_eq(col("a"))];
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(proj)
-            .unwrap()
-            .build()
-            .unwrap();
+            .project(proj)?
+            .build()?;
 
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected =
@@ -545,10 +504,11 @@ mod tests {
                         \n  TableScan: test";
 
         assert_eq!(expected, actual);
+        Ok(())
     }
 
     #[test]
-    fn now_less_than_timestamp() {
+    fn now_less_than_timestamp() -> Result<()> {
         let table_scan = test_table_scan();
 
         let ts_string = "2020-09-08T12:05:00+00:00";
@@ -557,14 +517,10 @@ mod tests {
         //  cast(now() as int) < cast(to_timestamp(...) as int) + 50000_i64
         let plan =
             LogicalPlanBuilder::from(table_scan)
-                .filter(
-                    cast_to_int64_expr(now_expr())
-                        .lt(cast_to_int64_expr(to_timestamp_expr(ts_string))
-                            + lit(50000_i64)),
-                )
-                .unwrap()
-                .build()
-                .unwrap();
+                .filter(cast_to_int64_expr(now_expr()).lt(cast_to_int64_expr(
+                    to_timestamp_expr(ts_string),
+                ) + lit(50000_i64)))?
+                .build()?;
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
@@ -573,10 +529,11 @@ mod tests {
         let actual = get_optimized_plan_formatted(&plan, &time);
 
         assert_eq!(expected, actual);
+        Ok(())
     }
 
     #[test]
-    fn select_date_plus_interval() {
+    fn select_date_plus_interval() -> Result<()> {
         let table_scan = test_table_scan();
 
         let ts_string = "2020-09-08T12:05:00+00:00";
@@ -586,15 +543,12 @@ mod tests {
         let schema = table_scan.schema();
 
         let date_plus_interval_expr = to_timestamp_expr(ts_string)
-            .cast_to(&DataType::Date32, schema)
-            .unwrap()
+            .cast_to(&DataType::Date32, schema)?
             + Expr::Literal(ScalarValue::IntervalDayTime(Some(123i64 << 32)));
 
         let plan = LogicalPlanBuilder::from(table_scan.clone())
-            .project(vec![date_plus_interval_expr])
-            .unwrap()
-            .build()
-            .unwrap();
+            .project(vec![date_plus_interval_expr])?
+            .build()?;
 
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
@@ -603,132 +557,117 @@ mod tests {
         let actual = get_optimized_plan_formatted(&plan, &time);
 
         assert_eq!(expected, actual);
+        Ok(())
     }
 
     #[test]
-    fn simplify_not_binary() {
+    fn simplify_not_binary() -> Result<()> {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").gt(lit(10)).not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("d").gt(lit(10)).not())?
+            .build()?;
         let expected = "Filter: test.d <= Int32(10)\
             \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn simplify_not_bool_and() {
+    fn simplify_not_bool_and() -> Result<()> {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").gt(lit(10)).and(col("d").lt(lit(100))).not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("d").gt(lit(10)).and(col("d").lt(lit(100))).not())?
+            .build()?;
         let expected = "Filter: test.d <= Int32(10) OR test.d >= Int32(100)\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn simplify_not_bool_or() {
+    fn simplify_not_bool_or() -> Result<()> {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").gt(lit(10)).or(col("d").lt(lit(100))).not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("d").gt(lit(10)).or(col("d").lt(lit(100))).not())?
+            .build()?;
         let expected = "Filter: test.d <= Int32(10) AND test.d >= Int32(100)\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn simplify_not_not() {
+    fn simplify_not_not() -> Result<()> {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").gt(lit(10)).not().not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("d").gt(lit(10)).not().not())?
+            .build()?;
         let expected = "Filter: test.d > Int32(10)\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn simplify_not_null() {
+    fn simplify_not_null() -> Result<()> {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").is_null().not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("d").is_null().not())?
+            .build()?;
         let expected = "Filter: test.d IS NOT NULL\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn simplify_not_not_null() {
+    fn simplify_not_not_null() -> Result<()> {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").is_not_null().not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("d").is_not_null().not())?
+            .build()?;
         let expected = "Filter: test.d IS NULL\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn simplify_not_in() {
+    fn simplify_not_in() -> Result<()> {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], false).not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], false).not())?
+            .build()?;
         let expected =
             "Filter: test.d != Int32(3) AND test.d != Int32(2) AND test.d != Int32(1)\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn simplify_not_not_in() {
+    fn simplify_not_not_in() -> Result<()> {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], true).not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], true).not())?
+            .build()?;
         let expected =
             "Filter: test.d = Int32(3) OR test.d = Int32(2) OR test.d = Int32(1)\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn simplify_not_between() {
+    fn simplify_not_between() -> Result<()> {
         let table_scan = test_table_scan();
         let qual = Expr::Between(Between::new(
             Box::new(col("d")),
@@ -738,18 +677,16 @@ mod tests {
         ));
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(qual.not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(qual.not())?
+            .build()?;
         let expected = "Filter: test.d < Int32(1) OR test.d > Int32(10)\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn simplify_not_not_between() {
+    fn simplify_not_not_between() -> Result<()> {
         let table_scan = test_table_scan();
         let qual = Expr::Between(Between::new(
             Box::new(col("d")),
@@ -759,18 +696,16 @@ mod tests {
         ));
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(qual.not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(qual.not())?
+            .build()?;
         let expected = "Filter: test.d >= Int32(1) AND test.d <= Int32(10)\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn simplify_not_like() {
+    fn simplify_not_like() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
             Field::new("b", DataType::Utf8, false),
@@ -781,18 +716,16 @@ mod tests {
             .expect("building plan");
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("a").like(col("b")).not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("a").like(col("b")).not())?
+            .build()?;
         let expected = "Filter: test.a NOT LIKE test.b\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn simplify_not_not_like() {
+    fn simplify_not_not_like() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
             Field::new("b", DataType::Utf8, false),
@@ -803,43 +736,37 @@ mod tests {
             .expect("building plan");
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(col("a").not_like(col("b")).not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(col("a").not_like(col("b")).not())?
+            .build()?;
         let expected = "Filter: test.a LIKE test.b\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn simplify_not_distinct_from() {
+    fn simplify_not_distinct_from() -> Result<()> {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(binary_expr(col("d"), Operator::IsDistinctFrom, lit(10)).not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(binary_expr(col("d"), Operator::IsDistinctFrom, lit(10)).not())?
+            .build()?;
         let expected = "Filter: test.d IS NOT DISTINCT FROM Int32(10)\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
-    fn simplify_not_not_distinct_from() {
+    fn simplify_not_not_distinct_from() -> Result<()> {
         let table_scan = test_table_scan();
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(binary_expr(col("d"), Operator::IsNotDistinctFrom, lit(10)).not())
-            .unwrap()
-            .build()
-            .unwrap();
+            .filter(binary_expr(col("d"), Operator::IsNotDistinctFrom, lit(10)).not())?
+            .build()?;
         let expected = "Filter: test.d IS DISTINCT FROM Int32(10)\
         \n  TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected);
+        assert_optimized_plan_eq(&plan, expected)
     }
 }

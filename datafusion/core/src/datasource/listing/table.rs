@@ -169,7 +169,7 @@ impl ListingTableConfig {
 
         let listing_options = ListingOptions::new(format)
             .with_file_extension(file_extension)
-            .with_target_partitions(state.config.target_partitions);
+            .with_target_partitions(state.config.target_partitions());
 
         Ok(Self {
             table_paths: self.table_paths,

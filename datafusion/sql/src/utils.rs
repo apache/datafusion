@@ -411,6 +411,10 @@ where
                     )))
                 }
             },
+            Expr::Placeholder { id, data_type } => Ok(Expr::Placeholder {
+                id: id.clone(),
+                data_type: data_type.clone(),
+            }),
         },
     }
 }
@@ -539,6 +543,14 @@ pub(crate) fn make_decimal_type(
 pub(crate) fn normalize_ident(id: &Ident) -> String {
     match id.quote_style {
         Some(_) => id.value.clone(),
+        None => id.value.to_ascii_lowercase(),
+    }
+}
+
+// Normalize an owned identifier to a lowercase string unless the identifier is quoted.
+pub(crate) fn normalize_ident_owned(id: Ident) -> String {
+    match id.quote_style {
+        Some(_) => id.value,
         None => id.value.to_ascii_lowercase(),
     }
 }

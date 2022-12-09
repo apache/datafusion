@@ -43,9 +43,9 @@ use std::{
 /// Optimizer that removes unused projections and aggregations from plans
 /// This reduces both scans and
 #[derive(Default)]
-pub struct ProjectionPushDown {}
+pub struct PushDownProjection {}
 
-impl OptimizerRule for ProjectionPushDown {
+impl OptimizerRule for PushDownProjection {
     fn optimize(
         &self,
         plan: &LogicalPlan,
@@ -62,11 +62,11 @@ impl OptimizerRule for ProjectionPushDown {
     }
 
     fn name(&self) -> &str {
-        "projection_push_down"
+        "push_down_projection"
     }
 }
 
-impl ProjectionPushDown {
+impl PushDownProjection {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
@@ -75,7 +75,7 @@ impl ProjectionPushDown {
 
 /// Recursively transverses the logical plan removing expressions and that are not needed.
 fn optimize_plan(
-    _optimizer: &ProjectionPushDown,
+    _optimizer: &PushDownProjection,
     plan: &LogicalPlan,
     required_columns: &HashSet<Column>, // set of columns required up to this step
     has_projection: bool,
@@ -94,23 +94,22 @@ fn optimize_plan(
 
             let mut new_expr = Vec::new();
             let mut new_fields = Vec::new();
+            // When meet projection, its expr must contain all columns that its child need.
+            // So we need create a empty required_columns instead use original new_required_columns.
+            // Otherwise it cause redundant columns.
+            let mut new_required_columns = HashSet::new();
 
             // Gather all columns needed for expressions in this Projection
-            schema
-                .fields()
-                .iter()
-                .enumerate()
-                .try_for_each(|(i, field)| {
-                    if required_columns.contains(&field.qualified_column()) {
-                        new_expr.push(expr[i].clone());
-                        new_fields.push(field.clone());
+            schema.fields().iter().enumerate().for_each(|(i, field)| {
+                if required_columns.contains(&field.qualified_column()) {
+                    new_expr.push(expr[i].clone());
+                    new_fields.push(field.clone());
+                }
+            });
 
-                        // gather the new set of required columns
-                        expr_to_columns(&expr[i], &mut new_required_columns)
-                    } else {
-                        Ok(())
-                    }
-                })?;
+            for e in new_expr.iter() {
+                expr_to_columns(e, &mut new_required_columns)?
+            }
 
             let new_input = optimize_plan(
                 _optimizer,
@@ -392,7 +391,8 @@ fn optimize_plan(
         | LogicalPlan::SetVariable(_)
         | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Distinct(_)
-        | LogicalPlan::Extension { .. } => {
+        | LogicalPlan::Extension { .. }
+        | LogicalPlan::Prepare(_) => {
             let expr = plan.expressions();
             // collect all required columns by this plan
             exprlist_to_columns(&expr, &mut new_required_columns)?;
@@ -1012,7 +1012,7 @@ mod tests {
     }
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let rule = ProjectionPushDown::new();
+        let rule = PushDownProjection::new();
         rule.optimize(plan, &mut OptimizerConfig::new())
     }
 }

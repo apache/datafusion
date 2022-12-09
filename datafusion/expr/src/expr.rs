@@ -199,7 +199,7 @@ pub enum Expr {
         /// List of order by expressions
         order_by: Vec<Expr>,
         /// Window frame
-        window_frame: Option<window_frame::WindowFrame>,
+        window_frame: window_frame::WindowFrame,
     },
     /// aggregate function
     AggregateUDF {
@@ -244,6 +244,14 @@ pub enum Expr {
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
+    /// A place holder for parameters in a prepared statement
+    /// (e.g. `$foo` or `$1`)
+    Placeholder {
+        /// The identifier of the parameter (e.g, $1 or $foo)
+        id: String,
+        /// The type the parameter will be filled in with
+        data_type: DataType,
+    },
 }
 
 /// Binary expression
@@ -528,6 +536,7 @@ impl Expr {
             Expr::Literal(..) => "Literal",
             Expr::Negative(..) => "Negative",
             Expr::Not(..) => "Not",
+            Expr::Placeholder { .. } => "Placeholder",
             Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
             Expr::ScalarFunction { .. } => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
@@ -827,15 +836,11 @@ impl fmt::Debug for Expr {
                 if !order_by.is_empty() {
                     write!(f, " ORDER BY {:?}", order_by)?;
                 }
-                if let Some(window_frame) = window_frame {
-                    write!(
-                        f,
-                        " {} BETWEEN {} AND {}",
-                        window_frame.units,
-                        window_frame.start_bound,
-                        window_frame.end_bound
-                    )?;
-                }
+                write!(
+                    f,
+                    " {} BETWEEN {} AND {}",
+                    window_frame.units, window_frame.start_bound, window_frame.end_bound
+                )?;
                 Ok(())
             }
             Expr::AggregateFunction {
@@ -984,6 +989,7 @@ impl fmt::Debug for Expr {
                     )
                 }
             },
+            Expr::Placeholder { id, .. } => write!(f, "{}", id),
         }
     }
 }
@@ -1187,9 +1193,7 @@ fn create_name(e: &Expr) -> Result<String> {
             if !order_by.is_empty() {
                 parts.push(format!("ORDER BY {:?}", order_by));
             }
-            if let Some(window_frame) = window_frame {
-                parts.push(format!("{}", window_frame));
-            }
+            parts.push(format!("{}", window_frame));
             Ok(parts.join(" "))
         }
         Expr::AggregateFunction {
@@ -1269,6 +1273,7 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
             "Create name does not support qualified wildcard".to_string(),
         )),
+        Expr::Placeholder { id, .. } => Ok((*id).to_string()),
     }
 }
 
