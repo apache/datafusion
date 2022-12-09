@@ -79,7 +79,7 @@ SELECT stddev_pop(c2) FROM aggregate_test_100
 1.3665650368716449
 
 # csv_query_stddev_2
-query R 
+query R
 SELECT stddev_pop(c6) FROM aggregate_test_100
 ----
 5.114326382039172e18
@@ -215,6 +215,70 @@ query T
 SELECT approx_median(a) FROM median_f64_nan
 ----
 NaN
+
+# median_multi
+# test case for https://github.com/apache/arrow-datafusion/issues/3105
+# has an intermediate grouping
+statement ok
+create table cpu (host string, usage float) as select * from (values
+('host0', 90.1),
+('host1', 90.2),
+('host1', 90.4)
+);
+
+query CI rowsort
+select host, median(usage) from cpu group by host;
+----
+host1 90.3
+host0 90.1
+
+query CI
+select median(usage) from cpu;
+----
+90.2
+
+
+statement ok
+drop table cpu;
+
+# median_multi_odd
+
+# data is not sorted and has an odd number of values per group
+statement ok
+create table cpu (host string, usage float) as select * from (values
+  ('host0', 90.2),
+  ('host1', 90.1),
+  ('host1', 90.5),
+  ('host0', 90.5),
+  ('host1', 90.0),
+  ('host1', 90.3),
+  ('host0', 87.9),
+  ('host1', 89.3)
+);
+
+query CI rowsort
+select host, median(usage) from cpu group by host;
+----
+host0 90.2
+host1 90.1
+
+
+statement ok
+drop table cpu;
+
+# median_multi_even
+# data is not sorted and has an odd number of values per group
+statement ok
+create table cpu (host string, usage float) as select * from (values ('host0', 90.2), ('host1', 90.1), ('host1', 90.5), ('host0', 90.5), ('host1', 90.0), ('host1', 90.3), ('host1', 90.2), ('host1', 90.3));
+
+query CI rowsort
+select host, median(usage) from cpu group by host;
+----
+host1 90.25
+host0 90.35
+
+statement ok
+drop table cpu
 
 # csv_query_external_table_count
 query I
@@ -818,7 +882,7 @@ select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count
 # SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100;
 
 # csv_query_array_cube_agg_with_overflow
-query TIIRIII 
+query TIIRIII
 select c1, c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by CUBE (c1,c2) order by c1, c2
 ----
 a 1 -88  -17.6               83  -85  5
@@ -870,7 +934,7 @@ e   847  40.333333333333336  120 -95  21
 # query IIII
 # SELECT count(nanos), count(micros), count(millis), count(secs) FROM t
 # ----
-# 3 3 3 3 
+# 3 3 3 3
 
 # aggregate_timestamps_min
 # query TTTT
