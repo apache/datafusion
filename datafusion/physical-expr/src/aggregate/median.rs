@@ -111,6 +111,7 @@ impl Accumulator for MedianAccumulator {
         assert_eq!(values.len(), 1);
         let array = &values[0];
 
+        assert!(matches!(array.data_type(), DataType::List(_)));
         self.all_values.reserve(self.all_values.len() + array.len());
         for index in 0..array.len() {
             self.all_values
@@ -124,6 +125,7 @@ impl Accumulator for MedianAccumulator {
         assert_eq!(states.len(), 1);
 
         let array = &states[0];
+        assert!(matches!(array.data_type(), DataType::List(_)));
         for index in 0..array.len() {
             match ScalarValue::try_from_array(array, index)? {
                 ScalarValue::List(Some(mut values), _) => {
