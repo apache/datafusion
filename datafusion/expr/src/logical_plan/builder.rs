@@ -42,8 +42,9 @@ use datafusion_common::{
     ToDFSchema,
 };
 use std::any::Any;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -993,6 +994,68 @@ pub fn table_scan(
     let table_schema = Arc::new(table_schema.clone());
     let table_source = Arc::new(LogicalTableSource { table_schema });
     LogicalPlanBuilder::scan(name.unwrap_or(UNNAMED_TABLE), table_source, projection)
+}
+
+/// Wrap projection for a plan, if the join keys contains normal expression.
+pub fn wrap_projection_for_join_if_necessary(
+    join_keys: &[Expr],
+    input: LogicalPlan,
+) -> Result<(LogicalPlan, Vec<Column>, bool)> {
+    let input_schema = input.schema();
+    let alias_join_keys: Vec<Expr> = join_keys
+        .iter()
+        .map(|key| {
+            // The display_name() of cast expression will ignore the cast info, and show the inner expression name.
+            // If we do not add alais, it will throw same field name error in the schema when adding projection.
+            // For example:
+            //    input scan : [a, b, c],
+            //    join keys: [cast(a as int)]
+            //
+            //  then a and cast(a as int) will use the same field name - `a` in projection schema.
+            //  https://github.com/apache/arrow-datafusion/issues/4478
+            if matches!(key, Expr::Cast(_))
+                || matches!(
+                    key,
+                    Expr::TryCast {
+                        expr: _,
+                        data_type: _
+                    }
+                )
+            {
+                let alias = format!("{:?}", key);
+                key.clone().alias(alias)
+            } else {
+                key.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let need_project = join_keys.iter().any(|key| !matches!(key, Expr::Column(_)));
+    let plan = if need_project {
+        let mut projection = expand_wildcard(input_schema, &input)?;
+        let join_key_items = alias_join_keys
+            .iter()
+            .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))
+            .cloned()
+            .collect::<HashSet<Expr>>();
+        projection.extend(join_key_items);
+
+        LogicalPlanBuilder::from(input)
+            .project(projection)?
+            .build()?
+    } else {
+        input
+    };
+
+    let join_on = alias_join_keys
+        .into_iter()
+        .map(|key| {
+            key.try_into_col()
+                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok((plan, join_on, need_project))
 }
 
 /// Basic TableSource implementation intended for use in tests and documentation. It is expected

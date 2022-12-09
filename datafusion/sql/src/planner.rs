@@ -45,7 +45,10 @@ use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::builder::project;
+use datafusion_expr::logical_plan::builder::{
+    project, wrap_projection_for_join_if_necessary,
+};
+use datafusion_expr::logical_plan::Join as HashJoin;
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
@@ -53,8 +56,7 @@ use datafusion_expr::logical_plan::{
     DropTable, DropView, Explain, JoinType, LogicalPlan, LogicalPlanBuilder,
     Partitioning, PlanType, SetVariable, ToStringifiedPlan,
 };
-use datafusion_expr::logical_plan::{Filter, Subquery};
-use datafusion_expr::logical_plan::{Join as HashJoin, Prepare};
+use datafusion_expr::logical_plan::{Filter, Prepare, Subquery};
 use datafusion_expr::utils::{
     can_hash, check_all_column_from_schema, expand_qualified_wildcard, expand_wildcard,
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_column_exprs,
@@ -862,26 +864,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .build()
                 } else {
                     // Wrap projection for left input if left join keys contain normal expression.
-                    let (left_child, left_projected) =
+                    let (left_child, left_join_keys, left_projected) =
                         wrap_projection_for_join_if_necessary(&left_keys, left)?;
-                    let left_join_keys = left_keys
-                        .iter()
-                        .map(|key| {
-                            key.try_into_col()
-                                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
 
                     // Wrap projection for right input if right join keys contains normal expression.
-                    let (right_child, right_projected) =
+                    let (right_child, right_join_keys, right_projected) =
                         wrap_projection_for_join_if_necessary(&right_keys, right)?;
-                    let right_join_keys = right_keys
-                        .iter()
-                        .map(|key| {
-                            key.try_into_col()
-                                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
 
                     let join_plan_builder = LogicalPlanBuilder::from(left_child).join(
                         &right_child,
@@ -3226,32 +3214,6 @@ fn extract_join_keys(
     }
 
     Ok(())
-}
-
-/// Wrap projection for a plan, if the join keys contains normal expression.
-fn wrap_projection_for_join_if_necessary(
-    join_keys: &[Expr],
-    input: LogicalPlan,
-) -> Result<(LogicalPlan, bool)> {
-    let expr_join_keys = join_keys
-        .iter()
-        .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))
-        .cloned()
-        .collect::<HashSet<Expr>>();
-
-    let need_project = !expr_join_keys.is_empty();
-    let plan = if need_project {
-        let mut projection = vec![Expr::Wildcard];
-        projection.extend(expr_join_keys.into_iter());
-
-        LogicalPlanBuilder::from(input)
-            .project(projection)?
-            .build()?
-    } else {
-        input
-    };
-
-    Ok((plan, need_project))
 }
 
 /// Ensure any column reference of the expression is unambiguous.
@@ -6429,6 +6391,23 @@ mod tests {
         \n        SubqueryAlias: t2\
         \n          Projection: person.age\
         \n            TableScan: person";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_inner_join_with_cast_key() {
+        let sql = "SELECT person.id, person.age
+            FROM person
+            INNER JOIN orders
+            ON cast(person.id as Int) = cast(orders.customer_id as Int)";
+
+        let expected = "Projection: person.id, person.age\
+        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+        \n    Inner Join: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
+        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, CAST(person.id AS Int32) AS CAST(person.id AS Int32)\
+        \n        TableScan: person\
+        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, CAST(orders.customer_id AS Int32) AS CAST(orders.customer_id AS Int32)\
+        \n        TableScan: orders";
         quick_test(sql, expected);
     }
 
