@@ -344,6 +344,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
             "Create physical name does not support qualified wildcard".to_string(),
         )),
+        Expr::Placeholder { .. } => Err(DataFusionError::Internal(
+            "Create physical name does not support placeholder".to_string(),
+        )),
     }
 }
 
@@ -1029,6 +1032,14 @@ impl DefaultPhysicalPlanner {
                     // the context)
                     Err(DataFusionError::Internal(
                         "Unsupported logical plan: CreateExternalTable".to_string(),
+                    ))
+                }
+                LogicalPlan::Prepare(_) => {
+                    // There is no default plan for "PREPARE" -- it must be
+                    // handled at a higher level (so that the appropriate
+                    // statement can be prepared)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: Prepare".to_string(),
                     ))
                 }
                 LogicalPlan::CreateCatalogSchema(_) => {

@@ -52,6 +52,73 @@ pub enum TableReference<'a> {
     },
 }
 
+/// Represents a path to a table that may require further resolution
+/// that owns the underlying names
+#[derive(Debug, Clone)]
+pub enum OwnedTableReference {
+    /// An unqualified table reference, e.g. "table"
+    Bare {
+        /// The table name
+        table: String,
+    },
+    /// A partially resolved table reference, e.g. "schema.table"
+    Partial {
+        /// The schema containing the table
+        schema: String,
+        /// The table name
+        table: String,
+    },
+    /// A fully resolved table reference, e.g. "catalog.schema.table"
+    Full {
+        /// The catalog (aka database) containing the table
+        catalog: String,
+        /// The schema containing the table
+        schema: String,
+        /// The table name
+        table: String,
+    },
+}
+
+impl OwnedTableReference {
+    /// Return a `TableReference` view of this `OwnedTableReference`
+    pub fn as_table_reference(&self) -> TableReference<'_> {
+        match self {
+            Self::Bare { table } => TableReference::Bare { table },
+            Self::Partial { schema, table } => TableReference::Partial { schema, table },
+            Self::Full {
+                catalog,
+                schema,
+                table,
+            } => TableReference::Full {
+                catalog,
+                schema,
+                table,
+            },
+        }
+    }
+
+    /// Return a string suitable for display
+    pub fn display_string(&self) -> String {
+        match self {
+            OwnedTableReference::Bare { table } => table.clone(),
+            OwnedTableReference::Partial { schema, table } => format!("{schema}.{table}"),
+            OwnedTableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => format!("{catalog}.{schema}.{table}"),
+        }
+    }
+}
+
+/// Convert `OwnedTableReference` into a `TableReference`. Somewhat
+/// akward to use but 'idiomatic': `(&table_ref).into()`
+impl<'a> From<&'a OwnedTableReference> for TableReference<'a> {
+    fn from(r: &'a OwnedTableReference) -> Self {
+        r.as_table_reference()
+    }
+}
+
 impl<'a> TableReference<'a> {
     /// Retrieve the actual table name, regardless of qualification
     pub fn table(&self) -> &str {
@@ -90,10 +157,18 @@ impl<'a> TableReference<'a> {
             },
         }
     }
-}
 
-impl<'a> From<&'a str> for TableReference<'a> {
-    fn from(s: &'a str) -> Self {
+    /// Forms a [`TableReferece`] by splitting `s` on periods `.`.
+    ///
+    /// Note that this function does NOT handle periods or name
+    /// normalization correctly (e.g. `"foo.bar"` will be parsed as
+    /// `"foo`.`bar"`. and `Foo` will be parsed as `Foo` (not `foo`).
+    ///
+    /// If you need to handle such identifiers correctly, you should
+    /// use a SQL parser or form the [`OwnedTableReference`] directly.
+    ///
+    /// See more detail in <https://github.com/apache/arrow-datafusion/issues/4532>
+    pub fn parse_str(s: &'a str) -> Self {
         let parts: Vec<&str> = s.split('.').collect();
 
         match parts.len() {
@@ -109,6 +184,15 @@ impl<'a> From<&'a str> for TableReference<'a> {
             },
             _ => Self::Bare { table: s },
         }
+    }
+}
+
+/// Parse a string into a TableReference, by splittig on `.`
+///
+/// See caveats on [`TableReference::parse_str`]
+impl<'a> From<&'a str> for TableReference<'a> {
+    fn from(s: &'a str) -> Self {
+        Self::parse_str(s)
     }
 }
 
