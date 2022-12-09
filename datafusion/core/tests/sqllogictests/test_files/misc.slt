@@ -19,8 +19,8 @@
 
 # Show string normalization working
 # '' --> (empty)
-# '' --> NULL   (TODO: needs https://github.com/apache/arrow-rs/issues/3268)
+# '' --> NULL
 query II
 select 'foo', '', NULL
 ----
-foo (empty)
+foo (empty) NULL
