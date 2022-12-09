@@ -124,7 +124,7 @@ impl SortMergeJoinExec {
                 let right = PhysicalSortExpr {
                     expr: Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
                     options: *sort_op,
-                };        
+                };
                 (left, right)
             })
             .unzip();
