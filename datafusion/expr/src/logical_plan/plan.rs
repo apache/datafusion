@@ -23,10 +23,14 @@ use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::utils::{
     exprlist_to_fields, from_plan, grouping_set_expr_count, grouping_set_to_exprlist,
 };
-use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
+use crate::{
+    Between, Case, Cast, Expr, ExprSchemable, GetIndexedField, GroupingSet, Like,
+    TableProviderFilterPushDown, TableSource,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    ScalarValue,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -364,6 +368,42 @@ impl LogicalPlan {
     ) -> Result<LogicalPlan, DataFusionError> {
         from_plan(self, &self.expressions(), inputs)
     }
+
+    /// Convert a prepare logical plan into its inner logical plan with all params replaced with their corresponding values
+    pub fn execute(
+        logical_plan: LogicalPlan,
+        param_values: Vec<ScalarValue>,
+    ) -> Result<LogicalPlan, DataFusionError> {
+        match logical_plan {
+            LogicalPlan::Prepare(prepare_lp) => {
+                // Verify if the number of params matches the number of values
+                if prepare_lp.data_types.len() != param_values.len() {
+                    return Err(DataFusionError::Internal(format!(
+                        "Expected {} parameters, got {}",
+                        prepare_lp.data_types.len(),
+                        param_values.len()
+                    )));
+                }
+
+                // Verify if the types of the params matches the types of the values
+                for (param_type, value) in
+                    prepare_lp.data_types.iter().zip(param_values.iter())
+                {
+                    if *param_type != value.get_datatype() {
+                        return Err(DataFusionError::Internal(format!(
+                            "Expected parameter of type {:?}, got {:?}",
+                            param_type,
+                            value.get_datatype()
+                        )));
+                    }
+                }
+
+                let input_plan = prepare_lp.input;
+                input_plan.replace_params_with_values(&param_values)
+            }
+            _ => Ok(logical_plan),
+        }
+    }
 }
 
 /// Trait that implements the [Visitor
@@ -532,6 +572,655 @@ impl LogicalPlan {
                 sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
             }
             _ => {}
+        }
+    }
+
+    /// recursively to replace the params (e.g $1 $2, ...) wit corresponding values provided in the prams_values
+    pub fn replace_params_with_values(
+        &self,
+        param_values: &Vec<ScalarValue>,
+    ) -> Result<LogicalPlan, DataFusionError> {
+        match self {
+            LogicalPlan::Projection(Projection {
+                expr,
+                input,
+                schema,
+            }) => {
+                let expr = &mut expr
+                    .iter()
+                    .map(|e| {
+                        Self::replace_placeholders_with_values(e.clone(), param_values)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let input = input.replace_params_with_values(param_values)?;
+                Ok(LogicalPlan::Projection(Projection {
+                    expr: expr.clone(),
+                    input: Arc::new(input),
+                    schema: Arc::clone(schema),
+                }))
+            }
+            LogicalPlan::Filter(Filter { predicate, input }) => {
+                let predicate = Self::replace_placeholders_with_values(
+                    predicate.clone(),
+                    param_values,
+                )?;
+                let input = input.replace_params_with_values(param_values)?;
+                Ok(LogicalPlan::Filter(Filter {
+                    predicate,
+                    input: Arc::new(input),
+                }))
+            }
+            LogicalPlan::Repartition(Repartition {
+                input,
+                partitioning_scheme,
+            }) => {
+                let input = input.replace_params_with_values(param_values)?;
+                // Even though the `partitioning` member of Repartition include expresions , they are internal ones and should not include params
+                // Hence no need to look for placeholders and replace them
+                Ok(LogicalPlan::Repartition(Repartition {
+                    input: Arc::new(input),
+                    partitioning_scheme: partitioning_scheme.clone(),
+                }))
+            }
+            LogicalPlan::Window(Window {
+                input,
+                window_expr,
+                schema,
+            }) => {
+                let input = input.replace_params_with_values(param_values)?;
+                let window_expr = &mut window_expr
+                    .iter()
+                    .map(|e| {
+                        Self::replace_placeholders_with_values(e.clone(), param_values)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(LogicalPlan::Window(Window {
+                    input: Arc::new(input),
+                    window_expr: window_expr.clone(),
+                    schema: Arc::clone(schema),
+                }))
+            }
+            LogicalPlan::Aggregate(Aggregate {
+                input,
+                group_expr,
+                aggr_expr,
+                schema,
+            }) => {
+                let input = input.replace_params_with_values(param_values)?;
+                let group_expr = &mut group_expr
+                    .iter()
+                    .map(|e| {
+                        Self::replace_placeholders_with_values(e.clone(), param_values)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let aggr_expr = &mut aggr_expr
+                    .iter()
+                    .map(|e| {
+                        Self::replace_placeholders_with_values(e.clone(), param_values)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(LogicalPlan::Aggregate(Aggregate {
+                    input: Arc::new(input),
+                    group_expr: group_expr.clone(),
+                    aggr_expr: aggr_expr.clone(),
+                    schema: Arc::clone(schema),
+                }))
+            }
+            LogicalPlan::Sort(Sort { input, expr, fetch }) => {
+                let input = input.replace_params_with_values(param_values)?;
+                let expr = &mut expr
+                    .iter()
+                    .map(|e| {
+                        Self::replace_placeholders_with_values(e.clone(), param_values)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(LogicalPlan::Sort(Sort {
+                    input: Arc::new(input),
+                    expr: expr.clone(),
+                    fetch: *fetch,
+                }))
+            }
+            LogicalPlan::Join(Join {
+                left,
+                right,
+                filter,
+                on,
+                join_type,
+                join_constraint,
+                schema,
+                null_equals_null,
+            }) => {
+                let left = left.replace_params_with_values(param_values)?;
+                let fright = right.replace_params_with_values(param_values)?;
+                let filter = filter.clone().map(|f| {
+                    Self::replace_placeholders_with_values(f, param_values)
+                        .expect("Failed to replace params in join filter")
+                });
+                Ok(LogicalPlan::Join(Join {
+                    left: Arc::new(left),
+                    right: Arc::new(fright),
+                    filter,
+                    on: on.clone(),
+                    join_type: *join_type,
+                    join_constraint: *join_constraint,
+                    schema: Arc::clone(schema),
+                    null_equals_null: *null_equals_null,
+                }))
+            }
+            LogicalPlan::CrossJoin(CrossJoin {
+                left,
+                right,
+                schema,
+            }) => {
+                let left = left.replace_params_with_values(param_values)?;
+                let right = right.replace_params_with_values(param_values)?;
+                Ok(LogicalPlan::CrossJoin(CrossJoin {
+                    left: Arc::new(left),
+                    right: Arc::new(right),
+                    schema: Arc::clone(schema),
+                }))
+            }
+            LogicalPlan::Limit(Limit { input, skip, fetch }) => {
+                let input = input.replace_params_with_values(param_values)?;
+                Ok(LogicalPlan::Limit(Limit {
+                    input: Arc::new(input),
+                    skip: *skip,
+                    fetch: *fetch,
+                }))
+            }
+            LogicalPlan::Subquery(Subquery { subquery }) => {
+                let subquery = subquery.replace_params_with_values(param_values)?;
+                Ok(LogicalPlan::Subquery(Subquery {
+                    subquery: Arc::new(subquery),
+                }))
+            }
+            LogicalPlan::SubqueryAlias(SubqueryAlias {
+                input,
+                alias,
+                schema,
+            }) => {
+                let input = input.replace_params_with_values(param_values)?;
+                Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
+                    input: Arc::new(input),
+                    alias: alias.clone(),
+                    schema: Arc::clone(schema),
+                }))
+            }
+            LogicalPlan::Extension(Extension { node }) => {
+                // Currently only support params in standard SQL
+                // and extesion should not have any params
+                Ok(LogicalPlan::Extension(Extension { node: node.clone() }))
+            }
+            LogicalPlan::Union(Union { inputs, schema }) => {
+                let inputs = inputs
+                    .iter()
+                    .map(|input| input.replace_params_with_values(param_values))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(LogicalPlan::Union(Union {
+                    inputs: inputs.into_iter().map(Arc::new).collect(),
+                    schema: Arc::clone(schema),
+                }))
+            }
+            LogicalPlan::Distinct(Distinct { input }) => {
+                let input = input.replace_params_with_values(param_values)?;
+                Ok(LogicalPlan::Distinct(Distinct {
+                    input: Arc::new(input),
+                }))
+            }
+            LogicalPlan::Prepare(Prepare {
+                name,
+                data_types,
+                input,
+            }) => {
+                let input = input.replace_params_with_values(param_values)?;
+                Ok(LogicalPlan::Prepare(Prepare {
+                    name: name.clone(),
+                    data_types: data_types.clone(),
+                    input: Arc::new(input),
+                }))
+            }
+            // plans without inputs
+            LogicalPlan::TableScan(TableScan {
+                table_name,
+                source,
+                projection,
+                projected_schema,
+                filters,
+                fetch,
+            }) => {
+                let filters = filters
+                    .iter()
+                    .map(|f| {
+                        Self::replace_placeholders_with_values(f.clone(), param_values)
+                            .expect("Failed to replace params in table scan filter")
+                    })
+                    .collect();
+                Ok(LogicalPlan::TableScan(TableScan {
+                    table_name: table_name.clone(),
+                    source: Arc::clone(source),
+                    projection: projection.clone(),
+                    projected_schema: Arc::clone(projected_schema),
+                    filters,
+                    fetch: *fetch,
+                }))
+            }
+            LogicalPlan::Values(Values { values, schema }) => {
+                let values = values
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|expr| {
+                                Self::replace_placeholders_with_values(
+                                    expr.clone(),
+                                    param_values,
+                                )
+                                .expect("Failed to replace params in values")
+                            })
+                            .collect()
+                    })
+                    .collect();
+                Ok(LogicalPlan::Values(Values {
+                    values,
+                    schema: Arc::clone(schema),
+                }))
+            }
+            LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row,
+                schema,
+            }) => Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: *produce_one_row,
+                schema: Arc::clone(schema),
+            })),
+            LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::CreateMemoryTable(_)
+            | LogicalPlan::CreateView(_)
+            | LogicalPlan::CreateExternalTable(_)
+            | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::SetVariable(_)
+            | LogicalPlan::DropView(_) => Err::<LogicalPlan, DataFusionError>(
+                DataFusionError::NotImplemented(format!(
+                    "This logical plan should not contain parameters/placeholder: {}",
+                    self.display()
+                )),
+            ),
+        }
+    }
+
+    /// Recrusively to walk the expression and convert a placeholder into a literal value
+    fn replace_placeholders_with_values(
+        expr: Expr,
+        param_values: &Vec<ScalarValue>,
+    ) -> Result<Expr, DataFusionError> {
+        match expr {
+            Expr::Column(..) | Expr::ScalarVariable(..) | Expr::Literal(..) => Ok(expr),
+            Expr::Alias(expr, name) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::Alias(Box::new(expr), name))
+            }
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                let left = Self::replace_placeholders_with_values(*left, param_values)?;
+                let right = Self::replace_placeholders_with_values(*right, param_values)?;
+                Ok(Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                }))
+            }
+            Expr::Case(case) => {
+                let expr = match case.expr {
+                    Some(expr) => Some(Box::new(Self::replace_placeholders_with_values(
+                        *expr,
+                        param_values,
+                    )?)),
+                    None => None,
+                };
+                let mut when_then_expr = vec![];
+                for (w, t) in case.when_then_expr {
+                    let w = Self::replace_placeholders_with_values(*w, param_values)?;
+                    let t = Self::replace_placeholders_with_values(*t, param_values)?;
+                    when_then_expr.push((Box::new(w), Box::new(t)));
+                }
+                let else_expr = match case.else_expr {
+                    Some(expr) => Some(Box::new(Self::replace_placeholders_with_values(
+                        *expr,
+                        param_values,
+                    )?)),
+                    None => None,
+                };
+                Ok(Expr::Case(Case {
+                    expr,
+                    when_then_expr,
+                    else_expr,
+                }))
+            }
+            Expr::Cast(Cast { expr, data_type }) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::Cast(Cast {
+                    expr: Box::new(expr),
+                    data_type,
+                }))
+            }
+            Expr::TryCast { expr, data_type } => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::TryCast {
+                    expr: Box::new(expr),
+                    data_type,
+                })
+            }
+            Expr::Not(expr) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::Not(Box::new(expr)))
+            }
+            Expr::Negative(expr) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::Negative(Box::new(expr)))
+            }
+            Expr::IsNull(expr) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::IsNull(Box::new(expr)))
+            }
+            Expr::IsNotNull(expr) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::IsNotNull(Box::new(expr)))
+            }
+            Expr::IsTrue(expr) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::IsTrue(Box::new(expr)))
+            }
+            Expr::IsFalse(expr) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::IsFalse(Box::new(expr)))
+            }
+            Expr::IsUnknown(expr) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::IsUnknown(Box::new(expr)))
+            }
+            Expr::IsNotTrue(expr) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::IsNotTrue(Box::new(expr)))
+            }
+            Expr::IsNotFalse(expr) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::IsNotFalse(Box::new(expr)))
+            }
+            Expr::IsNotUnknown(expr) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::IsNotUnknown(Box::new(expr)))
+            }
+            Expr::GetIndexedField(GetIndexedField { key, expr }) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::GetIndexedField(GetIndexedField {
+                    key,
+                    expr: Box::new(expr),
+                }))
+            }
+            Expr::ScalarFunction { fun, args, .. } => {
+                let new_args = args
+                    .into_iter()
+                    .map(|arg| Self::replace_placeholders_with_values(arg, param_values))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Expr::ScalarFunction {
+                    fun,
+                    args: new_args,
+                })
+            }
+            Expr::ScalarUDF { fun, args } => {
+                let new_args = args
+                    .into_iter()
+                    .map(|arg| Self::replace_placeholders_with_values(arg, param_values))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Expr::ScalarUDF {
+                    fun,
+                    args: new_args,
+                })
+            }
+            Expr::WindowFunction {
+                fun,
+                args,
+                partition_by,
+                order_by,
+                window_frame,
+            } => {
+                let new_args = args
+                    .into_iter()
+                    .map(|arg| Self::replace_placeholders_with_values(arg, param_values))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let new_partition_by = partition_by
+                    .into_iter()
+                    .map(|arg| Self::replace_placeholders_with_values(arg, param_values))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let new_order_by = order_by
+                    .into_iter()
+                    .map(|arg| Self::replace_placeholders_with_values(arg, param_values))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Expr::WindowFunction {
+                    fun,
+                    args: new_args,
+                    partition_by: new_partition_by,
+                    order_by: new_order_by,
+                    window_frame,
+                })
+            }
+            Expr::AggregateFunction {
+                fun,
+                distinct,
+                args,
+                filter,
+            } => {
+                let new_args = args
+                    .into_iter()
+                    .map(|arg| Self::replace_placeholders_with_values(arg, param_values))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let new_filter = match filter {
+                    Some(filter) => Some(Box::new(
+                        Self::replace_placeholders_with_values(*filter, param_values)?,
+                    )),
+                    None => None,
+                };
+                Ok(Expr::AggregateFunction {
+                    fun,
+                    distinct,
+                    args: new_args,
+                    filter: new_filter,
+                })
+            }
+            Expr::AggregateUDF { fun, args, filter } => {
+                let new_args = args
+                    .into_iter()
+                    .map(|arg| Self::replace_placeholders_with_values(arg, param_values))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let new_filter = match filter {
+                    Some(filter) => Some(Box::new(
+                        Self::replace_placeholders_with_values(*filter, param_values)?,
+                    )),
+                    None => None,
+                };
+                Ok(Expr::AggregateUDF {
+                    fun,
+                    args: new_args,
+                    filter: new_filter,
+                })
+            }
+            Expr::GroupingSet(grouping_set) => match grouping_set {
+                GroupingSet::Rollup(exprs) => Ok(Expr::GroupingSet(GroupingSet::Rollup(
+                    exprs
+                        .into_iter()
+                        .map(|e| Self::replace_placeholders_with_values(e, param_values))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ))),
+                GroupingSet::Cube(exprs) => Ok(Expr::GroupingSet(GroupingSet::Cube(
+                    exprs
+                        .into_iter()
+                        .map(|e| Self::replace_placeholders_with_values(e, param_values))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ))),
+                GroupingSet::GroupingSets(exprs) => {
+                    Ok(Expr::GroupingSet(GroupingSet::GroupingSets(
+                        exprs
+                            .into_iter()
+                            .map(|e| {
+                                e.into_iter()
+                                    .map(|e| {
+                                        Self::replace_placeholders_with_values(
+                                            e,
+                                            param_values,
+                                        )
+                                    })
+                                    .collect::<Result<Vec<_>, _>>()
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )))
+                }
+            },
+            Expr::InList {
+                expr,
+                list,
+                negated,
+            } => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                let list = list
+                    .into_iter()
+                    .map(|expr| {
+                        Self::replace_placeholders_with_values(expr, param_values)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Expr::InList {
+                    expr: Box::new(expr),
+                    list,
+                    negated,
+                })
+            }
+            Expr::Exists { subquery, negated } => {
+                subquery.subquery.replace_params_with_values(param_values)?;
+                Ok(Expr::Exists { subquery, negated })
+            }
+            Expr::InSubquery {
+                expr,
+                subquery,
+                negated,
+            } => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                subquery.subquery.replace_params_with_values(param_values)?;
+                Ok(Expr::InSubquery {
+                    expr: Box::new(expr),
+                    subquery,
+                    negated,
+                })
+            }
+            Expr::ScalarSubquery(_) => Err(DataFusionError::NotImplemented(
+                "Scalar subqueries are not yet supported in the physical plan"
+                    .to_string(),
+            )),
+            Expr::Between(Between {
+                expr,
+                negated,
+                low,
+                high,
+            }) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                let low = Self::replace_placeholders_with_values(*low, param_values)?;
+                let high = Self::replace_placeholders_with_values(*high, param_values)?;
+                Ok(Expr::Between(Between {
+                    expr: Box::new(expr),
+                    negated,
+                    low: Box::new(low),
+                    high: Box::new(high),
+                }))
+            }
+            Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                let pattern =
+                    Self::replace_placeholders_with_values(*pattern, param_values)?;
+                Ok(Expr::Like(Like {
+                    negated,
+                    expr: Box::new(expr),
+                    pattern: Box::new(pattern),
+                    escape_char,
+                }))
+            }
+            Expr::ILike(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                let pattern =
+                    Self::replace_placeholders_with_values(*pattern, param_values)?;
+                Ok(Expr::ILike(Like {
+                    negated,
+                    expr: Box::new(expr),
+                    pattern: Box::new(pattern),
+                    escape_char,
+                }))
+            }
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+            }) => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                let pattern =
+                    Self::replace_placeholders_with_values(*pattern, param_values)?;
+                Ok(Expr::SimilarTo(Like {
+                    negated,
+                    expr: Box::new(expr),
+                    pattern: Box::new(pattern),
+                    escape_char,
+                }))
+            }
+            Expr::Sort {
+                expr,
+                asc,
+                nulls_first,
+            } => {
+                let expr = Self::replace_placeholders_with_values(*expr, param_values)?;
+                Ok(Expr::Sort {
+                    expr: Box::new(expr),
+                    asc,
+                    nulls_first,
+                })
+            }
+            Expr::Wildcard => Ok(Expr::Wildcard),
+            Expr::QualifiedWildcard { qualifier } => {
+                Ok(Expr::QualifiedWildcard { qualifier })
+            }
+            Expr::Placeholder { id, data_type } => {
+                // convert id (in format $1, $2, ..) to idx (0, 1, ..)
+                let idx = id[1..].parse::<usize>().map_err(|e| {
+                    DataFusionError::Internal(format!(
+                        "Failed to parse placeholder id: {}",
+                        e
+                    ))
+                })? - 1;
+                // value at the idx-th position in param_values should be the value for the placeholder
+                let value = param_values.get(idx).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "No value found for placeholder with id {}",
+                        id
+                    ))
+                })?;
+                // check if the data type of the value matches the data type of the placeholder
+                if value.get_datatype() != data_type {
+                    return Err(DataFusionError::Internal(format!(
+                        "Placeholder value type mismatch: expected {:?}, got {:?}",
+                        data_type,
+                        value.get_datatype()
+                    )));
+                }
+                // Replace the placeholder with the value
+                Ok(Expr::Literal(value.clone()))
+            }
         }
     }
 }

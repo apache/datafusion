@@ -20,6 +20,7 @@ use datafusion::{
     datasource::empty::EmptyTable, from_slice::FromSlice,
     physical_plan::collect_partitioned,
 };
+use datafusion_common::ScalarValue;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -1254,6 +1255,73 @@ async fn csv_join_unaliased_subqueries() -> Result<()> {
         "+----+----+----+----+----+-----+",
     ];
     assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+// Test prepare statement from sql to final result
+// This test is equivalent with the test parallel_query_with_filter below but using prepare statement
+#[tokio::test]
+async fn test_prepare_statement() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let partition_count = 4;
+    let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
+
+    // sql to statement then to prepare logical plan with parameters
+    // c1 defined as UINT32, c2 defined as UInt64 but the params are Int32 and Float64
+    let logical_plan =
+        ctx.create_logical_plan("PREPARE my_plan(INT, DOUBLE) AS SELECT c1, c2 FROM test WHERE c1 > $2 AND c1 < $1")?;
+
+    // prepare logical plan to logical plan without parameters
+    let param_values = vec![ScalarValue::Int32(Some(3)), ScalarValue::Float64(Some(0.0))];
+    let logical_plan = LogicalPlan::execute(logical_plan, param_values)?;
+
+    // logical plan to optimized logical plan
+    let logical_plan = ctx.optimize(&logical_plan)?;
+
+    // optimized logical plan to physical plan
+    let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
+
+    let task_ctx = ctx.task_ctx();
+    let results = collect_partitioned(physical_plan, task_ctx).await?;
+
+    // note that the order of partitions is not deterministic
+    let mut num_rows = 0;
+    for partition in &results {
+        for batch in partition {
+            num_rows += batch.num_rows();
+        }
+    }
+    assert_eq!(20, num_rows);
+
+    let results: Vec<RecordBatch> = results.into_iter().flatten().collect();
+    let expected = vec![
+        "+----+----+",
+        "| c1 | c2 |",
+        "+----+----+",
+        "| 1  | 1  |",
+        "| 1  | 10 |",
+        "| 1  | 2  |",
+        "| 1  | 3  |",
+        "| 1  | 4  |",
+        "| 1  | 5  |",
+        "| 1  | 6  |",
+        "| 1  | 7  |",
+        "| 1  | 8  |",
+        "| 1  | 9  |",
+        "| 2  | 1  |",
+        "| 2  | 10 |",
+        "| 2  | 2  |",
+        "| 2  | 3  |",
+        "| 2  | 4  |",
+        "| 2  | 5  |",
+        "| 2  | 6  |",
+        "| 2  | 7  |",
+        "| 2  | 8  |",
+        "| 2  | 9  |",
+        "+----+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
     Ok(())
 }
 
