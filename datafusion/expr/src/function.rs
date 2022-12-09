@@ -474,6 +474,10 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                     DataType::Utf8,
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
                 ]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_owned())),
+                ]),
             ],
             fun.volatility(),
         ),

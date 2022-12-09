@@ -22,6 +22,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sql::parser::{DFParser, Statement};
 use log::info;
 use normalize::normalize_batch;
+use sqllogictest::{ColumnType, DBOutput};
 use sqlparser::ast::Statement as SQLStatement;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -46,7 +47,7 @@ pub struct DataFusion {
 impl sqllogictest::AsyncDB for DataFusion {
     type Error = DFSqlLogicTestError;
 
-    async fn run(&mut self, sql: &str) -> Result<String> {
+    async fn run(&mut self, sql: &str) -> Result<DBOutput> {
         println!("[{}] Running query: \"{}\"", self.file_name, sql);
         let result = run_query(&self.ctx, sql).await?;
         Ok(result)
@@ -172,19 +173,42 @@ async fn context_for_test_file(file_name: &str) -> SessionContext {
     }
 }
 
-fn format_batches(batches: Vec<RecordBatch>) -> Result<String> {
+fn convert_batches(batches: Vec<RecordBatch>) -> Result<DBOutput> {
     let mut bytes = vec![];
+    if batches.is_empty() {
+        return Ok(DBOutput::StatementComplete(0));
+    }
+    // TODO: use the actual types
+    let types = vec![ColumnType::Any; batches[0].num_columns()];
+
     {
-        let builder = WriterBuilder::new().has_headers(false).with_delimiter(b' ');
+        let builder = WriterBuilder::new()
+            .has_headers(false)
+            .with_delimiter(b'\t');
         let mut writer = builder.build(&mut bytes);
         for batch in batches {
             writer.write(&normalize_batch(batch)).unwrap();
         }
     }
-    Ok(String::from_utf8(bytes).unwrap())
+    let res = String::from_utf8(bytes).unwrap();
+    let rows = res
+        .lines()
+        .map(|s| {
+            s.split('\t')
+                .map(|s| {
+                    if s.is_empty() {
+                        "NULL".to_string()
+                    } else {
+                        s.to_string()
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    Ok(DBOutput::Rows { types, rows })
 }
 
-async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<String> {
+async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DBOutput> {
     let sql = sql.into();
     // Check if the sql is `insert`
     if let Ok(mut statements) = DFParser::parse_sql(&sql) {
@@ -198,6 +222,6 @@ async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<Strin
     }
     let df = ctx.sql(sql.as_str()).await?;
     let results: Vec<RecordBatch> = df.collect().await?;
-    let formatted_batches = format_batches(results)?;
+    let formatted_batches = convert_batches(results)?;
     Ok(formatted_batches)
 }

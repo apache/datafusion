@@ -45,9 +45,9 @@ query II rowsort
 select * from users;
 ----
 1 2
+11 20
 2 3
 2 4
-11 20
 
 
 # Dropping table

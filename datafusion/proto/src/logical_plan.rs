@@ -25,7 +25,7 @@ use crate::{
     },
     to_proto,
 };
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::datasource::TableProvider;
 use datafusion::{
     datasource::{
@@ -39,7 +39,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_common::{context, Column, DataFusionError, OwnedTableReference};
-use datafusion_expr::logical_plan::builder::{project, subquery_alias_owned};
+use datafusion_expr::logical_plan::{builder::project, Prepare};
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
@@ -348,7 +348,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                 match projection.optional_alias.as_ref() {
                     Some(a) => match a {
                         protobuf::projection_node::OptionalAlias::Alias(alias) => {
-                            subquery_alias_owned(new_proj, alias)
+                            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                                new_proj, alias,
+                            )?))
                         }
                     },
                     _ => Ok(new_proj),
@@ -813,6 +815,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                     projection,
                 )?
                 .build()
+            }
+            LogicalPlanType::Prepare(prepare) => {
+                let input: LogicalPlan =
+                    into_logical_plan!(prepare.input, ctx, extension_codec)?;
+                let data_types: Vec<DataType> = prepare
+                    .data_types
+                    .iter()
+                    .map(DataType::try_from)
+                    .collect::<Result<_, _>>()?;
+                LogicalPlanBuilder::from(input)
+                    .prepare(prepare.name.clone(), data_types)?
+                    .build()
             }
         }
     }
@@ -1373,6 +1387,28 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Extension(
                         LogicalExtensionNode { node: buf, inputs },
                     )),
+                })
+            }
+            LogicalPlan::Prepare(Prepare {
+                name,
+                data_types,
+                input,
+            }) => {
+                let input = protobuf::LogicalPlanNode::try_from_logical_plan(
+                    input,
+                    extension_codec,
+                )?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Prepare(Box::new(
+                        protobuf::PrepareNode {
+                            name: name.clone(),
+                            data_types: data_types
+                                .iter()
+                                .map(|t| t.try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
+                            input: Some(Box::new(input)),
+                        },
+                    ))),
                 })
             }
             LogicalPlan::CreateMemoryTable(_) => Err(proto_error(

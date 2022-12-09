@@ -721,7 +721,7 @@ impl std::hash::Hash for ScalarValue {
 /// dictionary array
 #[inline]
 fn get_dict_value<K: ArrowDictionaryKeyType>(
-    array: &ArrayRef,
+    array: &dyn Array,
     index: usize,
 ) -> (&ArrayRef, Option<usize>) {
     let dict_array = as_dictionary_array::<K>(array).unwrap();
@@ -1963,7 +1963,7 @@ impl ScalarValue {
     }
 
     fn get_decimal_value_from_array(
-        array: &ArrayRef,
+        array: &dyn Array,
         index: usize,
         precision: u8,
         scale: i8,
@@ -1978,7 +1978,7 @@ impl ScalarValue {
     }
 
     /// Converts a value in `array` at `index` into a ScalarValue
-    pub fn try_from_array(array: &ArrayRef, index: usize) -> Result<Self> {
+    pub fn try_from_array(array: &dyn Array, index: usize) -> Result<Self> {
         // handle NULL value
         if !array.is_valid(index) {
             return array.data_type().try_into();
@@ -2341,14 +2341,13 @@ impl ScalarValue {
                 | ScalarValue::LargeBinary(b) => {
                     b.as_ref().map(|b| b.capacity()).unwrap_or_default()
                 }
-                // TODO(crepererum): `Field` is NOT fixed size, add `Field::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
                 ScalarValue::List(vals, field) => {
                     vals.as_ref()
                         .map(|vals| Self::size_of_vec(vals) - std::mem::size_of_val(vals))
                         .unwrap_or_default()
-                        + std::mem::size_of_val(field)
+                        // `field` is boxed, so it is NOT already included in `self`
+                        + field.size()
                 }
-                // TODO(crepererum): `Field` is NOT fixed size, add `Field::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
                 ScalarValue::Struct(vals, fields) => {
                     vals.as_ref()
                         .map(|vals| {
@@ -2358,11 +2357,14 @@ impl ScalarValue {
                                 + (std::mem::size_of::<ScalarValue>() * vals.capacity())
                         })
                         .unwrap_or_default()
+                        // `fields` is boxed, so it is NOT already included in `self`
+                        + std::mem::size_of_val(fields)
                         + (std::mem::size_of::<Field>() * fields.capacity())
+                        + fields.iter().map(|field| field.size() - std::mem::size_of_val(field)).sum::<usize>()
                 }
-                // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
                 ScalarValue::Dictionary(dt, sv) => {
-                    std::mem::size_of_val(dt.as_ref()) + sv.size()
+                    // `dt` and `sv` are boxed, so they are NOT already included in `self`
+                    dt.size() + sv.size()
                 }
             }
     }

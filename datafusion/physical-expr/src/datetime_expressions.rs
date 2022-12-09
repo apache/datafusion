@@ -413,7 +413,7 @@ macro_rules! extract_date_part {
                 Ok($FN(array)
                     .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
             }
-            DataType::Timestamp(time_unit, None) => match time_unit {
+            DataType::Timestamp(time_unit, _) => match time_unit {
                 TimeUnit::Second => {
                     let array = as_timestamp_second_array($ARRAY)?;
                     Ok($FN(array)

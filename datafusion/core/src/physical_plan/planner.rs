@@ -344,6 +344,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
             "Create physical name does not support qualified wildcard".to_string(),
         )),
+        Expr::Placeholder { .. } => Err(DataFusionError::Internal(
+            "Create physical name does not support placeholder".to_string(),
+        )),
     }
 }
 
@@ -991,7 +994,7 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                     let left = self.create_initial_plan(left, session_state).await?;
                     let right = self.create_initial_plan(right, session_state).await?;
-                    Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
+                    Ok(Arc::new(CrossJoinExec::new(left, right)))
                 }
                 LogicalPlan::Subquery(_) => todo!(),
                 LogicalPlan::EmptyRelation(EmptyRelation {
@@ -1029,6 +1032,14 @@ impl DefaultPhysicalPlanner {
                     // the context)
                     Err(DataFusionError::Internal(
                         "Unsupported logical plan: CreateExternalTable".to_string(),
+                    ))
+                }
+                LogicalPlan::Prepare(_) => {
+                    // There is no default plan for "PREPARE" -- it must be
+                    // handled at a higher level (so that the appropriate
+                    // statement can be prepared)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: Prepare".to_string(),
                     ))
                 }
                 LogicalPlan::CreateCatalogSchema(_) => {
