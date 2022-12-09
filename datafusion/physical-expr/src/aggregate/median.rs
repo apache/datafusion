@@ -111,7 +111,7 @@ impl Accumulator for MedianAccumulator {
         assert_eq!(values.len(), 1);
         let array = &values[0];
 
-        assert!(matches!(array.data_type(), DataType::List(_)));
+        assert_eq!(array.data_type(), &self.data_type);
         self.all_values.reserve(self.all_values.len() + array.len());
         for index in 0..array.len() {
             self.all_values
@@ -195,10 +195,10 @@ impl Accumulator for MedianAccumulator {
     }
 
     fn size(&self) -> usize {
-        // TODO(crepererum): `DataType` is NOT fixed size, add
-        // `DataType::size` method to arrow
-        // (https://github.com/apache/arrow-rs/issues/3147)
-        std::mem::align_of_val(self) + ScalarValue::size_of_vec(&self.all_values)
+        std::mem::size_of_val(self) + ScalarValue::size_of_vec(&self.all_values)
+            - std::mem::size_of_val(&self.all_values)
+            + self.data_type.size()
+            - std::mem::size_of_val(&self.data_type)
     }
 }
 

@@ -24,23 +24,23 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     let sql = "select \
                c9, \
-               count(c5) over (), \
-               max(c5) over (), \
-               min(c5) over () \
+               count(c5) over () as count1, \
+               max(c5) over () as max1, \
+               min(c5) over () as min1 \
                from aggregate_test_100 \
                order by c9 \
                limit 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----------+------------------------------+----------------------------+----------------------------+",
-        "| c9        | COUNT(aggregate_test_100.c5) | MAX(aggregate_test_100.c5) | MIN(aggregate_test_100.c5) |",
-        "+-----------+------------------------------+----------------------------+----------------------------+",
-        "| 28774375  | 100                          | 2143473091                 | -2141999138                |",
-        "| 63044568  | 100                          | 2143473091                 | -2141999138                |",
-        "| 141047417 | 100                          | 2143473091                 | -2141999138                |",
-        "| 141680161 | 100                          | 2143473091                 | -2141999138                |",
-        "| 145294611 | 100                          | 2143473091                 | -2141999138                |",
-        "+-----------+------------------------------+----------------------------+----------------------------+",
+        "+-----------+--------+------------+-------------+",
+        "| c9        | count1 | max1       | min1        |",
+        "+-----------+--------+------------+-------------+",
+        "| 28774375  | 100    | 2143473091 | -2141999138 |",
+        "| 63044568  | 100    | 2143473091 | -2141999138 |",
+        "| 141047417 | 100    | 2143473091 | -2141999138 |",
+        "| 141680161 | 100    | 2143473091 | -2141999138 |",
+        "| 145294611 | 100    | 2143473091 | -2141999138 |",
+        "+-----------+--------+------------+-------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -53,25 +53,25 @@ async fn csv_query_window_with_partition_by() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     let sql = "select \
                c9, \
-               sum(cast(c4 as Int)) over (partition by c3), \
-               avg(cast(c4 as Int)) over (partition by c3), \
-               count(cast(c4 as Int)) over (partition by c3), \
-               max(cast(c4 as Int)) over (partition by c3), \
-               min(cast(c4 as Int)) over (partition by c3) \
+               sum(cast(c4 as Int)) over (partition by c3) as sum1, \
+               avg(cast(c4 as Int)) over (partition by c3) as avg1, \
+               count(cast(c4 as Int)) over (partition by c3) as count1, \
+               max(cast(c4 as Int)) over (partition by c3) as max1, \
+               min(cast(c4 as Int)) over (partition by c3) as min1 \
                from aggregate_test_100 \
                order by c9 \
                limit 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+",
-        "| c9        | SUM(aggregate_test_100.c4) | AVG(aggregate_test_100.c4) | COUNT(aggregate_test_100.c4) | MAX(aggregate_test_100.c4) | MIN(aggregate_test_100.c4) |",
-        "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+",
-        "| 28774375  | -16110                     | -16110                     | 1                            | -16110                     | -16110                     |",
-        "| 63044568  | 3917                       | 3917                       | 1                            | 3917                       | 3917                       |",
-        "| 141047417 | -38455                     | -19227.5                   | 2                            | -16974                     | -21481                     |",
-        "| 141680161 | -1114                      | -1114                      | 1                            | -1114                      | -1114                      |",
-        "| 145294611 | 15673                      | 15673                      | 1                            | 15673                      | 15673                      |",
-        "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+",
+        "+-----------+--------+----------+--------+--------+--------+",
+        "| c9        | sum1   | avg1     | count1 | max1   | min1   |",
+        "+-----------+--------+----------+--------+--------+--------+",
+        "| 28774375  | -16110 | -16110   | 1      | -16110 | -16110 |",
+        "| 63044568  | 3917   | 3917     | 1      | 3917   | 3917   |",
+        "| 141047417 | -38455 | -19227.5 | 2      | -16974 | -21481 |",
+        "| 141680161 | -1114  | -1114    | 1      | -1114  | -1114  |",
+        "| 145294611 | 15673  | 15673    | 1      | 15673  | 15673  |",
+        "+-----------+--------+----------+--------+--------+--------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -83,28 +83,28 @@ async fn csv_query_window_with_order_by() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     let sql = "select \
                c9, \
-               sum(c5) over (order by c9), \
-               avg(c5) over (order by c9), \
-               count(c5) over (order by c9), \
-               max(c5) over (order by c9), \
-               min(c5) over (order by c9), \
-               first_value(c5) over (order by c9), \
-               last_value(c5) over (order by c9), \
-               nth_value(c5, 2) over (order by c9) \
+               sum(c5) over (order by c9) as sum1, \
+               avg(c5) over (order by c9) as avg1, \
+               count(c5) over (order by c9) as count1, \
+               max(c5) over (order by c9) as max1, \
+               min(c5) over (order by c9) as min1, \
+               first_value(c5) over (order by c9) as fv1, \
+               last_value(c5) over (order by c9) as lv1, \
+               nth_value(c5, 2) over (order by c9) as nv1 \
                from aggregate_test_100 \
                order by c9 \
                limit 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+",
-        "| c9        | SUM(aggregate_test_100.c5) | AVG(aggregate_test_100.c5) | COUNT(aggregate_test_100.c5) | MAX(aggregate_test_100.c5) | MIN(aggregate_test_100.c5) | FIRST_VALUE(aggregate_test_100.c5) | LAST_VALUE(aggregate_test_100.c5) | NTH_VALUE(aggregate_test_100.c5,Int64(2)) |",
-        "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+",
-        "| 28774375  | 61035129                   | 61035129                   | 1                            | 61035129                   | 61035129                   | 61035129                           | 61035129                          |                                           |",
-        "| 63044568  | -47938237                  | -23969118.5                | 2                            | 61035129                   | -108973366                 | 61035129                           | -108973366                        | -108973366                                |",
-        "| 141047417 | 575165281                  | 191721760.33333334         | 3                            | 623103518                  | -108973366                 | 61035129                           | 623103518                         | -108973366                                |",
-        "| 141680161 | -1352462829                | -338115707.25              | 4                            | 623103518                  | -1927628110                | 61035129                           | -1927628110                       | -108973366                                |",
-        "| 145294611 | -3251637940                | -650327588                 | 5                            | 623103518                  | -1927628110                | 61035129                           | -1899175111                       | -108973366                                |",
-        "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+",
+        "+-----------+-------------+--------------------+--------+-----------+-------------+----------+-------------+------------+",
+        "| c9        | sum1        | avg1               | count1 | max1      | min1        | fv1      | lv1         | nv1        |",
+        "+-----------+-------------+--------------------+--------+-----------+-------------+----------+-------------+------------+",
+        "| 28774375  | 61035129    | 61035129           | 1      | 61035129  | 61035129    | 61035129 | 61035129    |            |",
+        "| 63044568  | -47938237   | -23969118.5        | 2      | 61035129  | -108973366  | 61035129 | -108973366  | -108973366 |",
+        "| 141047417 | 575165281   | 191721760.33333334 | 3      | 623103518 | -108973366  | 61035129 | 623103518   | -108973366 |",
+        "| 141680161 | -1352462829 | -338115707.25      | 4      | 623103518 | -1927628110 | 61035129 | -1927628110 | -108973366 |",
+        "| 145294611 | -3251637940 | -650327588         | 5      | 623103518 | -1927628110 | 61035129 | -1899175111 | -108973366 |",
+        "+-----------+-------------+--------------------+--------+-----------+-------------+----------+-------------+------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -116,28 +116,28 @@ async fn csv_query_window_with_partition_by_order_by() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     let sql = "select \
                c9, \
-               sum(c5) over (partition by c4 order by c9), \
-               avg(c5) over (partition by c4 order by c9), \
-               count(c5) over (partition by c4 order by c9), \
-               max(c5) over (partition by c4 order by c9), \
-               min(c5) over (partition by c4 order by c9), \
-               first_value(c5) over (partition by c4 order by c9), \
-               last_value(c5) over (partition by c4 order by c9), \
-               nth_value(c5, 2) over (partition by c4 order by c9) \
+               sum(c5) over (partition by c4 order by c9) as sum1, \
+               avg(c5) over (partition by c4 order by c9) as avg1, \
+               count(c5) over (partition by c4 order by c9) as count1, \
+               max(c5) over (partition by c4 order by c9) as max1, \
+               min(c5) over (partition by c4 order by c9) as min1, \
+               first_value(c5) over (partition by c4 order by c9) as fv1, \
+               last_value(c5) over (partition by c4 order by c9) as lv1, \
+               nth_value(c5, 2) over (partition by c4 order by c9) as nv1 \
                from aggregate_test_100 \
                order by c9 \
                limit 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+",
-        "| c9        | SUM(aggregate_test_100.c5) | AVG(aggregate_test_100.c5) | COUNT(aggregate_test_100.c5) | MAX(aggregate_test_100.c5) | MIN(aggregate_test_100.c5) | FIRST_VALUE(aggregate_test_100.c5) | LAST_VALUE(aggregate_test_100.c5) | NTH_VALUE(aggregate_test_100.c5,Int64(2)) |",
-        "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+",
-        "| 28774375  | 61035129                   | 61035129                   | 1                            | 61035129                   | 61035129                   | 61035129                           | 61035129                          |                                           |",
-        "| 63044568  | -108973366                 | -108973366                 | 1                            | -108973366                 | -108973366                 | -108973366                         | -108973366                        |                                           |",
-        "| 141047417 | 623103518                  | 623103518                  | 1                            | 623103518                  | 623103518                  | 623103518                          | 623103518                         |                                           |",
-        "| 141680161 | -1927628110                | -1927628110                | 1                            | -1927628110                | -1927628110                | -1927628110                        | -1927628110                       |                                           |",
-        "| 145294611 | -1899175111                | -1899175111                | 1                            | -1899175111                | -1899175111                | -1899175111                        | -1899175111                       |                                           |",
-        "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+"
+        "+-----------+-------------+-------------+--------+-------------+-------------+-------------+-------------+-----+",
+        "| c9        | sum1        | avg1        | count1 | max1        | min1        | fv1         | lv1         | nv1 |",
+        "+-----------+-------------+-------------+--------+-------------+-------------+-------------+-------------+-----+",
+        "| 28774375  | 61035129    | 61035129    | 1      | 61035129    | 61035129    | 61035129    | 61035129    |     |",
+        "| 63044568  | -108973366  | -108973366  | 1      | -108973366  | -108973366  | -108973366  | -108973366  |     |",
+        "| 141047417 | 623103518   | 623103518   | 1      | 623103518   | 623103518   | 623103518   | 623103518   |     |",
+        "| 141680161 | -1927628110 | -1927628110 | 1      | -1927628110 | -1927628110 | -1927628110 | -1927628110 |     |",
+        "| 145294611 | -1899175111 | -1899175111 | 1      | -1899175111 | -1899175111 | -1899175111 | -1899175111 |     |",
+        "+-----------+-------------+-------------+--------+-------------+-------------+-------------+-------------+-----+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -149,11 +149,11 @@ async fn window() -> Result<()> {
         "SELECT \
         c1, \
         c2, \
-        SUM(c2) OVER (), \
-        COUNT(c2) OVER (), \
-        MAX(c2) OVER (), \
-        MIN(c2) OVER (), \
-        AVG(c2) OVER () \
+        SUM(c2) OVER () as sum1, \
+        COUNT(c2) OVER () as count1, \
+        MAX(c2) OVER () as max1, \
+        MIN(c2) OVER () as min1, \
+        AVG(c2) OVER () as avg1 \
         FROM test \
         ORDER BY c1, c2 \
         LIMIT 5",
@@ -166,15 +166,15 @@ async fn window() -> Result<()> {
     assert_eq!(results.len(), 1);
 
     let expected = vec![
-        "+----+----+--------------+----------------+--------------+--------------+--------------+",
-        "| c1 | c2 | SUM(test.c2) | COUNT(test.c2) | MAX(test.c2) | MIN(test.c2) | AVG(test.c2) |",
-        "+----+----+--------------+----------------+--------------+--------------+--------------+",
-        "| 0  | 1  | 220          | 40             | 10           | 1            | 5.5          |",
-        "| 0  | 2  | 220          | 40             | 10           | 1            | 5.5          |",
-        "| 0  | 3  | 220          | 40             | 10           | 1            | 5.5          |",
-        "| 0  | 4  | 220          | 40             | 10           | 1            | 5.5          |",
-        "| 0  | 5  | 220          | 40             | 10           | 1            | 5.5          |",
-        "+----+----+--------------+----------------+--------------+--------------+--------------+",
+        "+----+----+------+--------+------+------+------+",
+        "| c1 | c2 | sum1 | count1 | max1 | min1 | avg1 |",
+        "+----+----+------+--------+------+------+------+",
+        "| 0  | 1  | 220  | 40     | 10   | 1    | 5.5  |",
+        "| 0  | 2  | 220  | 40     | 10   | 1    | 5.5  |",
+        "| 0  | 3  | 220  | 40     | 10   | 1    | 5.5  |",
+        "| 0  | 4  | 220  | 40     | 10   | 1    | 5.5  |",
+        "| 0  | 5  | 220  | 40     | 10   | 1    | 5.5  |",
+        "+----+----+------+--------+------+------+------+",
     ];
 
     // window function shall respect ordering
@@ -188,15 +188,15 @@ async fn window_order_by() -> Result<()> {
         "SELECT \
         c1, \
         c2, \
-        ROW_NUMBER() OVER (ORDER BY c1, c2), \
-        FIRST_VALUE(c2) OVER (ORDER BY c1, c2), \
-        LAST_VALUE(c2) OVER (ORDER BY c1, c2), \
-        NTH_VALUE(c2, 2) OVER (ORDER BY c1, c2), \
-        SUM(c2) OVER (ORDER BY c1, c2), \
-        COUNT(c2) OVER (ORDER BY c1, c2), \
-        MAX(c2) OVER (ORDER BY c1, c2), \
-        MIN(c2) OVER (ORDER BY c1, c2), \
-        AVG(c2) OVER (ORDER BY c1, c2) \
+        ROW_NUMBER() OVER (ORDER BY c1, c2) as rn1, \
+        FIRST_VALUE(c2) OVER (ORDER BY c1, c2) as fv1, \
+        LAST_VALUE(c2) OVER (ORDER BY c1, c2) as lv1, \
+        NTH_VALUE(c2, 2) OVER (ORDER BY c1, c2) as nv1, \
+        SUM(c2) OVER (ORDER BY c1, c2) as sum1, \
+        COUNT(c2) OVER (ORDER BY c1, c2) as count1, \
+        MAX(c2) OVER (ORDER BY c1, c2) as max1, \
+        MIN(c2) OVER (ORDER BY c1, c2) as min1, \
+        AVG(c2) OVER (ORDER BY c1, c2) as avg1 \
         FROM test \
         ORDER BY c1, c2 \
         LIMIT 5",
@@ -209,15 +209,15 @@ async fn window_order_by() -> Result<()> {
     assert_eq!(results.len(), 1);
 
     let expected = vec![
-        "+----+----+--------------+----------------------+---------------------+-----------------------------+--------------+----------------+--------------+--------------+--------------+",
-        "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(test.c2) | LAST_VALUE(test.c2) | NTH_VALUE(test.c2,Int64(2)) | SUM(test.c2) | COUNT(test.c2) | MAX(test.c2) | MIN(test.c2) | AVG(test.c2) |",
-        "+----+----+--------------+----------------------+---------------------+-----------------------------+--------------+----------------+--------------+--------------+--------------+",
-        "| 0  | 1  | 1            | 1                    | 1                   |                             | 1            | 1              | 1            | 1            | 1            |",
-        "| 0  | 2  | 2            | 1                    | 2                   | 2                           | 3            | 2              | 2            | 1            | 1.5          |",
-        "| 0  | 3  | 3            | 1                    | 3                   | 2                           | 6            | 3              | 3            | 1            | 2            |",
-        "| 0  | 4  | 4            | 1                    | 4                   | 2                           | 10           | 4              | 4            | 1            | 2.5          |",
-        "| 0  | 5  | 5            | 1                    | 5                   | 2                           | 15           | 5              | 5            | 1            | 3            |",
-        "+----+----+--------------+----------------------+---------------------+-----------------------------+--------------+----------------+--------------+--------------+--------------+",
+        "+----+----+-----+-----+-----+-----+------+--------+------+------+------+",
+        "| c1 | c2 | rn1 | fv1 | lv1 | nv1 | sum1 | count1 | max1 | min1 | avg1 |",
+        "+----+----+-----+-----+-----+-----+------+--------+------+------+------+",
+        "| 0  | 1  | 1   | 1   | 1   |     | 1    | 1      | 1    | 1    | 1    |",
+        "| 0  | 2  | 2   | 1   | 2   | 2   | 3    | 2      | 2    | 1    | 1.5  |",
+        "| 0  | 3  | 3   | 1   | 3   | 2   | 6    | 3      | 3    | 1    | 2    |",
+        "| 0  | 4  | 4   | 1   | 4   | 2   | 10   | 4      | 4    | 1    | 2.5  |",
+        "| 0  | 5  | 5   | 1   | 5   | 2   | 15   | 5      | 5    | 1    | 3    |",
+        "+----+----+-----+-----+-----+-----+------+--------+------+------+------+",
     ];
 
     // window function shall respect ordering
@@ -231,11 +231,11 @@ async fn window_partition_by() -> Result<()> {
         "SELECT \
         c1, \
         c2, \
-        SUM(c2) OVER (PARTITION BY c2), \
-        COUNT(c2) OVER (PARTITION BY c2), \
-        MAX(c2) OVER (PARTITION BY c2), \
-        MIN(c2) OVER (PARTITION BY c2), \
-        AVG(c2) OVER (PARTITION BY c2) \
+        SUM(c2) OVER (PARTITION BY c2) as sum1, \
+        COUNT(c2) OVER (PARTITION BY c2) as count1, \
+        MAX(c2) OVER (PARTITION BY c2) as max1, \
+        MIN(c2) OVER (PARTITION BY c2) as min1, \
+        AVG(c2) OVER (PARTITION BY c2) as avg1 \
         FROM test \
         ORDER BY c1, c2 \
         LIMIT 5",
@@ -244,15 +244,15 @@ async fn window_partition_by() -> Result<()> {
     .await?;
 
     let expected = vec![
-        "+----+----+--------------+----------------+--------------+--------------+--------------+",
-        "| c1 | c2 | SUM(test.c2) | COUNT(test.c2) | MAX(test.c2) | MIN(test.c2) | AVG(test.c2) |",
-        "+----+----+--------------+----------------+--------------+--------------+--------------+",
-        "| 0  | 1  | 4            | 4              | 1            | 1            | 1            |",
-        "| 0  | 2  | 8            | 4              | 2            | 2            | 2            |",
-        "| 0  | 3  | 12           | 4              | 3            | 3            | 3            |",
-        "| 0  | 4  | 16           | 4              | 4            | 4            | 4            |",
-        "| 0  | 5  | 20           | 4              | 5            | 5            | 5            |",
-        "+----+----+--------------+----------------+--------------+--------------+--------------+",
+        "+----+----+------+--------+------+------+------+",
+        "| c1 | c2 | sum1 | count1 | max1 | min1 | avg1 |",
+        "+----+----+------+--------+------+------+------+",
+        "| 0  | 1  | 4    | 4      | 1    | 1    | 1    |",
+        "| 0  | 2  | 8    | 4      | 2    | 2    | 2    |",
+        "| 0  | 3  | 12   | 4      | 3    | 3    | 3    |",
+        "| 0  | 4  | 16   | 4      | 4    | 4    | 4    |",
+        "| 0  | 5  | 20   | 4      | 5    | 5    | 5    |",
+        "+----+----+------+--------+------+------+------+",
     ];
 
     // window function shall respect ordering
@@ -266,15 +266,15 @@ async fn window_partition_by_order_by() -> Result<()> {
         "SELECT \
         c1, \
         c2, \
-        ROW_NUMBER() OVER (PARTITION BY c2 ORDER BY c1), \
-        FIRST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
-        LAST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
-        NTH_VALUE(c2 + c1, 1) OVER (PARTITION BY c2 ORDER BY c1), \
-        SUM(c2) OVER (PARTITION BY c2 ORDER BY c1), \
-        COUNT(c2) OVER (PARTITION BY c2 ORDER BY c1), \
-        MAX(c2) OVER (PARTITION BY c2 ORDER BY c1), \
-        MIN(c2) OVER (PARTITION BY c2 ORDER BY c1), \
-        AVG(c2) OVER (PARTITION BY c2 ORDER BY c1) \
+        ROW_NUMBER() OVER (PARTITION BY c2 ORDER BY c1) as rn1, \
+        FIRST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1) as fv1, \
+        LAST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1) as lv1, \
+        NTH_VALUE(c2 + c1, 1) OVER (PARTITION BY c2 ORDER BY c1) as nv1, \
+        SUM(c2) OVER (PARTITION BY c2 ORDER BY c1) as sum1, \
+        COUNT(c2) OVER (PARTITION BY c2 ORDER BY c1) as count1, \
+        MAX(c2) OVER (PARTITION BY c2 ORDER BY c1) as max1, \
+        MIN(c2) OVER (PARTITION BY c2 ORDER BY c1) as min1, \
+        AVG(c2) OVER (PARTITION BY c2 ORDER BY c1) as avg1 \
         FROM test \
         ORDER BY c1, c2 \
         LIMIT 5",
@@ -283,15 +283,15 @@ async fn window_partition_by_order_by() -> Result<()> {
     .await?;
 
     let expected = vec![
-        "+----+----+--------------+--------------------------------+-------------------------------+---------------------------------------+--------------+----------------+--------------+--------------+--------------+",
-        "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(test.c2 + test.c1) | LAST_VALUE(test.c2 + test.c1) | NTH_VALUE(test.c2 + test.c1,Int64(1)) | SUM(test.c2) | COUNT(test.c2) | MAX(test.c2) | MIN(test.c2) | AVG(test.c2) |",
-        "+----+----+--------------+--------------------------------+-------------------------------+---------------------------------------+--------------+----------------+--------------+--------------+--------------+",
-        "| 0  | 1  | 1            | 1                              | 1                             | 1                                     | 1            | 1              | 1            | 1            | 1            |",
-        "| 0  | 2  | 1            | 2                              | 2                             | 2                                     | 2            | 1              | 2            | 2            | 2            |",
-        "| 0  | 3  | 1            | 3                              | 3                             | 3                                     | 3            | 1              | 3            | 3            | 3            |",
-        "| 0  | 4  | 1            | 4                              | 4                             | 4                                     | 4            | 1              | 4            | 4            | 4            |",
-        "| 0  | 5  | 1            | 5                              | 5                             | 5                                     | 5            | 1              | 5            | 5            | 5            |",
-        "+----+----+--------------+--------------------------------+-------------------------------+---------------------------------------+--------------+----------------+--------------+--------------+--------------+",
+        "+----+----+-----+-----+-----+-----+------+--------+------+------+------+",
+        "| c1 | c2 | rn1 | fv1 | lv1 | nv1 | sum1 | count1 | max1 | min1 | avg1 |",
+        "+----+----+-----+-----+-----+-----+------+--------+------+------+------+",
+        "| 0  | 1  | 1   | 1   | 1   | 1   | 1    | 1      | 1    | 1    | 1    |",
+        "| 0  | 2  | 1   | 2   | 2   | 2   | 2    | 1      | 2    | 2    | 2    |",
+        "| 0  | 3  | 1   | 3   | 3   | 3   | 3    | 1      | 3    | 3    | 3    |",
+        "| 0  | 4  | 1   | 4   | 4   | 4   | 4    | 1      | 4    | 4    | 4    |",
+        "| 0  | 5  | 1   | 5   | 5   | 5   | 5    | 1      | 5    | 5    | 5    |",
+        "+----+----+-----+-----+-----+-----+------+--------+------+------+------+",
     ];
 
     // window function shall respect ordering
@@ -339,15 +339,16 @@ async fn window_expr_eliminate() -> Result<()> {
         "          SubqueryAlias: _data2 [a:Int64, b:Utf8]",
         "            Projection: s.a, s.b [a:Int64, b:Utf8]",
         "              SubqueryAlias: s [a:Int64, b:Utf8]",
-        "                Union [a:Int64, b:Utf8]",
-        "                  Projection: Int64(1) AS a, Utf8(\"aa\") AS b [a:Int64, b:Utf8]",
-        "                    EmptyRelation []",
-        "                  Projection: Int64(3) AS a, Utf8(\"aa\") AS b [a:Int64, b:Utf8]",
-        "                    EmptyRelation []",
-        "                  Projection: Int64(5) AS a, Utf8(\"bb\") AS b [a:Int64, b:Utf8]",
-        "                    EmptyRelation []",
-        "                  Projection: Int64(7) AS a, Utf8(\"bb\") AS b [a:Int64, b:Utf8]",
-        "                    EmptyRelation []",
+        "                SubqueryAlias: _sample_data [a:Int64, b:Utf8]",
+        "                  Union [a:Int64, b:Utf8]",
+        "                    Projection: Int64(1) AS a, Utf8(\"aa\") AS b [a:Int64, b:Utf8]",
+        "                      EmptyRelation []",
+        "                    Projection: Int64(3) AS a, Utf8(\"aa\") AS b [a:Int64, b:Utf8]",
+        "                      EmptyRelation []",
+        "                    Projection: Int64(5) AS a, Utf8(\"bb\") AS b [a:Int64, b:Utf8]",
+        "                      EmptyRelation []",
+        "                    Projection: Int64(7) AS a, Utf8(\"bb\") AS b [a:Int64, b:Utf8]",
+        "                      EmptyRelation []",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -401,18 +402,19 @@ async fn window_expr_eliminate() -> Result<()> {
         "      Aggregate: groupBy=[[d.b]], aggr=[[MAX(d.a), MAX(d.seq)]] [b:Utf8, MAX(d.a):Int64;N, MAX(d.seq):UInt64;N]",
         "        SubqueryAlias: d [seq:UInt64;N, a:Int64, b:Utf8]",
         "          SubqueryAlias: _data2 [seq:UInt64;N, a:Int64, b:Utf8]",
-        "            Projection: ROW_NUMBER() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] AS seq, s.a, s.b [seq:UInt64;N, a:Int64, b:Utf8]",
-        "              WindowAggr: windowExpr=[[ROW_NUMBER() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST]]] [ROW_NUMBER() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST]:UInt64;N, a:Int64, b:Utf8]",
+        "            Projection: ROW_NUMBER() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS seq, s.a, s.b [seq:UInt64;N, a:Int64, b:Utf8]",
+        "              WindowAggr: windowExpr=[[ROW_NUMBER() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]] [ROW_NUMBER() PARTITION BY [s.b] ORDER BY [s.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:UInt64;N, a:Int64, b:Utf8]",
         "                SubqueryAlias: s [a:Int64, b:Utf8]",
-        "                  Union [a:Int64, b:Utf8]",
-        "                    Projection: Int64(1) AS a, Utf8(\"aa\") AS b [a:Int64, b:Utf8]",
-        "                      EmptyRelation []",
-        "                    Projection: Int64(3) AS a, Utf8(\"aa\") AS b [a:Int64, b:Utf8]",
-        "                      EmptyRelation []",
-        "                    Projection: Int64(5) AS a, Utf8(\"bb\") AS b [a:Int64, b:Utf8]",
-        "                      EmptyRelation []",
-        "                    Projection: Int64(7) AS a, Utf8(\"bb\") AS b [a:Int64, b:Utf8]",
-        "                      EmptyRelation []",
+        "                  SubqueryAlias: _sample_data [a:Int64, b:Utf8]",
+        "                    Union [a:Int64, b:Utf8]",
+        "                      Projection: Int64(1) AS a, Utf8(\"aa\") AS b [a:Int64, b:Utf8]",
+        "                        EmptyRelation []",
+        "                      Projection: Int64(3) AS a, Utf8(\"aa\") AS b [a:Int64, b:Utf8]",
+        "                        EmptyRelation []",
+        "                      Projection: Int64(5) AS a, Utf8(\"bb\") AS b [a:Int64, b:Utf8]",
+        "                        EmptyRelation []",
+        "                      Projection: Int64(7) AS a, Utf8(\"bb\") AS b [a:Int64, b:Utf8]",
+        "                        EmptyRelation []",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -439,15 +441,15 @@ async fn window_expr_eliminate() -> Result<()> {
 #[tokio::test]
 async fn window_in_expression() -> Result<()> {
     let ctx = SessionContext::new();
-    let sql = "select 1 - lag(amount, 1) over (order by idx) from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)";
+    let sql = "select 1 - lag(amount, 1) over (order by idx) as column1 from (values ('a', 1, 100), ('a', 2, 150)) as t (col1, idx, amount)";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-------------------------------------------------------------------+",
-        "| Int64(1) - LAG(t.amount,Int64(1)) ORDER BY [t.idx ASC NULLS LAST] |",
-        "+-------------------------------------------------------------------+",
-        "|                                                                   |",
-        "| -99                                                               |",
-        "+-------------------------------------------------------------------+",
+        "+---------+",
+        "| column1 |",
+        "+---------+",
+        "|         |",
+        "| -99     |",
+        "+---------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -479,22 +481,22 @@ async fn window_frame_empty() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
-               SUM(c3) OVER(),\
-               COUNT(*) OVER ()\
+               SUM(c3) OVER() as sum1, \
+               COUNT(*) OVER () as count1 \
                FROM aggregate_test_100 \
                ORDER BY c9 \
                LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c3) | COUNT(UInt8(1)) |",
-        "+----------------------------+-----------------+",
-        "| 781                        | 100             |",
-        "| 781                        | 100             |",
-        "| 781                        | 100             |",
-        "| 781                        | 100             |",
-        "| 781                        | 100             |",
-        "+----------------------------+-----------------+",
+        "+------+--------+",
+        "| sum1 | count1 |",
+        "+------+--------+",
+        "| 781  | 100    |",
+        "| 781  | 100    |",
+        "| 781  | 100    |",
+        "| 781  | 100    |",
+        "| 781  | 100    |",
+        "+------+--------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -613,20 +615,20 @@ async fn window_frame_order_by_asc_desc_large() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT
-                SUM(c5) OVER (ORDER BY c2 ASC, c6 DESC)
+                SUM(c5) OVER (ORDER BY c2 ASC, c6 DESC) as sum1
                 FROM aggregate_test_100
                 LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+",
-        "| SUM(aggregate_test_100.c5) |",
-        "+----------------------------+",
-        "| -1383162419                |",
-        "| -3265456275                |",
-        "| -3909681744                |",
-        "| -5241214934                |",
-        "| -4246910946                |",
-        "+----------------------------+",
+        "+-------------+",
+        "| sum1        |",
+        "+-------------+",
+        "| -1383162419 |",
+        "| -3265456275 |",
+        "| -3909681744 |",
+        "| -5241214934 |",
+        "| -4246910946 |",
+        "+-------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -637,21 +639,21 @@ async fn window_frame_order_by_desc_large() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT
-                SUM(c5) OVER (ORDER BY c2 DESC, c6 ASC)
+                SUM(c5) OVER (ORDER BY c2 DESC, c6 ASC) as sum1
                 FROM aggregate_test_100
                 ORDER BY c9
                 LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+",
-        "| SUM(aggregate_test_100.c5) |",
-        "+----------------------------+",
-        "| 11212193439                |",
-        "| 22799733943                |",
-        "| 2935356871                 |",
-        "| 15810962683                |",
-        "| 18035025006                |",
-        "+----------------------------+",
+        "+-------------+",
+        "| sum1        |",
+        "+-------------+",
+        "| 11212193439 |",
+        "| 22799733943 |",
+        "| 2935356871  |",
+        "| 15810962683 |",
+        "| 18035025006 |",
+        "+-------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -662,20 +664,20 @@ async fn window_frame_order_by_null_timestamp_order_by() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_null_cases_csv(&ctx).await?;
     let sql = "SELECT
-                SUM(c1) OVER (ORDER BY c2 DESC)
+                SUM(c1) OVER (ORDER BY c2 DESC) as summation1
                 FROM null_cases
                 LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+--------------------+",
-        "| SUM(null_cases.c1) |",
-        "+--------------------+",
-        "| 962                |",
-        "| 962                |",
-        "| 962                |",
-        "| 962                |",
-        "| 962                |",
-        "+--------------------+",
+        "+------------+",
+        "| summation1 |",
+        "+------------+",
+        "| 962        |",
+        "| 962        |",
+        "| 962        |",
+        "| 962        |",
+        "| 962        |",
+        "+------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -923,22 +925,22 @@ async fn window_frame_order_by_unique() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
-               SUM(c5) OVER (ORDER BY c5), \
-               COUNT(*) OVER (ORDER BY c9) \
+               SUM(c5) OVER (ORDER BY c5) as sum1, \
+               COUNT(*) OVER (ORDER BY c9) as count1 \
                FROM aggregate_test_100 \
                ORDER BY c9 \
                LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c5) | COUNT(UInt8(1)) |",
-        "+----------------------------+-----------------+",
-        "| -49877765574               | 1               |",
-        "| -50025861694               | 2               |",
-        "| -45402230071               | 3               |",
-        "| -14557735645               | 4               |",
-        "| -18365391649               | 5               |",
-        "+----------------------------+-----------------+",
+        "+--------------+--------+",
+        "| sum1         | count1 |",
+        "+--------------+--------+",
+        "| -49877765574 | 1      |",
+        "| -50025861694 | 2      |",
+        "| -45402230071 | 3      |",
+        "| -14557735645 | 4      |",
+        "| -18365391649 | 5      |",
+        "+--------------+--------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -1605,5 +1607,42 @@ async fn test_window_frame_nth_value_aggregate() -> Result<()> {
         "+------------+------------+",
     ];
     assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_window_agg_sort() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT
+      c9,
+      SUM(c9) OVER(ORDER BY c9) as sum1,
+      SUM(c9) OVER(ORDER BY c9, c8) as sum2
+      FROM aggregate_test_100";
+
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx.create_logical_plan(sql).expect(&msg);
+    let state = ctx.state();
+    let logical_plan = state.optimize(&plan)?;
+    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+    // Only 1 SortExec was added
+    let expected = {
+        vec![
+            "ProjectionExec: expr=[c9@3 as c9, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@0 as sum1, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c8 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as sum2]",
+            "  WindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(NULL)), end_bound: CurrentRow }]",
+            "    WindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(NULL)), end_bound: CurrentRow }]",
+            "      SortExec: [c9@1 ASC NULLS LAST,c8@0 ASC NULLS LAST]",
+        ]
+    };
+
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    let actual_len = actual.len();
+    let actual_trim_last = &actual[..actual_len - 1];
+    assert_eq!(
+        expected, actual_trim_last,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
     Ok(())
 }

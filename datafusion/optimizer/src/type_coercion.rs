@@ -431,12 +431,11 @@ fn convert_to_coerced_type(
     value: &ScalarValue,
 ) -> Result<ScalarValue> {
     match value {
-        // In here we do casting either for ScalarValue::Utf8(None) or
+        // In here we do casting either for NULL types or
         // ScalarValue::Utf8(Some(val)). The other types are already casted.
         // The reason is that we convert the sqlparser result
         // to the Utf8 for all possible cases. Hence the types other than Utf8
         // are already casted to appropriate type. Therefore they can be returned directly.
-        ScalarValue::Utf8(None) => ScalarValue::try_from(coerced_type),
         ScalarValue::Utf8(Some(val)) => {
             // we need special handling for Interval types
             if let DataType::Interval(..) = coerced_type {
@@ -445,7 +444,13 @@ fn convert_to_coerced_type(
                 ScalarValue::try_from_string(val.clone(), coerced_type)
             }
         }
-        s => Ok(s.clone()),
+        s => {
+            if s.is_null() {
+                ScalarValue::try_from(coerced_type)
+            } else {
+                Ok(s.clone())
+            }
+        }
     }
 }
 
@@ -465,10 +470,10 @@ fn coerce_frame_bound(
 }
 
 fn get_coerced_window_frame(
-    window_frame: Option<WindowFrame>,
+    window_frame: WindowFrame,
     schema: &DFSchemaRef,
     expressions: &[Expr],
-) -> Result<Option<WindowFrame>> {
+) -> Result<WindowFrame> {
     fn get_coerced_type(column_type: &DataType) -> Result<DataType> {
         if is_numeric(column_type) {
             Ok(column_type.clone())
@@ -482,38 +487,31 @@ fn get_coerced_window_frame(
         }
     }
 
-    if let Some(window_frame) = window_frame {
-        let mut window_frame = window_frame;
-        let current_types = expressions
-            .iter()
-            .map(|e| e.get_type(schema))
-            .collect::<Result<Vec<_>>>()?;
-        match &mut window_frame.units {
-            WindowFrameUnits::Range => {
-                let col_type = current_types.first().ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "ORDER BY column cannot be empty".to_string(),
-                    )
-                })?;
-                let coerced_type = get_coerced_type(col_type)?;
-                window_frame.start_bound =
-                    coerce_frame_bound(&coerced_type, &window_frame.start_bound)?;
-                window_frame.end_bound =
-                    coerce_frame_bound(&coerced_type, &window_frame.end_bound)?;
-            }
-            WindowFrameUnits::Rows | WindowFrameUnits::Groups => {
-                let coerced_type = DataType::UInt64;
-                window_frame.start_bound =
-                    coerce_frame_bound(&coerced_type, &window_frame.start_bound)?;
-                window_frame.end_bound =
-                    coerce_frame_bound(&coerced_type, &window_frame.end_bound)?;
-            }
+    let mut window_frame = window_frame;
+    let current_types = expressions
+        .iter()
+        .map(|e| e.get_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+    match &mut window_frame.units {
+        WindowFrameUnits::Range => {
+            let col_type = current_types.first().ok_or_else(|| {
+                DataFusionError::Internal("ORDER BY column cannot be empty".to_string())
+            })?;
+            let coerced_type = get_coerced_type(col_type)?;
+            window_frame.start_bound =
+                coerce_frame_bound(&coerced_type, &window_frame.start_bound)?;
+            window_frame.end_bound =
+                coerce_frame_bound(&coerced_type, &window_frame.end_bound)?;
         }
-
-        Ok(Some(window_frame))
-    } else {
-        Ok(None)
+        WindowFrameUnits::Rows | WindowFrameUnits::Groups => {
+            let coerced_type = DataType::UInt64;
+            window_frame.start_bound =
+                coerce_frame_bound(&coerced_type, &window_frame.start_bound)?;
+            window_frame.end_bound =
+                coerce_frame_bound(&coerced_type, &window_frame.end_bound)?;
+        }
     }
+    Ok(window_frame)
 }
 // Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
 // The above op will be rewrite to the binary op when creating the physical op.

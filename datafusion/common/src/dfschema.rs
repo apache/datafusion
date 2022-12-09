@@ -206,7 +206,7 @@ impl DFSchema {
                 (Some(qq), None) => {
                     // the original field may now be aliased with a name that matches the
                     // original qualified name
-                    let table_ref: TableReference = field.name().as_str().into();
+                    let table_ref = TableReference::parse_str(field.name().as_str());
                     match table_ref {
                         TableReference::Partial { schema, table } => {
                             schema == qq && table == name

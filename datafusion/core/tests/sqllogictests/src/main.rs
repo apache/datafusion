@@ -19,12 +19,19 @@ use async_trait::async_trait;
 use datafusion::arrow::csv::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use std::path::Path;
+use datafusion_sql::parser::{DFParser, Statement};
+use log::info;
+use normalize::normalize_batch;
+use sqlparser::ast::Statement as SQLStatement;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use sqllogictest::TestError;
-pub type Result<T> = std::result::Result<T, TestError>;
+use crate::error::{DFSqlLogicTestError, Result};
+use crate::insert::insert;
 
+mod error;
+mod insert;
+mod normalize;
 mod setup;
 mod utils;
 
@@ -37,7 +44,7 @@ pub struct DataFusion {
 
 #[async_trait]
 impl sqllogictest::AsyncDB for DataFusion {
-    type Error = TestError;
+    type Error = DFSqlLogicTestError;
 
     async fn run(&mut self, sql: &str) -> Result<String> {
         println!("[{}] Running query: \"{}\"", self.file_name, sql);
@@ -70,76 +77,127 @@ pub async fn main() -> Result<()> {
 #[tokio::main]
 #[cfg(not(target_family = "windows"))]
 pub async fn main() -> Result<()> {
-    let paths = std::fs::read_dir(TEST_DIRECTORY).unwrap();
+    // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
+    env_logger::init();
 
-    // run each file using its own new SessionContext
+    // run each file using its own new DB
     //
     // Note: can't use tester.run_parallel_async()
     // as that will reuse the same SessionContext
     //
     // We could run these tests in parallel eventually if we wanted.
 
-    for path in paths {
-        // TODO better error handling
-        let path = path.unwrap().path();
+    let files = get_test_files();
+    info!("Running test files {:?}", files);
 
-        run_file(&path).await?;
+    for path in files {
+        println!("Running: {}", path.display());
+
+        let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
+
+        let ctx = context_for_test_file(&file_name).await;
+
+        let mut tester = sqllogictest::Runner::new(DataFusion { ctx, file_name });
+        tester.run_file_async(path).await?;
     }
 
     Ok(())
 }
 
-/// Run the tests in the specified `.slt` file
-async fn run_file(path: &Path) -> Result<()> {
-    println!("Running: {}", path.display());
+/// Gets a list of test files to execute. If there were arguments
+/// passed to the program treat it as a cargo test filter (substring match on filenames)
+fn get_test_files() -> Vec<PathBuf> {
+    info!("Test directory: {}", TEST_DIRECTORY);
 
-    let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
+    let args: Vec<_> = std::env::args().collect();
 
-    let ctx = context_for_test_file(&file_name).await;
+    // treat args after the first as filters to run (substring matching)
+    let filters = if !args.is_empty() {
+        args.iter()
+            .skip(1)
+            .map(|arg| arg.as_str())
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
 
-    let mut tester = sqllogictest::Runner::new(DataFusion { ctx, file_name });
-    tester.run_file_async(path).await?;
+    // default to all files in test directory filtering based on name
+    std::fs::read_dir(TEST_DIRECTORY)
+        .unwrap()
+        .map(|path| path.unwrap().path())
+        .filter(|path| check_test_file(&filters, path.as_path()))
+        .collect()
+}
 
-    Ok(())
+/// because this test can be run as a cargo test, commands like
+///
+/// ```shell
+/// cargo test foo
+/// ```
+///
+/// Will end up passing `foo` as a command line argument.
+///
+/// be compatible with this, treat the command line arguments as a
+/// filter and that does a substring match on each input.
+/// returns true f this path should be run
+fn check_test_file(filters: &[&str], path: &Path) -> bool {
+    if filters.is_empty() {
+        return true;
+    }
+
+    // otherwise check if any filter matches
+    let path_str = path.to_string_lossy();
+    filters.iter().any(|filter| path_str.contains(filter))
 }
 
 /// Create a SessionContext, configured for the specific test
 async fn context_for_test_file(file_name: &str) -> SessionContext {
     match file_name {
         "aggregate.slt" => {
-            println!("Registering aggregate tables");
+            info!("Registering aggregate tables");
             let ctx = SessionContext::new();
             setup::register_aggregate_tables(&ctx).await;
             ctx
         }
         "information_schema.slt" => {
-            println!("Enabling information schema");
+            info!("Enabling information schema");
             SessionContext::with_config(
                 SessionConfig::new().with_information_schema(true),
             )
         }
         _ => {
-            println!("Using default SessionContex");
+            info!("Using default SessionContext");
             SessionContext::new()
         }
     }
 }
 
-fn format_batches(batches: &[RecordBatch]) -> Result<String> {
+fn format_batches(batches: Vec<RecordBatch>) -> Result<String> {
     let mut bytes = vec![];
     {
         let builder = WriterBuilder::new().has_headers(false).with_delimiter(b' ');
         let mut writer = builder.build(&mut bytes);
         for batch in batches {
-            writer.write(batch).unwrap();
+            writer.write(&normalize_batch(batch)).unwrap();
         }
     }
     Ok(String::from_utf8(bytes).unwrap())
 }
 
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<String> {
-    let df = ctx.sql(&sql.into()).await.unwrap();
-    let results: Vec<RecordBatch> = df.collect().await.unwrap();
-    let formatted_batches = format_batches(&results)?;
+    let sql = sql.into();
+    // Check if the sql is `insert`
+    if let Ok(mut statements) = DFParser::parse_sql(&sql) {
+        let statement0 = statements.pop_front().expect("at least one SQL statement");
+        if let Statement::Statement(statement) = statement0 {
+            let statement = *statement;
+            if matches!(&statement, SQLStatement::Insert { .. }) {
+                return insert(ctx, statement).await;
+            }
+        }
+    }
+    let df = ctx.sql(sql.as_str()).await?;
+    let results: Vec<RecordBatch> = df.collect().await?;
+    let formatted_batches = format_batches(results)?;
     Ok(formatted_batches)
 }

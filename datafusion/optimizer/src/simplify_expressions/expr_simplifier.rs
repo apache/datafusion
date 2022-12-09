@@ -253,7 +253,8 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Sort { .. }
             | Expr::GroupingSet(_)
             | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. } => false,
+            | Expr::QualifiedWildcard { .. }
+            | Expr::Placeholder { .. } => false,
             Expr::ScalarFunction { fun, .. } => Self::volatility_ok(fun.volatility()),
             Expr::ScalarUDF { fun, .. } => Self::volatility_ok(fun.signature.volatility),
             Expr::Literal(_)

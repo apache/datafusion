@@ -400,7 +400,8 @@ mod tests {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(in_subquery(col("c"), test_subquery_with_name("sq_inner")?))?
-            .project_with_alias(vec![col("b"), col("c")], Some("wrapped".to_string()))?
+            .project(vec![col("b"), col("c")])?
+            .alias("wrapped")?
             .filter(or(
                 binary_expr(col("b"), Operator::Lt, lit(30_u32)),
                 in_subquery(col("c"), test_subquery_with_name("sq_outer")?),

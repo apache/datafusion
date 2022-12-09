@@ -291,6 +291,7 @@ impl ExprRewritable for Expr {
                     key,
                 ))
             }
+            Expr::Placeholder { id, data_type } => Expr::Placeholder { id, data_type },
         };
 
         // now rewrite this expression itself
@@ -537,10 +538,7 @@ pub fn coerce_plan_expr_for_schema(
                     (
                         LogicalPlan::Projection(Projection { input, .. }),
                         Expr::Alias(e, alias),
-                    ) => Ok(Expr::Alias(
-                        Box::new(e.clone().cast_to(new_type, input.schema())?),
-                        alias.clone(),
-                    )),
+                    ) => Ok(e.clone().cast_to(new_type, input.schema())?.alias(alias)),
                     _ => expr.cast_to(new_type, plan.schema()),
                 }
             } else {

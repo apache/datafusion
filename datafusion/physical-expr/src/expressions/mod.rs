@@ -62,9 +62,12 @@ pub use crate::aggregate::sum_distinct::DistinctSum;
 pub use crate::aggregate::variance::{Variance, VariancePop};
 
 pub use crate::window::cume_dist::cume_dist;
+pub use crate::window::cume_dist::CumeDist;
+pub use crate::window::lead_lag::WindowShift;
 pub use crate::window::lead_lag::{lag, lead};
-pub use crate::window::nth_value::NthValue;
+pub use crate::window::nth_value::{NthValue, NthValueKind};
 pub use crate::window::rank::{dense_rank, percent_rank, rank};
+pub use crate::window::rank::{Rank, RankType};
 pub use crate::window::row_number::RowNumber;
 
 pub use binary::{binary, BinaryExpr};

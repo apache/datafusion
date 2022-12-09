@@ -41,7 +41,7 @@ pub struct AggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
-    window_frame: Option<Arc<WindowFrame>>,
+    window_frame: Arc<WindowFrame>,
 }
 
 impl AggregateWindowExpr {
@@ -50,7 +50,7 @@ impl AggregateWindowExpr {
         aggregate: Arc<dyn AggregateExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],
-        window_frame: Option<Arc<WindowFrame>>,
+        window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
             aggregate,
@@ -58,6 +58,11 @@ impl AggregateWindowExpr {
             order_by: order_by.to_vec(),
             window_frame,
         }
+    }
+
+    /// Get aggregate expr of AggregateWindowExpr
+    pub fn get_aggregate_expr(&self) -> &Arc<dyn AggregateExpr> {
+        &self.aggregate
     }
 }
 
@@ -89,14 +94,6 @@ impl WindowExpr for AggregateWindowExpr {
             self.evaluate_partition_points(batch.num_rows(), &partition_columns)?;
         let sort_options: Vec<SortOptions> =
             self.order_by.iter().map(|o| o.options).collect();
-        let (_, order_bys) = self.get_values_orderbys(batch)?;
-        let window_frame = if !order_bys.is_empty() && self.window_frame.is_none() {
-            // OVER (ORDER BY a) case
-            // We create an implicit window for ORDER BY.
-            Some(Arc::new(WindowFrame::default()))
-        } else {
-            self.window_frame.clone()
-        };
         let mut row_wise_results: Vec<ScalarValue> = vec![];
         for partition_range in &partition_points {
             let mut accumulator = self.aggregate.create_accumulator()?;
@@ -104,7 +101,7 @@ impl WindowExpr for AggregateWindowExpr {
             let (values, order_bys) =
                 self.get_values_orderbys(&batch.slice(partition_range.start, length))?;
 
-            let mut window_frame_ctx = WindowFrameContext::new(&window_frame);
+            let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
             let mut last_range: (usize, usize) = (0, 0);
 
             // We iterate on each row to perform a running calculation.
@@ -153,5 +150,9 @@ impl WindowExpr for AggregateWindowExpr {
 
     fn order_by(&self) -> &[PhysicalSortExpr] {
         &self.order_by
+    }
+
+    fn get_window_frame(&self) -> &Arc<WindowFrame> {
+        &self.window_frame
     }
 }
