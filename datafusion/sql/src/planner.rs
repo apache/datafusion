@@ -1179,12 +1179,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 //
                 // For example:
                 //
-                //   SELECT c1 AS m FROM t HAVING m > 10;
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING m > 10;
                 //
                 // are rewritten as, respectively:
                 //
-                //   SELECT c1 AS m FROM t HAVING c1 > 10;
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
                 let having_expr = resolve_aliases_to_exprs(&having_expr, &alias_map)?;
