@@ -719,7 +719,9 @@ impl PartialEq<dyn Any> for BinaryExpr {
 
 // Analyze the comparison between an expression (on the left) and a scalar value
 // (on the right). The new boundaries will indicate whether it is always true, always
-// false, or unknown (with a probablistic selectivity value attached).
+// false, or unknown (with a probablistic selectivity value attached). This operation
+// will also include the new upper/lower boundaries for the operand on the left if
+// they can be determined.
 fn analyze_expr_scalar_comparison(
     context: AnalysisContext,
     op: &Operator,
@@ -3180,8 +3182,8 @@ mod tests {
             let analysis_ctx =
                 analyze_expr_scalar_comparison(context, &operator, &left, right);
             let boundaries = analysis_ctx
-                .clone()
                 .boundaries
+                .as_ref()
                 .expect("Analysis must complete for this test!");
 
             assert_eq!(

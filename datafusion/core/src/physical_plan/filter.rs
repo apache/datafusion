@@ -562,6 +562,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_filter_statistics_column_level_nested_multiple() -> Result<()> {
+        // Table:
+        //      a: min=1, max=100
+        //      b: min=1, max=50
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Some(100),
+                column_statistics: Some(vec![
+                    ColumnStatistics {
+                        min_value: Some(ScalarValue::Int32(Some(1))),
+                        max_value: Some(ScalarValue::Int32(Some(100))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Some(ScalarValue::Int32(Some(1))),
+                        max_value: Some(ScalarValue::Int32(Some(50))),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            },
+            schema.clone(),
+        ));
+
+        // WHERE a <= 25
+        let a_lte_25: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+            binary(col("a", &schema)?, Operator::LtEq, lit(25i32), &schema)?,
+            input,
+        )?);
+
+        // WHERE b > 45
+        let b_gt_5: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+            binary(col("b", &schema)?, Operator::Gt, lit(45i32), &schema)?,
+            a_lte_25,
+        )?);
+
+        // WHERE a >= 10
+        let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+            binary(col("a", &schema)?, Operator::GtEq, lit(10i32), &schema)?,
+            b_gt_5,
+        )?);
+
+        let statistics = filter.statistics();
+        // On a uniform distribution, only fifteen rows will satisfy the
+        // filter that 'a' proposed (a >= 10 AND a <= 25) (15/100) and only
+        // 5 rows will satisfy the filter that 'b' proposed (b > 45) (5/50).
+        //
+        // Which would result with a selectivity of  '15/100 * 5/50' or 0.015
+        // and that means about %1.5 of the all rows (rounded up to 2 rows).
+        assert_eq!(statistics.num_rows, Some(2));
+        assert_eq!(
+            statistics.column_statistics,
+            Some(vec![
+                ColumnStatistics {
+                    min_value: Some(ScalarValue::Int32(Some(10))),
+                    max_value: Some(ScalarValue::Int32(Some(25))),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Some(ScalarValue::Int32(Some(45))),
+                    max_value: Some(ScalarValue::Int32(Some(50))),
+                    ..Default::default()
+                }
+            ])
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_filter_statistics_when_input_stats_missing() -> Result<()> {
         // Table:
         //      a: min=???, max=??? (missing)
