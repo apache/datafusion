@@ -96,17 +96,18 @@ impl OwnedTableReference {
             },
         }
     }
+}
 
-    /// Return a string suitable for display
-    pub fn display_string(&self) -> String {
+impl std::fmt::Display for OwnedTableReference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OwnedTableReference::Bare { table } => table.clone(),
-            OwnedTableReference::Partial { schema, table } => format!("{schema}.{table}"),
+            OwnedTableReference::Bare { table } => write!(f, "{}", table),
+            OwnedTableReference::Partial { schema, table } => write!(f, "{schema}.{table}"),
             OwnedTableReference::Full {
                 catalog,
                 schema,
                 table,
-            } => format!("{catalog}.{schema}.{table}"),
+            } => write!(f, "{catalog}.{schema}.{table}"),
         }
     }
 }

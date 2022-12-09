@@ -59,7 +59,7 @@ statement error Error during planning: table 'datafusion.public.users' not found
 select * from users;
 
 # Can not drop it again
-statement error Table Bare \{ table: "user" \} doesn't exist.
+statement error Table 'user' doesn't exist.
 DROP TABLE user;
 
 # Can not insert into a undefined table
@@ -187,7 +187,7 @@ statement ok
 DROP VIEW bar;
 
 # not ok to drop after already dropped
-statement error View Bare \{ table: "bar" \} doesn't exist.
+statement error View 'bar' doesn't exist.
 DROP VIEW bar;
 
 # ok to drop with IF EXISTS after already dropped
@@ -195,7 +195,7 @@ statement ok
 DROP VIEW IF EXISTS bar;
 
 # can't drop non existent view
-statement error View Bare \{ table: "non_existent_view" \} doesn't exist.
+statement error View 'non_existent_view' doesn't exist.
 DROP VIEW non_existent_view
 
 ##########
@@ -218,7 +218,7 @@ statement ok
 DROP TABLE my_table;
 
 # not ok to drop after already dropped
-statement error Table Bare \{ table: "my_table" \} doesn't exist.
+statement error Table 'my_table' doesn't exist.
 DROP TABLE my_table;
 
 # ok to drop after already dropped with IF EXISTS
@@ -226,7 +226,7 @@ statement ok
 DROP TABLE IF EXISTS my_table;
 
 # Can't drop non existent table
-statement error Table Bare \{ table: "non_existent_table" \} doesn't exist.
+statement error Table 'non_existent_table' doesn't exist.
 DROP TABLE non_existent_table;
 
 
@@ -277,8 +277,7 @@ SELECT * FROM y
 5 6
 
 # 'IF NOT EXISTS' cannot coexist with 'REPLACE'
-# TODO this shoudn't be an internal error
-statement error Internal error: 'IF NOT EXISTS' cannot coexist with 'REPLACE'
+statement error Execution error: 'IF NOT EXISTS' cannot coexist with 'REPLACE'
 CREATE OR REPLACE TABLE if not exists y AS VALUES (7,8);
 
 statement ok
@@ -289,7 +288,7 @@ DROP TABLE y
 statement ok
 CREATE TABLE t AS SELECT 1
 
-statement error View Bare \{ table: "t" \} doesn't exist.
+statement error View 't' doesn't exist.
 DROP VIEW t
 
 statement ok
@@ -299,7 +298,7 @@ DROP TABLE t
 statement ok
 CREATE VIEW v AS SELECT 1;
 
-statement error Table Bare \{ table: "v" \} doesn't exist.
+statement error Table 'v' doesn't exist.
 DROP TABLE v;
 
 statement ok
@@ -382,7 +381,7 @@ DROP TABLE csv_with_timestamps
 statement ok
 CREATE TABLE y AS VALUES (1,2,3);
 
-statement error Table 'Bare \{ table: "y" \}' already exists
+statement error Table 'y' already exists
 CREATE TABLE y AS VALUES (1,2,3);
 
 statement ok
@@ -393,7 +392,7 @@ DROP TABLE y;
 statement ok
 CREATE VIEW y AS VALUES (1,2,3);
 
-statement error Table 'Bare \{ table: "y" \}' already exists
+statement error Table 'y' already exists
 CREATE VIEW y AS VALUES (1,2,3);
 
 statement ok
