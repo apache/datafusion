@@ -6356,7 +6356,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "value: Internal(\"Expected parameter of type Int32, got Float64\")"
+        expected = "value: Internal(\"Expected parameter of type Int32, got Float64 at index 0\")"
     )]
     fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
         // no embedded parameter but still declare it

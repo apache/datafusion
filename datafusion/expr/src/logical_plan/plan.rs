@@ -385,14 +385,14 @@ impl LogicalPlan {
                 }
 
                 // Verify if the types of the params matches the types of the values
-                for (param_type, value) in
-                    prepare_lp.data_types.iter().zip(param_values.iter())
-                {
+                let iter = prepare_lp.data_types.iter().zip(param_values.iter());
+                for (i, (param_type, value)) in iter.enumerate() {
                     if *param_type != value.get_datatype() {
                         return Err(DataFusionError::Internal(format!(
-                            "Expected parameter of type {:?}, got {:?}",
+                            "Expected parameter of type {:?}, got {:?} at index {}",
                             param_type,
-                            value.get_datatype()
+                            value.get_datatype(),
+                            i
                         )));
                     }
                 }
