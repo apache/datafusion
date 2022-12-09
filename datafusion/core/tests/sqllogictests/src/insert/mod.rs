@@ -40,9 +40,9 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: SQLStatement) -> Result<D
             table_reference = object_name_to_table_reference(table_name)?;
 
             // Todo: check columns match table schema
-            match &*source.body {
+            match *source.body {
                 SetExpr::Values(values) => {
-                    insert_values = values.0.clone();
+                    insert_values = values.rows;
                 }
                 _ => {
                     // Directly panic: make it easy to find the location of the error.
