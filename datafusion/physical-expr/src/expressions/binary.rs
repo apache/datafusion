@@ -60,12 +60,9 @@ use kernels::{
     bitwise_xor, bitwise_xor_scalar,
 };
 use kernels_arrow::{
-    add_decimal, add_decimal_scalar, divide_decimal_scalar, divide_opt_decimal,
-    is_distinct_from, is_distinct_from_bool, is_distinct_from_decimal,
-    is_distinct_from_null, is_distinct_from_utf8, is_not_distinct_from,
-    is_not_distinct_from_bool, is_not_distinct_from_decimal, is_not_distinct_from_null,
-    is_not_distinct_from_utf8, modulus_decimal, modulus_decimal_scalar, multiply_decimal,
-    multiply_decimal_scalar, subtract_decimal, subtract_decimal_scalar,
+    is_distinct_from, is_distinct_from_bool, is_distinct_from_null,
+    is_distinct_from_utf8, is_not_distinct_from, is_not_distinct_from_bool,
+    is_not_distinct_from_null, is_not_distinct_from_utf8,
 };
 
 use arrow::datatypes::{DataType, Schema, TimeUnit};
@@ -128,29 +125,6 @@ macro_rules! compute_decimal_op_dyn_scalar {
             // when the $RIGHT is a NULL, generate a NULL array of $OP_TYPE type
             Ok(Arc::new(new_null_array($OP_TYPE, $LEFT.len())))
         }
-    }};
-}
-
-macro_rules! compute_decimal_op_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = as_decimal128_array($LEFT).unwrap();
-        if let ScalarValue::Decimal128(Some(_), _, _) = $RIGHT {
-            Ok(Arc::new(paste::expr! {[<$OP _decimal_scalar>]}(
-                ll,
-                $RIGHT.try_into()?,
-            )?))
-        } else {
-            // when the $RIGHT is a NULL, generate a NULL array of LEFT's datatype
-            Ok(Arc::new(new_null_array($LEFT.data_type(), $LEFT.len())))
-        }
-    }};
-}
-
-macro_rules! compute_decimal_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT.as_any().downcast_ref::<$DT>().unwrap();
-        let rr = $RIGHT.as_any().downcast_ref::<$DT>().unwrap();
-        Ok(Arc::new(paste::expr! {[<$OP _decimal>]}(ll, rr)?))
     }};
 }
 
@@ -371,7 +345,7 @@ macro_rules! binary_string_array_op {
 macro_rules! binary_primitive_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
-            DataType::Decimal128(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
+            DataType::Decimal128(_,_) => compute_op!($LEFT, $RIGHT, $OP, Decimal128Array),
             DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op!($LEFT, $RIGHT, $OP, Int32Array),
@@ -396,7 +370,7 @@ macro_rules! binary_primitive_array_op {
 macro_rules! binary_primitive_array_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Decimal128(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, Decimal128Array),
+            DataType::Decimal128(_,_) => compute_op_scalar!($LEFT, $RIGHT, $OP, Decimal128Array),
             DataType::Int8 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int32Array),
@@ -423,7 +397,7 @@ macro_rules! binary_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
             DataType::Null => compute_null_op!($LEFT, $RIGHT, $OP, NullArray),
-            DataType::Decimal128(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, Decimal128Array),
+            DataType::Decimal128(_,_) => compute_op!($LEFT, $RIGHT, $OP, Decimal128Array),
             DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op!($LEFT, $RIGHT, $OP, Int32Array),

@@ -18,9 +18,8 @@
 //! This module contains computation kernels that are eventually
 //! destined for arrow-rs but are in datafusion until they are ported.
 
-use arrow::error::ArrowError;
 use arrow::{array::*, datatypes::ArrowNumericType};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 
 // Simple (low performance) kernels until optimized kernels are added to arrow
 // See https://github.com/apache/arrow-rs/issues/960
@@ -118,200 +117,10 @@ pub(crate) fn is_not_distinct_from_utf8<OffsetSize: OffsetSizeTrait>(
         .collect())
 }
 
-pub(crate) fn is_distinct_from_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<BooleanArray> {
-    Ok(left
-        .iter()
-        .zip(right.iter())
-        .map(|(left, right)| match (left, right) {
-            (None, None) => Some(false),
-            (None, Some(_)) | (Some(_), None) => Some(true),
-            (Some(left), Some(right)) => Some(left != right),
-        })
-        .collect())
-}
-
-pub(crate) fn is_not_distinct_from_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<BooleanArray> {
-    Ok(left
-        .iter()
-        .zip(right.iter())
-        .map(|(left, right)| match (left, right) {
-            (None, None) => Some(true),
-            (None, Some(_)) | (Some(_), None) => Some(false),
-            (Some(left), Some(right)) => Some(left == right),
-        })
-        .collect())
-}
-
-/// Creates an Decimal128Array the same size as `left`,
-/// by applying `op` to all non-null elements of left and right
-pub(crate) fn arith_decimal<F>(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-    op: F,
-) -> Result<Decimal128Array>
-where
-    F: Fn(i128, i128) -> Result<i128>,
-{
-    left.iter()
-        .zip(right.iter())
-        .map(|(left, right)| {
-            if let (Some(left), Some(right)) = (left, right) {
-                Some(op(left, right)).transpose()
-            } else {
-                Ok(None)
-            }
-        })
-        .collect()
-}
-
-pub(crate) fn arith_decimal_scalar<F>(
-    left: &Decimal128Array,
-    right: i128,
-    op: F,
-) -> Result<Decimal128Array>
-where
-    F: Fn(i128, i128) -> Result<i128>,
-{
-    left.iter()
-        .map(|left| {
-            if let Some(left) = left {
-                Some(op(left, right)).transpose()
-            } else {
-                Ok(None)
-            }
-        })
-        .collect()
-}
-
-pub(crate) fn add_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<Decimal128Array> {
-    let array = arith_decimal(left, right, |left, right| Ok(left + right))?
-        .with_precision_and_scale(left.precision(), left.scale())?;
-    Ok(array)
-}
-
-pub(crate) fn add_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<Decimal128Array> {
-    let array = arith_decimal_scalar(left, right, |left, right| Ok(left + right))?
-        .with_precision_and_scale(left.precision(), left.scale())?;
-    Ok(array)
-}
-
-pub(crate) fn subtract_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<Decimal128Array> {
-    let array = arith_decimal(left, right, |left, right| Ok(left - right))?
-        .with_precision_and_scale(left.precision(), left.scale())?;
-    Ok(array)
-}
-
-pub(crate) fn subtract_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<Decimal128Array> {
-    let array = arith_decimal_scalar(left, right, |left, right| Ok(left - right))?
-        .with_precision_and_scale(left.precision(), left.scale())?;
-    Ok(array)
-}
-
-pub(crate) fn multiply_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<Decimal128Array> {
-    let divide = 10_i128.pow(left.scale() as u32);
-    let array = arith_decimal(left, right, |left, right| Ok(left * right / divide))?
-        .with_precision_and_scale(left.precision(), left.scale())?;
-    Ok(array)
-}
-
-pub(crate) fn multiply_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<Decimal128Array> {
-    let divide = 10_i128.pow(left.scale() as u32);
-    let array =
-        arith_decimal_scalar(left, right, |left, right| Ok(left * right / divide))?
-            .with_precision_and_scale(left.precision(), left.scale())?;
-    Ok(array)
-}
-
-pub(crate) fn divide_opt_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<Decimal128Array> {
-    let mul = 10_f64.powi(left.scale() as i32);
-    let array = arith_decimal(left, right, |left, right| {
-        if right == 0 {
-            return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
-        }
-        let l_value = left as f64;
-        let r_value = right as f64;
-        let result = ((l_value / r_value) * mul) as i128;
-        Ok(result)
-    })?
-    .with_precision_and_scale(left.precision(), left.scale())?;
-    Ok(array)
-}
-
-pub(crate) fn divide_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<Decimal128Array> {
-    if right == 0 {
-        return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
-    }
-    let mul = 10_f64.powi(left.scale() as i32);
-    let array = arith_decimal_scalar(left, right, |left, right| {
-        let l_value = left as f64;
-        let r_value = right as f64;
-        let result = ((l_value / r_value) * mul) as i128;
-        Ok(result)
-    })?
-    .with_precision_and_scale(left.precision(), left.scale())?;
-    Ok(array)
-}
-
-pub(crate) fn modulus_decimal(
-    left: &Decimal128Array,
-    right: &Decimal128Array,
-) -> Result<Decimal128Array> {
-    let array = arith_decimal(left, right, |left, right| {
-        if right == 0 {
-            Err(DataFusionError::ArrowError(ArrowError::DivideByZero))
-        } else {
-            Ok(left % right)
-        }
-    })?
-    .with_precision_and_scale(left.precision(), left.scale())?;
-    Ok(array)
-}
-
-pub(crate) fn modulus_decimal_scalar(
-    left: &Decimal128Array,
-    right: i128,
-) -> Result<Decimal128Array> {
-    if right == 0 {
-        return Err(DataFusionError::ArrowError(ArrowError::DivideByZero));
-    }
-    let array = arith_decimal_scalar(left, right, |left, right| Ok(left % right))?
-        .with_precision_and_scale(left.precision(), left.scale())?;
-    Ok(array)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::compute::kernels::arithmetic::*;
 
     fn create_decimal_array(
         array: &[Option<i128>],
@@ -355,14 +164,13 @@ mod tests {
         );
 
         // is_distinct: left distinct right
-        let result = is_distinct_from_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = is_distinct_from(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(
             BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)]),
             result
         );
         // is_distinct: left distinct right
-        let result =
-            is_not_distinct_from_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = is_not_distinct_from(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(
             BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true)]),
             result
@@ -394,27 +202,27 @@ mod tests {
             3,
         );
         // add
-        let result = add_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = add(&left_decimal_array, &right_decimal_array)?;
         let expect =
             create_decimal_array(&[Some(246), None, Some(245), Some(247)], 25, 3);
         assert_eq!(expect, result);
-        let result = add_decimal_scalar(&left_decimal_array, 10)?;
+        let result = add_scalar(&left_decimal_array, 10)?;
         let expect =
             create_decimal_array(&[Some(133), None, Some(132), Some(134)], 25, 3);
         assert_eq!(expect, result);
         // subtract
-        let result = subtract_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = subtract(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 25, 3);
         assert_eq!(expect, result);
-        let result = subtract_decimal_scalar(&left_decimal_array, 10)?;
+        let result = subtract_scalar(&left_decimal_array, 10)?;
         let expect =
             create_decimal_array(&[Some(113), None, Some(112), Some(114)], 25, 3);
         assert_eq!(expect, result);
         // multiply
-        let result = multiply_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = multiply(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(&[Some(15), None, Some(15), Some(15)], 25, 3);
         assert_eq!(expect, result);
-        let result = multiply_decimal_scalar(&left_decimal_array, 10)?;
+        let result = multiply_scalar(&left_decimal_array, 10)?;
         let expect = create_decimal_array(&[Some(1), None, Some(1), Some(1)], 25, 3);
         assert_eq!(expect, result);
         // divide
@@ -434,14 +242,14 @@ mod tests {
             25,
             3,
         );
-        let result = divide_opt_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = divide_opt(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(
             &[Some(123456700), None, Some(22446672), Some(-10037130), None],
             25,
             3,
         );
         assert_eq!(expect, result);
-        let result = divide_decimal_scalar(&left_decimal_array, 10)?;
+        let result = divide_scalar(&left_decimal_array, 10)?;
         let expect = create_decimal_array(
             &[
                 Some(123456700),
@@ -455,11 +263,11 @@ mod tests {
         );
         assert_eq!(expect, result);
         // modulus
-        let result = modulus_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = modulus(&left_decimal_array, &right_decimal_array)?;
         let expect =
             create_decimal_array(&[Some(7), None, Some(37), Some(16), None], 25, 3);
         assert_eq!(expect, result);
-        let result = modulus_decimal_scalar(&left_decimal_array, 10)?;
+        let result = modulus_scalar(&left_decimal_array, 10)?;
         let expect =
             create_decimal_array(&[Some(7), None, Some(7), Some(7), Some(7)], 25, 3);
         assert_eq!(expect, result);
@@ -472,14 +280,14 @@ mod tests {
         let left_decimal_array = create_decimal_array(&[Some(101)], 10, 1);
         let right_decimal_array = create_decimal_array(&[Some(0)], 1, 1);
 
-        let err =
-            divide_opt_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
-        assert_eq!("Arrow error: Divide by zero error", err.to_string());
-        let err = divide_decimal_scalar(&left_decimal_array, 0).unwrap_err();
-        assert_eq!("Arrow error: Divide by zero error", err.to_string());
-        let err = modulus_decimal(&left_decimal_array, &right_decimal_array).unwrap_err();
-        assert_eq!("Arrow error: Divide by zero error", err.to_string());
-        let err = modulus_decimal_scalar(&left_decimal_array, 0).unwrap_err();
-        assert_eq!("Arrow error: Divide by zero error", err.to_string());
+        let array = divide_opt(&left_decimal_array, &right_decimal_array).unwrap();
+        assert_eq!(array.len(), 1);
+        assert_eq!(array.null_count(), 1);
+        let err = divide_scalar(&left_decimal_array, 0).unwrap_err();
+        assert_eq!("Divide by zero error", err.to_string());
+        let err = modulus(&left_decimal_array, &right_decimal_array).unwrap_err();
+        assert_eq!("Divide by zero error", err.to_string());
+        let err = modulus_scalar(&left_decimal_array, 0).unwrap_err();
+        assert_eq!("Divide by zero error", err.to_string());
     }
 }
