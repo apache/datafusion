@@ -55,11 +55,58 @@ pub(crate) fn is_distinct_from<T>(
 where
     T: ArrowNumericType,
 {
-    Ok(left
-        .iter()
-        .zip(right.iter())
-        .map(|(x, y)| Some(x != y))
-        .collect())
+    let array_len = left.data().len().min(right.data().len());
+    let mut arr = vec![false; array_len].into_boxed_slice();
+
+    let left_values = left.values();
+    let right_values = right.values();
+
+    for i in 0..array_len {
+        arr[i] = left_values[i] != right_values[i];
+    }
+
+    Ok(to_bool_arr(arr))
+}
+
+#[allow(clippy::needless_range_loop)]
+fn to_bool_arr(slice: Box<[bool]>) -> BooleanArray {
+    let slice = slice.as_ref();
+    let mut mut_buf = arrow_buffer::MutableBuffer::new_null(slice.len());
+    {
+        let mut_slice = mut_buf.as_slice_mut();
+        for i in 0..slice.len() {
+            if slice[i] {
+                arrow_buffer::bit_util::set_bit(mut_slice, i);
+            }
+        }
+    }
+
+    let array_data = ArrayData::builder(arrow_schema::DataType::Boolean)
+        .len(slice.len())
+        .add_buffer(mut_buf.into());
+
+    let array_data = unsafe { array_data.build_unchecked() };
+    BooleanArray::from(array_data)
+}
+
+pub(crate) fn is_not_distinct_from<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<BooleanArray>
+where
+    T: ArrowNumericType,
+{
+    let array_len = left.data().len().min(right.data().len());
+    let mut arr = vec![false; array_len].into_boxed_slice();
+
+    let left_values = left.values();
+    let right_values = right.values();
+
+    for i in 0..array_len {
+        arr[i] = left_values[i] == right_values[i];
+    }
+
+    Ok(to_bool_arr(arr))
 }
 
 pub(crate) fn is_distinct_from_utf8<OffsetSize: OffsetSizeTrait>(
@@ -91,20 +138,6 @@ pub(crate) fn is_not_distinct_from_null(
 
 fn make_boolean_array(length: usize, value: bool) -> Result<BooleanArray> {
     Ok((0..length).into_iter().map(|_| Some(value)).collect())
-}
-
-pub(crate) fn is_not_distinct_from<T>(
-    left: &PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
-) -> Result<BooleanArray>
-where
-    T: ArrowNumericType,
-{
-    Ok(left
-        .iter()
-        .zip(right.iter())
-        .map(|(x, y)| Some(x == y))
-        .collect())
 }
 
 pub(crate) fn is_not_distinct_from_utf8<OffsetSize: OffsetSizeTrait>(
