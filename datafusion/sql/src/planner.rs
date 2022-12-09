@@ -5443,7 +5443,7 @@ mod tests {
         expected_plan: &str,
     ) -> LogicalPlan {
         // replace params
-        let plan = LogicalPlan::execute(plan, param_values).unwrap();
+        let plan = plan.with_param_values(param_values).unwrap();
         assert_eq!(format!("{:?}", plan), expected_plan);
 
         plan

@@ -1273,7 +1273,7 @@ async fn test_prepare_statement() -> Result<()> {
 
     // prepare logical plan to logical plan without parameters
     let param_values = vec![ScalarValue::Int32(Some(3)), ScalarValue::Float64(Some(0.0))];
-    let logical_plan = LogicalPlan::execute(logical_plan, param_values)?;
+    let logical_plan = logical_plan.with_param_values(param_values)?;
 
     // logical plan to optimized logical plan
     let logical_plan = ctx.optimize(&logical_plan)?;
