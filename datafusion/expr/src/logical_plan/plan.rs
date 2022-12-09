@@ -575,7 +575,7 @@ impl LogicalPlan {
         }
     }
 
-    /// recursively to replace the params (e.g $1 $2, ...) wit corresponding values provided in the prams_values
+    /// recursively to replace the params (e.g $1 $2, ...) with corresponding values provided in the prams_values
     pub fn replace_params_with_values(
         &self,
         param_values: &Vec<ScalarValue>,
