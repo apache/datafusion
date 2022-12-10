@@ -3367,6 +3367,16 @@ mod tests {
     }
 
     #[test]
+    fn try_cast_from_aggregation() {
+        quick_test(
+            "SELECT TRY_CAST(SUM(age) AS FLOAT) FROM person",
+            "Projection: TRY_CAST(SUM(person.age) AS Float32)\
+            \n  Aggregate: groupBy=[[]], aggr=[[SUM(person.age)]]\
+            \n    TableScan: person",
+        );
+    }
+
+    #[test]
     fn cast_to_invalid_decimal_type() {
         // precision == 0
         {
