@@ -283,7 +283,7 @@ impl SessionContext {
                         self.register_table(&name, table)?;
                         self.return_empty_dataframe()
                     }
-                    (true, true, Ok(_)) => Err(DataFusionError::Internal(
+                    (true, true, Ok(_)) => Err(DataFusionError::Execution(
                         "'IF NOT EXISTS' cannot coexist with 'REPLACE'".to_string(),
                     )),
                     (_, _, Err(_)) => {
@@ -300,7 +300,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                        "Table '{:?}' already exists",
+                        "Table '{}' already exists",
                         name
                     ))),
                 }
@@ -331,7 +331,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                        "Table '{:?}' already exists",
+                        "Table '{}' already exists",
                         name
                     ))),
                 }
@@ -345,7 +345,7 @@ impl SessionContext {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
                     (_, _) => Err(DataFusionError::Execution(format!(
-                        "Table {:?} doesn't exist.",
+                        "Table '{}' doesn't exist.",
                         name
                     ))),
                 }
@@ -359,7 +359,7 @@ impl SessionContext {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
                     (_, _) => Err(DataFusionError::Execution(format!(
-                        "View {:?} doesn't exist.",
+                        "View '{}' doesn't exist.",
                         name
                     ))),
                 }
@@ -451,7 +451,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                        "Schema '{:?}' already exists",
+                        "Schema '{}' already exists",
                         schema_name
                     ))),
                 }
@@ -474,7 +474,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                        "Catalog '{:?}' already exists",
+                        "Catalog '{}' already exists",
                         catalog_name
                     ))),
                 }
@@ -505,7 +505,7 @@ impl SessionContext {
                 self.return_empty_dataframe()
             }
             (false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                "Table '{:?}' already exists",
+                "Table '{}' already exists",
                 cmd.name
             ))),
         }
