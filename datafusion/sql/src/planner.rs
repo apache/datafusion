@@ -1193,33 +1193,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<Expr>>>()?;
 
         // process group by, aggregation or having
-        let (plan, mut select_exprs_post_aggr, having_expr_post_aggr) =
-            if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
-                self.aggregate(
-                    plan,
-                    &select_exprs,
-                    having_expr_opt.as_ref(),
-                    group_by_exprs,
-                    aggr_exprs,
-                )?
-            } else {
-                if let Some(having_expr) = &having_expr_opt {
-                    let available_columns = select_exprs
-                        .iter()
-                        .map(|expr| expr_as_column_expr(expr, &plan))
-                        .collect::<Result<Vec<Expr>>>()?;
-
-                    // Ensure the HAVING expression is using only columns
-                    // provided by the SELECT.
-                    check_columns_satisfy_exprs(
-                        &available_columns,
-                        &[having_expr.clone()],
-                        "HAVING clause references column(s) not provided by the select",
-                    )?;
+        let (plan, mut select_exprs_post_aggr, having_expr_post_aggr) = if !group_by_exprs
+            .is_empty()
+            || !aggr_exprs.is_empty()
+        {
+            self.aggregate(
+                plan,
+                &select_exprs,
+                having_expr_opt.as_ref(),
+                group_by_exprs,
+                aggr_exprs,
+            )?
+        } else {
+            match having_expr_opt {
+                    Some(having_expr) => return Err(DataFusionError::Plan(
+                        format!("having_expr: {} must appear in the GROUP BY clause or be used in an aggregate function", having_expr))),
+                    None => (plan, select_exprs, having_expr_opt)
                 }
-
-                (plan, select_exprs, having_expr_opt)
-            };
+        };
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
             LogicalPlanBuilder::from(plan)
@@ -3641,10 +3632,11 @@ mod tests {
         let sql = "SELECT id, age
                    FROM person
                    HAVING age > 100 AND age < 200";
-        let expected = "Projection: person.id, person.age\
-                        \n  Filter: person.age > Int64(100) AND person.age < Int64(200)\
-                        \n    TableScan: person";
-        quick_test(sql, expected);
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"having_expr: person.age > Int64(100) AND person.age < Int64(200) must appear in the GROUP BY clause or be used in an aggregate function\")",
+            format!("{:?}", err)
+        );
     }
 
     #[test]
@@ -3654,7 +3646,7 @@ mod tests {
                    HAVING first_name = 'M'";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"HAVING clause references column(s) not provided by the select: Expression person.first_name could not be resolved from available columns: person.id, person.age\")",
+            "Plan(\"having_expr: person.first_name = Utf8(\\\"M\\\") must appear in the GROUP BY clause or be used in an aggregate function\")",
             format!("{:?}", err)
         );
     }
@@ -3666,9 +3658,7 @@ mod tests {
                    HAVING age > 100";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"HAVING clause references column(s) not provided by the select: \
-            Expression person.age could not be resolved from available columns: \
-            person.id, person.age + Int64(1)\")",
+            "Plan(\"having_expr: person.age > Int64(100) must appear in the GROUP BY clause or be used in an aggregate function\")",
             format!("{:?}", err)
         );
     }

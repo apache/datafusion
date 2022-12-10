@@ -194,7 +194,7 @@ async fn csv_query_group_by_and_having_and_where() -> Result<()> {
 async fn csv_query_having_without_group_by() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT c1, c2, c3 FROM aggregate_test_100 HAVING c2 >= 4 AND c3 > 90";
+    let sql = "SELECT c1, c2, c3 FROM aggregate_test_100 where c2 >= 4 AND c3 > 90";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+----+-----+",
