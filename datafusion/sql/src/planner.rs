@@ -921,7 +921,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             TableFactor::Table { name, alias, .. } => {
                 // normalize name and alias
                 let table_ref = object_name_to_table_reference(name)?;
-                let table_name = table_ref.display_string();
+                let table_name = table_ref.to_string();
                 let cte = planner_context.ctes.get(&table_name);
                 (
                     match (
@@ -6304,9 +6304,9 @@ mod tests {
 
     #[test]
     fn test_prepare_statement_to_plan_multi_params() {
-        let sql = "PREPARE my_plan(INT, STRING, DOUBLE, INT, DOUBLE, STRING) AS 
-        SELECT id, age, $6  
-        FROM person 
+        let sql = "PREPARE my_plan(INT, STRING, DOUBLE, INT, DOUBLE, STRING) AS
+        SELECT id, age, $6
+        FROM person
         WHERE age IN ($1, $4) AND salary > $3 and salary < $5 OR first_name < $2";
 
         let expected_plan = "Prepare: \"my_plan\" [Int32, Utf8, Float64, Int32, Float64, Utf8] \
@@ -6321,11 +6321,11 @@ mod tests {
 
     #[test]
     fn test_prepare_statement_to_plan_having() {
-        let sql = "PREPARE my_plan(INT, DOUBLE, DOUBLE, DOUBLE) AS 
-        SELECT id, SUM(age)  
+        let sql = "PREPARE my_plan(INT, DOUBLE, DOUBLE, DOUBLE) AS
+        SELECT id, SUM(age)
         FROM person \
-        WHERE salary > $2 
-        GROUP BY id 
+        WHERE salary > $2
+        GROUP BY id
         HAVING sum(age) < $1 AND SUM(age) > 10 OR SUM(age) in ($3, $4)\
         ";
 
