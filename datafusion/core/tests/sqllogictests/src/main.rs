@@ -16,13 +16,12 @@
 // under the License.
 
 use async_trait::async_trait;
-use datafusion::arrow::csv::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sql::parser::{DFParser, Statement};
 use log::info;
-use normalize::normalize_batch;
-use sqllogictest::{ColumnType, DBOutput};
+use normalize::convert_batches;
+use sqllogictest::DBOutput;
 use sqlparser::ast::Statement as SQLStatement;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -171,41 +170,6 @@ async fn context_for_test_file(file_name: &str) -> SessionContext {
             SessionContext::new()
         }
     }
-}
-
-fn convert_batches(batches: Vec<RecordBatch>) -> Result<DBOutput> {
-    let mut bytes = vec![];
-    if batches.is_empty() {
-        return Ok(DBOutput::StatementComplete(0));
-    }
-    // TODO: use the actual types
-    let types = vec![ColumnType::Any; batches[0].num_columns()];
-
-    {
-        let builder = WriterBuilder::new()
-            .has_headers(false)
-            .with_delimiter(b'\t');
-        let mut writer = builder.build(&mut bytes);
-        for batch in batches {
-            writer.write(&normalize_batch(batch)).unwrap();
-        }
-    }
-    let res = String::from_utf8(bytes).unwrap();
-    let rows = res
-        .lines()
-        .map(|s| {
-            s.split('\t')
-                .map(|s| {
-                    if s.is_empty() {
-                        "NULL".to_string()
-                    } else {
-                        s.to_string()
-                    }
-                })
-                .collect()
-        })
-        .collect();
-    Ok(DBOutput::Rows { types, rows })
 }
 
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DBOutput> {
