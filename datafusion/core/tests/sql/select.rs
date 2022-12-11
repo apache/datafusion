@@ -23,57 +23,8 @@ use datafusion::{
 use tempfile::TempDir;
 
 #[tokio::test]
-async fn all_where_empty() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT *
-               FROM aggregate_test_100
-               WHERE 1=2";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["++", "++"];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn select_values_list() -> Result<()> {
     let ctx = SessionContext::new();
-    {
-        let sql = "VALUES (1)";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| 1       |",
-            "+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
-    {
-        let sql = "VALUES (-1)";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| -1      |",
-            "+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
-    {
-        let sql = "VALUES (2+1,2-1,2>1)";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+---------+---------+",
-            "| column1 | column2 | column3 |",
-            "+---------+---------+---------+",
-            "| 3       | 1       | true    |",
-            "+---------+---------+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
     {
         let sql = "VALUES";
         let plan = ctx.create_logical_plan(sql);
@@ -85,35 +36,9 @@ async fn select_values_list() -> Result<()> {
         assert!(plan.is_err());
     }
     {
-        let sql = "VALUES (1),(2)";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| 1       |",
-            "| 2       |",
-            "+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
-    {
         let sql = "VALUES (1),()";
         let plan = ctx.create_logical_plan(sql);
         assert!(plan.is_err());
-    }
-    {
-        let sql = "VALUES (1,'a'),(2,'b')";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+---------+",
-            "| column1 | column2 |",
-            "+---------+---------+",
-            "| 1       | a       |",
-            "| 2       | b       |",
-            "+---------+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
     }
     {
         let sql = "VALUES (1),(1,2)";
