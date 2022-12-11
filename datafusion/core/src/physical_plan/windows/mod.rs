@@ -21,7 +21,7 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     aggregates,
     expressions::{
-        cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue,
+        cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
     },
     type_coercion::coerce,
@@ -101,6 +101,19 @@ fn create_built_in_window_expr(
         BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name)),
         BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name)),
         BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name)),
+        BuiltInWindowFunction::Ntile => {
+            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
+            let n = coerced_args[0]
+                .as_any()
+                .downcast_ref::<Literal>()
+                .unwrap()
+                .value();
+            let n: i64 = n
+                .clone()
+                .try_into()
+                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+            Arc::new(Ntile::new(name, n))
+        }
         BuiltInWindowFunction::Lag => {
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
             let arg = coerced_args[0].clone();
@@ -148,12 +161,6 @@ fn create_built_in_window_expr(
                 coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
             let data_type = args[0].data_type(input_schema)?;
             Arc::new(NthValue::last(name, arg, data_type))
-        }
-        _ => {
-            return Err(DataFusionError::NotImplemented(format!(
-                "Window function with {:?} not yet implemented",
-                fun
-            )))
         }
     })
 }

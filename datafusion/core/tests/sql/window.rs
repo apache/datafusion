@@ -893,6 +893,32 @@ async fn window_frame_ranges_preceding_following() -> Result<()> {
 }
 
 #[tokio::test]
+async fn window_frame_ranges_ntile() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT \
+               NTILE(10) OVER (ORDER BY C12) as ntile1,\
+               NTILE(20) OVER (ORDER BY C12 DESC) as ntile2 \
+               FROM aggregate_test_100 \
+               ORDER BY c9 \
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------+--------+",
+        "| ntile1 | ntile2 |",
+        "+--------+--------+",
+        "| 1      | 20     |",
+        "| 3      | 15     |",
+        "| 1      | 20     |",
+        "| 6      | 9      |",
+        "| 7      | 8      |",
+        "+--------+--------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn window_frame_ranges_string_check() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
