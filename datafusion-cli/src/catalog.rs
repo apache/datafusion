@@ -124,12 +124,20 @@ impl SchemaProvider for DynamicFileSchemaProvider {
 
         self.inner.table(name)
             .or_else(|| {
-                todo!();
-            })
+                // if the inner schema provider didn't have a table by
+                // that name, try to treat it as a listing table
+                println!("Treating {name} as filename...");
 
+                //let config  ListingTableConfig::new()
+
+                // TODO make the correct table provider here
             //let factory ListingTableFactory
 
             // todo wrap here
+                //todo!();
+                None
+            })
+
 
     }
 
