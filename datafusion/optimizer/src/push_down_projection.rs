@@ -391,7 +391,8 @@ fn optimize_plan(
         | LogicalPlan::SetVariable(_)
         | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Distinct(_)
-        | LogicalPlan::Extension { .. } => {
+        | LogicalPlan::Extension { .. }
+        | LogicalPlan::Prepare(_) => {
             let expr = plan.expressions();
             // collect all required columns by this plan
             exprlist_to_columns(&expr, &mut new_required_columns)?;

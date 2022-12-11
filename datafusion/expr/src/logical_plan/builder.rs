@@ -26,9 +26,9 @@ use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
         Aggregate, Analyze, CrossJoin, Distinct, EmptyRelation, Explain, Filter, Join,
-        JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
-        Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan, Union, Values,
-        Window,
+        JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
+        Projection, Repartition, Sort, SubqueryAlias, TableScan, ToStringifiedPlan,
+        Union, Values, Window,
     },
     utils::{
         can_hash, expand_qualified_wildcard, expand_wildcard,
@@ -42,8 +42,9 @@ use datafusion_common::{
     ToDFSchema,
 };
 use std::any::Any;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -118,6 +119,8 @@ impl LogicalPlanBuilder {
     /// By default, it assigns the names column1, column2, etc. to the columns of a VALUES table.
     /// The column names are not specified by the SQL standard and different database systems do it differently,
     /// so it's usually better to override the default names with a table alias list.
+    ///
+    /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
     pub fn values(mut values: Vec<Vec<Expr>>) -> Result<Self> {
         if values.is_empty() {
             return Err(DataFusionError::Plan("Values list cannot be empty".into()));
@@ -277,6 +280,15 @@ impl LogicalPlanBuilder {
             expr,
             Arc::new(self.plan.clone()),
         )?)))
+    }
+
+    /// Make a builder for a prepare logical plan from the builder's plan
+    pub fn prepare(&self, name: String, data_types: Vec<DataType>) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Prepare(Prepare {
+            name,
+            data_types,
+            input: Arc::new(self.plan.clone()),
+        })))
     }
 
     /// Limit the number of rows returned
@@ -966,17 +978,10 @@ pub fn project(
 
 /// Create a SubqueryAlias to wrap a LogicalPlan.
 pub fn subquery_alias(plan: &LogicalPlan, alias: &str) -> Result<LogicalPlan> {
-    subquery_alias_owned(plan.clone(), alias)
-}
-
-pub fn subquery_alias_owned(plan: LogicalPlan, alias: &str) -> Result<LogicalPlan> {
-    let schema: Schema = plan.schema().as_ref().clone().into();
-    let schema = DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
-    Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
-        input: Arc::new(plan),
-        alias: alias.to_string(),
-        schema,
-    }))
+    Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+        plan.clone(),
+        alias,
+    )?))
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
@@ -989,6 +994,68 @@ pub fn table_scan(
     let table_schema = Arc::new(table_schema.clone());
     let table_source = Arc::new(LogicalTableSource { table_schema });
     LogicalPlanBuilder::scan(name.unwrap_or(UNNAMED_TABLE), table_source, projection)
+}
+
+/// Wrap projection for a plan, if the join keys contains normal expression.
+pub fn wrap_projection_for_join_if_necessary(
+    join_keys: &[Expr],
+    input: LogicalPlan,
+) -> Result<(LogicalPlan, Vec<Column>, bool)> {
+    let input_schema = input.schema();
+    let alias_join_keys: Vec<Expr> = join_keys
+        .iter()
+        .map(|key| {
+            // The display_name() of cast expression will ignore the cast info, and show the inner expression name.
+            // If we do not add alais, it will throw same field name error in the schema when adding projection.
+            // For example:
+            //    input scan : [a, b, c],
+            //    join keys: [cast(a as int)]
+            //
+            //  then a and cast(a as int) will use the same field name - `a` in projection schema.
+            //  https://github.com/apache/arrow-datafusion/issues/4478
+            if matches!(key, Expr::Cast(_))
+                || matches!(
+                    key,
+                    Expr::TryCast {
+                        expr: _,
+                        data_type: _
+                    }
+                )
+            {
+                let alias = format!("{:?}", key);
+                key.clone().alias(alias)
+            } else {
+                key.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let need_project = join_keys.iter().any(|key| !matches!(key, Expr::Column(_)));
+    let plan = if need_project {
+        let mut projection = expand_wildcard(input_schema, &input)?;
+        let join_key_items = alias_join_keys
+            .iter()
+            .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))
+            .cloned()
+            .collect::<HashSet<Expr>>();
+        projection.extend(join_key_items);
+
+        LogicalPlanBuilder::from(input)
+            .project(projection)?
+            .build()?
+    } else {
+        input
+    };
+
+    let join_on = alias_join_keys
+        .into_iter()
+        .map(|key| {
+            key.try_into_col()
+                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok((plan, join_on, need_project))
 }
 
 /// Basic TableSource implementation intended for use in tests and documentation. It is expected

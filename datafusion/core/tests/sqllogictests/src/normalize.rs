@@ -15,63 +15,81 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use crate::error::{DFSqlLogicTestError, Result};
+use arrow::{array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
+use datafusion::error::DataFusionError;
+use sqllogictest::{ColumnType, DBOutput};
 
-use arrow::{
-    array::{
-        as_largestring_array, as_string_array, ArrayRef, LargeStringArray, StringArray,
-    },
-    datatypes::DataType,
-    record_batch::RecordBatch,
-};
+/// Converts `batches` to a DBOutput as expected by sqllogicteset.
+///
+/// Assumes empty record batches are a successful statement completion
+///
+pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DBOutput> {
+    if batches.is_empty() {
+        // DataFusion doesn't report number of rows complete
+        return Ok(DBOutput::StatementComplete(0));
+    }
 
-/// Normalizes the content of a RecordBatch prior to printing.
+    let schema = batches[0].schema();
+
+    // TODO: report the the actual types of the result
+    // https://github.com/apache/arrow-datafusion/issues/4499
+    let types = vec![ColumnType::Any; batches[0].num_columns()];
+
+    let mut rows = vec![];
+    for batch in batches {
+        // Verify schema
+        if schema != batch.schema() {
+            return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
+                format!(
+                    "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
+                    schema,
+                    batch.schema()
+                ),
+            )));
+        }
+        rows.append(&mut convert_batch(batch)?);
+    }
+
+    Ok(DBOutput::Rows { types, rows })
+}
+
+/// Convert a single batch to a `Vec<Vec<String>>` for comparison
+fn convert_batch(batch: RecordBatch) -> Result<Vec<Vec<String>>> {
+    (0..batch.num_rows())
+        .map(|row| {
+            batch
+                .columns()
+                .iter()
+                .map(|col| cell_to_string(col, row))
+                .collect::<Result<Vec<String>>>()
+        })
+        .collect()
+}
+
+/// Normalizes the content of a single cell in RecordBatch prior to printing.
 ///
 /// This is to make the output comparable to the semi-standard .slt format
 ///
-/// Normalizations applied:
-/// 1. Null Values (TODO)
-/// 2. [Empty Strings]
+/// Normalizations applied to [NULL Values and empty strings]
 ///
-/// [Empty Strings]: https://duckdb.org/dev/sqllogictest/result_verification#null-values-and-empty-strings
-pub fn normalize_batch(batch: RecordBatch) -> RecordBatch {
-    let new_columns = batch
-        .columns()
-        .iter()
-        .map(|array| {
-            match array.data_type() {
-                DataType::Utf8 => {
-                    let arr: StringArray = as_string_array(array.as_ref())
-                        .iter()
-                        .map(normalize_string)
-                        .collect();
-                    Arc::new(arr) as ArrayRef
-                }
-                DataType::LargeUtf8 => {
-                    let arr: LargeStringArray = as_largestring_array(array.as_ref())
-                        .iter()
-                        .map(normalize_string)
-                        .collect();
-                    Arc::new(arr) as ArrayRef
-                }
-                // todo normalize dictionary values
+/// [NULL Values and empty strings]: https://duckdb.org/dev/sqllogictest/result_verification#null-values-and-empty-strings
+///
+pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
+    // represent any null value with the string "NULL"
+    if !col.is_valid(row) {
+        return Ok("NULL".into());
+    }
 
-                // no normalization on this type
-                _ => array.clone(),
-            }
-        })
-        .collect();
+    // Convert to normal string representation
+    let mut s = arrow::util::display::array_value_to_string(col, row)
+        .map_err(DFSqlLogicTestError::Arrow)?;
 
-    RecordBatch::try_new(batch.schema(), new_columns).expect("creating normalized batch")
-}
-
-fn normalize_string(v: Option<&str>) -> Option<&str> {
-    v.map(|v| {
+    // apply subsequent normalization depending on type if
+    if matches!(col.data_type(), DataType::Utf8 | DataType::LargeUtf8) && s.is_empty() {
         // All empty strings are replaced with this value
-        if v.is_empty() {
-            "(empty)"
-        } else {
-            v
-        }
-    })
+        s = "(empty)".to_string();
+    }
+
+    Ok(s)
 }
