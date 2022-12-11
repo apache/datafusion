@@ -975,7 +975,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let apply_name_plan = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
             plan,
-            &normalize_ident(alias.name),
+            normalize_ident(alias.name),
         )?);
 
         self.apply_expr_alias(apply_name_plan, alias.columns)
