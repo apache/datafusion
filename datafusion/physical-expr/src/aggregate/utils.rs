@@ -21,14 +21,7 @@ use arrow::array::ArrayRef;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-/// Extract scalar values from an accumulator. This can return an error if the accumulator
-/// has any non-scalar values.
-pub fn get_accum_scalar_values(accum: &dyn Accumulator) -> Result<Vec<ScalarValue>> {
-    Ok(accum.state()?.to_vec())
-}
-
-/// Convert scalar values from an accumulator into arrays. This can
-/// return an error if the accumulator has any non-scalar values.
+/// Convert scalar values from an accumulator into arrays.
 pub fn get_accum_scalar_values_as_arrays(
     accum: &dyn Accumulator,
 ) -> Result<Vec<ArrayRef>> {

@@ -243,7 +243,6 @@ impl Accumulator for DistinctCountAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregate::utils::get_accum_scalar_values;
     use arrow::array::{
         ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
         Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
@@ -362,7 +361,7 @@ mod tests {
         let mut accum = agg.create_accumulator()?;
         accum.update_batch(arrays)?;
 
-        Ok((get_accum_scalar_values(accum.as_ref())?, accum.evaluate()?))
+        Ok((accum.state()?, accum.evaluate()?))
     }
 
     fn run_update(
@@ -393,7 +392,7 @@ mod tests {
 
         accum.update_batch(&arrays)?;
 
-        Ok((get_accum_scalar_values(accum.as_ref())?, accum.evaluate()?))
+        Ok((accum.state()?, accum.evaluate()?))
     }
 
     fn run_merge_batch(arrays: &[ArrayRef]) -> Result<(Vec<ScalarValue>, ScalarValue)> {
@@ -411,7 +410,7 @@ mod tests {
         let mut accum = agg.create_accumulator()?;
         accum.merge_batch(arrays)?;
 
-        Ok((get_accum_scalar_values(accum.as_ref())?, accum.evaluate()?))
+        Ok((accum.state()?, accum.evaluate()?))
     }
 
     // Used trait to create associated constant for f32 and f64
