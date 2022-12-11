@@ -21,6 +21,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionContext;
+use datafusion_cli::catalog::DynamicFileCatalog;
 use datafusion_cli::object_storage::DatafusionCliObjectStoreProvider;
 use datafusion_cli::{
     exec, print_format::PrintFormat, print_options::PrintOptions, DATAFUSION_CLI_VERSION,
@@ -29,6 +30,7 @@ use mimalloc::MiMalloc;
 use std::env;
 use std::path::Path;
 use std::sync::Arc;
+
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -105,6 +107,14 @@ pub async fn main() -> Result<()> {
     let runtime_env = create_runtime_env()?;
     let mut ctx =
         SessionContext::with_config_rt(session_config.clone(), Arc::new(runtime_env));
+
+    // install dynamic catalog provider that knows how to open files
+    {
+        let mut state = ctx.state.write();
+        state.catalog_list = Arc::new(DynamicFileCatalog::new(state.catalog_list.clone()));
+    }
+
+
     ctx.refresh_catalogs().await?;
 
     let mut print_options = PrintOptions {
@@ -142,12 +152,18 @@ pub async fn main() -> Result<()> {
     }
 }
 
+
+
+
+
+
 fn create_runtime_env() -> Result<RuntimeEnv> {
     let object_store_provider = DatafusionCliObjectStoreProvider {};
     let object_store_registry =
         ObjectStoreRegistry::new_with_provider(Some(Arc::new(object_store_provider)));
     let rn_config =
         RuntimeConfig::new().with_object_store_registry(Arc::new(object_store_registry));
+
     RuntimeEnv::new(rn_config)
 }
 
