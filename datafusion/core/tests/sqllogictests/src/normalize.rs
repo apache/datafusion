@@ -82,19 +82,14 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
     }
 
     // Convert to normal string representation
-    let s = arrow::util::display::array_value_to_string(col, row)
+    let mut s = arrow::util::display::array_value_to_string(col, row)
         .map_err(DFSqlLogicTestError::Arrow)?;
 
-    // apply subsequent normalization depending on type
-
-    let s = match col.data_type() {
-        DataType::Utf8 | DataType::LargeUtf8 if s.is_empty() => {
-            // All empty strings are replaced with this value
-            "(empty)".to_string()
-        }
-        // no other normalization
-        _ => s,
-    };
+    // apply subsequent normalization depending on type if
+    if matches!(col.data_type(), DataType::Utf8 | DataType::LargeUtf8) && s.is_empty() {
+        // All empty strings are replaced with this value
+        s = "(empty)".to_string();
+    }
 
     Ok(s)
 }
