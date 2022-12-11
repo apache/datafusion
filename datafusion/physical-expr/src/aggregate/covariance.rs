@@ -30,7 +30,7 @@ use arrow::{
 };
 use datafusion_common::{downcast_value, unwrap_or_internal_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 
 use crate::aggregate::stats::StatsType;
 use crate::expressions::format_state_name;
@@ -237,12 +237,12 @@ impl CovarianceAccumulator {
 }
 
 impl Accumulator for CovarianceAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
-            AggregateState::Scalar(ScalarValue::from(self.count)),
-            AggregateState::Scalar(ScalarValue::from(self.mean1)),
-            AggregateState::Scalar(ScalarValue::from(self.mean2)),
-            AggregateState::Scalar(ScalarValue::from(self.algo_const)),
+            ScalarValue::from(self.count),
+            ScalarValue::from(self.mean1),
+            ScalarValue::from(self.mean2),
+            ScalarValue::from(self.algo_const),
         ])
     }
 

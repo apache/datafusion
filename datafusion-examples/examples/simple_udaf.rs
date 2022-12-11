@@ -21,7 +21,6 @@ use datafusion::arrow::{
     array::ArrayRef, array::Float32Array, datatypes::DataType, record_batch::RecordBatch,
 };
 use datafusion::from_slice::FromSlice;
-use datafusion::logical_expr::AggregateState;
 use datafusion::{error::Result, physical_plan::Accumulator};
 use datafusion::{logical_expr::Volatility, prelude::*, scalar::ScalarValue};
 use datafusion_common::cast::as_float64_array;
@@ -108,10 +107,10 @@ impl Accumulator for GeometricMean {
     // This function serializes our state to `ScalarValue`, which DataFusion uses
     // to pass this state between execution stages.
     // Note that this can be arbitrary data.
-    fn state(&self) -> Result<Vec<AggregateState>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
-            AggregateState::Scalar(ScalarValue::from(self.prod)),
-            AggregateState::Scalar(ScalarValue::from(self.n)),
+            ScalarValue::from(self.prod),
+            ScalarValue::from(self.n),
         ])
     }
 

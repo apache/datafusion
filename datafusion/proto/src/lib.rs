@@ -73,7 +73,7 @@ mod roundtrip_tests {
     use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
-        col, lit, Accumulator, AggregateFunction, AggregateState,
+        col, lit, Accumulator, AggregateFunction,
         BuiltinScalarFunction::{Sqrt, Substr},
         Expr, LogicalPlan, Operator, Volatility,
     };
@@ -1209,7 +1209,7 @@ mod roundtrip_tests {
         struct Dummy {}
 
         impl Accumulator for Dummy {
-            fn state(&self) -> datafusion::error::Result<Vec<AggregateState>> {
+            fn state(&self) -> datafusion::error::Result<Vec<ScalarValue>> {
                 Ok(vec![])
             }
 
