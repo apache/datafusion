@@ -212,7 +212,7 @@ CREATE TABLE my_table AS SELECT * FROM aggregate_simple
 query II rowsort
 SELECT * FROM my_table order by c1 LIMIT 1
 ----
-0.00001 1.0e-12 true
+0.00001 0.000000000001 true
 
 statement ok
 DROP TABLE my_table;
@@ -237,7 +237,7 @@ CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT *,c
 query II rowsort
 SELECT * FROM my_table order by c1 LIMIT 1
 ----
-0.00001 1.0e-12 true 1
+0.00001 0.000000000001 true 1
 
 statement ok
 DROP TABLE my_table;
@@ -257,7 +257,7 @@ CREATE TABLE my_table(c1 int, c2 float, c3 varchar) AS VALUES(1, 2, 'hello')
 query II rowsort
 SELECT * FROM my_table;
 ----
-1 2.0 hello
+1 2 hello
 
 statement ok
 DROP TABLE my_table;
@@ -343,8 +343,8 @@ ts TIMESTAMP
 query CC
 SELECT * from csv_with_timestamps
 ----
-Jorge 2018-12-13T12:12:10.011000000
-Andrew 2018-11-13T17:11:10.011000000
+Jorge 2018-12-13T12:12:10.011
+Andrew 2018-11-13T17:11:10.011
 
 statement ok
 DROP TABLE csv_with_timestamps
@@ -369,8 +369,8 @@ LOCATION 'tests/data/partitioned_table';
 query CCC
 SELECT * from csv_with_timestamps where c_date='2018-11-13'
 ----
-Jorge 2018-12-13T12:12:10.011000000 2018-11-13
-Andrew 2018-11-13T17:11:10.011000000 2018-11-13
+Jorge 2018-12-13T12:12:10.011 2018-11-13
+Andrew 2018-11-13T17:11:10.011 2018-11-13
 
 statement ok
 DROP TABLE csv_with_timestamps
@@ -409,7 +409,7 @@ CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '
 query CCC
 SELECT * FROM aggregate_simple order by c1 LIMIT 1;
 ----
-0.00001 1.0e-12 true
+0.00001 0.000000000001 true
 
 statement ok
 DROP TABLE aggregate_simple
