@@ -44,4 +44,4 @@ log = "^0.4"
 sqlparser = "0.27"
 
 [dev-dependencies]
-datafusion-physical-expr = { path = "../physical-expr" }
+datafusion = { path = "../core" }

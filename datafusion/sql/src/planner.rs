@@ -3289,13 +3289,14 @@ fn ensure_any_column_reference_is_unambiguous(
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::array::ArrayRef;
+    use datafusion::prelude::SessionContext;
     use std::any::Any;
 
     use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
     use datafusion_common::assert_contains;
-    use datafusion_expr::{create_udaf, Volatility};
-    use datafusion_physical_expr::expressions::MaxAccumulator;
+    use datafusion_expr::{create_udaf, Accumulator, AggregateState, Volatility};
 
     use super::*;
 
@@ -5297,23 +5298,60 @@ mod tests {
 
     #[test]
     fn udaf_as_window_func() -> Result<()> {
-        let my_max = create_udaf(
-            "my_max",
+        #[derive(Debug)]
+        struct MyAccumulator;
+
+        impl Accumulator for MyAccumulator {
+            fn state(&self) -> Result<Vec<AggregateState>> {
+                unimplemented!()
+            }
+
+            fn update_batch(&mut self, _: &[ArrayRef]) -> Result<()> {
+                unimplemented!()
+            }
+
+            fn merge_batch(&mut self, _: &[ArrayRef]) -> Result<()> {
+                unimplemented!()
+            }
+
+            fn evaluate(&self) -> Result<ScalarValue> {
+                unimplemented!()
+            }
+
+            fn size(&self) -> usize {
+                unimplemented!()
+            }
+        }
+
+        let my_acc = create_udaf(
+            "my_acc",
             DataType::Int32,
             Arc::new(DataType::Int32),
             Volatility::Immutable,
-            Arc::new(|_| Ok(Box::new(MaxAccumulator::try_new(&DataType::Int32)?))),
+            Arc::new(|_| Ok(Box::new(MyAccumulator))),
             Arc::new(vec![DataType::Int32]),
         );
 
-        let mut context = MockContextProvider::default();
-        context.udafs.insert("my_max".to_string(), Arc::new(my_max));
+        let mut context = SessionContext::new();
+        context.register_table(
+            TableReference::Bare { table: "my_table" },
+            Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::new(
+                Schema::new(vec![
+                    Field::new("a", DataType::UInt32, false),
+                    Field::new("b", DataType::Int32, false),
+                ]),
+            ))),
+        )?;
+        context.register_udaf(my_acc);
 
-        let sql = "SELECT order_id, MY_MAX(qty) OVER(PARTITION BY order_id) FROM orders";
-        let expected = r#"Projection: orders.order_id, AggregateUDF { name: "my_max", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" }(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-  WindowAggr: windowExpr=[[AggregateUDF { name: "my_max", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" }(orders.qty) PARTITION BY [orders.order_id] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-    TableScan: orders"#;
-        quick_test_with_context(&context, sql, expected)
+        let sql = "SELECT a, MY_ACC(b) OVER(PARTITION BY a) FROM my_table";
+        let expected = r#"Projection: my_table.a, AggregateUDF { name: "my_acc", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" }(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+  WindowAggr: windowExpr=[[AggregateUDF { name: "my_acc", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" }(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+    TableScan: my_table"#;
+
+        let plan = context.create_logical_plan(sql)?;
+        assert_eq!(format!("{:?}", plan), expected);
+        Ok(())
     }
 
     #[test]
@@ -5400,20 +5438,6 @@ mod tests {
             let dt = format!("{:?}", data_types);
             assert_eq!(dt, expected_data_types);
         }
-    }
-
-    fn quick_test_with_context<S: ContextProvider>(
-        context: &S,
-        sql: &str,
-        expected: &str,
-    ) -> Result<()> {
-        let stmt = DFParser::parse_sql_with_dialect(sql, &GenericDialect)?
-            .remove(0)
-            .unwrap();
-        let planner = SqlToRel::new(context);
-        let plan = planner.statement_to_plan(stmt)?;
-        assert_eq!(format!("{:?}", plan), expected);
-        Ok(())
     }
 
     #[derive(Default)]

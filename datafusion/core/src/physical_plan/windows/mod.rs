@@ -178,7 +178,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_primitive_array;
-    use datafusion_common::downcast_value;
     use datafusion_expr::{create_udaf, Accumulator, AggregateState, Volatility};
     use futures::FutureExt;
 
@@ -207,7 +206,7 @@ mod tests {
             }
 
             fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-                let counts = downcast_value!(states[0], Int64Array);
+                let counts: &Int64Array = arrow::array::as_primitive_array(&states[0]);
                 if let Some(c) = &arrow::compute::sum(counts) {
                     self.0 += *c;
                 }
