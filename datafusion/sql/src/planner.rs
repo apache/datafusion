@@ -23,7 +23,6 @@ use std::sync::Arc;
 use std::{convert::TryInto, vec};
 
 use arrow_schema::*;
-use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayAgg, ExactNumberInfo, SetQuantifier};
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
@@ -34,6 +33,7 @@ use sqlparser::ast::{
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
+use sqlparser::ast::{TimezoneInfo, WildcardAdditionalOptions};
 use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::parsers::parse_interval;
@@ -1621,7 +1621,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let expr = Alias(Box::new(select_expr), normalize_ident(&alias));
                 Ok(vec![normalize_col(expr, plan)?])
             }
-            SelectItem::Wildcard => {
+            SelectItem::Wildcard(options) => {
+                Self::check_wildcard_options(options)?;
+
                 if empty_from {
                     return Err(DataFusionError::Plan(
                         "SELECT * with no tables specified is not valid".to_string(),
@@ -1630,11 +1632,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // do not expand from outer schema
                 expand_wildcard(plan.schema().as_ref(), plan)
             }
-            SelectItem::QualifiedWildcard(ref object_name) => {
+            SelectItem::QualifiedWildcard(ref object_name, options) => {
+                Self::check_wildcard_options(options)?;
+
                 let qualifier = format!("{}", object_name);
                 // do not expand from outer schema
                 expand_qualified_wildcard(&qualifier, plan.schema().as_ref(), plan)
             }
+        }
+    }
+
+    fn check_wildcard_options(options: WildcardAdditionalOptions) -> Result<()> {
+        let WildcardAdditionalOptions {
+            opt_exclude,
+            opt_except,
+        } = options;
+
+        if opt_exclude.is_some() || opt_except.is_some() {
+            Err(DataFusionError::NotImplemented(
+                "wildcard * with EXCLUDE or EXCEPT not supported ".to_string(),
+            ))
+        } else {
+            Ok(())
         }
     }
 
@@ -1794,10 +1813,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         values: SQLValues,
         param_data_types: &[DataType],
     ) -> Result<LogicalPlan> {
+        let SQLValues {
+            explicit_row: _,
+            rows,
+        } = values;
+
         // values should not be based on any other schema
         let schema = DFSchema::empty();
-        let values = values
-            .0
+        let values = rows
             .into_iter()
             .map(|row| {
                 row.into_iter()
