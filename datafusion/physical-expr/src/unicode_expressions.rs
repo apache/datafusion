@@ -25,11 +25,13 @@ use arrow::{
     array::{ArrayRef, GenericStringArray, OffsetSizeTrait, PrimitiveArray},
     datatypes::{ArrowNativeType, ArrowPrimitiveType},
 };
-use datafusion_common::{cast::{as_int64_array, as_generic_string_array}, DataFusionError, Result};
+use datafusion_common::{
+    cast::{as_generic_string_array, as_int64_array},
+    DataFusionError, Result,
+};
 use hashbrown::HashMap;
-use std::cmp::Ordering;
+use std::cmp::{max, Ordering};
 use std::sync::Arc;
-use std::{cmp::max};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Returns number of characters in the string.
