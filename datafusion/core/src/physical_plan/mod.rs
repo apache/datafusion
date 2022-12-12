@@ -241,6 +241,16 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 
     /// Returns the global output statistics for this `ExecutionPlan` node.
     fn statistics(&self) -> Statistics;
+
+    /// Indicate whether a data exchange is needed, which will be very helpful
+    /// especially for the distributed engine to judge whether need to deal with shuffling.
+    /// Currently there are 3 kinds of execution plan which needs data exchange
+    ///     1. RepartitionExec for changing the partition number between two operators
+    ///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
+    ///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
+    fn need_data_exchange(&self) -> bool {
+        false
+    }
 }
 
 /// Returns a copy of this plan if we change any child according to the pointer comparison.

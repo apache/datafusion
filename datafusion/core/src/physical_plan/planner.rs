@@ -18,7 +18,6 @@
 //! Physical query planner
 
 use super::analyze::AnalyzeExec;
-use super::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use super::{
     aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
@@ -838,22 +837,7 @@ impl DefaultPhysicalPlanner {
                             )),
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    // If we have a `LIMIT` can run sort/limts in parallel (similar to TopK)
-                    Ok(if fetch.is_some() && session_state.config.target_partitions() > 1 {
-                        let sort = SortExec::new_with_partitioning(
-                            sort_expr,
-                            physical_input,
-                            true,
-                            *fetch,
-                        );
-                        let merge = SortPreservingMergeExec::new(
-                            sort.expr().to_vec(),
-                            Arc::new(sort),
-                        );
-                        Arc::new(merge)
-                    } else {
-                        Arc::new(SortExec::try_new(sort_expr, physical_input, *fetch)?)
-                    })
+                    Ok(Arc::new(SortExec::try_new(sort_expr, physical_input, *fetch)?))
                 }
                 LogicalPlan::Join(Join {
                     left,

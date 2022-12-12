@@ -176,6 +176,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
     fn statistics(&self) -> Statistics {
         self.input.statistics()
     }
+
+    fn need_data_exchange(&self) -> bool {
+        self.input.output_partitioning().partition_count() > 1
+    }
 }
 
 struct MergeStream {
