@@ -191,27 +191,6 @@ async fn csv_query_group_by_and_having_and_where() -> Result<()> {
 }
 
 #[tokio::test]
-async fn csv_query_having_without_group_by() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT c1, c2, c3 FROM aggregate_test_100 HAVING c2 >= 4 AND c3 > 90";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----+----+-----+",
-        "| c1 | c2 | c3  |",
-        "+----+----+-----+",
-        "| c  | 4  | 123 |",
-        "| c  | 5  | 118 |",
-        "| d  | 4  | 102 |",
-        "| e  | 4  | 96  |",
-        "| e  | 4  | 97  |",
-        "+----+----+-----+",
-    ];
-    assert_batches_sorted_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn csv_query_group_by_substr() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
