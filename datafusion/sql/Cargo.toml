@@ -42,3 +42,6 @@ datafusion-common = { path = "../common", version = "15.0.0" }
 datafusion-expr = { path = "../expr", version = "15.0.0" }
 log = "^0.4"
 sqlparser = "0.28"
+
+[dev-dependencies]
+datafusion = { path = "../core" }
