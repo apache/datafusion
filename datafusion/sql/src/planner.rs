@@ -5379,15 +5379,32 @@ mod tests {
         sql: &str,
         expected_plan: &str,
         expected_data_types: &str,
-    ) {
+    ) -> LogicalPlan {
         let plan = logical_plan(sql).unwrap();
+
+        let assert_plan = plan.clone();
         // verify plan
-        assert_eq!(format!("{:?}", plan), expected_plan);
+        assert_eq!(format!("{:?}", assert_plan), expected_plan);
+
         // verify data types
-        if let LogicalPlan::Prepare(Prepare { data_types, .. }) = plan {
+        if let LogicalPlan::Prepare(Prepare { data_types, .. }) = assert_plan {
             let dt = format!("{:?}", data_types);
             assert_eq!(dt, expected_data_types);
         }
+
+        plan
+    }
+
+    fn prepare_stmt_replace_params_quick_test(
+        plan: LogicalPlan,
+        param_values: Vec<ScalarValue>,
+        expected_plan: &str,
+    ) -> LogicalPlan {
+        // replace params
+        let plan = plan.with_param_values(param_values).unwrap();
+        assert_eq!(format!("{:?}", plan), expected_plan);
+
+        plan
     }
 
     struct MockContextProvider {}
@@ -6197,11 +6214,7 @@ mod tests {
         // param is not number following the $ sign
         // panic due to error returned from the parser
         let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $foo";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6210,11 +6223,7 @@ mod tests {
         // param is not number following the $ sign
         // panic due to error returned from the parser
         let sql = "PREPARE AS SELECT id, age  FROM person WHERE age = $foo";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6223,11 +6232,7 @@ mod tests {
     )]
     fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
         let sql = "PREPARE my_plan(INT) AS SELECT id + $1";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6237,11 +6242,7 @@ mod tests {
     fn test_prepare_statement_to_plan_panic_no_data_types() {
         // only provide 1 data type while using 2 params
         let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1 + $2";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6250,11 +6251,7 @@ mod tests {
     )]
     fn test_prepare_statement_to_plan_panic_is_param() {
         let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6269,9 +6266,18 @@ mod tests {
 
         let expected_dt = "[Int32]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
-        /////////////////////////
+        ///////////////////
+        // replace params with values
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "Projection: person.id, person.age\
+        \n  Filter: person.age = Int64(10)\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+
+        //////////////////////////////////////////
         // no embedded parameter and no declare it
         let sql = "PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10";
 
@@ -6282,7 +6288,54 @@ mod tests {
 
         let expected_dt = "[]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![];
+        let expected_plan = "Projection: person.id, person.age\
+        \n  Filter: person.age = Int64(10)\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    }
+
+    #[test]
+    #[should_panic(expected = "value: Internal(\"Expected 1 parameters, got 0\")")]
+    fn test_prepare_statement_to_plan_one_param_no_value_panic() {
+        // no embedded parameter but still declare it
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
+        let plan = logical_plan(sql).unwrap();
+        // declare 1 param but provide 0
+        let param_values = vec![];
+        let expected_plan = "whatever";
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "value: Internal(\"Expected parameter of type Int32, got Float64 at index 0\")"
+    )]
+    fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
+        // no embedded parameter but still declare it
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
+        let plan = logical_plan(sql).unwrap();
+        // declare 1 param but provide 0
+        let param_values = vec![ScalarValue::Float64(Some(20.0))];
+        let expected_plan = "whatever";
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    }
+
+    #[test]
+    #[should_panic(expected = "value: Internal(\"Expected 0 parameters, got 1\")")]
+    fn test_prepare_statement_to_plan_no_param_on_value_panic() {
+        // no embedded parameter but still declare it
+        let sql = "PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10";
+        let plan = logical_plan(sql).unwrap();
+        // declare 1 param but provide 0
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "whatever";
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6293,25 +6346,50 @@ mod tests {
         \n  Projection: $1\n    EmptyRelation";
         let expected_dt = "[Int32]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
-        /////////////////////////
+        ///////////////////
+        // replace params with values
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "Projection: Int32(10)\n  EmptyRelation";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+
+        ///////////////////////////////////////
         let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1";
 
         let expected_plan = "Prepare: \"my_plan\" [Int32] \
         \n  Projection: Int64(1) + $1\n    EmptyRelation";
         let expected_dt = "[Int32]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
-        /////////////////////////
+        ///////////////////
+        // replace params with values
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "Projection: Int64(1) + Int32(10)\n  EmptyRelation";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+
+        ///////////////////////////////////////
         let sql = "PREPARE my_plan(INT, DOUBLE) AS SELECT 1 + $1 + $2";
 
         let expected_plan = "Prepare: \"my_plan\" [Int32, Float64] \
         \n  Projection: Int64(1) + $1 + $2\n    EmptyRelation";
         let expected_dt = "[Int32, Float64]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![
+            ScalarValue::Int32(Some(10)),
+            ScalarValue::Float64(Some(10.0)),
+        ];
+        let expected_plan =
+            "Projection: Int64(1) + Int32(10) + Float64(10)\n  EmptyRelation";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6325,7 +6403,41 @@ mod tests {
 
         let expected_dt = "[Int32]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "Projection: person.id, person.age\
+        \n  Filter: person.age = Int32(10)\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    }
+
+    #[test]
+    fn test_prepare_statement_to_plan_data_type() {
+        let sql = "PREPARE my_plan(DOUBLE) AS SELECT id, age  FROM person WHERE age = $1";
+
+        // age is defined as Int32 but prepare statement declares it as DOUBLE/Float64
+        // Prepare statement and its logical plan should be created successfully
+        let expected_plan = "Prepare: \"my_plan\" [Float64] \
+        \n  Projection: person.id, person.age\
+        \n    Filter: person.age = $1\
+        \n      TableScan: person";
+
+        let expected_dt = "[Float64]";
+
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values still succeed and use Float64
+        let param_values = vec![ScalarValue::Float64(Some(10.0))];
+        let expected_plan = "Projection: person.id, person.age\
+        \n  Filter: person.age = Float64(10)\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6342,7 +6454,24 @@ mod tests {
 
         let expected_dt = "[Int32, Utf8, Float64, Int32, Float64, Utf8]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![
+            ScalarValue::Int32(Some(10)),
+            ScalarValue::Utf8(Some("abc".to_string())),
+            ScalarValue::Float64(Some(100.0)),
+            ScalarValue::Int32(Some(20)),
+            ScalarValue::Float64(Some(200.0)),
+            ScalarValue::Utf8(Some("xyz".to_string())),
+        ];
+        let expected_plan =
+        "Projection: person.id, person.age, Utf8(\"xyz\")\
+        \n  Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8(\"abc\")\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6364,7 +6493,24 @@ mod tests {
 
         let expected_dt = "[Int32, Float64, Float64, Float64]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![
+            ScalarValue::Int32(Some(10)),
+            ScalarValue::Float64(Some(100.0)),
+            ScalarValue::Float64(Some(200.0)),
+            ScalarValue::Float64(Some(300.0)),
+        ];
+        let expected_plan =
+        "Projection: person.id, SUM(person.age)\
+        \n  Filter: SUM(person.age) < Int32(10) AND SUM(person.age) > Int64(10) OR SUM(person.age) IN ([Float64(200), Float64(300)])\
+        \n    Aggregate: groupBy=[[person.id]], aggr=[[SUM(person.age)]]\
+        \n      Filter: person.salary > Float64(100)\
+        \n        TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6379,7 +6525,20 @@ mod tests {
 
         let expected_dt = "[Utf8, Utf8]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![
+            ScalarValue::Utf8(Some("a".to_string())),
+            ScalarValue::Utf8(Some("b".to_string())),
+        ];
+        let expected_plan = "Projection: num, letter\
+        \n  Projection: t.column1 AS num, t.column2 AS letter\
+        \n    SubqueryAlias: t\
+        \n      Values: (Int64(1), Utf8(\"a\")), (Int64(2), Utf8(\"b\"))";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]

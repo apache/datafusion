@@ -16,17 +16,20 @@
 // under the License.
 
 use crate::expr::BinaryExpr;
+use crate::expr_rewriter::{ExprRewritable, ExprRewriter};
 ///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::utils::{
-    exprlist_to_fields, from_plan, grouping_set_expr_count, grouping_set_to_exprlist,
+    self, exprlist_to_fields, from_plan, grouping_set_expr_count,
+    grouping_set_to_exprlist,
 };
 use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    ScalarValue,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -364,6 +367,42 @@ impl LogicalPlan {
     ) -> Result<LogicalPlan, DataFusionError> {
         from_plan(self, &self.expressions(), inputs)
     }
+
+    /// Convert a prepare logical plan into its inner logical plan with all params replaced with their corresponding values
+    pub fn with_param_values(
+        self,
+        param_values: Vec<ScalarValue>,
+    ) -> Result<LogicalPlan, DataFusionError> {
+        match self {
+            LogicalPlan::Prepare(prepare_lp) => {
+                // Verify if the number of params matches the number of values
+                if prepare_lp.data_types.len() != param_values.len() {
+                    return Err(DataFusionError::Internal(format!(
+                        "Expected {} parameters, got {}",
+                        prepare_lp.data_types.len(),
+                        param_values.len()
+                    )));
+                }
+
+                // Verify if the types of the params matches the types of the values
+                let iter = prepare_lp.data_types.iter().zip(param_values.iter());
+                for (i, (param_type, value)) in iter.enumerate() {
+                    if *param_type != value.get_datatype() {
+                        return Err(DataFusionError::Internal(format!(
+                            "Expected parameter of type {:?}, got {:?} at index {}",
+                            param_type,
+                            value.get_datatype(),
+                            i
+                        )));
+                    }
+                }
+
+                let input_plan = prepare_lp.input;
+                input_plan.replace_params_with_values(&param_values)
+            }
+            _ => Ok(self),
+        }
+    }
 }
 
 /// Trait that implements the [Visitor
@@ -533,6 +572,72 @@ impl LogicalPlan {
             }
             _ => {}
         }
+    }
+
+    /// Return a logical plan with all placeholders/params (e.g $1 $2, ...) replaced with corresponding values provided in the prams_values
+    pub fn replace_params_with_values(
+        &self,
+        param_values: &Vec<ScalarValue>,
+    ) -> Result<LogicalPlan, DataFusionError> {
+        let exprs = self.expressions();
+        let mut new_exprs = vec![];
+        for expr in exprs {
+            new_exprs.push(Self::replace_placeholders_with_values(expr, param_values)?);
+        }
+
+        let new_inputs = self.inputs();
+        let mut new_inputs_with_values = vec![];
+        for input in new_inputs {
+            new_inputs_with_values.push(input.replace_params_with_values(param_values)?);
+        }
+
+        let new_plan = utils::from_plan(self, &new_exprs, &new_inputs_with_values)?;
+        Ok(new_plan)
+    }
+
+    /// Return an Expr with all placeholders replaced with their corresponding values provided in the prams_values
+    fn replace_placeholders_with_values(
+        expr: Expr,
+        param_values: &Vec<ScalarValue>,
+    ) -> Result<Expr, DataFusionError> {
+        struct PlaceholderReplacer<'a> {
+            param_values: &'a Vec<ScalarValue>,
+        }
+
+        impl<'a> ExprRewriter for PlaceholderReplacer<'a> {
+            fn mutate(&mut self, expr: Expr) -> Result<Expr, DataFusionError> {
+                if let Expr::Placeholder { id, data_type } = &expr {
+                    // convert id (in format $1, $2, ..) to idx (0, 1, ..)
+                    let idx = id[1..].parse::<usize>().map_err(|e| {
+                        DataFusionError::Internal(format!(
+                            "Failed to parse placeholder id: {}",
+                            e
+                        ))
+                    })? - 1;
+                    // value at the idx-th position in param_values should be the value for the placeholder
+                    let value = self.param_values.get(idx).ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "No value found for placeholder with id {}",
+                            id
+                        ))
+                    })?;
+                    // check if the data type of the value matches the data type of the placeholder
+                    if value.get_datatype() != *data_type {
+                        return Err(DataFusionError::Internal(format!(
+                            "Placeholder value type mismatch: expected {:?}, got {:?}",
+                            data_type,
+                            value.get_datatype()
+                        )));
+                    }
+                    // Replace the placeholder with the value
+                    Ok(Expr::Literal(value.clone()))
+                } else {
+                    Ok(expr)
+                }
+            }
+        }
+
+        expr.rewrite(&mut PlaceholderReplacer { param_values })
     }
 }
 
