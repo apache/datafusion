@@ -22,27 +22,15 @@
 //! Unicode expressions
 
 use arrow::{
-    array::{ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait, PrimitiveArray},
+    array::{ArrayRef, GenericStringArray, OffsetSizeTrait, PrimitiveArray},
     datatypes::{ArrowNativeType, ArrowPrimitiveType},
 };
-use datafusion_common::{cast::as_generic_string_array, DataFusionError, Result};
+use datafusion_common::{cast::{as_int64_array, as_generic_string_array}, DataFusionError, Result};
 use hashbrown::HashMap;
 use std::cmp::Ordering;
 use std::sync::Arc;
-use std::{any::type_name, cmp::max};
+use std::{cmp::max};
 use unicode_segmentation::UnicodeSegmentation;
-
-macro_rules! downcast_arg {
-    ($ARG:expr, $NAME:expr, $ARRAY_TYPE:ident) => {{
-        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "could not cast {} to {}",
-                $NAME,
-                type_name::<$ARRAY_TYPE>()
-            ))
-        })?
-    }};
-}
 
 /// Returns number of characters in the string.
 /// character_length('josé') = 4
@@ -72,7 +60,7 @@ where
 /// The implementation uses UTF-8 code points as characters
 pub fn left<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = as_generic_string_array::<T>(&args[0])?;
-    let n_array = downcast_arg!(args[1], "n", Int64Array);
+    let n_array = as_int64_array(&args[1])?;
     let result = string_array
         .iter()
         .zip(n_array.iter())
@@ -104,7 +92,7 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => {
             let string_array = as_generic_string_array::<T>(&args[0])?;
-            let length_array = downcast_arg!(args[1], "length", Int64Array);
+            let length_array = as_int64_array(&args[1])?;
 
             let result = string_array
                 .iter()
@@ -140,7 +128,7 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         3 => {
             let string_array = as_generic_string_array::<T>(&args[0])?;
-            let length_array = downcast_arg!(args[1], "length", Int64Array);
+            let length_array = as_int64_array(&args[1])?;
             let fill_array = as_generic_string_array::<T>(&args[2])?;
 
             let result = string_array
@@ -216,7 +204,7 @@ pub fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// The implementation uses UTF-8 code points as characters
 pub fn right<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = as_generic_string_array::<T>(&args[0])?;
-    let n_array = downcast_arg!(args[1], "n", Int64Array);
+    let n_array = as_int64_array(&args[1])?;
 
     let result = string_array
         .iter()
@@ -250,7 +238,7 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => {
             let string_array = as_generic_string_array::<T>(&args[0])?;
-            let length_array = downcast_arg!(args[1], "length", Int64Array);
+            let length_array = as_int64_array(&args[1])?;
 
             let result = string_array
                 .iter()
@@ -285,7 +273,7 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         3 => {
             let string_array = as_generic_string_array::<T>(&args[0])?;
-            let length_array = downcast_arg!(args[1], "length", Int64Array);
+            let length_array = as_int64_array(&args[1])?;
             let fill_array = as_generic_string_array::<T>(&args[2])?;
 
             let result = string_array
@@ -376,7 +364,7 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => {
             let string_array = as_generic_string_array::<T>(&args[0])?;
-            let start_array = downcast_arg!(args[1], "start", Int64Array);
+            let start_array = as_int64_array(&args[1])?;
 
             let result = string_array
                 .iter()
@@ -397,8 +385,8 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         3 => {
             let string_array = as_generic_string_array::<T>(&args[0])?;
-            let start_array = downcast_arg!(args[1], "start", Int64Array);
-            let count_array = downcast_arg!(args[2], "count", Int64Array);
+            let start_array = as_int64_array(&args[1])?;
+            let count_array = as_int64_array(&args[2])?;
 
             let result = string_array
                 .iter()
