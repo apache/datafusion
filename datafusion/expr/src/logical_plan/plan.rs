@@ -1300,13 +1300,17 @@ pub struct SubqueryAlias {
 }
 
 impl SubqueryAlias {
-    pub fn try_new(plan: LogicalPlan, alias: &str) -> datafusion_common::Result<Self> {
+    pub fn try_new(
+        plan: LogicalPlan,
+        alias: impl Into<String>,
+    ) -> datafusion_common::Result<Self> {
+        let alias = alias.into();
         let schema: Schema = plan.schema().as_ref().clone().into();
         let schema =
-            DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
+            DFSchemaRef::new(DFSchema::try_from_qualified_schema(&alias, &schema)?);
         Ok(SubqueryAlias {
             input: Arc::new(plan),
-            alias: alias.to_string(),
+            alias,
             schema,
         })
     }
