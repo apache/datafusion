@@ -23,7 +23,7 @@
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFField, DFSchemaRef};
 use datafusion_expr::{
-    and, logical_plan::Filter, logical_plan::JoinType, Expr, LogicalPlan,
+    and, logical_plan::Filter, logical_plan::JoinType, Expr, LogicalPlan, ExprSchemable,
 };
 use std::sync::Arc;
 
@@ -54,16 +54,24 @@ impl OptimizerRule for FilterNullJoinKeys {
                 let mut right_filters = vec![];
 
                 for (l, r) in &join.on {
-                    if let Some((left_field, right_field)) =
-                        resolve_join_key_pair(left_schema, right_schema, l, r)
-                    {
-                        if left_field.is_nullable() {
-                            left_filters.push(l.clone());
-                        }
-                        if right_field.is_nullable() {
-                            right_filters.push(r.clone());
-                        }
+                    if l.nullable(left_schema)? {
+                        left_filters.push(l.clone());
                     }
+
+                    if r.nullable(right_schema)? {
+                        right_filters.push(r.clone());
+                    }
+
+                    // if let Some((left_field, right_field)) =
+                    //     resolve_join_key_pair(left_schema, right_schema, l, r)
+                    // {
+                    //     if left_field.is_nullable() {
+                    //         left_filters.push(l.clone());
+                    //     }
+                    //     if right_field.is_nullable() {
+                    //         right_filters.push(r.clone());
+                    //     }
+                    // }
                 }
 
                 if !left_filters.is_empty() {
@@ -94,10 +102,10 @@ impl OptimizerRule for FilterNullJoinKeys {
     }
 }
 
-fn create_not_null_predicate(columns: Vec<Column>) -> Expr {
-    let not_null_exprs: Vec<Expr> = columns
+fn create_not_null_predicate(filters: Vec<Expr>) -> Expr {
+    let not_null_exprs: Vec<Expr> = filters
         .into_iter()
-        .map(|c| Expr::IsNotNull(Box::new(Expr::Column(c))))
+        .map(|c| Expr::IsNotNull(Box::new(c)))
         .collect();
     // combine the IsNotNull expressions with AND
     not_null_exprs

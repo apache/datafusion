@@ -862,32 +862,39 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .unwrap_or(Ok(join))?
                         .build()
                 } else {
-                    // Wrap projection for left input if left join keys contain normal expression.
-                    let (left_child, left_join_keys, left_projected) =
-                        wrap_projection_for_join_if_necessary(&left_keys, left)?;
+                    // // Wrap projection for left input if left join keys contain normal expression.
+                    // let (left_child, left_join_keys, left_projected) =
+                    //     wrap_projection_for_join_if_necessary(&left_keys, left)?;
 
-                    // Wrap projection for right input if right join keys contains normal expression.
-                    let (right_child, right_join_keys, right_projected) =
-                        wrap_projection_for_join_if_necessary(&right_keys, right)?;
+                    // // Wrap projection for right input if right join keys contains normal expression.
+                    // let (right_child, right_join_keys, right_projected) =
+                    //     wrap_projection_for_join_if_necessary(&right_keys, right)?;
 
-                    let join_plan_builder = LogicalPlanBuilder::from(left_child).join(
-                        &right_child,
+                    // let join_plan_builder = LogicalPlanBuilder::from(left_child).join(
+                    //     &right_child,
+                    //     join_type,
+                    //     (left_join_keys, right_join_keys),
+                    //     join_filter,
+                    // )?;
+
+                    // // Remove temporary projected columns if necessary.
+                    // if left_projected || right_projected {
+                    //     let final_join_result = join_schema
+                    //         .fields()
+                    //         .iter()
+                    //         .map(|field| Expr::Column(field.qualified_column()))
+                    //         .collect::<Vec<_>>();
+                    //     join_plan_builder.project(final_join_result)?.build()
+                    // } else {
+                    //     join_plan_builder.build()
+                    // }
+
+                    LogicalPlanBuilder::from(left).join_with_expr_keys(
+                        &right,
                         join_type,
-                        (left_join_keys, right_join_keys),
+                        (left_keys, right_keys),
                         join_filter,
-                    )?;
-
-                    // Remove temporary projected columns if necessary.
-                    if left_projected || right_projected {
-                        let final_join_result = join_schema
-                            .fields()
-                            .iter()
-                            .map(|field| Expr::Column(field.qualified_column()))
-                            .collect::<Vec<_>>();
-                        join_plan_builder.project(final_join_result)?.build()
-                    } else {
-                        join_plan_builder.build()
-                    }
+                    )?.build()
                 }
             }
             JoinConstraint::Using(idents) => {
@@ -1061,7 +1068,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // For query: select id from t1 join t2 using(id), this is legal.
             // We should dedup the fields for cols in using clause.
             for join_cols in on.iter() {
-                let left_field = left.schema().field_from_column(&join_cols.0)?;
+                let left_field = left
+                    .schema()
+                    .field_from_column(&join_cols.0.try_into_col()?)?;
                 fields.retain(|field| {
                     field.unqualified_column().name
                         != left_field.unqualified_column().name
@@ -6073,13 +6082,19 @@ mod tests {
             INNER JOIN orders \
             ON orders.customer_id * 2 = person.id + 10";
 
+        // let expected = "Projection: person.id, orders.order_id\
+        // \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+        // \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        // \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
+        // \n        TableScan: person\
+        // \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
+        // \n        TableScan: orders";
+
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+
         quick_test(sql, expected);
     }
 
@@ -6090,13 +6105,18 @@ mod tests {
             INNER JOIN orders \
             ON person.id + 10 = orders.customer_id * 2";
 
+        // let expected = "Projection: person.id, orders.order_id\
+        // \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+        // \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        // \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
+        // \n        TableScan: person\
+        // \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
+        // \n        TableScan: orders";
+
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6107,13 +6127,18 @@ mod tests {
             INNER JOIN orders \
             ON person.id + person.age + 10 = orders.customer_id * 2 - orders.price";
 
+        // let expected = "Projection: person.id, orders.order_id\
+        // \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+        // \n    Inner Join: person.id + person.age + Int64(10) = orders.customer_id * Int64(2) - orders.price\
+        // \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + person.age + Int64(10)\
+        // \n        TableScan: person\
+        // \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
+        // \n        TableScan: orders";
+
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + person.age + Int64(10) = orders.customer_id * Int64(2) - orders.price\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + person.age + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + person.age + Int64(10) = orders.customer_id * Int64(2) - orders.price\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6124,12 +6149,17 @@ mod tests {
             INNER JOIN orders \
             ON person.id + person.age + 10 = orders.customer_id";
 
+        // let expected = "Projection: person.id, orders.order_id\
+        // \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+        // \n    Inner Join: person.id + person.age + Int64(10) = orders.customer_id\
+        // \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + person.age + Int64(10)\
+        // \n        TableScan: person\
+        // \n      TableScan: orders";
+
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + person.age + Int64(10) = orders.customer_id\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + person.age + Int64(10)\
-        \n        TableScan: person\
-        \n      TableScan: orders";
+        \n  Inner Join: person.id + person.age + Int64(10) = orders.customer_id\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6140,13 +6170,18 @@ mod tests {
             INNER JOIN orders \
             ON person.id = orders.customer_id * 2 - orders.price";
 
-        let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id = orders.customer_id * Int64(2) - orders.price\
-        \n      TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
-        \n        TableScan: orders";
-        quick_test(sql, expected);
+        // let expected = "Projection: person.id, orders.order_id\
+        // \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+        // \n    Inner Join: person.id = orders.customer_id * Int64(2) - orders.price\
+        // \n      TableScan: person\
+        // \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
+        // \n        TableScan: orders";
+
+       let expected = "Projection: person.id, orders.order_id\
+       \n  Inner Join: person.id = orders.customer_id * Int64(2) - orders.price\
+       \n    TableScan: person\
+       \n    TableScan: orders";
+       quick_test(sql, expected);
     }
 
     #[test]
@@ -6173,13 +6208,17 @@ mod tests {
             INNER JOIN orders \
             ON orders.customer_id * 2 = person.id + 10";
 
+        // let expected = "Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+        // \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+        // \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        // \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
+        // \n        TableScan: person\
+        // \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
+        // \n        TableScan: orders";
         let expected = "Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6190,13 +6229,17 @@ mod tests {
             INNER JOIN orders
             ON orders.customer_id * 2 = person.id + 10";
 
+        // let expected = "Projection: orders.customer_id * Int64(2), person.id + Int64(10)\
+        // \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+        // \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        // \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
+        // \n        TableScan: person\
+        // \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
+        // \n        TableScan: orders";
         let expected = "Projection: orders.customer_id * Int64(2), person.id + Int64(10)\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6223,13 +6266,18 @@ mod tests {
             INNER JOIN orders
             ON person.id * 2 = orders.customer_id + 10 and person.id * 2 = orders.order_id";
 
+        // let expected = "Projection: person.id, person.age\
+        // \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+        // \n    Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id * Int64(2) = orders.order_id\
+        // \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id * Int64(2)\
+        // \n        TableScan: person\
+        // \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id + Int64(10)\
+        // \n        TableScan: orders";
+
         let expected = "Projection: person.id, person.age\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id * Int64(2) = orders.order_id\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id * Int64(2)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id + Int64(10)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id * Int64(2) = orders.order_id\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6241,12 +6289,17 @@ mod tests {
             INNER JOIN orders
             ON person.id * 2 = orders.customer_id + 10 and person.id =  orders.customer_id + 10";
 
+        // let expected = "Projection: person.id, person.age\
+        // \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\n    Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id = orders.customer_id + Int64(10)\
+        // \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id * Int64(2)\
+        // \n        TableScan: person\
+        // \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id + Int64(10)\
+        // \n        TableScan: orders";
+
         let expected = "Projection: person.id, person.age\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\n    Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id = orders.customer_id + Int64(10)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id * Int64(2)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id + Int64(10)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id = orders.customer_id + Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6663,13 +6716,18 @@ mod tests {
             INNER JOIN orders
             ON cast(person.id as Int) = cast(orders.customer_id as Int)";
 
+        // let expected = "Projection: person.id, person.age\
+        // \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+        // \n    Inner Join: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
+        // \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, CAST(person.id AS Int32) AS CAST(person.id AS Int32)\
+        // \n        TableScan: person\
+        // \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, CAST(orders.customer_id AS Int32) AS CAST(orders.customer_id AS Int32)\
+        // \n        TableScan: orders";
+
         let expected = "Projection: person.id, person.age\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, CAST(person.id AS Int32) AS CAST(person.id AS Int32)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, CAST(orders.customer_id AS Int32) AS CAST(orders.customer_id AS Int32)\
-        \n        TableScan: orders";
+        \n  Inner Join: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 

@@ -457,8 +457,18 @@ fn push_down_join(
                     Err(e) => return Some(Err(e)),
                 };
 
+                // Only allow both side key is column.
+                let join_col_keys = join
+                    .on
+                    .iter()
+                    .flat_map(|(l, r)| match (l.try_into_col(), r.try_into_col()) {
+                        (Ok(l_col), Ok(r_col)) => Some((l_col, r_col)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+
                 for col in columns.iter() {
-                    for (l, r) in join.on.iter() {
+                    for (l, r) in join_col_keys.iter() {
                         if col == l {
                             join_cols_to_replace.insert(col, r);
                             break;

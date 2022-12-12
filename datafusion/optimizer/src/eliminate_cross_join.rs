@@ -101,6 +101,9 @@ impl OptimizerRule for EliminateCrossJoin {
                 left = utils::optimize_children(self, &left, _optimizer_config)?;
 
                 if plan.schema() != left.schema() {
+                    println!("plan shcema: {:#?}", plan.schema());
+                    println!("left shcema: {:#?}", left.schema());
+
                     left = LogicalPlan::Projection(Projection::new_from_schema(
                         Arc::new(left.clone()),
                         plan.schema().clone(),
@@ -141,11 +144,12 @@ fn flatten_join_inputs(
 ) -> Result<()> {
     let children = match plan {
         LogicalPlan::Join(join) => {
-            for join_keys in join.on.iter() {
-                let join_keys = join_keys.clone();
-                possible_join_keys
-                    .push((Expr::Column(join_keys.0), Expr::Column(join_keys.1)));
-            }
+            // for join_keys in join.on.iter() {
+            //     let join_keys = join_keys.clone();
+            //     possible_join_keys
+            //         .push((Expr::Column(join_keys.0), Expr::Column(join_keys.1)));
+            // }
+            possible_join_keys.extend(join.on.clone());
             let left = &*(join.left);
             let right = &*(join.right);
             Ok::<Vec<&LogicalPlan>, DataFusionError>(vec![left, right])
@@ -238,26 +242,25 @@ fn find_inner_join(
                 &JoinType::Inner,
             )?);
 
-            // Wrap projection
-            let (left_on, right_on): (Vec<Expr>, Vec<Expr>) =
-                join_keys.into_iter().unzip();
-            let (new_left_input, new_left_on, _) =
-                wrap_projection_for_join_if_necessary(&left_on, left_input.clone())?;
-            let (new_right_input, new_right_on, _) =
-                wrap_projection_for_join_if_necessary(&right_on, right_input)?;
+            // // Wrap projection
+            // let (left_on, right_on): (Vec<Expr>, Vec<Expr>) =
+            //     join_keys.into_iter().unzip();
+            // let (new_left_input, new_left_on, _) =
+            //     wrap_projection_for_join_if_necessary(&left_on, left_input.clone())?;
+            // let (new_right_input, new_right_on, _) =
+            //     wrap_projection_for_join_if_necessary(&right_on, right_input)?;
 
             // Build new join on
-            let join_on = new_left_on
-                .into_iter()
-                .zip(new_right_on.into_iter())
-                .collect::<Vec<_>>();
-
+            // let join_on = new_left_on
+            //     .into_iter()
+            //     .zip(new_right_on.into_iter())
+            //     .collect::<Vec<_>>();
             return Ok(LogicalPlan::Join(Join {
-                left: Arc::new(new_left_input),
-                right: Arc::new(new_right_input),
+                left: Arc::new(left_input.clone()),
+                right: Arc::new(right_input),
                 join_type: JoinType::Inner,
                 join_constraint: JoinConstraint::On,
-                on: join_on,
+                on: join_keys,
                 filter: None,
                 schema: join_schema,
                 null_equals_null: false,
@@ -1112,6 +1115,12 @@ mod tests {
               "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
         ];
 
+        let expected = vec![
+            "Filter: t2.c < UInt32(20) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]", 
+            "  Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]", 
+            "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]", 
+            "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]"];
+
         assert_optimized_plan_eq(&plan, expected);
 
         Ok(())
@@ -1161,14 +1170,21 @@ mod tests {
             ))?
             .build()?;
 
+        // let expected = vec![
+        //        "Filter: t2.c < UInt32(20) AND t2.c = UInt32(10) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+        //        "  Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+        //        "    Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32, a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
+        //        "      Projection: t1.a, t1.b, t1.c, t1.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32]",
+        //        "        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+        //        "      Projection: t2.a, t2.b, t2.c, t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
+        //        "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+        // ];
+
         let expected = vec![
-               "Filter: t2.c < UInt32(20) AND t2.c = UInt32(10) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-               "  Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-               "    Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32, a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-               "      Projection: t1.a, t1.b, t1.c, t1.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32]",
-               "        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-               "      Projection: t2.a, t2.b, t2.c, t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-               "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+            "Filter: t2.c < UInt32(20) AND t2.c = UInt32(10) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "  Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
         ];
 
         assert_optimized_plan_eq(&plan, expected);
@@ -1192,15 +1208,22 @@ mod tests {
             ))?
             .build()?;
 
+        //     let expected = vec![
+        //            "Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+        //            "  Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+        //            "    Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32, a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
+        //            "      Projection: t1.a, t1.b, t1.c, t1.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32]",
+        //            "        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+        //            "      Projection: t2.a, t2.b, t2.c, t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
+        //            "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+        //    ];
+
         let expected = vec![
-               "Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-               "  Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-               "    Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32, a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-               "      Projection: t1.a, t1.b, t1.c, t1.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32]",
-               "        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-               "      Projection: t2.a, t2.b, t2.c, t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-               "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
-       ];
+        "Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+        "  Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+        "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+        "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+        ];
 
         assert_optimized_plan_eq(&plan, expected);
 
@@ -1232,18 +1255,28 @@ mod tests {
             ))?
             .build()?;
 
+        // let _expected = vec![
+        //     "Filter: t3.c < UInt32(15) AND t3.b < UInt32(15) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+        //     "  Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c, t3.a, t3.b, t3.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+        //     "    Inner Join: t3.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32, a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
+        //     "      Projection: t1.a, t1.b, t1.c, t3.a, t3.b, t3.c, t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32]",
+        //     "        Inner Join: t1.a * UInt32(2) = t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t1.a * UInt32(2):UInt32, a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32]",
+        //     "          Projection: t1.a, t1.b, t1.c, t1.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t1.a * UInt32(2):UInt32]",
+        //     "            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+        //     "          Projection: t3.a, t3.b, t3.c, t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32]",
+        //     "            TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]",
+        //     "      Projection: t2.a, t2.b, t2.c, t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
+        //     "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+        // ];
+
         let expected = vec![
             "Filter: t3.c < UInt32(15) AND t3.b < UInt32(15) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c, t3.a, t3.b, t3.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "    Inner Join: t3.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32, a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-            "      Projection: t1.a, t1.b, t1.c, t3.a, t3.b, t3.c, t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32]",
-            "        Inner Join: t1.a * UInt32(2) = t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t1.a * UInt32(2):UInt32, a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32]",
-            "          Projection: t1.a, t1.b, t1.c, t1.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t1.a * UInt32(2):UInt32]",
-            "            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-            "          Projection: t3.a, t3.b, t3.c, t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32]",
-            "            TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]",
-            "      Projection: t2.a, t2.b, t2.c, t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-            "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+            "    Inner Join: t3.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "      Inner Join: t1.a * UInt32(2) = t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+            "        TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]",
+            "      TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
         ];
 
         assert_optimized_plan_eq(&plan, expected);

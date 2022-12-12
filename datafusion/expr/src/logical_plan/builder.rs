@@ -31,8 +31,8 @@ use crate::{
         Union, Values, Window,
     },
     utils::{
-        can_hash, expand_qualified_wildcard, expand_wildcard,
-        group_window_expr_by_sort_keys,
+        can_hash, check_all_column_from_schema, expand_qualified_wildcard,
+        expand_wildcard, group_window_expr_by_sort_keys,
     },
     Expr, ExprSchemable, TableSource,
 };
@@ -555,7 +555,12 @@ impl LogicalPlanBuilder {
         let left_keys = left_keys.into_iter().collect::<Result<Vec<Column>>>()?;
         let right_keys = right_keys.into_iter().collect::<Result<Vec<Column>>>()?;
 
-        let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
+        // let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
+        let on = left_keys
+            .into_iter()
+            .zip(right_keys.into_iter())
+            .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
+            .collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
@@ -616,7 +621,13 @@ impl LogicalPlanBuilder {
                 }
             }
         }
-        if join_on.is_empty() {
+
+        let new_join_on = join_on
+            .into_iter()
+            .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
+            .collect::<Vec<_>>();
+
+        if new_join_on.is_empty() {
             let join = Self::from(self.plan.clone()).cross_join(&right.clone())?;
             join.filter(filters.ok_or_else(|| {
                 DataFusionError::Internal("filters should not be None here".to_string())
@@ -625,7 +636,7 @@ impl LogicalPlanBuilder {
             Ok(Self::from(LogicalPlan::Join(Join {
                 left: Arc::new(self.plan.clone()),
                 right: Arc::new(right.clone()),
-                on: join_on,
+                on: new_join_on,
                 filter: filters,
                 join_type,
                 join_constraint: JoinConstraint::Using,
@@ -791,6 +802,77 @@ impl LogicalPlanBuilder {
     /// Build the plan
     pub fn build(&self) -> Result<LogicalPlan> {
         Ok(self.plan.clone())
+    }
+
+    // Apply a join with on constraint -- expression key version.
+    ///
+    /// Filter expression expected to contain non-equality predicates that can not be pushed
+    /// down to any of join inputs.
+    /// In case of outer join, filter applied to only matched rows.
+    pub fn join_with_expr_keys(
+        &self,
+        right: &LogicalPlan,
+        join_type: JoinType,
+        join_keys: (Vec<impl Into<Expr>>, Vec<impl Into<Expr>>),
+        filter: Option<Expr>,
+    ) -> Result<Self> {
+        self.join_detailed_with_expr_keys(right, join_type, join_keys, filter, false)
+    }
+
+    /// Apply a join with on constraint and specified null equality --- expression key version
+    /// If null_equals_null is true then null == null, else null != null
+    pub fn join_detailed_with_expr_keys(
+        &self,
+        right: &LogicalPlan,
+        join_type: JoinType,
+        join_keys: (Vec<impl Into<Expr>>, Vec<impl Into<Expr>>),
+        filter: Option<Expr>,
+        null_equals_null: bool,
+    ) -> Result<Self> {
+        // ambiguous check
+        if join_keys.0.len() != join_keys.1.len() {
+            return Err(DataFusionError::Plan(
+                "left_keys and right_keys were not the same length".to_string(),
+            ));
+        }
+
+        let join_key_pairs = join_keys
+            .0
+            .into_iter()
+            .zip(join_keys.1.into_iter())
+            .map(|(l, r)| {
+                let left_key = l.into();
+                let right_key = r.into();
+
+                let normalized_left_key = normalize_col(left_key, &self.plan)?;
+                let normalized_right_key = normalize_col(right_key, right)?;
+
+                Ok((normalized_left_key, normalized_right_key))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // let left_keys = left_keys.into_iter().collect::<Result<Vec<Column>>>()?;
+        // let right_keys = right_keys.into_iter().collect::<Result<Vec<Column>>>()?;
+
+        // // let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
+        // let on = left_keys
+        //     .into_iter()
+        //     .zip(right_keys.into_iter())
+        //     .collect();
+       
+        let join_schema =
+            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+
+        Ok(Self::from(LogicalPlan::Join(Join {
+            left: Arc::new(self.plan.clone()),
+            right: Arc::new(right.clone()),
+            on: join_key_pairs,
+            filter,
+            join_type,
+            join_constraint: JoinConstraint::On,
+            schema: DFSchemaRef::new(join_schema),
+            null_equals_null,
+        })))
     }
 }
 
@@ -998,6 +1080,68 @@ pub fn table_scan(
 
 /// Wrap projection for a plan, if the join keys contains normal expression.
 pub fn wrap_projection_for_join_if_necessary(
+    join_keys: &[Expr],
+    input: LogicalPlan,
+) -> Result<(LogicalPlan, Vec<Column>, bool)> {
+    let input_schema = input.schema();
+    let alias_join_keys: Vec<Expr> = join_keys
+        .iter()
+        .map(|key| {
+            // The display_name() of cast expression will ignore the cast info, and show the inner expression name.
+            // If we do not add alais, it will throw same field name error in the schema when adding projection.
+            // For example:
+            //    input scan : [a, b, c],
+            //    join keys: [cast(a as int)]
+            //
+            //  then a and cast(a as int) will use the same field name - `a` in projection schema.
+            //  https://github.com/apache/arrow-datafusion/issues/4478
+            if matches!(key, Expr::Cast(_))
+                || matches!(
+                    key,
+                    Expr::TryCast {
+                        expr: _,
+                        data_type: _
+                    }
+                )
+            {
+                let alias = format!("{:?}", key);
+                key.clone().alias(alias)
+            } else {
+                key.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let need_project = join_keys.iter().any(|key| !matches!(key, Expr::Column(_)));
+    let plan = if need_project {
+        let mut projection = expand_wildcard(input_schema, &input)?;
+        let join_key_items = alias_join_keys
+            .iter()
+            .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))
+            .cloned()
+            .collect::<HashSet<Expr>>();
+        projection.extend(join_key_items);
+
+        LogicalPlanBuilder::from(input)
+            .project(projection)?
+            .build()?
+    } else {
+        input
+    };
+
+    let join_on = alias_join_keys
+        .into_iter()
+        .map(|key| {
+            key.try_into_col()
+                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok((plan, join_on, need_project))
+}
+
+/// Wrap projection for a plan, if the join keys contains normal expression.
+pub fn wrap_projection_for_join_if_necessary1(
     join_keys: &[Expr],
     input: LogicalPlan,
 ) -> Result<(LogicalPlan, Vec<Column>, bool)> {

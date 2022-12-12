@@ -252,7 +252,7 @@ impl LogicalPlan {
             }) => group_expr.iter().chain(aggr_expr.iter()).cloned().collect(),
             LogicalPlan::Join(Join { on, filter, .. }) => on
                 .iter()
-                .flat_map(|(l, r)| vec![Expr::Column(l.clone()), Expr::Column(r.clone())])
+                .flat_map(|(l, r)| vec![l.clone(), r.clone()])
                 .chain(
                     filter
                         .as_ref()
@@ -343,12 +343,19 @@ impl LogicalPlan {
                     ..
                 }) = plan
                 {
-                    self.using_columns.push(
-                        on.iter()
-                            .flat_map(|entry| [&entry.0, &entry.1])
-                            .cloned()
-                            .collect::<HashSet<Column>>(),
-                    );
+                    // self.using_columns.push(
+                    //     on.iter()
+                    //         .flat_map(|entry| [&entry.0, &entry.1])
+                    //         .cloned()
+                    //         .collect::<HashSet<Column>>(),
+                    // );
+                    let columns =
+                        on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
+                            accumu.insert(l.try_into_col()?);
+                            accumu.insert(r.try_into_col()?);
+                            Result::<_, DataFusionError>::Ok(accumu)
+                        })?;
+                    self.using_columns.push(columns);
                 }
                 Ok(true)
             }
@@ -1647,7 +1654,7 @@ pub struct Join {
     /// Right input
     pub right: Arc<LogicalPlan>,
     /// Equijoin clause expressed as pairs of (left, right) join columns
-    pub on: Vec<(Column, Column)>,
+    pub on: Vec<(Expr, Expr)>,
     /// Filters applied during join (non-equi conditions)
     pub filter: Option<Expr>,
     /// Join type

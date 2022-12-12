@@ -257,8 +257,8 @@ message JoinNode {
   LogicalPlanNode right = 2;
   JoinType join_type = 3;
   JoinConstraint join_constraint = 4;
-  repeated datafusion.Column left_join_column = 5;
-  repeated datafusion.Column right_join_column = 6;
+  repeated LogicalExprNode left_join_key = 5;
+  repeated LogicalExprNode right_join_key = 6;
   bool null_equals_null = 7;
   LogicalExprNode filter = 8;
 }
