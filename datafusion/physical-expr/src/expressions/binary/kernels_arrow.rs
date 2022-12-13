@@ -55,38 +55,22 @@ pub(crate) fn is_distinct_from<T>(
 where
     T: ArrowNumericType,
 {
-    let array_len = left.data().len().min(right.data().len());
-    let mut arr = vec![false; array_len].into_boxed_slice();
+    let left_data = left.data();
+    let right_data = right.data();
+    let array_len = left_data.len().min(right_data.len());
 
     let left_values = left.values();
     let right_values = right.values();
 
-    for i in 0..array_len {
-        arr[i] = left_values[i] != right_values[i];
-    }
-
-    Ok(to_bool_arr(arr))
-}
-
-#[allow(clippy::needless_range_loop)]
-fn to_bool_arr(slice: Box<[bool]>) -> BooleanArray {
-    let slice = slice.as_ref();
-    let mut mut_buf = arrow_buffer::MutableBuffer::new_null(slice.len());
-    {
-        let mut_slice = mut_buf.as_slice_mut();
-        for i in 0..slice.len() {
-            if slice[i] {
-                arrow_buffer::bit_util::set_bit(mut_slice, i);
-            }
-        }
-    }
+    let distinct = arrow_buffer::MutableBuffer::collect_bool(array_len, |i| {
+        left_data.is_null(i) != right_data.is_null(i) || left_values[i] != right_values[i]
+    });
 
     let array_data = ArrayData::builder(arrow_schema::DataType::Boolean)
-        .len(slice.len())
-        .add_buffer(mut_buf.into());
+        .len(array_len)
+        .add_buffer(distinct.into());
 
-    let array_data = unsafe { array_data.build_unchecked() };
-    BooleanArray::from(array_data)
+    Ok(BooleanArray::from(unsafe { array_data.build_unchecked() }))
 }
 
 pub(crate) fn is_not_distinct_from<T>(
@@ -96,17 +80,23 @@ pub(crate) fn is_not_distinct_from<T>(
 where
     T: ArrowNumericType,
 {
-    let array_len = left.data().len().min(right.data().len());
-    let mut arr = vec![false; array_len].into_boxed_slice();
+    let left_data = left.data();
+    let right_data = right.data();
+    let array_len = left_data.len().min(right_data.len());
 
     let left_values = left.values();
     let right_values = right.values();
 
-    for i in 0..array_len {
-        arr[i] = left_values[i] == right_values[i];
-    }
+    let distinct = arrow_buffer::MutableBuffer::collect_bool(array_len, |i| {
+        !(left_data.is_null(i) != right_data.is_null(i)
+            || left_values[i] != right_values[i])
+    });
 
-    Ok(to_bool_arr(arr))
+    let array_data = ArrayData::builder(arrow_schema::DataType::Boolean)
+        .len(array_len)
+        .add_buffer(distinct.into());
+
+    Ok(BooleanArray::from(unsafe { array_data.build_unchecked() }))
 }
 
 pub(crate) fn is_distinct_from_utf8<OffsetSize: OffsetSizeTrait>(
@@ -362,6 +352,15 @@ mod tests {
             .unwrap()
     }
 
+    fn create_int_array(array: &[Option<i32>]) -> Int32Array {
+        let mut int_builder = Int32Builder::with_capacity(array.len());
+
+        for value in array.iter().copied() {
+            int_builder.append_option(value)
+        }
+        int_builder.finish()
+    }
+
     #[test]
     fn comparison_decimal_op_test() -> Result<()> {
         let value_i128: i128 = 123;
@@ -388,14 +387,13 @@ mod tests {
         );
 
         // is_distinct: left distinct right
-        let result = is_distinct_from_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = is_distinct_from(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(
             BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)]),
             result
         );
         // is_distinct: left distinct right
-        let result =
-            is_not_distinct_from_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = is_not_distinct_from(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(
             BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true)]),
             result
@@ -514,5 +512,41 @@ mod tests {
         assert_eq!("Arrow error: Divide by zero error", err.to_string());
         let err = modulus_decimal_scalar(&left_decimal_array, 0).unwrap_err();
         assert_eq!("Arrow error: Divide by zero error", err.to_string());
+    }
+
+    #[test]
+    fn is_distinct_from_nulls() -> Result<()> {
+        let left_int_array =
+            create_int_array(&[Some(0), Some(0), None, Some(3), Some(0), Some(0)]);
+        let right_int_array =
+            create_int_array(&[Some(0), None, None, None, Some(0), None]);
+
+        // is_distinct: left distinct right
+        let result = is_distinct_from(&left_int_array, &right_int_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(true)
+            ]),
+            result
+        );
+        // is_distinct: left distinct right
+        let result = is_not_distinct_from(&left_int_array, &right_int_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false)
+            ]),
+            result
+        );
+        Ok(())
     }
 }
