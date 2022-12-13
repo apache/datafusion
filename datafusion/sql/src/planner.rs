@@ -5881,10 +5881,9 @@ mod tests {
             FROM person \
             JOIN orders ON id = customer_id OR person.age > 30";
         let expected = "Projection: person.id, orders.order_id\
-            \n  Filter: person.id = orders.customer_id OR person.age > Int64(30)\
-            \n    CrossJoin:\
-            \n      TableScan: person\
-            \n      TableScan: orders";
+            \n  Inner Join:  Filter: person.id = orders.customer_id OR person.age > Int64(30)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6006,10 +6005,9 @@ mod tests {
             ON person.id = 10";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Filter: person.id = Int64(10)\
-        \n    CrossJoin:\
-        \n      TableScan: person\
-        \n      TableScan: orders";
+        \n  Inner Join:  Filter: person.id = Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6146,10 +6144,9 @@ mod tests {
             ON person.id = 10";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Filter: person.id = Int64(10)\
-        \n    CrossJoin:\
-        \n      TableScan: person\
-        \n      TableScan: orders";
+            \n  Full Join:  Filter: person.id = Int64(10)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
