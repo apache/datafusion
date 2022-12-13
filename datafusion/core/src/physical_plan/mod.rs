@@ -241,14 +241,32 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 
     /// Returns the global output statistics for this `ExecutionPlan` node.
     fn statistics(&self) -> Statistics;
+}
 
-    /// Indicate whether a data exchange is needed, which will be very helpful
-    /// especially for the distributed engine to judge whether need to deal with shuffling.
-    /// Currently there are 3 kinds of execution plan which needs data exchange
-    ///     1. RepartitionExec for changing the partition number between two operators
-    ///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
-    ///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
-    fn need_data_exchange(&self) -> bool {
+/// Indicate whether a data exchange is needed, which will be very helpful
+/// especially for the distributed engine to judge whether need to deal with shuffling.
+/// Currently there are 3 kinds of execution plan which needs data exchange
+///     1. RepartitionExec for changing the partition number between two operators
+///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
+///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
+pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
+    if let Some(repart) = plan.as_any().downcast_ref::<RepartitionExec>() {
+        !matches!(
+            repart.output_partitioning(),
+            Partitioning::RoundRobinBatch(_)
+        )
+    } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>()
+    {
+        coalesce.input().output_partitioning().partition_count() > 1
+    } else if let Some(sort_preserving_merge) =
+        plan.as_any().downcast_ref::<SortPreservingMergeExec>()
+    {
+        sort_preserving_merge
+            .input()
+            .output_partitioning()
+            .partition_count()
+            > 1
+    } else {
         false
     }
 }
@@ -665,6 +683,8 @@ pub mod values;
 pub mod windows;
 
 use crate::execution::context::TaskContext;
+use crate::physical_plan::repartition::RepartitionExec;
+use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use datafusion_physical_expr::{
     expressions, functions, hash_utils, type_coercion, udf,
 };

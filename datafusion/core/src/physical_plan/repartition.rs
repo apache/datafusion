@@ -396,10 +396,6 @@ impl ExecutionPlan for RepartitionExec {
     fn statistics(&self) -> Statistics {
         self.input.statistics()
     }
-
-    fn need_data_exchange(&self) -> bool {
-        !matches!(self.partitioning, Partitioning::RoundRobinBatch(_))
-    }
 }
 
 impl RepartitionExec {
