@@ -429,8 +429,8 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_has_file_compression_type(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("COMPRESSION"))
-            & self.consume_token(&Token::make_keyword("TYPE"))
+        self.parser
+            .parse_keywords(&[Keyword::COMPRESSION, Keyword::TYPE])
     }
 
     fn parse_csv_has_header(&mut self) -> bool {
@@ -719,11 +719,18 @@ mod tests {
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'";
         expect_parse_error(sql, "sql parser error: Expected LOCATION, found: WITH");
 
-        // Error case: `partitioned` is an invalid syntax
+        // Error case: a single word `partitioned` is invalid
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'";
         expect_parse_error(
             sql,
             "sql parser error: Expected LOCATION, found: PARTITIONED",
+        );
+
+        // Error case: a single word `compression` is invalid
+        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION LOCATION 'abc'";
+        expect_parse_error(
+            sql,
+            "sql parser error: Expected LOCATION, found: COMPRESSION",
         );
 
         Ok(())
