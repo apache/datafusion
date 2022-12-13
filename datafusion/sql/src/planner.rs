@@ -23,7 +23,6 @@ use std::sync::Arc;
 use std::{convert::TryInto, vec};
 
 use arrow_schema::*;
-use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayAgg, ExactNumberInfo, SetQuantifier};
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
@@ -34,6 +33,7 @@ use sqlparser::ast::{
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
+use sqlparser::ast::{TimezoneInfo, WildcardAdditionalOptions};
 use sqlparser::parser::ParserError::ParserError;
 
 use datafusion_common::parsers::parse_interval;
@@ -45,7 +45,10 @@ use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::builder::project;
+use datafusion_expr::logical_plan::builder::{
+    project, wrap_projection_for_join_if_necessary,
+};
+use datafusion_expr::logical_plan::Join as HashJoin;
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
     Analyze, CreateCatalog, CreateCatalogSchema,
@@ -53,8 +56,7 @@ use datafusion_expr::logical_plan::{
     DropTable, DropView, Explain, JoinType, LogicalPlan, LogicalPlanBuilder,
     Partitioning, PlanType, SetVariable, ToStringifiedPlan,
 };
-use datafusion_expr::logical_plan::{Filter, Subquery};
-use datafusion_expr::logical_plan::{Join as HashJoin, Prepare};
+use datafusion_expr::logical_plan::{Filter, Prepare, Subquery};
 use datafusion_expr::utils::{
     can_hash, check_all_column_from_schema, expand_qualified_wildcard, expand_wildcard,
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_column_exprs,
@@ -66,13 +68,12 @@ use datafusion_expr::{
     GetIndexedField, Operator, ScalarUDF, SubqueryAlias, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
-    window_function::WindowFunction, BuiltinScalarFunction, TableSource,
+    window_function::{self, WindowFunction},
+    BuiltinScalarFunction, TableSource,
 };
 
 use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
-use crate::utils::{
-    make_decimal_type, normalize_ident, normalize_ident_owned, resolve_columns,
-};
+use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
 
 use super::{
     parser::DFParser,
@@ -294,7 +295,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ..
             } if with_options.is_empty() => {
                 let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
-                plan = self.apply_expr_alias(plan, &columns)?;
+                plan = self.apply_expr_alias(plan, columns)?;
 
                 Ok(LogicalPlan::CreateView(CreateView {
                     name: object_name_to_table_reference(name)?,
@@ -448,7 +449,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         query: Query,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        self.query_to_plan_with_alias(query, None, planner_context, None)
+        self.query_to_plan_with_schema(query, planner_context, None)
     }
 
     /// Generate a logical plan from a SQL subquery
@@ -458,19 +459,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
         outer_query_schema: &DFSchema,
     ) -> Result<LogicalPlan> {
-        self.query_to_plan_with_alias(
-            query,
-            None,
-            planner_context,
-            Some(outer_query_schema),
-        )
+        self.query_to_plan_with_schema(query, planner_context, Some(outer_query_schema))
     }
 
-    /// Generate a logic plan from an SQL query with optional alias
-    pub fn query_to_plan_with_alias(
+    /// Generate a logic plan from an SQL query.
+    /// It's implementation of `subquery_to_plan` and `query_to_plan`.
+    /// It shouldn't be invoked directly.
+    fn query_to_plan_with_schema(
         &self,
         query: Query,
-        alias: Option<String>,
         planner_context: &mut PlannerContext,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
@@ -486,7 +483,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
-                let cte_name = normalize_ident(&cte.alias.name);
+                let cte_name = normalize_ident(cte.alias.name.clone());
                 if planner_context.ctes.contains_key(&cte_name) {
                     return Err(DataFusionError::SQL(ParserError(format!(
                         "WITH query name {:?} specified more than once",
@@ -494,12 +491,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     ))));
                 }
                 // create logical plan & pass backreferencing CTEs
-                let logical_plan = self.query_to_plan_with_alias(
-                    *cte.query,
-                    None,
-                    &mut planner_context.clone(),
-                    outer_query_schema,
-                )?;
+                // CTE expr don't need extend outer_query_schema
+                let logical_plan =
+                    self.query_to_plan(*cte.query, &mut planner_context.clone())?;
 
                 // Each `WITH` block can change the column names in the last
                 // projection (e.g. "WITH table(t1, t2) AS SELECT 1, 2").
@@ -509,7 +503,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         }
         let plan =
-            self.set_expr_to_plan(*set_expr, alias, planner_context, outer_query_schema)?;
+            self.set_expr_to_plan(*set_expr, planner_context, outer_query_schema)?;
         let plan = self.order_by(plan, query.order_by)?;
         self.limit(plan, query.offset, query.limit)
     }
@@ -517,13 +511,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn set_expr_to_plan(
         &self,
         set_expr: SetExpr,
-        alias: Option<String>,
         planner_context: &mut PlannerContext,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         match set_expr {
             SetExpr::Select(s) => {
-                self.select_to_plan(*s, planner_context, alias, outer_query_schema)
+                self.select_to_plan(*s, planner_context, outer_query_schema)
             }
             SetExpr::Values(v) => {
                 self.sql_values_to_plan(v, &planner_context.prepare_param_data_types)
@@ -539,18 +532,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     SetQuantifier::Distinct | SetQuantifier::None => false,
                 };
 
-                let left_plan = self.set_expr_to_plan(
-                    *left,
-                    None,
-                    planner_context,
-                    outer_query_schema,
-                )?;
-                let right_plan = self.set_expr_to_plan(
-                    *right,
-                    None,
-                    planner_context,
-                    outer_query_schema,
-                )?;
+                let left_plan =
+                    self.set_expr_to_plan(*left, planner_context, outer_query_schema)?;
+                let right_plan =
+                    self.set_expr_to_plan(*right, planner_context, outer_query_schema)?;
                 match (op, all) {
                     (SetOperator::Union, true) => LogicalPlanBuilder::from(left_plan)
                         .union(right_plan)?
@@ -703,7 +688,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .any(|x| x.option == ColumnOption::Null);
             fields.push(Field::new(
-                &normalize_ident(&column.name),
+                &normalize_ident(column.name),
                 data_type,
                 allow_null,
             ));
@@ -878,26 +863,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .build()
                 } else {
                     // Wrap projection for left input if left join keys contain normal expression.
-                    let (left_child, left_projected) =
+                    let (left_child, left_join_keys, left_projected) =
                         wrap_projection_for_join_if_necessary(&left_keys, left)?;
-                    let left_join_keys = left_keys
-                        .iter()
-                        .map(|key| {
-                            key.try_into_col()
-                                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
 
                     // Wrap projection for right input if right join keys contains normal expression.
-                    let (right_child, right_projected) =
+                    let (right_child, right_join_keys, right_projected) =
                         wrap_projection_for_join_if_necessary(&right_keys, right)?;
-                    let right_join_keys = right_keys
-                        .iter()
-                        .map(|key| {
-                            key.try_into_col()
-                                .or_else(|_| Ok(Column::from_name(key.display_name()?)))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
 
                     let join_plan_builder = LogicalPlanBuilder::from(left_child).join(
                         &right_child,
@@ -922,7 +893,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
-                    .map(|x| Column::from_name(normalize_ident(&x)))
+                    .map(|x| Column::from_name(normalize_ident(x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
                     .join_using(&right, join_type, keys)?
@@ -949,7 +920,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             TableFactor::Table { name, alias, .. } => {
                 // normalize name and alias
                 let table_ref = object_name_to_table_reference(name)?;
-                let table_name = table_ref.display_string();
+                let table_name = table_ref.to_string();
                 let cte = planner_context.ctes.get(&table_name);
                 (
                     match (
@@ -968,12 +939,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             TableFactor::Derived {
                 subquery, alias, ..
             } => {
-                let logical_plan = self.query_to_plan_with_alias(
-                    *subquery,
-                    None,
-                    planner_context,
-                    outer_query_schema,
-                )?;
+                let logical_plan = self.query_to_plan(*subquery, planner_context)?;
                 (logical_plan, alias)
             }
             TableFactor::NestedJoin {
@@ -1010,16 +976,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let apply_name_plan = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
             plan,
-            &normalize_ident(&alias.name),
+            normalize_ident(alias.name),
         )?);
 
-        self.apply_expr_alias(apply_name_plan, &alias.columns)
+        self.apply_expr_alias(apply_name_plan, alias.columns)
     }
 
     fn apply_expr_alias(
         &self,
         plan: LogicalPlan,
-        idents: &Vec<Ident>,
+        idents: Vec<Ident>,
     ) -> Result<LogicalPlan> {
         if idents.is_empty() {
             Ok(plan)
@@ -1032,7 +998,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             let fields = plan.schema().fields().clone();
             LogicalPlanBuilder::from(plan)
-                .project(fields.iter().zip(idents.iter()).map(|(field, ident)| {
+                .project(fields.iter().zip(idents.into_iter()).map(|(field, ident)| {
                     col(field.name()).alias(normalize_ident(ident))
                 }))?
                 .build()
@@ -1112,7 +1078,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         select: Select,
         planner_context: &mut PlannerContext,
-        alias: Option<String>,
         outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         // check for unsupported syntax first
@@ -1179,12 +1144,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 //
                 // For example:
                 //
-                //   SELECT c1 AS m FROM t HAVING m > 10;
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING m > 10;
                 //
                 // are rewritten as, respectively:
                 //
-                //   SELECT c1 AS m FROM t HAVING c1 > 10;
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
                 let having_expr = resolve_aliases_to_exprs(&having_expr, &alias_map)?;
@@ -1229,33 +1192,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<Expr>>>()?;
 
         // process group by, aggregation or having
-        let (plan, mut select_exprs_post_aggr, having_expr_post_aggr) =
-            if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
-                self.aggregate(
-                    plan,
-                    &select_exprs,
-                    having_expr_opt.as_ref(),
-                    group_by_exprs,
-                    aggr_exprs,
-                )?
-            } else {
-                if let Some(having_expr) = &having_expr_opt {
-                    let available_columns = select_exprs
-                        .iter()
-                        .map(|expr| expr_as_column_expr(expr, &plan))
-                        .collect::<Result<Vec<Expr>>>()?;
-
-                    // Ensure the HAVING expression is using only columns
-                    // provided by the SELECT.
-                    check_columns_satisfy_exprs(
-                        &available_columns,
-                        &[having_expr.clone()],
-                        "HAVING clause references column(s) not provided by the select",
-                    )?;
+        let (plan, mut select_exprs_post_aggr, having_expr_post_aggr) = if !group_by_exprs
+            .is_empty()
+            || !aggr_exprs.is_empty()
+        {
+            self.aggregate(
+                plan,
+                &select_exprs,
+                having_expr_opt.as_ref(),
+                group_by_exprs,
+                aggr_exprs,
+            )?
+        } else {
+            match having_expr_opt {
+                    Some(having_expr) => return Err(DataFusionError::Plan(
+                        format!("HAVING clause references: {} must appear in the GROUP BY clause or be used in an aggregate function", having_expr))),
+                    None => (plan, select_exprs, having_expr_opt)
                 }
-
-                (plan, select_exprs, having_expr_opt)
-            };
+        };
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
             LogicalPlanBuilder::from(plan)
@@ -1283,13 +1237,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // final projection
-        let mut plan = project(plan, select_exprs_post_aggr)?;
-        plan = match alias {
-            Some(alias) => {
-                LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(plan, &alias)?)
-            }
-            None => plan,
-        };
+        let plan = project(plan, select_exprs_post_aggr)?;
 
         // process distinct clause
         let plan = if select.distinct {
@@ -1660,10 +1608,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     from_schema,
                     &[select_expr.clone()],
                 )?;
-                let expr = Alias(Box::new(select_expr), normalize_ident(&alias));
+                let expr = Alias(Box::new(select_expr), normalize_ident(alias));
                 Ok(vec![normalize_col(expr, plan)?])
             }
-            SelectItem::Wildcard => {
+            SelectItem::Wildcard(options) => {
+                Self::check_wildcard_options(options)?;
+
                 if empty_from {
                     return Err(DataFusionError::Plan(
                         "SELECT * with no tables specified is not valid".to_string(),
@@ -1672,11 +1622,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // do not expand from outer schema
                 expand_wildcard(plan.schema().as_ref(), plan)
             }
-            SelectItem::QualifiedWildcard(ref object_name) => {
+            SelectItem::QualifiedWildcard(ref object_name, options) => {
+                Self::check_wildcard_options(options)?;
+
                 let qualifier = format!("{}", object_name);
                 // do not expand from outer schema
                 expand_qualified_wildcard(&qualifier, plan.schema().as_ref(), plan)
             }
+        }
+    }
+
+    fn check_wildcard_options(options: WildcardAdditionalOptions) -> Result<()> {
+        let WildcardAdditionalOptions {
+            opt_exclude,
+            opt_except,
+        } = options;
+
+        if opt_exclude.is_some() || opt_except.is_some() {
+            Err(DataFusionError::NotImplemented(
+                "wildcard * with EXCLUDE or EXCEPT not supported ".to_string(),
+            ))
+        } else {
+            Ok(())
         }
     }
 
@@ -1836,10 +1803,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         values: SQLValues,
         param_data_types: &[DataType],
     ) -> Result<LogicalPlan> {
+        let SQLValues {
+            explicit_row: _,
+            rows,
+        } = values;
+
         // values should not be based on any other schema
         let schema = DFSchema::empty();
-        let values = values
-            .0
+        let values = rows
             .into_iter()
             .map(|row| {
                 row.into_iter()
@@ -1988,14 +1959,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                     Ok(Expr::Column(Column {
                         relation: None,
-                        name: normalize_ident(&id),
+                        name: normalize_ident(id),
                     }))
                 }
             }
 
-            SQLExpr::MapAccess { ref column, keys } => {
-                if let SQLExpr::Identifier(ref id) = column.as_ref() {
-                    plan_indexed(col(&normalize_ident(id)), keys)
+            SQLExpr::MapAccess { column, keys } => {
+                if let SQLExpr::Identifier(id) = *column {
+                    plan_indexed(col(normalize_ident(id)), keys)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {} instead",
@@ -2011,7 +1982,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::CompoundIdentifier(ids) => {
                 if ids[0].value.starts_with('@') {
-                    let var_names: Vec<_> = ids.into_iter().map(|s| normalize_ident(&s)).collect();
+                    let var_names: Vec<_> = ids.into_iter().map(normalize_ident).collect();
                     let ty = self
                         .schema_provider
                         .get_variable_type(&var_names)
@@ -2336,7 +2307,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // (e.g. "foo.bar") for function names yet
                     function.name.to_string()
                 } else {
-                    normalize_ident(&function.name.0[0])
+                    normalize_ident(function.name.0[0].clone())
                 };
 
                 // first, check SQL reserved words
@@ -2386,8 +2357,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     } else {
                         WindowFrame::new(!order_by.is_empty())
                     };
-                    let fun = WindowFunction::from_str(&name)?;
-                    match fun {
+                    let fun = self.find_window_func(&name)?;
+                    let expr = match fun {
                         WindowFunction::AggregateFunction(
                             aggregate_fun,
                         ) => {
@@ -2397,7 +2368,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 schema,
                             )?;
 
-                            return Ok(Expr::WindowFunction {
+                            Expr::WindowFunction {
                                 fun: WindowFunction::AggregateFunction(
                                     aggregate_fun,
                                 ),
@@ -2405,22 +2376,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            });
+                            }
                         }
-                        WindowFunction::BuiltInWindowFunction(
-                            window_fun,
-                        ) => {
-                            return Ok(Expr::WindowFunction {
-                                fun: WindowFunction::BuiltInWindowFunction(
-                                    window_fun,
-                                ),
+                        _ => {
+                            Expr::WindowFunction {
+                                fun,
                                 args: self.function_args_to_expr(function.args, schema)?,
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            });
+                            }
                         }
-                    }
+                    };
+                    return Ok(expr);
                 }
 
                 // next, aggregate built-ins
@@ -2482,6 +2450,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 sql
             ))),
         }
+    }
+
+    fn find_window_func(&self, name: &str) -> Result<WindowFunction> {
+        window_function::find_df_window_func(name)
+            .or_else(|| {
+                self.schema_provider
+                    .get_aggregate_meta(name)
+                    .map(WindowFunction::AggregateUDF)
+            })
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "There is no window function named {}",
+                    name
+                ))
+            })
     }
 
     fn parse_exists_subquery(
@@ -3102,7 +3085,7 @@ fn idents_to_table_reference(idents: Vec<Ident>) -> Result<OwnedTableReference> 
     impl IdentTaker {
         fn take(&mut self) -> String {
             let ident = self.0.pop().expect("no more identifiers");
-            normalize_ident_owned(ident)
+            normalize_ident(ident)
         }
     }
 
@@ -3145,7 +3128,7 @@ pub fn object_name_to_qualifier(sql_table_name: &ObjectName) -> String {
         .rev()
         .zip(columns)
         .map(|(ident, column_name)| {
-            format!(r#"{} = '{}'"#, column_name, normalize_ident(ident))
+            format!(r#"{} = '{}'"#, column_name, normalize_ident(ident.clone()))
         })
         .collect::<Vec<_>>()
         .join(" AND ")
@@ -3256,32 +3239,6 @@ fn extract_join_keys(
     }
 
     Ok(())
-}
-
-/// Wrap projection for a plan, if the join keys contains normal expression.
-fn wrap_projection_for_join_if_necessary(
-    join_keys: &[Expr],
-    input: LogicalPlan,
-) -> Result<(LogicalPlan, bool)> {
-    let expr_join_keys = join_keys
-        .iter()
-        .flat_map(|expr| expr.try_into_col().is_err().then_some(expr))
-        .cloned()
-        .collect::<HashSet<Expr>>();
-
-    let need_project = !expr_join_keys.is_empty();
-    let plan = if need_project {
-        let mut projection = vec![Expr::Wildcard];
-        projection.extend(expr_join_keys.into_iter());
-
-        LogicalPlanBuilder::from(input)
-            .project(projection)?
-            .build()?
-    } else {
-        input
-    };
-
-    Ok((plan, need_project))
 }
 
 /// Ensure any column reference of the expression is unambiguous.
@@ -3431,6 +3388,16 @@ mod tests {
             "Projection: CAST(a AS Float32)\
             \n  Projection: Int64(1) AS a\
             \n    EmptyRelation",
+        );
+    }
+
+    #[test]
+    fn try_cast_from_aggregation() {
+        quick_test(
+            "SELECT TRY_CAST(SUM(age) AS FLOAT) FROM person",
+            "Projection: TRY_CAST(SUM(person.age) AS Float32)\
+            \n  Aggregate: groupBy=[[]], aggr=[[SUM(person.age)]]\
+            \n    TableScan: person",
         );
     }
 
@@ -3709,10 +3676,11 @@ mod tests {
         let sql = "SELECT id, age
                    FROM person
                    HAVING age > 100 AND age < 200";
-        let expected = "Projection: person.id, person.age\
-                        \n  Filter: person.age > Int64(100) AND person.age < Int64(200)\
-                        \n    TableScan: person";
-        quick_test(sql, expected);
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"HAVING clause references: person.age > Int64(100) AND person.age < Int64(200) must appear in the GROUP BY clause or be used in an aggregate function\")",
+            format!("{:?}", err)
+        );
     }
 
     #[test]
@@ -3722,7 +3690,20 @@ mod tests {
                    HAVING first_name = 'M'";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"HAVING clause references column(s) not provided by the select: Expression person.first_name could not be resolved from available columns: person.id, person.age\")",
+            "Plan(\"HAVING clause references: person.first_name = Utf8(\\\"M\\\") must appear in the GROUP BY clause or be used in an aggregate function\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn select_with_having_refers_to_invalid_column() {
+        let sql = "SELECT id, MAX(age)
+                   FROM person
+                   GROUP BY id
+                   HAVING first_name = 'M'";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"HAVING clause references non-aggregate values: Expression person.first_name could not be resolved from available columns: person.id, MAX(person.age)\")",
             format!("{:?}", err)
         );
     }
@@ -3734,9 +3715,7 @@ mod tests {
                    HAVING age > 100";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"HAVING clause references column(s) not provided by the select: \
-            Expression person.age could not be resolved from available columns: \
-            person.id, person.age + Int64(1)\")",
+            "Plan(\"HAVING clause references: person.age > Int64(100) must appear in the GROUP BY clause or be used in an aggregate function\")",
             format!("{:?}", err)
         );
     }
@@ -5389,7 +5368,8 @@ mod tests {
         sql: &str,
         dialect: &dyn Dialect,
     ) -> Result<LogicalPlan> {
-        let planner = SqlToRel::new(&MockContextProvider {});
+        let context = MockContextProvider::default();
+        let planner = SqlToRel::new(&context);
         let result = DFParser::parse_sql_with_dialect(sql, dialect);
         let mut ast = result?;
         planner.statement_to_plan(ast.pop_front().unwrap())
@@ -5400,7 +5380,8 @@ mod tests {
         dialect: &dyn Dialect,
         options: ParserOptions,
     ) -> Result<LogicalPlan> {
-        let planner = SqlToRel::new_with_options(&MockContextProvider {}, options);
+        let context = MockContextProvider::default();
+        let planner = SqlToRel::new_with_options(&context, options);
         let result = DFParser::parse_sql_with_dialect(sql, dialect);
         let mut ast = result?;
         planner.statement_to_plan(ast.pop_front().unwrap())
@@ -5421,18 +5402,38 @@ mod tests {
         sql: &str,
         expected_plan: &str,
         expected_data_types: &str,
-    ) {
+    ) -> LogicalPlan {
         let plan = logical_plan(sql).unwrap();
+
+        let assert_plan = plan.clone();
         // verify plan
-        assert_eq!(format!("{:?}", plan), expected_plan);
+        assert_eq!(format!("{:?}", assert_plan), expected_plan);
+
         // verify data types
-        if let LogicalPlan::Prepare(Prepare { data_types, .. }) = plan {
+        if let LogicalPlan::Prepare(Prepare { data_types, .. }) = assert_plan {
             let dt = format!("{:?}", data_types);
             assert_eq!(dt, expected_data_types);
         }
+
+        plan
     }
 
-    struct MockContextProvider {}
+    fn prepare_stmt_replace_params_quick_test(
+        plan: LogicalPlan,
+        param_values: Vec<ScalarValue>,
+        expected_plan: &str,
+    ) -> LogicalPlan {
+        // replace params
+        let plan = plan.with_param_values(param_values).unwrap();
+        assert_eq!(format!("{:?}", plan), expected_plan);
+
+        plan
+    }
+
+    #[derive(Default)]
+    struct MockContextProvider {
+        udafs: HashMap<String, Arc<AggregateUDF>>,
+    }
 
     impl ContextProvider for MockContextProvider {
         fn get_table_provider(
@@ -5518,8 +5519,8 @@ mod tests {
             unimplemented!()
         }
 
-        fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
-            unimplemented!()
+        fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+            self.udafs.get(name).map(Arc::clone)
         }
 
         fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
@@ -6239,11 +6240,7 @@ mod tests {
         // param is not number following the $ sign
         // panic due to error returned from the parser
         let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $foo";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6252,11 +6249,7 @@ mod tests {
         // param is not number following the $ sign
         // panic due to error returned from the parser
         let sql = "PREPARE AS SELECT id, age  FROM person WHERE age = $foo";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6265,11 +6258,7 @@ mod tests {
     )]
     fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
         let sql = "PREPARE my_plan(INT) AS SELECT id + $1";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6279,11 +6268,7 @@ mod tests {
     fn test_prepare_statement_to_plan_panic_no_data_types() {
         // only provide 1 data type while using 2 params
         let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1 + $2";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6292,11 +6277,7 @@ mod tests {
     )]
     fn test_prepare_statement_to_plan_panic_is_param() {
         let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6311,9 +6292,18 @@ mod tests {
 
         let expected_dt = "[Int32]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
-        /////////////////////////
+        ///////////////////
+        // replace params with values
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "Projection: person.id, person.age\
+        \n  Filter: person.age = Int64(10)\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+
+        //////////////////////////////////////////
         // no embedded parameter and no declare it
         let sql = "PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10";
 
@@ -6324,7 +6314,54 @@ mod tests {
 
         let expected_dt = "[]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![];
+        let expected_plan = "Projection: person.id, person.age\
+        \n  Filter: person.age = Int64(10)\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    }
+
+    #[test]
+    #[should_panic(expected = "value: Internal(\"Expected 1 parameters, got 0\")")]
+    fn test_prepare_statement_to_plan_one_param_no_value_panic() {
+        // no embedded parameter but still declare it
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
+        let plan = logical_plan(sql).unwrap();
+        // declare 1 param but provide 0
+        let param_values = vec![];
+        let expected_plan = "whatever";
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "value: Internal(\"Expected parameter of type Int32, got Float64 at index 0\")"
+    )]
+    fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
+        // no embedded parameter but still declare it
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
+        let plan = logical_plan(sql).unwrap();
+        // declare 1 param but provide 0
+        let param_values = vec![ScalarValue::Float64(Some(20.0))];
+        let expected_plan = "whatever";
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    }
+
+    #[test]
+    #[should_panic(expected = "value: Internal(\"Expected 0 parameters, got 1\")")]
+    fn test_prepare_statement_to_plan_no_param_on_value_panic() {
+        // no embedded parameter but still declare it
+        let sql = "PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10";
+        let plan = logical_plan(sql).unwrap();
+        // declare 1 param but provide 0
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "whatever";
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6335,25 +6372,50 @@ mod tests {
         \n  Projection: $1\n    EmptyRelation";
         let expected_dt = "[Int32]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
-        /////////////////////////
+        ///////////////////
+        // replace params with values
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "Projection: Int32(10)\n  EmptyRelation";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+
+        ///////////////////////////////////////
         let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1";
 
         let expected_plan = "Prepare: \"my_plan\" [Int32] \
         \n  Projection: Int64(1) + $1\n    EmptyRelation";
         let expected_dt = "[Int32]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
-        /////////////////////////
+        ///////////////////
+        // replace params with values
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "Projection: Int64(1) + Int32(10)\n  EmptyRelation";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+
+        ///////////////////////////////////////
         let sql = "PREPARE my_plan(INT, DOUBLE) AS SELECT 1 + $1 + $2";
 
         let expected_plan = "Prepare: \"my_plan\" [Int32, Float64] \
         \n  Projection: Int64(1) + $1 + $2\n    EmptyRelation";
         let expected_dt = "[Int32, Float64]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![
+            ScalarValue::Int32(Some(10)),
+            ScalarValue::Float64(Some(10.0)),
+        ];
+        let expected_plan =
+            "Projection: Int64(1) + Int32(10) + Float64(10)\n  EmptyRelation";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6367,14 +6429,48 @@ mod tests {
 
         let expected_dt = "[Int32]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "Projection: person.id, person.age\
+        \n  Filter: person.age = Int32(10)\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    }
+
+    #[test]
+    fn test_prepare_statement_to_plan_data_type() {
+        let sql = "PREPARE my_plan(DOUBLE) AS SELECT id, age  FROM person WHERE age = $1";
+
+        // age is defined as Int32 but prepare statement declares it as DOUBLE/Float64
+        // Prepare statement and its logical plan should be created successfully
+        let expected_plan = "Prepare: \"my_plan\" [Float64] \
+        \n  Projection: person.id, person.age\
+        \n    Filter: person.age = $1\
+        \n      TableScan: person";
+
+        let expected_dt = "[Float64]";
+
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values still succeed and use Float64
+        let param_values = vec![ScalarValue::Float64(Some(10.0))];
+        let expected_plan = "Projection: person.id, person.age\
+        \n  Filter: person.age = Float64(10)\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
     fn test_prepare_statement_to_plan_multi_params() {
-        let sql = "PREPARE my_plan(INT, STRING, DOUBLE, INT, DOUBLE, STRING) AS 
-        SELECT id, age, $6  
-        FROM person 
+        let sql = "PREPARE my_plan(INT, STRING, DOUBLE, INT, DOUBLE, STRING) AS
+        SELECT id, age, $6
+        FROM person
         WHERE age IN ($1, $4) AND salary > $3 and salary < $5 OR first_name < $2";
 
         let expected_plan = "Prepare: \"my_plan\" [Int32, Utf8, Float64, Int32, Float64, Utf8] \
@@ -6384,16 +6480,33 @@ mod tests {
 
         let expected_dt = "[Int32, Utf8, Float64, Int32, Float64, Utf8]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![
+            ScalarValue::Int32(Some(10)),
+            ScalarValue::Utf8(Some("abc".to_string())),
+            ScalarValue::Float64(Some(100.0)),
+            ScalarValue::Int32(Some(20)),
+            ScalarValue::Float64(Some(200.0)),
+            ScalarValue::Utf8(Some("xyz".to_string())),
+        ];
+        let expected_plan =
+        "Projection: person.id, person.age, Utf8(\"xyz\")\
+        \n  Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8(\"abc\")\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
     fn test_prepare_statement_to_plan_having() {
-        let sql = "PREPARE my_plan(INT, DOUBLE, DOUBLE, DOUBLE) AS 
-        SELECT id, SUM(age)  
+        let sql = "PREPARE my_plan(INT, DOUBLE, DOUBLE, DOUBLE) AS
+        SELECT id, SUM(age)
         FROM person \
-        WHERE salary > $2 
-        GROUP BY id 
+        WHERE salary > $2
+        GROUP BY id
         HAVING sum(age) < $1 AND SUM(age) > 10 OR SUM(age) in ($3, $4)\
         ";
 
@@ -6406,7 +6519,24 @@ mod tests {
 
         let expected_dt = "[Int32, Float64, Float64, Float64]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![
+            ScalarValue::Int32(Some(10)),
+            ScalarValue::Float64(Some(100.0)),
+            ScalarValue::Float64(Some(200.0)),
+            ScalarValue::Float64(Some(300.0)),
+        ];
+        let expected_plan =
+        "Projection: person.id, SUM(person.age)\
+        \n  Filter: SUM(person.age) < Int32(10) AND SUM(person.age) > Int64(10) OR SUM(person.age) IN ([Float64(200), Float64(300)])\
+        \n    Aggregate: groupBy=[[person.id]], aggr=[[SUM(person.age)]]\
+        \n      Filter: person.salary > Float64(100)\
+        \n        TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6421,7 +6551,20 @@ mod tests {
 
         let expected_dt = "[Utf8, Utf8]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![
+            ScalarValue::Utf8(Some("a".to_string())),
+            ScalarValue::Utf8(Some("b".to_string())),
+        ];
+        let expected_plan = "Projection: num, letter\
+        \n  Projection: t.column1 AS num, t.column2 AS letter\
+        \n    SubqueryAlias: t\
+        \n      Values: (Int64(1), Utf8(\"a\")), (Int64(2), Utf8(\"b\"))";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6459,6 +6602,23 @@ mod tests {
         \n        SubqueryAlias: t2\
         \n          Projection: person.age\
         \n            TableScan: person";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_inner_join_with_cast_key() {
+        let sql = "SELECT person.id, person.age
+            FROM person
+            INNER JOIN orders
+            ON cast(person.id as Int) = cast(orders.customer_id as Int)";
+
+        let expected = "Projection: person.id, person.age\
+        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
+        \n    Inner Join: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
+        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, CAST(person.id AS Int32) AS CAST(person.id AS Int32)\
+        \n        TableScan: person\
+        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, CAST(orders.customer_id AS Int32) AS CAST(orders.customer_id AS Int32)\
+        \n        TableScan: orders";
         quick_test(sql, expected);
     }
 

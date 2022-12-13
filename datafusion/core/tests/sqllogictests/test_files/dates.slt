@@ -1,0 +1,85 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Date/Time Handling Tests
+##########
+
+# Reproducer for https://github.com/apache/arrow-datafusion/issues/3944
+statement ok
+CREATE TABLE test(
+  i_item_desc VARCHAR,
+  d1_date DATE,
+  d2_date DATE,
+  d3_date DATE
+) as VALUES
+  ('a','2022-12-12','2022-12-12','2022-12-12'),
+  ('b','2022-12-12','2022-12-11','2022-12-12'),
+  ('c','2022-12-12','2022-12-10','2022-12-12'),
+  ('d','2022-12-12','2022-12-9','2022-12-12'),
+  ('e','2022-12-12','2022-12-8','2022-12-12'),
+  ('f','2022-12-12','2022-12-7','2022-12-12'),
+  ('g','2022-12-12','2022-12-6','2022-12-12'),
+  ('h','2022-12-12','2022-12-5','2022-12-12')
+;
+
+
+query C rowsort
+select i_item_desc
+from test
+where d3_date > d2_date + INTERVAL '1 days';
+----
+c
+d
+e
+f
+g
+h
+
+query C rowsort
+select i_item_desc
+from test
+where d3_date > d2_date + INTERVAL '5 days';
+----
+g
+h
+
+# date and other predicate
+query C rowsort
+select i_item_desc
+from test
+where d3_date > d2_date + INTERVAL '5 days' AND i_item_desc != 'g';
+----
+h
+
+# swap predicate order
+query C rowsort
+select i_item_desc
+from test
+where i_item_desc != 'g' AND d3_date > d2_date + INTERVAL '5 days';
+----
+h
+
+## Use OR
+query C rowsort
+select i_item_desc from test
+where d3_date > d2_date + INTERVAL '5 days'
+   OR d3_date = d2_date + INTERVAL '3 days';
+----
+d
+g
+h

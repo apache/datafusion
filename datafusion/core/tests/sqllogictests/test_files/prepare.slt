@@ -25,7 +25,7 @@ create table person (id int, first_name varchar, last_name varchar, age int, sta
 query C rowsort
 select * from person;
 ----
-1 jane smith 20 MA 100000.45 2000-11-12T00:00:00.000000000 99
+1 jane smith 20 MA 100000.45 2000-11-12T00:00:00 99
 
 # Error due to syntax and semantic violation
 
@@ -80,4 +80,3 @@ PREPARE my_plan(INT, DOUBLE, DOUBLE, DOUBLE) AS SELECT id, SUM(age) FROM person 
 
 statement error
 PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);
-

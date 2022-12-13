@@ -61,6 +61,8 @@ pub enum Error {
     InvalidTimeUnit(TimeUnit),
 
     UnsupportedScalarFunction(BuiltinScalarFunction),
+
+    NotImplemented(String),
 }
 
 impl std::error::Error for Error {}
@@ -98,6 +100,9 @@ impl std::fmt::Display for Error {
             }
             Self::UnsupportedScalarFunction(function) => {
                 write!(f, "Unsupported scalar function {:?}", function)
+            }
+            Self::NotImplemented(s) => {
+                write!(f, "Not implemented: {}", s)
             }
         }
     }
@@ -546,6 +551,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             protobuf::BuiltInWindowFunction::from(fun).into(),
                         )
                     }
+                    // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/4584
+                    WindowFunction::AggregateUDF(_) => return Err(Error::NotImplemented("UDAF as window function in proto".to_string()))
                 };
                 let arg_expr: Option<Box<Self>> = if !args.is_empty() {
                     let arg = &args[0];

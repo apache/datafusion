@@ -557,7 +557,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     runtime,
                     extension_codec
                 )?;
-                Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
+                Ok(Arc::new(CrossJoinExec::new(left, right)))
             }
             PhysicalPlanType::Empty(empty) => {
                 let schema = Arc::new(convert_required!(empty.schema)?);

@@ -1296,6 +1296,7 @@ async fn test_extract_date_part() -> Result<()> {
         "EXTRACT(microsecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
         "12123456.78"
     );
+    // Depends on https://github.com/apache/arrow-datafusion/issues/4528
     // test_expression!(
     //     "EXTRACT(nanosecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
     //     "1212345678"
@@ -1316,6 +1317,81 @@ async fn test_extract_date_part() -> Result<()> {
         "date_part('nanosecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
         "12123456780"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_extract_date_part_func() -> Result<()> {
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "year"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "quarter"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "month"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "week"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!("(date_part('{0}', now()) = EXTRACT({0} FROM now()))", "day"),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "hour"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "minute"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "second"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "millisecond"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "microsecond"
+        ),
+        "true"
+    );
+    // Depends on https://github.com/apache/arrow-datafusion/issues/4528
+    //test_expression!(format!("(date_part('{0}', now()) = EXTRACT({0} FROM now()))", "nanosecond"), "true");
+
     Ok(())
 }
 

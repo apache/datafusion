@@ -113,33 +113,21 @@ impl SortMergeJoinExec {
             )));
         }
 
-        let (left_expr, right_expr): (Vec<_>, Vec<_>) = on
+        let (left_sort_exprs, right_sort_exprs): (Vec<_>, Vec<_>) = on
             .iter()
-            .map(|(l, r)| {
-                (
-                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-                )
+            .zip(sort_options.iter())
+            .map(|((l, r), sort_op)| {
+                let left = PhysicalSortExpr {
+                    expr: Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
+                    options: *sort_op,
+                };
+                let right = PhysicalSortExpr {
+                    expr: Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
+                    options: *sort_op,
+                };
+                (left, right)
             })
             .unzip();
-
-        let left_sort_exprs = left_expr
-            .into_iter()
-            .zip(sort_options.iter())
-            .map(|(k, sort_op)| PhysicalSortExpr {
-                expr: k,
-                options: *sort_op,
-            })
-            .collect::<Vec<_>>();
-
-        let right_sort_exprs = right_expr
-            .into_iter()
-            .zip(sort_options.iter())
-            .map(|(k, sort_op)| PhysicalSortExpr {
-                expr: k,
-                options: *sort_op,
-            })
-            .collect::<Vec<_>>();
 
         let output_ordering = match join_type {
             JoinType::Inner
