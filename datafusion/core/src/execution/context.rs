@@ -99,6 +99,7 @@ use url::Url;
 
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
+use crate::physical_optimizer::remove_unnecessary_sorts::RemoveUnnecessarySorts;
 use uuid::Uuid;
 
 use super::options::{
@@ -1595,6 +1596,11 @@ impl SessionState {
         // Repartition rule could introduce additional RepartitionExec with RoundRobin partitioning.
         // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
+
+        // `BasicEnforcement` stage conservatively inserts `SortExec`s before `WindowAggExec`s without
+        // a deep analysis of window frames. Such analysis may sometimes reveal that a `SortExec` is
+        // actually unnecessary. The rule below performs this analysis and removes such `SortExec`s.
+        physical_optimizers.push(Arc::new(RemoveUnnecessarySorts::new()));
 
         SessionState {
             session_id,

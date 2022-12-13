@@ -101,4 +101,19 @@ pub trait AggregateExpr: Send + Sync + Debug {
             self
         )))
     }
+
+    /// Get whether window function is reversible
+    /// make `true` if `reverse_expr` is implemented
+    fn is_window_fn_reversible(&self) -> bool {
+        false
+    }
+
+    /// Construct Reverse Expression
+    // Typically expression itself for aggregate functions
+    fn reverse_expr(&self) -> Result<Arc<dyn AggregateExpr>> {
+        Err(DataFusionError::NotImplemented(format!(
+            "reverse_expr hasn't been implemented for {:?} yet",
+            self
+        )))
+    }
 }

@@ -21,7 +21,12 @@ use super::optimizer::PhysicalOptimizerRule;
 use crate::execution::context::SessionConfig;
 
 use crate::error::Result;
+use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion_physical_expr::{
+    normalize_sort_expr_with_equivalence_properties, EquivalenceProperties,
+    PhysicalSortExpr,
+};
 use std::sync::Arc;
 
 /// Convenience rule for writing optimizers: recursively invoke
@@ -44,4 +49,86 @@ pub fn optimize_children(
     } else {
         with_new_children_if_necessary(plan, children)
     }
+}
+
+/// Check the required ordering requirements are satisfied by the provided PhysicalSortExprs.
+pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
+    provided: Option<&[PhysicalSortExpr]>,
+    required: Option<&[PhysicalSortExpr]>,
+    equal_properties: F,
+) -> bool {
+    match (provided, required) {
+        (_, None) => true,
+        (None, Some(_)) => false,
+        (Some(provided), Some(required)) => {
+            ordering_satisfy_inner(provided, required, equal_properties)
+        }
+    }
+}
+
+pub fn ordering_satisfy_inner<F: FnOnce() -> EquivalenceProperties>(
+    provided: &[PhysicalSortExpr],
+    required: &[PhysicalSortExpr],
+    equal_properties: F,
+) -> bool {
+    if required.len() > provided.len() {
+        false
+    } else {
+        let fast_match = required
+            .iter()
+            .zip(provided.iter())
+            .all(|(order1, order2)| order1.eq(order2));
+
+        if !fast_match {
+            let eq_properties = equal_properties();
+            let eq_classes = eq_properties.classes();
+            if !eq_classes.is_empty() {
+                let normalized_required_exprs = required
+                    .iter()
+                    .map(|e| {
+                        normalize_sort_expr_with_equivalence_properties(
+                            e.clone(),
+                            eq_classes,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let normalized_provided_exprs = provided
+                    .iter()
+                    .map(|e| {
+                        normalize_sort_expr_with_equivalence_properties(
+                            e.clone(),
+                            eq_classes,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                normalized_required_exprs
+                    .iter()
+                    .zip(normalized_provided_exprs.iter())
+                    .all(|(order1, order2)| order1.eq(order2))
+            } else {
+                fast_match
+            }
+        } else {
+            fast_match
+        }
+    }
+}
+
+/// Util function to add SortExec above child
+pub fn add_sort_above_child(
+    child: &Arc<dyn ExecutionPlan>,
+    sort_expr: Vec<PhysicalSortExpr>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let new_child = if child.output_partitioning().partition_count() > 1 {
+        Arc::new(SortExec::new_with_partitioning(
+            sort_expr,
+            child.clone(),
+            true,
+            None,
+        )) as Arc<dyn ExecutionPlan>
+    } else {
+        Arc::new(SortExec::try_new(sort_expr, child.clone(), None)?)
+            as Arc<dyn ExecutionPlan>
+    };
+    Ok(new_child)
 }

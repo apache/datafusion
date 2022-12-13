@@ -20,7 +20,7 @@ use arrow::compute::kernels::partition::lexicographical_partition_ranges;
 use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{reverse_sort_options, DataFusionError, Result};
 use datafusion_expr::WindowFrame;
 use std::any::Any;
 use std::fmt::Debug;
@@ -129,6 +129,25 @@ pub trait WindowExpr: Send + Sync + Debug {
         Ok((values, order_bys))
     }
 
-    // Get window frame of this WindowExpr, None if absent
+    // Get window frame of this WindowExpr
     fn get_window_frame(&self) -> &Arc<WindowFrame>;
+
+    /// Get whether window function can be reversed
+    fn is_window_fn_reversible(&self) -> bool;
+
+    /// get reversed expression
+    fn get_reversed_expr(&self) -> Result<Arc<dyn WindowExpr>>;
+}
+
+/// Reverses the ORDER BY expression, which is useful during equivalent window
+/// expression construction. For instance, 'ORDER BY a ASC, NULLS LAST' turns into
+/// 'ORDER BY a DESC, NULLS FIRST'.
+pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr> {
+    order_bys
+        .iter()
+        .map(|e| PhysicalSortExpr {
+            expr: e.expr.clone(),
+            options: reverse_sort_options(e.options),
+        })
+        .collect()
 }

@@ -36,7 +36,7 @@ use crate::expressions::format_state_name;
 
 /// COUNT aggregate expression
 /// Returns the amount of non-null values of the given expression.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Count {
     name: String,
     data_type: DataType,
@@ -103,6 +103,14 @@ impl AggregateExpr for Count {
         start_index: usize,
     ) -> Result<Box<dyn RowAccumulator>> {
         Ok(Box::new(CountRowAccumulator::new(start_index)))
+    }
+
+    fn is_window_fn_reversible(&self) -> bool {
+        true
+    }
+
+    fn reverse_expr(&self) -> Result<Arc<dyn AggregateExpr>> {
+        Ok(Arc::new(self.clone()))
     }
 }
 

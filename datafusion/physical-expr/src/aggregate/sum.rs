@@ -42,7 +42,7 @@ use arrow::compute::cast;
 use datafusion_row::accessor::RowAccessor;
 
 /// SUM aggregate expression
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sum {
     name: String,
     data_type: DataType,
@@ -131,6 +131,14 @@ impl AggregateExpr for Sum {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn is_window_fn_reversible(&self) -> bool {
+        true
+    }
+
+    fn reverse_expr(&self) -> Result<Arc<dyn AggregateExpr>> {
+        Ok(Arc::new(self.clone()))
     }
 }
 

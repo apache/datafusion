@@ -20,6 +20,7 @@
 use super::window_frame_state::WindowFrameContext;
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
+use crate::window::window_expr::reverse_order_bys;
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
@@ -136,5 +137,18 @@ impl WindowExpr for BuiltInWindowExpr {
 
     fn get_window_frame(&self) -> &Arc<WindowFrame> {
         &self.window_frame
+    }
+
+    fn is_window_fn_reversible(&self) -> bool {
+        self.expr.as_ref().is_window_fn_reversible()
+    }
+
+    fn get_reversed_expr(&self) -> Result<Arc<dyn WindowExpr>> {
+        Ok(Arc::new(BuiltInWindowExpr::new(
+            self.expr.reverse_expr()?,
+            &self.partition_by.clone(),
+            &reverse_order_bys(&self.order_by),
+            Arc::new(self.window_frame.reverse()),
+        )))
     }
 }

@@ -24,6 +24,7 @@ pub mod enforcement;
 pub mod join_selection;
 pub mod optimizer;
 pub mod pruning;
+pub mod remove_unnecessary_sorts;
 pub mod repartition;
 mod utils;
 

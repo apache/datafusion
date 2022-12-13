@@ -107,6 +107,20 @@ impl BuiltInWindowFunctionExpr for WindowShift {
             default_value: self.default_value.clone(),
         }))
     }
+
+    fn is_window_fn_reversible(&self) -> bool {
+        true
+    }
+
+    fn reverse_expr(&self) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
+        Ok(Arc::new(Self {
+            name: self.name.clone(),
+            data_type: self.data_type.clone(),
+            shift_offset: -self.shift_offset,
+            expr: self.expr.clone(),
+            default_value: self.default_value.clone(),
+        }))
+    }
 }
 
 pub(crate) struct WindowShiftEvaluator {

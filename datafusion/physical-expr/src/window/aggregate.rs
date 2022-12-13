@@ -30,6 +30,7 @@ use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::WindowFrame;
 
+use crate::window::window_expr::reverse_order_bys;
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use crate::{window::WindowExpr, AggregateExpr};
 
@@ -154,5 +155,18 @@ impl WindowExpr for AggregateWindowExpr {
 
     fn get_window_frame(&self) -> &Arc<WindowFrame> {
         &self.window_frame
+    }
+
+    fn is_window_fn_reversible(&self) -> bool {
+        self.aggregate.as_ref().is_window_fn_reversible()
+    }
+
+    fn get_reversed_expr(&self) -> Result<Arc<dyn WindowExpr>> {
+        Ok(Arc::new(AggregateWindowExpr::new(
+            self.aggregate.reverse_expr()?,
+            &self.partition_by.clone(),
+            &reverse_order_bys(&self.order_by),
+            Arc::new(self.window_frame.reverse()),
+        )))
     }
 }
