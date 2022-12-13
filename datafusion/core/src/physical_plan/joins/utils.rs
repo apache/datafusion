@@ -700,6 +700,11 @@ impl<T: 'static> OnceFut<T> {
     }
 }
 
+/// Some type `join_type` of join need to maintain the matched indices bit map for the left side, and
+/// use the bit map to generate the part of result of the join.
+///
+/// For example of the `Left` join, in each iteration of right side, can get the matched result, but need
+/// to maintain the matched indices bit map to get the unmatched row for the left side.
 pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     matches!(
         join_type,
@@ -707,7 +712,15 @@ pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     )
 }
 
-pub(crate) fn get_final_indices(
+/// In the end of join execution, need to use bit map of the matched indices to generate the final left and
+/// right indices.
+///
+/// For example:
+/// left_bit_map: [true, false, true, true, false]
+/// join_type: `Left`
+///
+/// The result is: ([1,4], [null, null])
+pub(crate) fn get_final_indices_from_bit_map(
     left_bit_map: &BooleanBufferBuilder,
     join_type: JoinType,
 ) -> (UInt64Array, UInt32Array) {
@@ -731,6 +744,8 @@ pub(crate) fn get_final_indices(
     (left_indices, right_indices)
 }
 
+/// Use the `left_indices` and `right_indices` to restructure tuples, and apply the `filter` to
+/// all of them to get the matched left and right indices.
 pub(crate) fn apply_join_filter_to_indices(
     left: &RecordBatch,
     right: &RecordBatch,
@@ -810,8 +825,8 @@ pub(crate) fn build_batch_from_indices(
     RecordBatch::try_new(Arc::new(schema.clone()), columns)
 }
 
-// The input is the matched indices for left and right.
-// Adjust the indices according to the join type
+/// The input is the matched indices for left and right and
+/// adjust the indices according to the join type
 pub(crate) fn adjust_indices_by_join_type(
     left_indices: UInt64Array,
     right_indices: UInt32Array,
@@ -860,30 +875,34 @@ pub(crate) fn adjust_indices_by_join_type(
     }
 }
 
+/// Appends the `right_unmatched_indices` to the `right_indices`,
+/// and fills Null to tail of `left_indices` to
+/// keep the length of `right_indices` and `left_indices` consistent.
 pub(crate) fn append_right_indices(
     left_indices: UInt64Array,
     right_indices: UInt32Array,
-    appended_right_indices: UInt32Array,
+    right_unmatched_indices: UInt32Array,
 ) -> (UInt64Array, UInt32Array) {
-    // left_indices, right_indices and appended_right_indices must not contain the null value
-    if appended_right_indices.is_empty() {
+    // left_indices, right_indices and right_unmatched_indices must not contain the null value
+    if right_unmatched_indices.is_empty() {
         (left_indices, right_indices)
     } else {
-        let unmatched_size = appended_right_indices.len();
+        let unmatched_size = right_unmatched_indices.len();
         // the new left indices: left_indices + null array
-        // the new right indices: right_indices + appended_right_indices
+        // the new right indices: right_indices + right_unmatched_indices
         let new_left_indices = left_indices
             .iter()
             .chain(std::iter::repeat(None).take(unmatched_size))
             .collect::<UInt64Array>();
         let new_right_indices = right_indices
             .iter()
-            .chain(appended_right_indices.iter())
+            .chain(right_unmatched_indices.iter())
             .collect::<UInt32Array>();
         (new_left_indices, new_right_indices)
     }
 }
 
+/// Get unmatched and deduplicated indices
 pub(crate) fn get_anti_indices(
     row_count: usize,
     input_indices: &UInt32Array,
@@ -900,6 +919,7 @@ pub(crate) fn get_anti_indices(
         .collect::<UInt32Array>()
 }
 
+/// Get matched and deduplicated indices
 pub(crate) fn get_semi_indices(
     row_count: usize,
     input_indices: &UInt32Array,

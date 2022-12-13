@@ -85,7 +85,7 @@ use super::{
 };
 use crate::physical_plan::joins::utils::{
     adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
-    get_final_indices, need_produce_result_in_final,
+    get_final_indices_from_bit_map, need_produce_result_in_final,
 };
 use log::debug;
 use std::fmt;
@@ -1205,8 +1205,10 @@ impl HashJoinStream {
                     if need_produce_result_in_final(self.join_type) && !self.is_exhausted
                     {
                         // use the global left bitmap to produce the left indices and right indices
-                        let (left_side, right_side) =
-                            get_final_indices(visited_left_side, self.join_type);
+                        let (left_side, right_side) = get_final_indices_from_bit_map(
+                            visited_left_side,
+                            self.join_type,
+                        );
                         let empty_right_batch =
                             RecordBatch::new_empty(self.right.schema());
                         // use the left and right indices to produce the batch result
