@@ -38,7 +38,7 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
-use datafusion_common::{context, Column, DataFusionError, OwnedTableReference};
+use datafusion_common::{context, DataFusionError, OwnedTableReference};
 use datafusion_expr::logical_plan::{builder::project, Prepare};
 use datafusion_expr::{
     logical_plan::{

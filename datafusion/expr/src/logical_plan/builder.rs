@@ -31,8 +31,8 @@ use crate::{
         Union, Values, Window,
     },
     utils::{
-        can_hash, check_all_column_from_schema, expand_qualified_wildcard,
-        expand_wildcard, group_window_expr_by_sort_keys,
+        can_hash, expand_qualified_wildcard, expand_wildcard,
+        group_window_expr_by_sort_keys,
     },
     Expr, ExprSchemable, TableSource,
 };
@@ -859,7 +859,7 @@ impl LogicalPlanBuilder {
         //     .into_iter()
         //     .zip(right_keys.into_iter())
         //     .collect();
-       
+
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 

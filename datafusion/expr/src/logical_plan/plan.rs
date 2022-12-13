@@ -25,7 +25,9 @@ use crate::utils::{
     self, exprlist_to_fields, from_plan, grouping_set_expr_count,
     grouping_set_to_exprlist,
 };
-use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
+use crate::{
+    build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
@@ -1665,6 +1667,40 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
+}
+
+impl Join {
+    pub fn try_new_with_project_input(
+        original: &LogicalPlan,
+        left: Arc<LogicalPlan>,
+        right: Arc<LogicalPlan>,
+        column_on: (Vec<Column>, Vec<Column>),
+    ) -> Result<Self, DataFusionError> {
+        let original_join = match original {
+            LogicalPlan::Join(join) => join,
+            _ => return plan_err!("Could not create join with projected input"),
+        };
+
+        let on: Vec<(Expr, Expr)> = column_on
+            .0
+            .into_iter()
+            .zip(column_on.1.into_iter())
+            .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
+            .collect();
+        let join_schema =
+            build_join_schema(left.schema(), right.schema(), &original_join.join_type)?;
+
+        Ok(Join {
+            left,
+            right,
+            on,
+            filter: original_join.filter.clone(),
+            join_type: original_join.join_type,
+            join_constraint: original_join.join_constraint,
+            schema: Arc::new(join_schema),
+            null_equals_null: original_join.null_equals_null,
+        })
+    }
 }
 
 /// Subquery

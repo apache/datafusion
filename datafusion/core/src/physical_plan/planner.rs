@@ -66,10 +66,10 @@ use datafusion_expr::expr::{
     Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
+use datafusion_expr::logical_plan;
+use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{WindowFrame, WindowFrameBound};
-use datafusion_expr::logical_plan::builder::{wrap_projection_for_join_if_necessary, LogicalPlanBuilder};
-use datafusion_expr::logical_plan;
 use datafusion_optimizer::utils::unalias;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_sql::utils::window_expr_common_partition_keys;
@@ -865,46 +865,35 @@ impl DefaultPhysicalPlanner {
                     join_type,
                     null_equals_null,
                     schema: join_schema,
-                    join_constraint,
                     ..
                 }) => {
-                    if keys.iter().any(|(l, r)| !(matches!(l, Expr::Column(_)) && matches!(r, Expr::Column(_)))) {
+                    let has_expr_join_key = keys.iter().any(|(l, r)| !(matches!(l, Expr::Column(_)) && matches!(r, Expr::Column(_))));
+                    if has_expr_join_key {
                         let left_keys = keys.iter().map(|(l, _r)| l).cloned().collect::<Vec<_>>();
                         let right_keys = keys.iter().map(|(_l, r)| r).cloned().collect::<Vec<_>>();
-                        let (left, right, col_keys, added_project) = {
+                        let (left, right, column_on, added_project) = {
                             let (left, left_col_keys, left_projected) = wrap_projection_for_join_if_necessary(left_keys.as_slice(), left.as_ref().clone())?;
                             let (right, right_col_keys, right_projected) = wrap_projection_for_join_if_necessary(&right_keys, right.as_ref().clone())?;
-                            let on = left_col_keys.into_iter().zip(right_col_keys.into_iter()).map(|(l,r)| (Expr::Column(l), Expr::Column(r))).collect::<Vec<_>>();
-                            (left, right, on, left_projected || right_projected)
+                            (left, right, (left_col_keys, right_col_keys), left_projected || right_projected)
                         };
 
-                        let inner_join_schema = logical_plan::builder::build_join_schema(left.schema(), right.schema(), join_type)?;
-                        let join_plan = LogicalPlan::Join(Join {
-                            left: Arc::new(left),
-                            right: Arc::new(right),
-                            on: col_keys,
-                            filter: filter.clone(),
-                            join_type: *join_type,
-                            join_constraint: *join_constraint,
-                            schema: Arc::new(inner_join_schema),
-                            null_equals_null: *null_equals_null
-                        });
-    
+                        let join_plan = LogicalPlan::Join(Join::try_new_with_project_input(logical_plan, Arc::new(left), Arc::new(right), column_on)?);
+
                         // Remove temporary projected columns if necessary.
                         let join_plan = if added_project {
                             let final_join_result = join_schema
                                 .fields()
                                 .iter()
                                 .map(|field| Expr::Column(field.qualified_column()))
-                                .collect::<Vec<_>>();    
-                            // join_plan_builder.project(final_join_result)?.build()
+                                .collect::<Vec<_>>();
                             let projection = logical_plan::Projection::try_new_with_schema(final_join_result, Arc::new(join_plan), join_schema.clone())?;
                             LogicalPlan::Projection(projection)
                         } else {
                             join_plan
                         };
+
                         return self.create_initial_plan(&join_plan, session_state).await;
-                    }            
+                    }
 
                     let left_df_schema = left.schema();
                     let physical_left = self.create_initial_plan(left, session_state).await?;

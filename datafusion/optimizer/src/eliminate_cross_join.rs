@@ -23,10 +23,7 @@ use datafusion_expr::logical_plan::{
     CrossJoin, Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
 use datafusion_expr::utils::{can_hash, check_all_column_from_schema};
-use datafusion_expr::{
-    and, build_join_schema, or, wrap_projection_for_join_if_necessary, ExprSchemable,
-    Operator,
-};
+use datafusion_expr::{and, build_join_schema, or, ExprSchemable, Operator};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -1106,16 +1103,6 @@ mod tests {
             .build()?;
 
         let expected = vec![
-              "Filter: t2.c < UInt32(20) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-              "  Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-              "    Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32, a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-              "      Projection: t1.a, t1.b, t1.c, t1.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32]",
-              "        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-              "      Projection: t2.a, t2.b, t2.c, t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-              "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
-        ];
-
-        let expected = vec![
             "Filter: t2.c < UInt32(20) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]", 
             "  Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]", 
             "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]", 
@@ -1170,16 +1157,6 @@ mod tests {
             ))?
             .build()?;
 
-        // let expected = vec![
-        //        "Filter: t2.c < UInt32(20) AND t2.c = UInt32(10) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-        //        "  Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-        //        "    Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32, a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-        //        "      Projection: t1.a, t1.b, t1.c, t1.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32]",
-        //        "        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-        //        "      Projection: t2.a, t2.b, t2.c, t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-        //        "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
-        // ];
-
         let expected = vec![
             "Filter: t2.c < UInt32(20) AND t2.c = UInt32(10) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "  Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
@@ -1207,16 +1184,6 @@ mod tests {
                 binary_expr(common_join_key, And, col("t2.c").eq(lit(688u32))),
             ))?
             .build()?;
-
-        //     let expected = vec![
-        //            "Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-        //            "  Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-        //            "    Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32, a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-        //            "      Projection: t1.a, t1.b, t1.c, t1.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t1.a + UInt32(100):UInt32]",
-        //            "        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-        //            "      Projection: t2.a, t2.b, t2.c, t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-        //            "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
-        //    ];
 
         let expected = vec![
         "Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
@@ -1254,20 +1221,6 @@ mod tests {
                 ),
             ))?
             .build()?;
-
-        // let _expected = vec![
-        //     "Filter: t3.c < UInt32(15) AND t3.b < UInt32(15) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-        //     "  Projection: t1.a, t1.b, t1.c, t2.a, t2.b, t2.c, t3.a, t3.b, t3.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-        //     "    Inner Join: t3.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32, a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-        //     "      Projection: t1.a, t1.b, t1.c, t3.a, t3.b, t3.c, t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32]",
-        //     "        Inner Join: t1.a * UInt32(2) = t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t1.a * UInt32(2):UInt32, a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32]",
-        //     "          Projection: t1.a, t1.b, t1.c, t1.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t1.a * UInt32(2):UInt32]",
-        //     "            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-        //     "          Projection: t3.a, t3.b, t3.c, t3.a + UInt32(100) [a:UInt32, b:UInt32, c:UInt32, t3.a + UInt32(100):UInt32]",
-        //     "            TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]",
-        //     "      Projection: t2.a, t2.b, t2.c, t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, t2.a * UInt32(2):UInt32]",
-        //     "        TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
-        // ];
 
         let expected = vec![
             "Filter: t3.c < UInt32(15) AND t3.b < UInt32(15) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",

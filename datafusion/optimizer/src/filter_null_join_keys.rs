@@ -21,9 +21,8 @@
 //! can never match.
 
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DFField, DFSchemaRef};
 use datafusion_expr::{
-    and, logical_plan::Filter, logical_plan::JoinType, Expr, LogicalPlan, ExprSchemable,
+    and, logical_plan::Filter, logical_plan::JoinType, Expr, ExprSchemable, LogicalPlan,
 };
 use std::sync::Arc;
 
@@ -114,35 +113,6 @@ fn create_not_null_predicate(filters: Vec<Expr>) -> Expr {
         .fold(not_null_exprs[0].clone(), |a, b| and(a, b.clone()))
 }
 
-fn resolve_join_key_pair(
-    left_schema: &DFSchemaRef,
-    right_schema: &DFSchemaRef,
-    c1: &Column,
-    c2: &Column,
-) -> Option<(DFField, DFField)> {
-    resolve_fields(left_schema, right_schema, c1, c2)
-        .or_else(|| resolve_fields(left_schema, right_schema, c2, c1))
-}
-
-fn resolve_fields(
-    left_schema: &DFSchemaRef,
-    right_schema: &DFSchemaRef,
-    c1: &Column,
-    c2: &Column,
-) -> Option<(DFField, DFField)> {
-    match (
-        left_schema.index_of_column(c1),
-        right_schema.index_of_column(c2),
-    ) {
-        (Ok(left_index), Ok(right_index)) => {
-            let left_field = left_schema.field(left_index);
-            let right_field = right_schema.field(right_index);
-            Some((left_field.clone(), right_field.clone()))
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +194,44 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
+
+    // #[test]
+    // fn left_nullable_expr_key() -> Result<()> {
+    //     let (t1, t2) = test_tables()?;
+    //     let plan = build_plan(t1, t2, "t1.optional_id", "t2.id")?;
+    //     let schema = Schema::new(vec![
+    //         Field::new("id", DataType::UInt32, false),
+    //         Field::new("t1_id", DataType::UInt32, true),
+    //         Field::new("t2_id", DataType::UInt32, true),
+    //     ]);
+    //     let t3 = table_scan(Some("t3"), &schema, None)?.build()?;
+    //     let plan = LogicalPlanBuilder::from(t3)
+    //         .join(
+    //             &plan,
+    //             JoinType::Inner,
+    //             (
+    //                 vec![
+    //                     Column::from_qualified_name("t3.t1_id"),
+    //                     Column::from_qualified_name("t3.t2_id"),
+    //                 ],
+    //                 vec![
+    //                     Column::from_qualified_name("t1.id"),
+    //                     Column::from_qualified_name("t2.id"),
+    //                 ],
+    //             ),
+    //             None,
+    //         )?
+    //         .build()?;
+    //     let expected = "Inner Join: t3.t1_id = t1.id, t3.t2_id = t2.id\
+    //     \n  Filter: t3.t1_id IS NOT NULL AND t3.t2_id IS NOT NULL\
+    //     \n    TableScan: t3\
+    //     \n  Inner Join: t1.optional_id = t2.id\
+    //     \n    Filter: t1.optional_id IS NOT NULL\
+    //     \n      TableScan: t1\
+    //     \n    TableScan: t2";
+    //     assert_optimized_plan_eq(&plan, expected);
+    //     Ok(())
+    // }
 
     fn build_plan(
         left_table: LogicalPlan,
