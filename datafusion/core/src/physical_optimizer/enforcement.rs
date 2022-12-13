@@ -846,15 +846,16 @@ fn ensure_distribution_and_ordering(
     if plan.children().is_empty() {
         return Ok(plan);
     }
-    // If we have a `LIMIT` can run sort/limits in parallel (similar to TopK)
+    // It's mainly for changing the single node global SortExec to
+    // the SortPreservingMergeExec with multiple local SortExec.
+    // What's more, if limit exists, it can also be pushed down to the local sort
     let plan = plan
         .as_any()
         .downcast_ref::<SortExec>()
         .and_then(|sort_exec| {
-            if sort_exec.input().output_partitioning().partition_count() > 1
-                && !sort_exec.preserve_partitioning()
-                && sort_exec.fetch().is_some()
-            {
+            // If it's already preserving the partitioning, it can be regarded as a local sort
+            // and there's no need for this optimization
+            if !sort_exec.preserve_partitioning() {
                 let sort = SortExec::new_with_partitioning(
                     sort_exec.expr().to_vec(),
                     sort_exec.input().clone(),

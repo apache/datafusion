@@ -2040,8 +2040,8 @@ async fn left_semi_join() -> Result<()> {
         let physical_plan = state.create_physical_plan(&logical_plan).await?;
         let expected = if repartition_joins {
             vec![
-                "SortExec: [t1_id@0 ASC NULLS LAST]",
-                "  CoalescePartitionsExec",
+                "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
+                "  SortExec: [t1_id@0 ASC NULLS LAST]",
                 "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
                 "      CoalesceBatchesExec: target_batch_size=4096",
                 "        HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
@@ -2057,8 +2057,8 @@ async fn left_semi_join() -> Result<()> {
             ]
         } else {
             vec![
-                "SortExec: [t1_id@0 ASC NULLS LAST]",
-                "  CoalescePartitionsExec",
+                "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
+                "  SortExec: [t1_id@0 ASC NULLS LAST]",
                 "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
                 "      CoalesceBatchesExec: target_batch_size=4096",
                 "        HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
@@ -2230,8 +2230,8 @@ async fn right_semi_join() -> Result<()> {
         let logical_plan = state.optimize(&plan)?;
         let physical_plan = state.create_physical_plan(&logical_plan).await?;
         let expected = if repartition_joins {
-            vec![ "SortExec: [t1_id@0 ASC NULLS LAST]",
-                  "  CoalescePartitionsExec",
+            vec![ "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
+                  "  SortExec: [t1_id@0 ASC NULLS LAST]",
                   "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
                   "      CoalesceBatchesExec: target_batch_size=4096",
                   "        HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
@@ -2246,8 +2246,8 @@ async fn right_semi_join() -> Result<()> {
             ]
         } else {
             vec![
-                "SortExec: [t1_id@0 ASC NULLS LAST]",
-                "  CoalescePartitionsExec",
+                "SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]",
+                "  SortExec: [t1_id@0 ASC NULLS LAST]",
                 "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
                 "      CoalesceBatchesExec: target_batch_size=4096",
                 "        RepartitionExec: partitioning=RoundRobinBatch(2)",
