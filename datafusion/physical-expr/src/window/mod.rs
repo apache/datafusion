@@ -26,6 +26,7 @@ pub(crate) mod rank;
 pub(crate) mod row_number;
 mod window_expr;
 mod window_frame_state;
+pub(crate) mod segment_tree;
 
 pub use aggregate::AggregateWindowExpr;
 pub use built_in::BuiltInWindowExpr;
