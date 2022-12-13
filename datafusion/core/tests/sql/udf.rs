@@ -21,8 +21,8 @@ use datafusion::{
     execution::registry::FunctionRegistry,
     physical_plan::{expressions::AvgAccumulator, functions::make_scalar_function},
 };
-use datafusion_common::cast::as_int32_array;
-use datafusion_expr::{create_udaf, LogicalPlanBuilder};
+use datafusion_common::{cast::as_int32_array, ScalarValue};
+use datafusion_expr::{create_udaf, Accumulator, AggregateState, LogicalPlanBuilder};
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -166,5 +166,63 @@ async fn simple_udaf() -> Result<()> {
     ];
     assert_batches_eq!(expected, &result);
 
+    Ok(())
+}
+
+#[test]
+fn udaf_as_window_func() -> Result<()> {
+    #[derive(Debug)]
+    struct MyAccumulator;
+
+    impl Accumulator for MyAccumulator {
+        fn state(&self) -> Result<Vec<AggregateState>> {
+            unimplemented!()
+        }
+
+        fn update_batch(&mut self, _: &[ArrayRef]) -> Result<()> {
+            unimplemented!()
+        }
+
+        fn merge_batch(&mut self, _: &[ArrayRef]) -> Result<()> {
+            unimplemented!()
+        }
+
+        fn evaluate(&self) -> Result<ScalarValue> {
+            unimplemented!()
+        }
+
+        fn size(&self) -> usize {
+            unimplemented!()
+        }
+    }
+
+    let my_acc = create_udaf(
+        "my_acc",
+        DataType::Int32,
+        Arc::new(DataType::Int32),
+        Volatility::Immutable,
+        Arc::new(|_| Ok(Box::new(MyAccumulator))),
+        Arc::new(vec![DataType::Int32]),
+    );
+
+    let mut context = SessionContext::new();
+    context.register_table(
+        "my_table",
+        Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::new(
+            Schema::new(vec![
+                Field::new("a", DataType::UInt32, false),
+                Field::new("b", DataType::Int32, false),
+            ]),
+        ))),
+    )?;
+    context.register_udaf(my_acc);
+
+    let sql = "SELECT a, MY_ACC(b) OVER(PARTITION BY a) FROM my_table";
+    let expected = r#"Projection: my_table.a, AggregateUDF { name: "my_acc", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" }(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+  WindowAggr: windowExpr=[[AggregateUDF { name: "my_acc", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" }(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+    TableScan: my_table"#;
+
+    let plan = context.create_logical_plan(sql)?;
+    assert_eq!(format!("{:?}", plan), expected);
     Ok(())
 }
