@@ -107,7 +107,7 @@ impl ExecutionPlan for AvroExec {
         use super::file_stream::FileStream;
         let object_store = context
             .runtime_env()
-            .object_store(&config.object_store_url)?;
+            .object_store(&self.base_config.object_store_url)?;
 
         let config = Arc::new(private::AvroConfig {
             schema: Arc::clone(&self.base_config.file_schema),
