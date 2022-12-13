@@ -2119,7 +2119,9 @@ async fn test_window_agg_sort_orderby_reversed_binary_expr() -> Result<()> {
 
 #[tokio::test]
 async fn test_remove_unnecessary_sort_in_sub_query() -> Result<()> {
-    let config = SessionConfig::new();
+    let config = SessionConfig::new()
+        .with_target_partitions(8)
+        .with_repartition_windows(true);
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT count(*) as global_count FROM

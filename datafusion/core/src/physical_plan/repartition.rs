@@ -289,7 +289,21 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+        if self.maintains_input_order() {
+            self.input().output_ordering()
+        } else {
+            None
+        }
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        let n_input = match self.input().output_partitioning() {
+            Partitioning::RoundRobinBatch(n) => n,
+            Partitioning::Hash(_, n) => n,
+            Partitioning::UnknownPartitioning(n) => n,
+        };
+        // We preserve ordering when input partitioning is 1
+        n_input <= 1
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
