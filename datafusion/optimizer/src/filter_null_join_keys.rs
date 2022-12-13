@@ -119,7 +119,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Column, Result};
     use datafusion_expr::logical_plan::table_scan;
-    use datafusion_expr::{logical_plan::JoinType, LogicalPlanBuilder};
+    use datafusion_expr::{col, lit, logical_plan::JoinType, LogicalPlanBuilder};
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterNullJoinKeys::default();
@@ -195,43 +195,73 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
-    // fn left_nullable_expr_key() -> Result<()> {
-    //     let (t1, t2) = test_tables()?;
-    //     let plan = build_plan(t1, t2, "t1.optional_id", "t2.id")?;
-    //     let schema = Schema::new(vec![
-    //         Field::new("id", DataType::UInt32, false),
-    //         Field::new("t1_id", DataType::UInt32, true),
-    //         Field::new("t2_id", DataType::UInt32, true),
-    //     ]);
-    //     let t3 = table_scan(Some("t3"), &schema, None)?.build()?;
-    //     let plan = LogicalPlanBuilder::from(t3)
-    //         .join(
-    //             &plan,
-    //             JoinType::Inner,
-    //             (
-    //                 vec![
-    //                     Column::from_qualified_name("t3.t1_id"),
-    //                     Column::from_qualified_name("t3.t2_id"),
-    //                 ],
-    //                 vec![
-    //                     Column::from_qualified_name("t1.id"),
-    //                     Column::from_qualified_name("t2.id"),
-    //                 ],
-    //             ),
-    //             None,
-    //         )?
-    //         .build()?;
-    //     let expected = "Inner Join: t3.t1_id = t1.id, t3.t2_id = t2.id\
-    //     \n  Filter: t3.t1_id IS NOT NULL AND t3.t2_id IS NOT NULL\
-    //     \n    TableScan: t3\
-    //     \n  Inner Join: t1.optional_id = t2.id\
-    //     \n    Filter: t1.optional_id IS NOT NULL\
-    //     \n      TableScan: t1\
-    //     \n    TableScan: t2";
-    //     assert_optimized_plan_eq(&plan, expected);
-    //     Ok(())
-    // }
+    #[test]
+    fn left_nullable_expr_key() -> Result<()> {
+        let (t1, t2) = test_tables()?;
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_with_expr_keys(
+                &t2,
+                JoinType::Inner,
+                (
+                    vec![col("t1.optional_id") + lit(1u32)],
+                    vec![col("t2.id") + lit(1u32)],
+                ),
+                None,
+            )?
+            .build()?;
+        let expected = "Inner Join: t1.optional_id + UInt32(1) = t2.id + UInt32(1)\
+        \n  Filter: t1.optional_id + UInt32(1) IS NOT NULL\
+        \n    TableScan: t1\
+        \n  TableScan: t2";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn right_nullable_expr_key() -> Result<()> {
+        let (t1, t2) = test_tables()?;
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_with_expr_keys(
+                &t2,
+                JoinType::Inner,
+                (
+                    vec![col("t1.id") + lit(1u32)],
+                    vec![col("t2.optional_id") + lit(1u32)],
+                ),
+                None,
+            )?
+            .build()?;
+        let expected = "Inner Join: t1.id + UInt32(1) = t2.optional_id + UInt32(1)\
+        \n  TableScan: t1\
+        \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
+        \n    TableScan: t2";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn both_side_nullable_expr_key() -> Result<()> {
+        let (t1, t2) = test_tables()?;
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_with_expr_keys(
+                &t2,
+                JoinType::Inner,
+                (
+                    vec![col("t1.optional_id") + lit(1u32)],
+                    vec![col("t2.optional_id") + lit(1u32)],
+                ),
+                None,
+            )?
+            .build()?;
+        let expected =
+            "Inner Join: t1.optional_id + UInt32(1) = t2.optional_id + UInt32(1)\
+        \n  Filter: t1.optional_id + UInt32(1) IS NOT NULL\
+        \n    TableScan: t1\
+        \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
+        \n    TableScan: t2";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
 
     fn build_plan(
         left_table: LogicalPlan,
