@@ -28,9 +28,10 @@ use arrow::{array::ArrayRef, datatypes::Field};
 
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_expr::WindowFrame;
+use datafusion_expr::{Accumulator, WindowFrame};
 
-use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
+use crate::window::segment_tree::{Operator, SegmentTree};
+use crate::{expressions, expressions::PhysicalSortExpr, PhysicalExpr};
 use crate::{window::WindowExpr, AggregateExpr};
 
 use super::window_frame_state::WindowFrameContext;
@@ -96,11 +97,24 @@ impl WindowExpr for AggregateWindowExpr {
             self.order_by.iter().map(|o| o.options).collect();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
         for partition_range in &partition_points {
-            let mut accumulator = self.aggregate.create_accumulator()?;
             let length = partition_range.end - partition_range.start;
             let (values, order_bys) =
                 self.get_values_orderbys(&batch.slice(partition_range.start, length))?;
 
+            let mut accumulator = if let Some(opera) =
+                need_use_segment_tree(&self.window_frame, &self.aggregate)
+            {
+                let scalar_values = (0..values[0].len())
+                    .map(|i| ScalarValue::try_from_array(&values[0], i))
+                    .collect::<Result<Vec<_>>>()?;
+                WindowAccumulator::SegTree(SegmentTree::build(
+                    scalar_values,
+                    opera,
+                    values[0].data_type().clone(),
+                )?)
+            } else {
+                WindowAccumulator::Default(self.aggregate.create_accumulator()?)
+            };
             let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
             let mut last_range: (usize, usize) = (0, 0);
 
@@ -113,30 +127,40 @@ impl WindowExpr for AggregateWindowExpr {
                     length,
                     i,
                 )?;
-                let value = if cur_range.0 == cur_range.1 {
-                    // We produce None if the window is empty.
-                    ScalarValue::try_from(self.aggregate.field()?.data_type())?
-                } else {
-                    // Accumulate any new rows that have entered the window:
-                    let update_bound = cur_range.1 - last_range.1;
-                    if update_bound > 0 {
-                        let update: Vec<ArrayRef> = values
-                            .iter()
-                            .map(|v| v.slice(last_range.1, update_bound))
-                            .collect();
-                        accumulator.update_batch(&update)?
+                let value;
+                match &mut accumulator {
+                    WindowAccumulator::Default(acc) => {
+                        if cur_range.0 == cur_range.1 {
+                            // We produce None if the window is empty.
+                            value = ScalarValue::try_from(
+                                self.aggregate.field()?.data_type(),
+                            )?
+                        } else {
+                            // Accumulate any new rows that have entered the window:
+                            let update_bound = cur_range.1 - last_range.1;
+                            if update_bound > 0 {
+                                let update: Vec<ArrayRef> = values
+                                    .iter()
+                                    .map(|v| v.slice(last_range.1, update_bound))
+                                    .collect();
+                                acc.update_batch(&update)?
+                            }
+                            // Remove rows that have now left the window:
+                            let retract_bound = cur_range.0 - last_range.0;
+                            if retract_bound > 0 {
+                                let retract: Vec<ArrayRef> = values
+                                    .iter()
+                                    .map(|v| v.slice(last_range.0, retract_bound))
+                                    .collect();
+                                acc.retract_batch(&retract)?
+                            }
+                            value = acc.evaluate()?
+                        };
                     }
-                    // Remove rows that have now left the window:
-                    let retract_bound = cur_range.0 - last_range.0;
-                    if retract_bound > 0 {
-                        let retract: Vec<ArrayRef> = values
-                            .iter()
-                            .map(|v| v.slice(last_range.0, retract_bound))
-                            .collect();
-                        accumulator.retract_batch(&retract)?
+                    WindowAccumulator::SegTree(tree) => {
+                        value = tree.query(cur_range.0, cur_range.1)?
                     }
-                    accumulator.evaluate()?
-                };
+                }
                 row_wise_results.push(value);
                 last_range = cur_range;
             }
@@ -154,5 +178,30 @@ impl WindowExpr for AggregateWindowExpr {
 
     fn get_window_frame(&self) -> &Arc<WindowFrame> {
         &self.window_frame
+    }
+}
+enum WindowAccumulator {
+    Default(Box<dyn Accumulator>),
+    SegTree(SegmentTree),
+}
+
+// Only using segment tree in Min, Max, Sum with sliding window(Both left side and right side need to move)
+fn need_use_segment_tree(
+    frame: &Arc<WindowFrame>,
+    agg: &Arc<dyn AggregateExpr>,
+) -> Option<Operator> {
+    if !frame.start_bound.is_unbounded() && !frame.end_bound.is_unbounded() {
+        let agg_any = agg.as_any();
+        if agg_any.downcast_ref::<expressions::Sum>().is_some() {
+            Some(Operator::Add)
+        } else if agg_any.downcast_ref::<expressions::Min>().is_some() {
+            Some(Operator::Min)
+        } else if agg_any.downcast_ref::<expressions::Max>().is_some() {
+            Some(Operator::Max)
+        } else {
+            None
+        }
+    } else {
+        None
     }
 }

@@ -21,9 +21,9 @@ use datafusion_common::{DataFusionError, Result, ScalarValue};
 
 // A Enum that specifies which operator could use in segment tree.
 pub enum Operator {
-    ADD,
-    MIN,
-    MAX,
+    Add,
+    Min,
+    Max,
 }
 
 impl Operator {
@@ -33,9 +33,9 @@ impl Operator {
     // combine(a, combine(b, c))`.
     pub fn combine(&self, a: &ScalarValue, b: &ScalarValue) -> Result<ScalarValue> {
         match self {
-            Operator::ADD => a.add(b),
-            Operator::MIN => min(a, b),
-            Operator::MAX => max(a, b),
+            Operator::Add => a.add(b),
+            Operator::Min => min(a, b),
+            Operator::Max => max(a, b),
         }
     }
 }
@@ -88,9 +88,10 @@ impl SegmentTree {
 
     // Computes `a[l] op a[l+1] op ... op a[r-1]`.
     // Uses `O(log(len))` time.
-    // If `l >= r`, this method returns error.
+    // If `l > r`, this method returns error.
+    // If `l == r`, this method returns Null.
     pub fn query(&self, mut l: usize, mut r: usize) -> Result<ScalarValue> {
-        if l >= r {
+        if l >r {
             return Err(DataFusionError::Internal(
                 "Query SegmentTree l must <= r".to_string(),
             ));
@@ -135,14 +136,14 @@ mod tests {
             .collect();
 
         let segment_tree_add =
-            SegmentTree::build(rand_scalar.clone(), Operator::ADD, DataType::Int32)
+            SegmentTree::build(rand_scalar.clone(), Operator::Add, DataType::Int32)
                 .unwrap();
 
         let segment_tree_min =
-            SegmentTree::build(rand_scalar.clone(), Operator::MIN, DataType::Int32)
+            SegmentTree::build(rand_scalar.clone(), Operator::Min, DataType::Int32)
                 .unwrap();
         let segment_tree_max =
-            SegmentTree::build(rand_scalar, Operator::MAX, DataType::Int32).unwrap();
+            SegmentTree::build(rand_scalar, Operator::Max, DataType::Int32).unwrap();
 
         for _i in 0..1000 {
             let start: usize = rng.gen_range(0..test_size - 1);
