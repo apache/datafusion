@@ -26,6 +26,7 @@ pub mod listing;
 pub mod listing_table_factory;
 pub mod memory;
 pub mod object_store;
+pub mod streaming;
 pub mod view;
 
 use futures::Stream;
