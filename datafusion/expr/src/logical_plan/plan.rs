@@ -345,12 +345,7 @@ impl LogicalPlan {
                     ..
                 }) = plan
                 {
-                    // self.using_columns.push(
-                    //     on.iter()
-                    //         .flat_map(|entry| [&entry.0, &entry.1])
-                    //         .cloned()
-                    //         .collect::<HashSet<Column>>(),
-                    // );
+                    // The join keys in using-join must be columns.
                     let columns =
                         on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
                             accumu.insert(l.try_into_col()?);
@@ -1655,7 +1650,7 @@ pub struct Join {
     pub left: Arc<LogicalPlan>,
     /// Right input
     pub right: Arc<LogicalPlan>,
-    /// Equijoin clause expressed as pairs of (left, right) join columns
+    /// Equijoin clause expressed as pairs of (left, right) join expressions
     pub on: Vec<(Expr, Expr)>,
     /// Filters applied during join (non-equi conditions)
     pub filter: Option<Expr>,
@@ -1670,6 +1665,7 @@ pub struct Join {
 }
 
 impl Join {
+    /// Create Join with input which wrapped with projection, this method is used to help create physical join.
     pub fn try_new_with_project_input(
         original: &LogicalPlan,
         left: Arc<LogicalPlan>,
@@ -1678,7 +1674,7 @@ impl Join {
     ) -> Result<Self, DataFusionError> {
         let original_join = match original {
             LogicalPlan::Join(join) => join,
-            _ => return plan_err!("Could not create join with projected input"),
+            _ => return plan_err!("Could not create join with project input"),
         };
 
         let on: Vec<(Expr, Expr)> = column_on

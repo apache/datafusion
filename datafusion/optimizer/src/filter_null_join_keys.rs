@@ -60,17 +60,6 @@ impl OptimizerRule for FilterNullJoinKeys {
                     if r.nullable(right_schema)? {
                         right_filters.push(r.clone());
                     }
-
-                    // if let Some((left_field, right_field)) =
-                    //     resolve_join_key_pair(left_schema, right_schema, l, r)
-                    // {
-                    //     if left_field.is_nullable() {
-                    //         left_filters.push(l.clone());
-                    //     }
-                    //     if right_field.is_nullable() {
-                    //         right_filters.push(r.clone());
-                    //     }
-                    // }
                 }
 
                 if !left_filters.is_empty() {

@@ -556,7 +556,6 @@ impl LogicalPlanBuilder {
         let left_keys = left_keys.into_iter().collect::<Result<Vec<Column>>>()?;
         let right_keys = right_keys.into_iter().collect::<Result<Vec<Column>>>()?;
 
-        // let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
         let on = left_keys
             .into_iter()
             .zip(right_keys.into_iter())
@@ -597,19 +596,19 @@ impl LogicalPlanBuilder {
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
-        let mut join_on: Vec<(Column, Column)> = vec![];
+        let mut join_on: Vec<(Expr, Expr)> = vec![];
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
             if self.plan.schema().field_from_column(l).is_ok()
                 && right.schema().field_from_column(r).is_ok()
                 && can_hash(self.plan.schema().field_from_column(l)?.data_type())
             {
-                join_on.push((l.clone(), r.clone()));
+                join_on.push((Expr::Column(l.clone()), Expr::Column(r.clone())));
             } else if self.plan.schema().field_from_column(r).is_ok()
                 && right.schema().field_from_column(l).is_ok()
                 && can_hash(self.plan.schema().field_from_column(r)?.data_type())
             {
-                join_on.push((r.clone(), l.clone()));
+                join_on.push((Expr::Column(r.clone()), Expr::Column(l.clone())));
             } else {
                 let expr = binary_expr(
                     Expr::Column(l.clone()),
@@ -623,12 +622,7 @@ impl LogicalPlanBuilder {
             }
         }
 
-        let new_join_on = join_on
-            .into_iter()
-            .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
-            .collect::<Vec<_>>();
-
-        if new_join_on.is_empty() {
+        if join_on.is_empty() {
             let join = Self::from(self.plan.clone()).cross_join(&right.clone())?;
             join.filter(filters.ok_or_else(|| {
                 DataFusionError::Internal("filters should not be None here".to_string())
@@ -637,7 +631,7 @@ impl LogicalPlanBuilder {
             Ok(Self::from(LogicalPlan::Join(Join {
                 left: Arc::new(self.plan.clone()),
                 right: Arc::new(right.clone()),
-                on: new_join_on,
+                on: join_on,
                 filter: filters,
                 join_type,
                 join_constraint: JoinConstraint::Using,
@@ -805,7 +799,7 @@ impl LogicalPlanBuilder {
         Ok(self.plan.clone())
     }
 
-    /// Apply a join with on constraint -- expression key version.
+    /// Apply a join with expression on constraint.
     ///
     /// Filter expression expected to contain non-equality predicates that can not be pushed
     /// down to any of join inputs.
@@ -857,15 +851,20 @@ impl LogicalPlanBuilder {
                     right.schema().clone(),
                 )?;
 
+                let r_is_left_and_l_is_right = || {
+                    let result = check_all_column_from_schema(
+                        &normalized_right_using_columns,
+                        self.plan.schema().clone(),
+                    )? && check_all_column_from_schema(
+                        &normalized_left_using_columns,
+                        right.schema().clone(),
+                    )?;
+                    Result::Ok(result)
+                };
+
                 if l_is_left && r_is_right {
                     Ok((normalized_left_key, normalized_right_key))
-                } else if check_all_column_from_schema(
-                    &normalized_right_using_columns,
-                    self.plan.schema().clone(),
-                )? && check_all_column_from_schema(
-                    &normalized_left_using_columns,
-                    right.schema().clone(),
-                )? {
+                } else if r_is_left_and_l_is_right()?{
                     Ok((normalized_right_key, normalized_left_key))
                 } else {
                     Err(DataFusionError::Plan(format!(

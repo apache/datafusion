@@ -740,6 +740,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         filter,
                     )?,
                     JoinConstraint::Using => {
+                        // The equijoin keys in using-join must be column.
                         let using_keys = left_keys
                             .into_iter()
                             .map(|key| key.try_into_col())

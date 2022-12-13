@@ -1040,10 +1040,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         {
             // For query: select id from t1 join t2 using(id), this is legal.
             // We should dedup the fields for cols in using clause.
-            for join_cols in on.iter() {
-                let left_field = left
-                    .schema()
-                    .field_from_column(&join_cols.0.try_into_col()?)?;
+            for join_keys in on.iter() {
+                let join_col = &join_keys.0.try_into_col()?;
+                let left_field = left.schema().field_from_column(join_col)?;
                 fields.retain(|field| {
                     field.unqualified_column().name
                         != left_field.unqualified_column().name

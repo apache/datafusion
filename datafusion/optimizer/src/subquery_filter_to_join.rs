@@ -130,7 +130,6 @@ impl OptimizerRule for SubqueryFilterToJoin {
                             Ok(LogicalPlan::Join(Join {
                                 left: Arc::new(input),
                                 right: Arc::new(right_input),
-                                // on: vec![(left_key, right_key)],
                                 on: vec![(Expr::Column(left_key), Expr::Column(right_key))],
                                 filter: None,
                                 join_type,
