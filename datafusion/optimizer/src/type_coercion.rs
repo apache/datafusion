@@ -58,9 +58,19 @@ impl OptimizerRule for TypeCoercion {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        optimize_internal(&DFSchema::empty(), plan)
+        Ok(self
+            .try_optimize(plan, optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        _optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
+        Ok(Some(optimize_internal(&DFSchema::empty(), plan)?))
     }
 }
 

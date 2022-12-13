@@ -80,9 +80,25 @@ impl OptimizerRule for PushDownLimit {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        Ok(self
+            .try_optimize(plan, optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         let limit = match plan {
             LogicalPlan::Limit(limit) => limit,
-            _ => return utils::optimize_children(self, plan, optimizer_config),
+            _ => {
+                return Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
+            }
         };
 
         if let LogicalPlan::Limit(child_limit) = &*limit.input {
@@ -112,12 +128,18 @@ impl OptimizerRule for PushDownLimit {
                 fetch: new_fetch,
                 input: Arc::new((*child_limit.input).clone()),
             });
-            return self.optimize(&plan, optimizer_config);
+            return self.try_optimize(&plan, optimizer_config);
         }
 
         let fetch = match limit.fetch {
             Some(fetch) => fetch,
-            None => return utils::optimize_children(self, plan, optimizer_config),
+            None => {
+                return Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
+            }
         };
         let skip = limit.skip;
 
@@ -225,7 +247,11 @@ impl OptimizerRule for PushDownLimit {
             _ => plan.clone(),
         };
 
-        utils::optimize_children(self, &plan, optimizer_config)
+        Ok(Some(utils::optimize_children(
+            self,
+            &plan,
+            optimizer_config,
+        )?))
     }
 
     fn name(&self) -> &str {

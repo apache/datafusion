@@ -79,7 +79,9 @@ impl CommonSubexprEliminate {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let mut new_input = self.optimize(input, optimizer_config)?;
+        let mut new_input = self
+            .try_optimize(input, optimizer_config)?
+            .unwrap_or_else(|| input.clone());
         if !affected_id.is_empty() {
             new_input = build_project_plan(new_input, affected_id, expr_set)?;
         }
@@ -94,6 +96,16 @@ impl OptimizerRule for CommonSubexprEliminate {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        Ok(self
+            .try_optimize(plan, optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         let mut expr_set = ExprSet::new();
 
         match plan {
@@ -113,11 +125,13 @@ impl OptimizerRule for CommonSubexprEliminate {
                     optimizer_config,
                 )?;
 
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    pop_expr(&mut new_expr)?,
-                    Arc::new(new_input),
-                    schema.clone(),
-                )?))
+                Ok(Some(LogicalPlan::Projection(
+                    Projection::try_new_with_schema(
+                        pop_expr(&mut new_expr)?,
+                        Arc::new(new_input),
+                        schema.clone(),
+                    )?,
+                )))
             }
             LogicalPlan::Filter(filter) => {
                 let input = filter.input();
@@ -140,10 +154,10 @@ impl OptimizerRule for CommonSubexprEliminate {
                 )?;
 
                 if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
-                    Ok(LogicalPlan::Filter(Filter::try_new(
+                    Ok(Some(LogicalPlan::Filter(Filter::try_new(
                         predicate,
                         Arc::new(new_input),
-                    )?))
+                    )?)))
                 } else {
                     Err(DataFusionError::Internal(
                         "Failed to pop predicate expr".to_string(),
@@ -166,11 +180,11 @@ impl OptimizerRule for CommonSubexprEliminate {
                     optimizer_config,
                 )?;
 
-                Ok(LogicalPlan::Window(Window {
+                Ok(Some(LogicalPlan::Window(Window {
                     input: Arc::new(new_input),
                     window_expr: pop_expr(&mut new_expr)?,
                     schema: schema.clone(),
-                }))
+                })))
             }
             LogicalPlan::Aggregate(Aggregate {
                 group_expr,
@@ -194,12 +208,14 @@ impl OptimizerRule for CommonSubexprEliminate {
                 let new_aggr_expr = pop_expr(&mut new_expr)?;
                 let new_group_expr = pop_expr(&mut new_expr)?;
 
-                Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                    Arc::new(new_input),
-                    new_group_expr,
-                    new_aggr_expr,
-                    schema.clone(),
-                )?))
+                Ok(Some(LogicalPlan::Aggregate(
+                    Aggregate::try_new_with_schema(
+                        Arc::new(new_input),
+                        new_group_expr,
+                        new_aggr_expr,
+                        schema.clone(),
+                    )?,
+                )))
             }
             LogicalPlan::Sort(Sort { expr, input, fetch }) => {
                 let input_schema = Arc::clone(input.schema());
@@ -213,11 +229,11 @@ impl OptimizerRule for CommonSubexprEliminate {
                     optimizer_config,
                 )?;
 
-                Ok(LogicalPlan::Sort(Sort {
+                Ok(Some(LogicalPlan::Sort(Sort {
                     expr: pop_expr(&mut new_expr)?,
                     input: Arc::new(new_input),
                     fetch: *fetch,
-                }))
+                })))
             }
             LogicalPlan::Join(_)
             | LogicalPlan::CrossJoin(_)
@@ -243,7 +259,11 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Extension(_)
             | LogicalPlan::Prepare(_) => {
                 // apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, optimizer_config)
+                Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
             }
         }
     }

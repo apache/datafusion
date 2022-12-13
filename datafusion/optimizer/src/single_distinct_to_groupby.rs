@@ -86,8 +86,18 @@ impl OptimizerRule for SingleDistinctToGroupBy {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        Ok(self
+            .try_optimize(plan, optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        _optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Aggregate(Aggregate {
                 input,
@@ -192,16 +202,26 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         new_aggr_exprs,
                     )?);
 
-                    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                        alias_expr,
-                        Arc::new(outer_aggr),
-                        schema.clone(),
-                    )?))
+                    Ok(Some(LogicalPlan::Projection(
+                        Projection::try_new_with_schema(
+                            alias_expr,
+                            Arc::new(outer_aggr),
+                            schema.clone(),
+                        )?,
+                    )))
                 } else {
-                    utils::optimize_children(self, plan, _optimizer_config)
+                    Ok(Some(utils::optimize_children(
+                        self,
+                        plan,
+                        _optimizer_config,
+                    )?))
                 }
             }
-            _ => utils::optimize_children(self, plan, _optimizer_config),
+            _ => Ok(Some(utils::optimize_children(
+                self,
+                plan,
+                _optimizer_config,
+            )?)),
         }
     }
     fn name(&self) -> &str {
