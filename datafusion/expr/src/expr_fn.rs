@@ -25,11 +25,17 @@ use crate::{
     ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::Result;
+use datafusion_common::{Column, Result};
 use std::sync::Arc;
 
 /// Create a column expression based on a qualified or unqualified column name
-pub fn col(ident: &str) -> Expr {
+///
+/// example:
+/// ```
+/// # use datafusion_expr::col;
+/// let c = col("my_column");
+/// ```
+pub fn col(ident: impl Into<Column>) -> Expr {
     Expr::Column(ident.into())
 }
 

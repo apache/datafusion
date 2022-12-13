@@ -1966,7 +1966,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::MapAccess { column, keys } => {
                 if let SQLExpr::Identifier(id) = *column {
-                    plan_indexed(col(&normalize_ident(id)), keys)
+                    plan_indexed(col(normalize_ident(id)), keys)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {} instead",
