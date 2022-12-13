@@ -107,7 +107,8 @@ pub fn assert_optimized_plan_eq(
     expected: &str,
 ) {
     let optimized_plan = rule
-        .optimize(plan, &mut OptimizerConfig::new())
+        .try_optimize(plan, &mut OptimizerConfig::new())
+        .unwrap()
         .expect("failed to optimize plan");
     let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
     assert_eq!(formatted_plan, expected);
@@ -118,9 +119,9 @@ pub fn assert_optimizer_err(
     plan: &LogicalPlan,
     expected: &str,
 ) {
-    let res = rule.optimize(plan, &mut OptimizerConfig::new());
+    let res = rule.try_optimize(plan, &mut OptimizerConfig::new());
     match res {
-        Ok(plan) => assert_eq!(format!("{}", plan.display_indent()), "An error"),
+        Ok(plan) => assert_eq!(format!("{}", plan.unwrap().display_indent()), "An error"),
         Err(ref e) => {
             let actual = format!("{}", e);
             if expected.is_empty() || !actual.contains(expected) {
@@ -131,7 +132,10 @@ pub fn assert_optimizer_err(
 }
 
 pub fn assert_optimization_skipped(rule: &dyn OptimizerRule, plan: &LogicalPlan) {
-    let new_plan = rule.optimize(plan, &mut OptimizerConfig::new()).unwrap();
+    let new_plan = rule
+        .try_optimize(plan, &mut OptimizerConfig::new())
+        .unwrap()
+        .unwrap();
     assert_eq!(
         format!("{}", plan.display_indent()),
         format!("{}", new_plan.display_indent())

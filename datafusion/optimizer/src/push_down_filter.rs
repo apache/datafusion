@@ -503,16 +503,6 @@ impl OptimizerRule for PushDownFilter {
         "push_down_filter"
     }
 
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -808,7 +798,8 @@ mod tests {
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let optimized_plan = PushDownFilter::new()
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(plan.schema(), optimized_plan.schema());
@@ -1955,8 +1946,9 @@ mod tests {
             table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
 
         let optimised_plan = PushDownFilter::new()
-            .optimize(&plan, &mut OptimizerConfig::new())
-            .expect("failed to optimize plan");
+            .try_optimize(&plan, &mut OptimizerConfig::new())
+            .expect("failed to optimize plan")
+            .unwrap();
 
         let expected = "\
         Filter: a = Int64(1)\
@@ -2306,7 +2298,8 @@ mod tests {
         // Originally global state which can help to avoid duplicate Filters been generated and pushed down.
         // Now the global state is removed. Need to double confirm that avoid duplicate Filters.
         let optimized_plan = PushDownFilter::new()
-            .optimize(&plan, &mut OptimizerConfig::new())
+            .try_optimize(&plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
         assert_optimized_plan_eq(&optimized_plan, expected)
     }

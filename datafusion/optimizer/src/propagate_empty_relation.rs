@@ -34,16 +34,6 @@ impl PropagateEmptyRelation {
 }
 
 impl OptimizerRule for PropagateEmptyRelation {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -227,7 +217,8 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = PropagateEmptyRelation::new();
         let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -236,10 +227,12 @@ mod tests {
 
     fn assert_together_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let optimize_one = EliminateFilter::new()
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let optimize_two = PropagateEmptyRelation::new()
-            .optimize(&optimize_one, &mut OptimizerConfig::new())
+            .try_optimize(&optimize_one, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimize_two);
         assert_eq!(formatted_plan, expected);

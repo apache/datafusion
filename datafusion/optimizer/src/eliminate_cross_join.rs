@@ -51,20 +51,10 @@ impl EliminateCrossJoin {
 /// This fix helps to improve the performance of TPCH Q19. issue#78
 ///
 impl OptimizerRule for EliminateCrossJoin {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, _optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
+        optimizer_config: &mut OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
@@ -91,7 +81,7 @@ impl OptimizerRule for EliminateCrossJoin {
                         return Ok(Some(utils::optimize_children(
                             self,
                             plan,
-                            _optimizer_config,
+                            optimizer_config,
                         )?));
                     }
                 }
@@ -112,7 +102,7 @@ impl OptimizerRule for EliminateCrossJoin {
                     )?;
                 }
 
-                left = utils::optimize_children(self, &left, _optimizer_config)?;
+                left = utils::optimize_children(self, &left, optimizer_config)?;
 
                 if plan.schema() != left.schema() {
                     left = LogicalPlan::Projection(Projection::new_from_schema(
@@ -141,7 +131,7 @@ impl OptimizerRule for EliminateCrossJoin {
             _ => Ok(Some(utils::optimize_children(
                 self,
                 plan,
-                _optimizer_config,
+                optimizer_config,
             )?)),
         }
     }
@@ -399,7 +389,8 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: Vec<&str>) {
         let rule = EliminateCrossJoin::new();
         let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted = optimized_plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();

@@ -46,16 +46,6 @@ use std::{
 pub struct PushDownProjection {}
 
 impl OptimizerRule for PushDownProjection {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -1029,6 +1019,8 @@ mod tests {
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         let rule = PushDownProjection::new();
-        rule.optimize(plan, &mut OptimizerConfig::new())
+        Ok(rule
+            .try_optimize(plan, &mut OptimizerConfig::new())?
+            .unwrap())
     }
 }
