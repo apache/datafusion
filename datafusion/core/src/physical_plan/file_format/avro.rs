@@ -105,20 +105,20 @@ impl ExecutionPlan for AvroExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         use super::file_stream::FileStream;
+        let object_store = context
+            .runtime_env()
+            .object_store(&config.object_store_url)?;
+
         let config = Arc::new(private::AvroConfig {
             schema: Arc::clone(&self.base_config.file_schema),
             batch_size: context.session_config().batch_size(),
             projection: self.base_config.projected_file_column_names(),
+            object_store,
         });
         let opener = private::AvroOpener { config };
 
-        let stream = FileStream::new(
-            &self.base_config,
-            partition,
-            context,
-            opener,
-            self.metrics.clone(),
-        )?;
+        let stream =
+            FileStream::new(&self.base_config, partition, opener, self.metrics.clone())?;
         Ok(Box::pin(stream))
     }
 
@@ -157,6 +157,7 @@ mod private {
         pub schema: SchemaRef,
         pub batch_size: usize,
         pub projection: Option<Vec<String>>,
+        pub object_store: Arc<dyn ObjectStore>,
     }
 
     impl AvroConfig {
@@ -178,14 +179,10 @@ mod private {
     }
 
     impl FileOpener for AvroOpener {
-        fn open(
-            &self,
-            store: Arc<dyn ObjectStore>,
-            file_meta: FileMeta,
-        ) -> Result<FileOpenFuture> {
+        fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
             let config = self.config.clone();
             Ok(Box::pin(async move {
-                match store.get(file_meta.location()).await? {
+                match config.object_store.get(file_meta.location()).await? {
                     GetResult::File(file, _) => {
                         let reader = config.open(file)?;
                         Ok(futures::stream::iter(reader).boxed())
