@@ -648,6 +648,7 @@ pub mod repartition;
 pub mod rewrite;
 pub mod sorts;
 pub mod stream;
+pub mod streaming;
 pub mod udaf;
 pub mod union;
 pub mod values;
