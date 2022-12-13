@@ -103,6 +103,13 @@ impl NestedLoopJoinExec {
             Distribution::SinglePartition
         )
     }
+
+    fn is_single_partition_for_right(&self) -> bool {
+        matches!(
+            self.required_input_distribution()[1],
+            Distribution::SinglePartition
+        )
+    }
 }
 
 impl ExecutionPlan for NestedLoopJoinExec {
@@ -180,10 +187,9 @@ impl ExecutionPlan for NestedLoopJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // if the distribution of left is `SinglePartition`, just need to collect the left one
-        let left_is_single_partition = self.is_single_partition_for_left();
         // left side
-        let left_fut = if left_is_single_partition {
+        let left_fut = if self.is_single_partition_for_left() {
+            // if the distribution of left is `SinglePartition`, just need to collect the left one
             self.left_fut.once(|| {
                 // just one partition for the left side, and the first partition is all of data for left
                 load_left_specified_partition(0, self.left.clone(), context.clone())
@@ -197,11 +203,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
             ))
         };
         // right side
-        let right_side = if left_is_single_partition {
-            self.right.execute(partition, context)?
-        } else {
+        let right_side = if self.is_single_partition_for_right() {
             // the distribution of right is `SinglePartition`
+            // if the distribution of right is `SinglePartition`, just need to collect the right one
             self.right.execute(0, context)?
+        } else {
+            // the distribution of right is not single partition, just need the specified partition for right
+            self.right.execute(partition, context)?
         };
 
         Ok(Box::pin(NestedLoopJoinStream {
