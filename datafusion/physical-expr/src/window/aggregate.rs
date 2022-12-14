@@ -185,7 +185,7 @@ enum WindowAccumulator {
     SegTree(SegmentTree),
 }
 
-// Only using segment tree in Min, Max, Sum with sliding window(Both left side and right side need to move)
+// Only using segment tree in Min, Max with sliding window(Both left side and right side need to move)
 fn need_use_segment_tree(
     frame: &Arc<WindowFrame>,
     agg: &Arc<dyn AggregateExpr>,
