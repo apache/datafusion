@@ -442,8 +442,8 @@ impl BuiltInConfigs {
              ),
              ConfigDefinition::new_bool(
                  OPT_JOIN_REORDER_ENABLED,
-                 "Enable join reordering of fact dimension tables based on underlying table sizes",
-                 false,
+                 "Enable join reordering of joins between fact and dimension tables based on underlying table sizes",
+                 true, // TODO change to false before merging
              ),
              ConfigDefinition::new_f64(
                  OPT_JOIN_REORDER_FACT_DIM_RATIO,

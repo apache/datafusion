@@ -622,6 +622,16 @@ impl TableProvider for ListingTable {
     fn get_table_definition(&self) -> Option<&str> {
         self.definition.as_deref()
     }
+
+    fn statistics(&self) -> Option<Statistics> {
+        // TODO implement this
+        println("ListingTable::statistics() has {} stats available", self.collected_statistics.statistics.len());
+        for x in self.collected_statistics.statistics.iter() {
+            let (meta, stats) = x.value();
+            println!("path={}; meta={:?}; stats={:?}", x.key(), meta, stats);
+        }
+        None
+    }
 }
 
 impl ListingTable {

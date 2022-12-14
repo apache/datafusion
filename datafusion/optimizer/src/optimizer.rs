@@ -86,6 +86,8 @@ pub struct OptimizerConfig {
     skip_failing_rules: bool,
     /// Specify whether to enable the filter_null_keys rule
     filter_null_keys: bool,
+    /// Specify whether to enable the join_reorder rule
+    reorder_joins: bool,
     /// Maximum number of times to run optimizer against a plan
     max_passes: u8,
 }
@@ -98,6 +100,7 @@ impl OptimizerConfig {
             next_id: 0, // useful for generating things like unique subquery aliases
             skip_failing_rules: true,
             filter_null_keys: true,
+            reorder_joins: false,
             max_passes: 3,
         }
     }
@@ -105,6 +108,12 @@ impl OptimizerConfig {
     /// Specify whether to enable the filter_null_keys rule
     pub fn filter_null_keys(mut self, filter_null_keys: bool) -> Self {
         self.filter_null_keys = filter_null_keys;
+        self
+    }
+
+    /// Specify whether to enable the join_reorder rule
+    pub fn reorder_joins(mut self, filter_null_keys: bool) -> Self {
+        self.reorder_joins = filter_null_keys;
         self
     }
 
@@ -190,8 +199,10 @@ impl Optimizer {
         rules.push(Arc::new(PushDownFilter::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
 
-        //TODO enable based on configs
-        //rules.push(Arc::new(JoinReorder::default()));
+        if config.reorder_joins {
+            // TODO pass along config options
+            rules.push(Arc::new(JoinReorder::default()));
+        }
 
         // The previous optimizations added expressions and projections,
         // that might benefit from the following rules

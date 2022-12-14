@@ -57,12 +57,21 @@ impl OptimizerRule for JoinReorder {
         plan: &LogicalPlan,
         _config: &mut OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        //TODO is this transformUp or transformDown?
+
         // TODO too many clones - use Box/Rc/Arc to reduce
+
+        // recurse down first - we want the equivalent of Spark's transformUp here
+        utils::optimize_children(self, plan, _config)?;
+
+        println!(
+            "JoinReorder::try_optimize():\n{}",
+            plan.display_indent()
+        );
+
         match plan {
             LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
                 if !is_supported_join(join) {
-                    println!("Not a supported join");
+                    println!("Not a supported join!:\n{}", plan.display_indent());
                     return Ok(None);
                 }
                 println!(
@@ -171,8 +180,7 @@ impl OptimizerRule for JoinReorder {
             }
             _ => {
                 println!("not a join");
-                // TODO do we need to manually recurse here
-                Ok(Some(utils::optimize_children(self, plan, _config)?))
+                Ok(None)
             }
         }
     }
@@ -243,7 +251,7 @@ fn extract_inner_joins(
     ) {
         match plan {
             LogicalPlan::Join(join)
-                if join.join_type == JoinType::Inner && join.filter.is_none() =>
+                if join.join_type == JoinType::Inner /* TODO && join.filter.is_none()*/ =>
             {
                 _extract_inner_joins(&join.left, rels, conds);
                 _extract_inner_joins(&join.right, rels, conds);
@@ -291,7 +299,11 @@ fn is_supported_join(join: &Join) -> bool {
         match plan {
             LogicalPlan::Join(join) => {
                 join.join_type == JoinType::Inner
-                    && join.filter.is_none()
+                    // TODO need to support join filters correctly .. for now assume
+                    // they have already been pushed down to the underlying table scan
+                    // but we need to make sure we do not drop these filters when
+                    // rebuilding the joins later
+                    // && join.filter.is_none()
                     && is_supported_rel(&join.left)
                     && is_supported_rel(&join.right)
             }
@@ -299,7 +311,7 @@ fn is_supported_join(join: &Join) -> bool {
             LogicalPlan::SubqueryAlias(sq) => is_supported_rel(&sq.input),
             LogicalPlan::TableScan(_) => true,
             _ => {
-                println!("not a simple join: {}", plan.display_indent());
+                println!("not a supported relation: {}", plan.display_indent());
                 false
             }
         }

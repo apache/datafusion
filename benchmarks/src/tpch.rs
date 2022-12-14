@@ -341,7 +341,10 @@ pub async fn convert_tbl(
             .delimiter(b'|')
             .file_extension(".tbl");
 
-        let config = SessionConfig::new().with_batch_size(batch_size);
+        let config = SessionConfig::new()
+            .with_batch_size(batch_size)
+            .with_collect_statistics(true);
+        
         let ctx = SessionContext::with_config(config);
 
         // build plan to read the TBL file
