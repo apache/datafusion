@@ -133,6 +133,18 @@ pub const OPT_PREFER_HASH_JOIN: &str = "datafusion.optimizer.prefer_hash_join";
 pub const OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD: &str =
     "datafusion.optimizer.hash_join_single_partition_threshold";
 
+/// Configuration option "datafusion.optimizer.join_reordering.enabled"
+pub const OPT_JOIN_REORDER_ENABLED: &str = "datafusion.optimizer.join_reordering.enabled";
+
+/// Configuration option "datafusion.optimizer.join_reordering.ratio"
+pub const OPT_JOIN_REORDER_FACT_DIM_RATIO: &str = "datafusion.optimizer.join_reordering.ratio";
+
+/// Configuration option "datafusion.optimizer.join_reordering.max_fact"
+pub const OPT_JOIN_REORDER_MAX_FACT: &str = "datafusion.optimizer.join_reordering.max_fact";
+
+/// Configuration option "datafusion.optimizer.join_reordering.preserve_order"
+pub const OPT_JOIN_REORDER_PRESERVE_ORDER: &str = "datafusion.optimizer.join_reordering.preserve_order";
+
 /// Definition of a configuration option
 pub struct ConfigDefinition {
     /// key used to identifier this configuration option
@@ -202,6 +214,20 @@ impl ConfigDefinition {
             description,
             DataType::UInt64,
             ScalarValue::UInt64(Some(default_value)),
+        )
+    }
+
+    /// Create a configuration option definition with a f64 value
+    pub fn new_f64(
+        key: impl Into<String>,
+        description: impl Into<String>,
+        default_value: f64,
+    ) -> Self {
+        Self::new(
+            key,
+            description,
+            DataType::Float64,
+            ScalarValue::Float64(Some(default_value)),
         )
     }
 
@@ -410,6 +436,26 @@ impl BuiltInConfigs {
                  OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD,
                  "The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition",
                  1024 * 1024,
+             ),
+             ConfigDefinition::new_bool(
+                 OPT_JOIN_REORDER_ENABLED,
+                 "Enable join reordering of fact dimension tables based on underlying table sizes",
+                 false,
+             ),
+             ConfigDefinition::new_f64(
+                 OPT_JOIN_REORDER_FACT_DIM_RATIO,
+                 "Ratio between fact tables and dimension tables. A value of 0.3 means that a dimension table can be up to 30% of the size of a fact table",
+                 0.3,
+             ),
+             ConfigDefinition::new_u64(
+                 OPT_JOIN_REORDER_MAX_FACT,
+                 "Maximum number of fact tables allowed when reordering joins",
+                 2,
+             ),
+             ConfigDefinition::new_bool(
+                 OPT_JOIN_REORDER_PRESERVE_ORDER,
+                 "Preserve order of unfiltered dimension tables during join reordering",
+                 false,
              ),
             ]
         }

@@ -19,7 +19,7 @@
 
 use crate::datasource::TableProvider;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::DataFusionError;
+use datafusion_common::{DataFusionError, Statistics};
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource};
 use std::any::Any;
 use std::sync::Arc;
@@ -63,6 +63,10 @@ impl TableSource for DefaultTableSource {
 
     fn get_logical_plan(&self) -> Option<&datafusion_expr::LogicalPlan> {
         self.table_provider.get_logical_plan()
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        self.table_provider.statistics()
     }
 }
 

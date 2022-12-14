@@ -26,6 +26,7 @@ use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::inline_table_scan::InlineTableScan;
+use crate::join_reorder::JoinReorder;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
@@ -188,6 +189,9 @@ impl Optimizer {
         rules.push(Arc::new(PushDownLimit::new()));
         rules.push(Arc::new(PushDownFilter::new()));
         rules.push(Arc::new(SingleDistinctToGroupBy::new()));
+
+        //TODO enable based on configs
+        //rules.push(Arc::new(JoinReorder::default()));
 
         // The previous optimizations added expressions and projections,
         // that might benefit from the following rules
