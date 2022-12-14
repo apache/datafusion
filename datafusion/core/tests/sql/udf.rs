@@ -22,7 +22,7 @@ use datafusion::{
     physical_plan::{expressions::AvgAccumulator, functions::make_scalar_function},
 };
 use datafusion_common::{cast::as_int32_array, ScalarValue};
-use datafusion_expr::{create_udaf, Accumulator, AggregateState, LogicalPlanBuilder};
+use datafusion_expr::{create_udaf, Accumulator, LogicalPlanBuilder};
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -175,7 +175,7 @@ fn udaf_as_window_func() -> Result<()> {
     struct MyAccumulator;
 
     impl Accumulator for MyAccumulator {
-        fn state(&self) -> Result<Vec<AggregateState>> {
+        fn state(&self) -> Result<Vec<ScalarValue>> {
             unimplemented!()
         }
 

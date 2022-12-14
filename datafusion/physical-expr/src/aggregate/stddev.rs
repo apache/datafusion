@@ -27,7 +27,7 @@ use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
 #[derive(Debug)]
@@ -180,11 +180,11 @@ impl StddevAccumulator {
 }
 
 impl Accumulator for StddevAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
-            AggregateState::Scalar(ScalarValue::from(self.variance.get_count())),
-            AggregateState::Scalar(ScalarValue::from(self.variance.get_mean())),
-            AggregateState::Scalar(ScalarValue::from(self.variance.get_m2())),
+            ScalarValue::from(self.variance.get_count()),
+            ScalarValue::from(self.variance.get_mean()),
+            ScalarValue::from(self.variance.get_m2()),
         ])
     }
 

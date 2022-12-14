@@ -23,7 +23,7 @@ use arrow::array::{Array, ArrayRef, UInt32Array};
 use arrow::compute::sort_to_indices;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -101,10 +101,10 @@ struct MedianAccumulator {
 }
 
 impl Accumulator for MedianAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         let state =
             ScalarValue::new_list(Some(self.all_values.clone()), self.data_type.clone());
-        Ok(vec![AggregateState::Scalar(state)])
+        Ok(vec![state])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {

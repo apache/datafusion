@@ -28,7 +28,7 @@ use std::collections::HashSet;
 use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 
 /// Expression for a SUM(DISTINCT) aggregation.
 #[derive(Debug)]
@@ -127,7 +127,7 @@ impl DistinctSumAccumulator {
 }
 
 impl Accumulator for DistinctSumAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         // 1. Stores aggregate state in `ScalarValue::List`
         // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
         let state_out = {
@@ -135,10 +135,10 @@ impl Accumulator for DistinctSumAccumulator {
             self.hash_values
                 .iter()
                 .for_each(|distinct_value| distinct_values.push(distinct_value.clone()));
-            vec![AggregateState::Scalar(ScalarValue::new_list(
+            vec![ScalarValue::new_list(
                 Some(distinct_values),
                 self.data_type.clone(),
-            ))]
+            )]
         };
         Ok(state_out)
     }
@@ -187,7 +187,6 @@ impl Accumulator for DistinctSumAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregate::utils::get_accum_scalar_values;
     use crate::expressions::col;
     use crate::expressions::tests::aggregate;
     use arrow::record_batch::RecordBatch;
@@ -203,7 +202,7 @@ mod tests {
         let mut accum = agg.create_accumulator()?;
         accum.update_batch(arrays)?;
 
-        Ok((get_accum_scalar_values(accum.as_ref())?, accum.evaluate()?))
+        Ok((accum.state()?, accum.evaluate()?))
     }
 
     macro_rules! generic_test_sum_distinct {
