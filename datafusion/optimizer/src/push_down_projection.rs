@@ -155,8 +155,6 @@ fn optimize_plan(
             ..
         }) => {
             for (l, r) in on {
-                // new_required_columns.insert(l.clone());
-                // new_required_columns.insert(r.clone());
                 new_required_columns.extend(l.to_columns()?);
                 new_required_columns.extend(r.to_columns()?);
             }
