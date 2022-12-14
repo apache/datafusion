@@ -29,7 +29,7 @@ use arrow::{
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::{downcast_value, ScalarValue};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 use std::{any::Any, iter, sync::Arc};
 
 /// APPROX_PERCENTILE_CONT aggregate expression
@@ -357,13 +357,8 @@ impl ApproxPercentileAccumulator {
 }
 
 impl Accumulator for ApproxPercentileAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(self
-            .digest
-            .to_scalar_state()
-            .into_iter()
-            .map(AggregateState::Scalar)
-            .collect())
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(self.digest.to_scalar_state().into_iter().collect())
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {

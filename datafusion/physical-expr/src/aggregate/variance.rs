@@ -33,7 +33,7 @@ use arrow::{
 use datafusion_common::downcast_value;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 
 /// VAR and VAR_SAMP aggregate expression
 #[derive(Debug)]
@@ -211,11 +211,11 @@ impl VarianceAccumulator {
 }
 
 impl Accumulator for VarianceAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
-            AggregateState::Scalar(ScalarValue::from(self.count)),
-            AggregateState::Scalar(ScalarValue::from(self.mean)),
-            AggregateState::Scalar(ScalarValue::from(self.m2)),
+            ScalarValue::from(self.count),
+            ScalarValue::from(self.mean),
+            ScalarValue::from(self.m2),
         ])
     }
 
