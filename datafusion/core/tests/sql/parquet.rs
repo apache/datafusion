@@ -146,10 +146,7 @@ async fn run_query_with_options(options: ListingOptions, num_files: usize) -> St
         .to_string()
 }
 
-#[allow(dead_code)]
-// There's some bug fixed by https://github.com/apache/arrow-rs/pull/3182.
-// Later we'll add this unit test back
-// #[tokio::test]
+#[tokio::test]
 async fn fixed_size_binary_columns() {
     let ctx = SessionContext::new();
     ctx.register_parquet(
