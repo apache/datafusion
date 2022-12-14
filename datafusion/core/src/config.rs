@@ -137,13 +137,16 @@ pub const OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD: &str =
 pub const OPT_JOIN_REORDER_ENABLED: &str = "datafusion.optimizer.join_reordering.enabled";
 
 /// Configuration option "datafusion.optimizer.join_reordering.ratio"
-pub const OPT_JOIN_REORDER_FACT_DIM_RATIO: &str = "datafusion.optimizer.join_reordering.ratio";
+pub const OPT_JOIN_REORDER_FACT_DIM_RATIO: &str =
+    "datafusion.optimizer.join_reordering.ratio";
 
 /// Configuration option "datafusion.optimizer.join_reordering.max_fact"
-pub const OPT_JOIN_REORDER_MAX_FACT: &str = "datafusion.optimizer.join_reordering.max_fact";
+pub const OPT_JOIN_REORDER_MAX_FACT: &str =
+    "datafusion.optimizer.join_reordering.max_fact";
 
 /// Configuration option "datafusion.optimizer.join_reordering.preserve_order"
-pub const OPT_JOIN_REORDER_PRESERVE_ORDER: &str = "datafusion.optimizer.join_reordering.preserve_order";
+pub const OPT_JOIN_REORDER_PRESERVE_ORDER: &str =
+    "datafusion.optimizer.join_reordering.preserve_order";
 
 /// Definition of a configuration option
 pub struct ConfigDefinition {
