@@ -273,7 +273,7 @@ impl SessionContext {
                     (false, true, Ok(_)) => {
                         self.deregister_table(&name)?;
                         let schema = Arc::new(input.schema().as_ref().into());
-                        let physical = DataFrame::new(self.state.clone(), input);
+                        let physical = DataFrame::new(self.state(), input);
 
                         let batches: Vec<_> = physical.collect_partitioned().await?;
                         let table = Arc::new(MemTable::try_new(schema, batches)?);
@@ -286,7 +286,7 @@ impl SessionContext {
                     )),
                     (_, _, Err(_)) => {
                         let schema = Arc::new(input.schema().as_ref().into());
-                        let physical = DataFrame::new(self.state.clone(), input);
+                        let physical = DataFrame::new(self.state(), input);
 
                         let batches: Vec<_> = physical.collect_partitioned().await?;
                         let table = Arc::new(MemTable::try_new(schema, batches)?);
@@ -475,14 +475,14 @@ impl SessionContext {
                 }
             }
 
-            plan => Ok(DataFrame::new(self.state.clone(), plan)),
+            plan => Ok(DataFrame::new(self.state(), plan)),
         }
     }
 
     // return an empty dataframe
     fn return_empty_dataframe(&self) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::empty(false).build()?;
-        Ok(DataFrame::new(self.state.clone(), plan))
+        Ok(DataFrame::new(self.state(), plan))
     }
 
     async fn create_external_table(
@@ -661,7 +661,7 @@ impl SessionContext {
     /// Creates an empty DataFrame.
     pub fn read_empty(&self) -> Result<DataFrame> {
         Ok(DataFrame::new(
-            self.state.clone(),
+            self.state(),
             LogicalPlanBuilder::empty(true).build()?,
         ))
     }
@@ -716,7 +716,7 @@ impl SessionContext {
     /// Creates a [`DataFrame`] for reading a custom [`TableProvider`].
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<DataFrame> {
         Ok(DataFrame::new(
-            self.state.clone(),
+            self.state(),
             LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
                 .build()?,
         ))
@@ -726,7 +726,7 @@ impl SessionContext {
     pub fn read_batch(&self, batch: RecordBatch) -> Result<DataFrame> {
         let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
         Ok(DataFrame::new(
-            self.state.clone(),
+            self.state(),
             LogicalPlanBuilder::scan(
                 UNNAMED_TABLE,
                 provider_as_source(Arc::new(provider)),
@@ -946,7 +946,7 @@ impl SessionContext {
             None,
         )?
         .build()?;
-        Ok(DataFrame::new(self.state.clone(), plan))
+        Ok(DataFrame::new(self.state(), plan))
     }
 
     /// Return a [`TabelProvider`] for the specified table.
