@@ -1611,6 +1611,35 @@ async fn test_window_frame_nth_value_aggregate() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_sliding_window_frame_min_max_aggregate() -> Result<()> {
+    let config = SessionConfig::new();
+    let ctx = SessionContext::with_config(config);
+    register_aggregate_csv(&ctx).await?;
+
+    let sql = "SELECT
+           MIN(c4) OVER(ORDER BY c9 ASC ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) as MIN,
+           MAX(c4) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 3 FOLLOWING) as MAX
+           FROM aggregate_test_100
+           ORDER BY c9
+           LIMIT 5";
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------+-------+",
+        "| min    | max   |",
+        "+--------+-------+",
+        "| -16110 | 3917  |",
+        "| -16974 | 15673 |",
+        "| -16974 | 15673 |",
+        "| -16974 | 15673 |",
+        "| -16974 | 20690 |",
+        "+--------+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_window_agg_sort() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;

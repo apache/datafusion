@@ -91,7 +91,7 @@ impl SegmentTree {
     // If `l > r`, this method returns error.
     // If `l == r`, this method returns Null.
     pub fn query(&self, mut l: usize, mut r: usize) -> Result<ScalarValue> {
-        if l >r {
+        if l > r {
             return Err(DataFusionError::Internal(
                 "Query SegmentTree l must <= r".to_string(),
             ));

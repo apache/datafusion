@@ -24,9 +24,9 @@ pub(crate) mod nth_value;
 pub(crate) mod partition_evaluator;
 pub(crate) mod rank;
 pub(crate) mod row_number;
+pub(crate) mod segment_tree;
 mod window_expr;
 mod window_frame_state;
-pub(crate) mod segment_tree;
 
 pub use aggregate::AggregateWindowExpr;
 pub use built_in::BuiltInWindowExpr;
