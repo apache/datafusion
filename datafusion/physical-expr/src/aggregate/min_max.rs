@@ -38,6 +38,7 @@ use arrow::{
 use datafusion_common::ScalarValue;
 use datafusion_common::{downcast_value, DataFusionError, Result};
 use datafusion_expr::{Accumulator, AggregateState};
+use moving_min_max::MovingMin;
 
 use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::expressions::format_state_name;
@@ -541,6 +542,7 @@ pub fn max_row(index: usize, accessor: &mut RowAccessor, s: &ScalarValue) -> Res
 #[derive(Debug)]
 pub struct MaxAccumulator {
     max: ScalarValue,
+    moving_max: Box<moving_min_max::MovingMax<f64>>,
 }
 
 impl MaxAccumulator {
@@ -548,15 +550,27 @@ impl MaxAccumulator {
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
             max: ScalarValue::try_from(datatype)?,
+            moving_max: Box::new(moving_min_max::MovingMax::<f64>::new()),
         })
     }
 }
 
 impl Accumulator for MaxAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &values[0];
-        let delta = &max_batch(values)?;
-        self.max = max(&self.max, delta)?;
+        let values = downcast_value!(values[0], Float64Array);
+        for i in 0..values.len() {
+            (self.moving_max).push(values.value(i));
+        }
+        self.max = ScalarValue::from(*self.moving_max.max().unwrap());
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = downcast_value!(values[0], Float64Array);
+        for i in 0..values.len() {
+            (self.moving_max).pop();
+        }
+        self.max = ScalarValue::from(*self.moving_max.max().unwrap());
         Ok(())
     }
 
@@ -709,6 +723,7 @@ impl AggregateExpr for Min {
 #[derive(Debug)]
 pub struct MinAccumulator {
     min: ScalarValue,
+    moving_min: Box<moving_min_max::MovingMin<f64>>,
 }
 
 impl MinAccumulator {
@@ -716,6 +731,7 @@ impl MinAccumulator {
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
             min: ScalarValue::try_from(datatype)?,
+            moving_min: Box::new(moving_min_max::MovingMin::<f64>::new()),
         })
     }
 }
@@ -726,9 +742,20 @@ impl Accumulator for MinAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &values[0];
-        let delta = &min_batch(values)?;
-        self.min = min(&self.min, delta)?;
+        let values = downcast_value!(values[0], Float64Array);
+        for i in 0..values.len() {
+            (self.moving_min).push(values.value(i));
+        }
+        self.min = ScalarValue::from(*self.moving_min.min().unwrap());
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = downcast_value!(values[0], Float64Array);
+        for i in 0..values.len() {
+            (self.moving_min).pop();
+        }
+        self.min = ScalarValue::from(*self.moving_min.min().unwrap());
         Ok(())
     }
 
