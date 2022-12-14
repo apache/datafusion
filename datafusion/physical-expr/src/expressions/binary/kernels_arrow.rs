@@ -515,14 +515,42 @@ mod tests {
     }
 
     #[test]
+    fn is_distinct_from_non_nulls() -> Result<()> {
+        let left_int_array =
+            create_int_array(&[Some(0), Some(1), Some(2), Some(3), Some(4)]);
+        let right_int_array =
+            create_int_array(&[Some(4), Some(3), Some(2), Some(1), Some(0)]);
+
+        assert_eq!(
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(true),
+            ]),
+            is_distinct_from(&left_int_array, &right_int_array)?
+        );
+        assert_eq!(
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(false),
+            ]),
+            is_not_distinct_from(&left_int_array, &right_int_array)?
+        );
+        Ok(())
+    }
+
+    #[test]
     fn is_distinct_from_nulls() -> Result<()> {
         let left_int_array =
             create_int_array(&[Some(0), Some(0), None, Some(3), Some(0), Some(0)]);
         let right_int_array =
             create_int_array(&[Some(0), None, None, None, Some(0), None]);
 
-        // is_distinct: left distinct right
-        let result = is_distinct_from(&left_int_array, &right_int_array)?;
         assert_eq!(
             BooleanArray::from(vec![
                 Some(false),
@@ -532,10 +560,9 @@ mod tests {
                 Some(false),
                 Some(true)
             ]),
-            result
+            is_distinct_from(&left_int_array, &right_int_array)?
         );
-        // is_distinct: left distinct right
-        let result = is_not_distinct_from(&left_int_array, &right_int_array)?;
+
         assert_eq!(
             BooleanArray::from(vec![
                 Some(true),
@@ -545,7 +572,7 @@ mod tests {
                 Some(true),
                 Some(false)
             ]),
-            result
+            is_not_distinct_from(&left_int_array, &right_int_array)?
         );
         Ok(())
     }
