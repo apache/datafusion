@@ -1256,7 +1256,7 @@ mod roundtrip_tests {
             filter: Some(Box::new(lit(true))),
         };
 
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.register_udaf(dummy_agg);
 
         roundtrip_expr_test(test_expr, ctx);
@@ -1281,7 +1281,7 @@ mod roundtrip_tests {
             args: vec![lit("")],
         };
 
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.register_udf(udf);
 
         roundtrip_expr_test(test_expr, ctx);

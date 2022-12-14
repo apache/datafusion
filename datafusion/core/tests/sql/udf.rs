@@ -53,7 +53,7 @@ async fn scalar_udf() -> Result<()> {
         ],
     )?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     ctx.register_batch("t", batch)?;
 
@@ -138,7 +138,7 @@ async fn simple_udaf() -> Result<()> {
         vec![Arc::new(Int32Array::from_slice([4, 5]))],
     )?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
     ctx.register_table("t", Arc::new(provider))?;
@@ -205,7 +205,7 @@ fn udaf_as_window_func() -> Result<()> {
         Arc::new(vec![DataType::Int32]),
     );
 
-    let mut context = SessionContext::new();
+    let context = SessionContext::new();
     context.register_table(
         "my_table",
         Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::new(
