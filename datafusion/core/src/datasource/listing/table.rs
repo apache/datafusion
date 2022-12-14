@@ -624,13 +624,18 @@ impl TableProvider for ListingTable {
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        // TODO implement this
-        println("ListingTable::statistics() has {} stats available", self.collected_statistics.statistics.len());
-        for x in self.collected_statistics.statistics.iter() {
-            let (meta, stats) = x.value();
-            println!("path={}; meta={:?}; stats={:?}", x.key(), meta, stats);
+        if self.collected_statistics.statistics.is_empty() {
+            None
+        } else {
+            let mut row_count = 0;
+            for stats_entry in self.collected_statistics.statistics.iter() {
+                let (_, stats) = stats_entry.value();
+                row_count += stats.num_rows.unwrap_or(0);
+            }
+            let mut stats = Statistics::default();
+            stats.num_rows = Some(row_count);
+            Some(stats)
         }
-        None
     }
 }
 
@@ -638,7 +643,7 @@ impl ListingTable {
     /// Get the list of files for a scan as well as the file level statistics.
     /// The list is grouped to let the execution plan know how the files should
     /// be distributed to different threads / executors.
-    async fn list_files_for_scan<'a>(
+    pub async fn list_files_for_scan<'a>(
         &'a self,
         ctx: &'a SessionState,
         filters: &'a [Expr],

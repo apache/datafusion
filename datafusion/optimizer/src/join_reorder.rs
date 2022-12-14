@@ -57,16 +57,12 @@ impl OptimizerRule for JoinReorder {
         plan: &LogicalPlan,
         _config: &mut OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-
         // TODO too many clones - use Box/Rc/Arc to reduce
 
         // recurse down first - we want the equivalent of Spark's transformUp here
         utils::optimize_children(self, plan, _config)?;
 
-        println!(
-            "JoinReorder::try_optimize():\n{}",
-            plan.display_indent()
-        );
+        println!("JoinReorder::try_optimize():\n{}", plan.display_indent());
 
         match plan {
             LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {

@@ -74,7 +74,11 @@ use datafusion_sql::{ResolvedTableReference, TableReference};
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::repartition::Repartition;
 
-use crate::config::{ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE, OPT_FILTER_NULL_JOIN_KEYS, OPT_JOIN_REORDER_ENABLED, OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES};
+use crate::config::{
+    ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
+    OPT_FILTER_NULL_JOIN_KEYS, OPT_JOIN_REORDER_ENABLED, OPT_OPTIMIZER_MAX_PASSES,
+    OPT_OPTIMIZER_SKIP_FAILED_RULES,
+};
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_optimizer::enforcement::BasicEnforcement;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
@@ -762,6 +766,13 @@ impl SessionContext {
             .with_listing_options(options)
             .with_schema(resolved_schema);
         let table = ListingTable::try_new(config)?.with_definition(sql_definition);
+
+        // TODO is this the correct place for this? and need to only do this based on opt-in
+        let (_, stats) = table
+            .list_files_for_scan(&self.state.read(), &[], None)
+            .await?;
+        println!("{:?}", stats);
+
         self.register_table(TableReference::Bare { table: name }, Arc::new(table))?;
         Ok(())
     }
@@ -1559,17 +1570,21 @@ impl SessionState {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
-        let optimizer_config = OptimizerConfig::new().filter_null_keys(
-            config
-                .config_options
-                .read()
-                .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
-                .unwrap_or_default(),
-        ).reorder_joins(config
-            .config_options
-            .read()
-            .get_bool(OPT_JOIN_REORDER_ENABLED)
-            .unwrap_or_default());
+        let optimizer_config = OptimizerConfig::new()
+            .filter_null_keys(
+                config
+                    .config_options
+                    .read()
+                    .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
+                    .unwrap_or_default(),
+            )
+            .reorder_joins(
+                config
+                    .config_options
+                    .read()
+                    .get_bool(OPT_JOIN_REORDER_ENABLED)
+                    .unwrap_or_default(),
+            );
 
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),

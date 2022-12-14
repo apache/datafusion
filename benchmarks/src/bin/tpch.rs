@@ -421,7 +421,13 @@ async fn get_table(
         config.with_schema(schema)
     };
 
-    Ok(Arc::new(ListingTable::try_new(config)?))
+    let listing_table = ListingTable::try_new(config)?;
+
+    // TODO should not do this here - we should simplify the code here to just use SessionContext to register tables
+    let (_, stats) = listing_table.list_files_for_scan(ctx, &[], None).await?;
+    println!("{:?}", stats);
+
+    Ok(Arc::new(listing_table))
 }
 
 #[derive(Debug, Serialize)]
