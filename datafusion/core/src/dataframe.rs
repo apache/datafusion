@@ -149,16 +149,16 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn select(&self, expr_list: Vec<Expr>) -> Result<DataFrame> {
+    pub fn select(self, expr_list: Vec<Expr>) -> Result<DataFrame> {
         let window_func_exprs = find_window_exprs(&expr_list);
         let plan = if window_func_exprs.is_empty() {
-            self.plan.clone()
+            self.plan
         } else {
-            LogicalPlanBuilder::window_plan(self.plan.clone(), window_func_exprs)?
+            LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
         };
         let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
 
-        Ok(DataFrame::new(self.session_state.clone(), project_plan))
+        Ok(DataFrame::new(self.session_state, project_plan))
     }
 
     /// Filter a DataFrame to only include rows that match the specified filter expression.
@@ -174,11 +174,11 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn filter(&self, predicate: Expr) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan.clone())
+    pub fn filter(self, predicate: Expr) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
             .filter(predicate)?
             .build()?;
-        Ok(DataFrame::new(self.session_state.clone(), plan))
+        Ok(DataFrame::new(self.session_state, plan))
     }
 
     /// Perform an aggregate query with optional grouping expressions.
@@ -200,14 +200,14 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn aggregate(
-        &self,
+        self,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan.clone())
+        let plan = LogicalPlanBuilder::from(self.plan)
             .aggregate(group_expr, aggr_expr)?
             .build()?;
-        Ok(DataFrame::new(self.session_state.clone(), plan))
+        Ok(DataFrame::new(self.session_state, plan))
     }
 
     /// Limit the number of rows returned from this DataFrame.
@@ -374,7 +374,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn repartition(self, partitioning_scheme: Partitioning) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan.clone())
+        let plan = LogicalPlanBuilder::from(self.plan)
             .repartition(partitioning_scheme)?
             .build()?;
         Ok(DataFrame::new(self.session_state, plan))
@@ -724,7 +724,7 @@ impl DataFrame {
             }
         }
         if rename_applied {
-            let project_plan = LogicalPlanBuilder::from(self.plan.clone())
+            let project_plan = LogicalPlanBuilder::from(self.plan)
                 .project(projection)?
                 .build()?;
             Ok(DataFrame::new(self.session_state, project_plan))
@@ -1088,10 +1088,10 @@ mod tests {
     async fn register_table() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1", "c12"])?;
         let ctx = SessionContext::new();
-        let df_impl = Arc::new(DataFrame::new(ctx.state.clone(), df.plan.clone()));
+        let df_impl = DataFrame::new(ctx.state.clone(), df.plan.clone());
 
         // register a dataframe as a table
-        ctx.register_table("test_table", df_impl.clone())?;
+        ctx.register_table("test_table", Arc::new(df_impl.clone()))?;
 
         // pull the table out
         let table = ctx.table("test_table")?;
@@ -1100,7 +1100,7 @@ mod tests {
         let aggr_expr = vec![sum(col("c12"))];
 
         // check that we correctly read from the table
-        let df_results = &df_impl
+        let df_results = df_impl
             .aggregate(group_expr.clone(), aggr_expr.clone())?
             .collect()
             .await?;
@@ -1118,7 +1118,7 @@ mod tests {
                 "| e  | 10.206140546981722          |",
                 "+----+-----------------------------+",
             ],
-            df_results
+            &df_results
         );
 
         // the results are the same as the results from the view, modulo the leaf table name
