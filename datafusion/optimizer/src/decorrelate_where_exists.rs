@@ -57,8 +57,10 @@ impl DecorrelateWhereExists {
         for it in filters.iter() {
             match it {
                 Expr::Exists { subquery, negated } => {
-                    let subquery = self.optimize(&subquery.subquery, optimizer_config)?;
-                    let subquery = Arc::new(subquery);
+                    let subquery = self
+                        .try_optimize(&subquery.subquery, optimizer_config)?
+                        .map(Arc::new)
+                        .unwrap_or_else(|| subquery.subquery.clone());
                     let subquery = Subquery { subquery };
                     let subquery = SubqueryInfo::new(subquery.clone(), *negated);
                     subqueries.push(subquery);
@@ -90,10 +92,12 @@ impl OptimizerRule for DecorrelateWhereExists {
         match plan {
             LogicalPlan::Filter(filter) => {
                 let predicate = filter.predicate();
-                let filter_input = filter.input();
+                let filter_input = filter.input().as_ref();
 
                 // Apply optimizer rule to current input
-                let optimized_input = self.optimize(filter_input, optimizer_config)?;
+                let optimized_input = self
+                    .try_optimize(filter_input, optimizer_config)?
+                    .unwrap_or_else(|| filter_input.clone());
 
                 let (subqueries, other_exprs) =
                     self.extract_subquery_exprs(predicate, optimizer_config)?;
@@ -107,7 +111,7 @@ impl OptimizerRule for DecorrelateWhereExists {
                 }
 
                 // iterate through all exists clauses in predicate, turning each into a join
-                let mut cur_input = (**filter_input).clone();
+                let mut cur_input = filter_input.clone();
                 for subquery in subqueries {
                     if let Some(x) = optimize_exists(&subquery, &cur_input, &other_exprs)?
                     {

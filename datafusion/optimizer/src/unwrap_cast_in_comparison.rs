@@ -84,42 +84,55 @@ impl OptimizerRule for UnwrapCastInComparison {
         plan: &LogicalPlan,
         _optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
-        optimize(plan)
+        Ok(self
+            .try_optimize(plan, _optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        _optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
+        let new_inputs = plan
+            .inputs()
+            .into_iter()
+            .map(|input| {
+                self.try_optimize(input, _optimizer_config)
+                    .map(|o| o.unwrap_or_else(|| input.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut schema = new_inputs.iter().map(|input| input.schema()).fold(
+            DFSchema::empty(),
+            |mut lhs, rhs| {
+                lhs.merge(rhs);
+                lhs
+            },
+        );
+
+        schema.merge(plan.schema());
+
+        let mut expr_rewriter = UnwrapCastExprRewriter {
+            schema: Arc::new(schema),
+        };
+
+        let new_exprs = plan
+            .expressions()
+            .into_iter()
+            .map(|expr| rewrite_preserving_name(expr, &mut expr_rewriter))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Some(from_plan(
+            plan,
+            new_exprs.as_slice(),
+            new_inputs.as_slice(),
+        )?))
     }
 
     fn name(&self) -> &str {
         "unwrap_cast_in_comparison"
     }
-}
-
-fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
-    let new_inputs = plan
-        .inputs()
-        .iter()
-        .map(|input| optimize(input))
-        .collect::<Result<Vec<_>>>()?;
-
-    let mut schema = new_inputs.iter().map(|input| input.schema()).fold(
-        DFSchema::empty(),
-        |mut lhs, rhs| {
-            lhs.merge(rhs);
-            lhs
-        },
-    );
-
-    schema.merge(plan.schema());
-
-    let mut expr_rewriter = UnwrapCastExprRewriter {
-        schema: Arc::new(schema),
-    };
-
-    let new_exprs = plan
-        .expressions()
-        .into_iter()
-        .map(|expr| rewrite_preserving_name(expr, &mut expr_rewriter))
-        .collect::<Result<Vec<_>>>()?;
-
-    from_plan(plan, new_exprs.as_slice(), new_inputs.as_slice())
 }
 
 struct UnwrapCastExprRewriter {

@@ -56,6 +56,16 @@ impl OptimizerRule for EliminateCrossJoin {
         plan: &LogicalPlan,
         _optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        Ok(self
+            .try_optimize(plan, _optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        _optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
                 let input = (**filter.input()).clone();
@@ -78,7 +88,11 @@ impl OptimizerRule for EliminateCrossJoin {
                         )?;
                     }
                     _ => {
-                        return utils::optimize_children(self, plan, _optimizer_config);
+                        return Ok(Some(utils::optimize_children(
+                            self,
+                            plan,
+                            _optimizer_config,
+                        )?));
                     }
                 }
 
@@ -109,23 +123,26 @@ impl OptimizerRule for EliminateCrossJoin {
 
                 // if there are no join keys then do nothing.
                 if all_join_keys.is_empty() {
-                    Ok(LogicalPlan::Filter(Filter::try_new(
+                    Ok(Some(LogicalPlan::Filter(Filter::try_new(
                         predicate.clone(),
                         Arc::new(left),
-                    )?))
+                    )?)))
                 } else {
                     // remove join expressions from filter
                     match remove_join_expressions(predicate, &all_join_keys)? {
-                        Some(filter_expr) => Ok(LogicalPlan::Filter(Filter::try_new(
-                            filter_expr,
-                            Arc::new(left),
-                        )?)),
-                        _ => Ok(left),
+                        Some(filter_expr) => Ok(Some(LogicalPlan::Filter(
+                            Filter::try_new(filter_expr, Arc::new(left))?,
+                        ))),
+                        _ => Ok(Some(left)),
                     }
                 }
             }
 
-            _ => utils::optimize_children(self, plan, _optimizer_config),
+            _ => Ok(Some(utils::optimize_children(
+                self,
+                plan,
+                _optimizer_config,
+            )?)),
         }
     }
 

@@ -40,6 +40,16 @@ impl OptimizerRule for InlineTableScan {
         plan: &LogicalPlan,
         _optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        Ok(self
+            .try_optimize(plan, _optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        _optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             // Match only on scans without filter / projection / fetch
             // Views and DataFrames won't have those added
@@ -57,17 +67,21 @@ impl OptimizerRule for InlineTableScan {
                     let plan = LogicalPlanBuilder::from(plan)
                         .project(vec![Expr::Wildcard])?
                         .alias(table_name)?;
-                    plan.build()
+                    Ok(Some(plan.build()?))
                 } else {
                     // No plan available, return with table scan as is
-                    Ok(plan.clone())
+                    Ok(Some(plan.clone()))
                 }
             }
 
             // Rest: Recurse
             _ => {
                 // apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, _optimizer_config)
+                Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    _optimizer_config,
+                )?))
             }
         }
     }
