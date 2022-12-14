@@ -185,7 +185,9 @@ fn create_join_context(
     repartition_joins: bool,
 ) -> Result<SessionContext> {
     let ctx = SessionContext::with_config(
-        SessionConfig::new().with_repartition_joins(repartition_joins),
+        SessionConfig::new()
+            .with_repartition_joins(repartition_joins)
+            .with_target_partitions(2),
     );
 
     let t1_schema = Arc::new(Schema::new(vec![
