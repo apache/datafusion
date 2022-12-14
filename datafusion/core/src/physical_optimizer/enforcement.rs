@@ -853,9 +853,12 @@ fn ensure_distribution_and_ordering(
         .as_any()
         .downcast_ref::<SortExec>()
         .and_then(|sort_exec| {
-            // If it's already preserving the partitioning, it can be regarded as a local sort
-            // and there's no need for this optimization
-            if !sort_exec.preserve_partitioning() {
+            // There are two situations that there's no need for this optimization
+            // - There's only one input partition;
+            // - It's already preserving the partitioning so that it can be regarded as a local sort
+            if sort_exec.input().output_partitioning().partition_count() > 1
+                && !sort_exec.preserve_partitioning()
+            {
                 let sort = SortExec::new_with_partitioning(
                     sort_exec.expr().to_vec(),
                     sort_exec.input().clone(),
@@ -904,7 +907,7 @@ fn ensure_distribution_and_ordering(
             }
         });
 
-    // Add SortExec to guarantee output ordering
+    // Add local SortExec to guarantee output ordering within each partition
     let new_children: Result<Vec<Arc<dyn ExecutionPlan>>> = children
         .zip(required_input_orderings.into_iter())
         .map(|(child_result, required)| {

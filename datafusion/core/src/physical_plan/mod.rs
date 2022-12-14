@@ -110,8 +110,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Specifies the output partitioning scheme of this plan
     fn output_partitioning(&self) -> Partitioning;
 
-    /// If the output of this operator is sorted, returns `Some(keys)`
-    /// with the description of how it was sorted.
+    /// If the output of this operator within each partition is sorted,
+    /// returns `Some(keys)` with the description of how it was sorted.
     ///
     /// For example, Sort, (obviously) produces sorted output as does
     /// SortPreservingMergeStream. Less obviously `Projection`
@@ -128,8 +128,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
         vec![Distribution::UnspecifiedDistribution; self.children().len()]
     }
 
-    /// Specifies the ordering requirements for all the
-    /// children for this operator.
+    /// Specifies the ordering requirements for all of the children
+    /// For each child, it's the local ordering requirement within each partition rather than the global ordering
     fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
         vec![None; self.children().len()]
     }
@@ -243,7 +243,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     fn statistics(&self) -> Statistics;
 }
 
-/// Indicate whether a data exchange is needed, which will be very helpful
+/// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
 /// especially for the distributed engine to judge whether need to deal with shuffling.
 /// Currently there are 3 kinds of execution plan which needs data exchange
 ///     1. RepartitionExec for changing the partition number between two operators
