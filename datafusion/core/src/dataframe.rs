@@ -457,7 +457,7 @@ impl DataFrame {
     pub async fn execute_stream(&self) -> Result<SendableRecordBatchStream> {
         let plan = self.create_physical_plan().await?;
         let task_ctx = Arc::new(TaskContext::from(&self.session_state.read().clone()));
-        execute_stream(plan, task_ctx).await
+        execute_stream(plan, task_ctx)
     }
 
     /// Executes this DataFrame and collects all results into a vector of vector of RecordBatch
@@ -498,7 +498,7 @@ impl DataFrame {
     ) -> Result<Vec<SendableRecordBatchStream>> {
         let plan = self.create_physical_plan().await?;
         let task_ctx = Arc::new(TaskContext::from(&self.session_state.read().clone()));
-        execute_stream_partitioned(plan, task_ctx).await
+        execute_stream_partitioned(plan, task_ctx)
     }
 
     /// Returns the schema describing the output of this DataFrame in terms of columns returned,
