@@ -2404,6 +2404,8 @@ async fn reduce_cross_join_with_wildcard_and_expr() -> Result<()> {
         let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
 
         let sql = "select *,t1.t1_id+11 from t1,t2 where t1.t1_id+11=t2.t2_id";
+
+        // assert logical plan
         let msg = format!("Creating logical plan for '{}'", sql);
         let plan = ctx
             .create_logical_plan(&("explain ".to_owned() + sql))
@@ -2426,6 +2428,54 @@ async fn reduce_cross_join_with_wildcard_and_expr() -> Result<()> {
             "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
             expected, actual
         );
+
+        // assert physical plan
+        let msg = format!("Creating physical plan for '{}'", sql);
+        let plan = ctx.create_logical_plan(sql).expect(&msg);
+        let state = ctx.state();
+        let logical_plan = state.optimize(&plan)?;
+        let physical_plan = state.create_physical_plan(&logical_plan).await?;
+        let expected = if repartition_joins {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int, CAST(t1_id@0 AS Int64) + 11 as t1.t1_id + Int64(11)]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@4 as t2_id, t2_name@5 as t2_name, t2_int@6 as t2_int]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + Int64(11)\", index: 3 }, Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 })]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + Int64(11)\", index: 3 }], 2)",
+                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as t1.t1_id + Int64(11)]",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+                "        CoalesceBatchesExec: target_batch_size=4096",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 }], 2)",
+                "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(t2.t2_id AS Int64)]",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "                MemoryExec: partitions=1, partition_sizes=[1]",
+           ]
+        } else {
+            vec![
+                "ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int, CAST(t1_id@0 AS Int64) + 11 as t1.t1_id + Int64(11)]",
+                "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@4 as t2_id, t2_name@5 as t2_name, t2_int@6 as t2_int]",
+                "    CoalesceBatchesExec: target_batch_size=4096",
+                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + Int64(11)\", index: 3 }, Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 })]",
+                "        CoalescePartitionsExec",
+                "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as t1.t1_id + Int64(11)]",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              MemoryExec: partitions=1, partition_sizes=[1]",
+                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(t2.t2_id AS Int64)]",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "            MemoryExec: partitions=1, partition_sizes=[1]",
+            ]
+        };
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+            expected, actual
+        );
+
+        // assert execution result
         let expected = vec![
             "+-------+---------+--------+-------+---------+--------+----------------------+",
             "| t1_id | t1_name | t1_int | t2_id | t2_name | t2_int | t1.t1_id + Int64(11) |",
