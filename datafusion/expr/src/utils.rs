@@ -25,7 +25,7 @@ use crate::logical_plan::{
     Limit, Partitioning, Prepare, Projection, Repartition, Sort, Subquery, SubqueryAlias,
     Union, Values, Window,
 };
-use crate::{Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use crate::{Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, TableScan};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -587,8 +587,14 @@ pub fn from_plan(
             data_types: data_types.clone(),
             input: Arc::new(inputs[0].clone()),
         })),
+        LogicalPlan::TableScan(ts) => {
+            assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
+            Ok(LogicalPlan::TableScan(TableScan {
+                filters: expr.to_vec(),
+                ..ts.clone()
+            }))
+        }
         LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::TableScan { .. }
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::DropView(_)
