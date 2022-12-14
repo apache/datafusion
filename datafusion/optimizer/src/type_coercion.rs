@@ -85,6 +85,12 @@ fn optimize_internal(
         },
     );
 
+    if let LogicalPlan::TableScan(ts) = plan {
+        let source_schema =
+            DFSchema::try_from_qualified_schema(&ts.table_name, &ts.source.schema())?;
+        schema.merge(&source_schema);
+    }
+
     // merge the outer schema for correlated subqueries
     // like case:
     // select t2.c2 from t1 where t1.c1 in (select t2.c1 from t2 where t2.c2=t1.c3)
