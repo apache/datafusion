@@ -519,7 +519,7 @@ fn create_batch_from_map(
                         accumulators.group_states.iter().map(|group_state| {
                             group_state.accumulator_set[x]
                                 .state()
-                                .and_then(|x| x[y].as_scalar().map(|v| v.clone()))
+                                .map(|x| x[y].clone())
                                 .expect("unexpected accumulator state in hash aggregate")
                         }),
                     )?;

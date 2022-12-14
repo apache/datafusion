@@ -178,7 +178,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_primitive_array;
-    use datafusion_expr::{create_udaf, Accumulator, AggregateState, Volatility};
+    use datafusion_expr::{create_udaf, Accumulator, Volatility};
     use futures::FutureExt;
 
     fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
@@ -193,10 +193,8 @@ mod tests {
         struct MyCount(i64);
 
         impl Accumulator for MyCount {
-            fn state(&self) -> Result<Vec<AggregateState>> {
-                Ok(vec![AggregateState::Scalar(ScalarValue::Int64(Some(
-                    self.0,
-                )))])
+            fn state(&self) -> Result<Vec<ScalarValue>> {
+                Ok(vec![ScalarValue::Int64(Some(self.0))])
             }
 
             fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
