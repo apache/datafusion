@@ -192,7 +192,7 @@ impl DataFrame {
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     ///
     /// // The following use is the equivalent of "SELECT MIN(b) GROUP BY a"
-    /// let _ = df.aggregate(vec![col("a")], vec![min(col("b"))])?;
+    /// let _ = df.clone().aggregate(vec![col("a")], vec![min(col("b"))])?;
     ///
     /// // The following use is the equivalent of "SELECT MIN(b)"
     /// let _ = df.aggregate(vec![], vec![min(col("b"))])?;
