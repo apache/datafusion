@@ -17,6 +17,7 @@
 
 use crate::{Expr, LogicalPlan};
 use arrow::datatypes::SchemaRef;
+use datafusion_common::Statistics;
 use std::any::Any;
 
 ///! Table source
@@ -79,6 +80,11 @@ pub trait TableSource: Sync + Send {
 
     /// Get the Logical plan of this table provider, if available.
     fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+        None
+    }
+
+    /// Optionally, return statistics about the table source
+    fn statistics(&self) -> Option<Statistics> {
         None
     }
 }

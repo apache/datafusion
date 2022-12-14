@@ -24,6 +24,7 @@ pub mod eliminate_limit;
 pub mod eliminate_outer_join;
 pub mod filter_null_join_keys;
 pub mod inline_table_scan;
+pub mod join_reorder;
 pub mod optimizer;
 pub mod propagate_empty_relation;
 pub mod push_down_filter;
