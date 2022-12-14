@@ -128,10 +128,8 @@ mod tests {
         let rand_vals: Vec<i32> = (0..test_size)
             .map(|_| rng.gen_range(0..val_range))
             .collect();
-        let rand_scalar: Vec<ScalarValue> = rand_vals
-            .iter()
-            .map(|v| ScalarValue::from(v.clone()))
-            .collect();
+        let rand_scalar: Vec<ScalarValue> =
+            rand_vals.iter().map(|v| ScalarValue::from(*v)).collect();
 
         let segment_tree_min =
             SegmentTree::build(rand_scalar.clone(), Operator::Min, DataType::Int32)
@@ -148,11 +146,11 @@ mod tests {
 
             assert_eq!(
                 min_result,
-                ScalarValue::from(rand_vals[start..end].iter().min().unwrap().clone())
+                ScalarValue::from(*rand_vals[start..end].iter().min().unwrap())
             );
             assert_eq!(
                 max_result,
-                ScalarValue::from(rand_vals[start..end].iter().max().unwrap().clone())
+                ScalarValue::from(*rand_vals[start..end].iter().max().unwrap())
             );
         }
     }
