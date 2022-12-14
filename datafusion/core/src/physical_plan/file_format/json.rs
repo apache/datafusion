@@ -306,7 +306,7 @@ mod tests {
         file_compression_type: FileCompressionType,
         store: Arc<dyn ObjectStore>,
     ) {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.runtime_env()
             .register_object_store("file", "", store.clone());
         let filename = "1.json";
