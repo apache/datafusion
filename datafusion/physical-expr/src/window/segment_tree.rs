@@ -21,7 +21,6 @@ use datafusion_common::{DataFusionError, Result, ScalarValue};
 
 // A Enum that specifies which operator could use in segment tree.
 pub enum Operator {
-    Add,
     Min,
     Max,
 }
@@ -33,7 +32,6 @@ impl Operator {
     // combine(a, combine(b, c))`.
     pub fn combine(&self, a: &ScalarValue, b: &ScalarValue) -> Result<ScalarValue> {
         match self {
-            Operator::Add => a.add(b),
             Operator::Min => min(a, b),
             Operator::Max => max(a, b),
         }
@@ -135,10 +133,6 @@ mod tests {
             .map(|v| ScalarValue::from(v.clone()))
             .collect();
 
-        let segment_tree_add =
-            SegmentTree::build(rand_scalar.clone(), Operator::Add, DataType::Int32)
-                .unwrap();
-
         let segment_tree_min =
             SegmentTree::build(rand_scalar.clone(), Operator::Min, DataType::Int32)
                 .unwrap();
@@ -149,14 +143,9 @@ mod tests {
             let start: usize = rng.gen_range(0..test_size - 1);
             let end: usize = rng.gen_range(start + 1..test_size);
 
-            let add_result = segment_tree_add.query(start, end).unwrap();
             let min_result = segment_tree_min.query(start, end).unwrap();
             let max_result = segment_tree_max.query(start, end).unwrap();
 
-            assert_eq!(
-                add_result,
-                ScalarValue::from(rand_vals[start..end].iter().sum::<i32>())
-            );
             assert_eq!(
                 min_result,
                 ScalarValue::from(rand_vals[start..end].iter().min().unwrap().clone())

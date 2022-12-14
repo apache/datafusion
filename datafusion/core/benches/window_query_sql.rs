@@ -222,20 +222,6 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
         },
     );
-
-    c.bench_function(
-        "window order by, u64_narrow, sum functions",
-        |b| {
-            b.iter(|| {
-                query(
-                    ctx.clone(),
-                    "SELECT \
-                        SUM(u64_narrow) OVER (ORDER by u64_narrow desc ROWS BETWEEN 50 PRECEDING AND 50 FOLLOWING) \
-                    FROM t",
-                )
-            })
-        },
-    );
 }
 
 criterion_group!(benches, criterion_benchmark);

@@ -192,12 +192,10 @@ fn need_use_segment_tree(
 ) -> Option<Operator> {
     if !frame.start_bound.is_unbounded() && !frame.end_bound.is_unbounded() {
         let agg_any = agg.as_any();
-        if agg_any.downcast_ref::<expressions::Sum>().is_some() {
-            Some(Operator::Add)
+        if agg_any.downcast_ref::<expressions::Max>().is_some() {
+            Some(Operator::Max)
         } else if agg_any.downcast_ref::<expressions::Min>().is_some() {
             Some(Operator::Min)
-        } else if agg_any.downcast_ref::<expressions::Max>().is_some() {
-            Some(Operator::Max)
         } else {
             None
         }
