@@ -94,6 +94,16 @@ impl OptimizerRule for ScalarSubqueryToJoin {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        Ok(self
+            .try_optimize(plan, optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
                 // Apply optimizer rule to current input
@@ -104,10 +114,10 @@ impl OptimizerRule for ScalarSubqueryToJoin {
 
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
-                    return Ok(LogicalPlan::Filter(Filter::try_new(
+                    return Ok(Some(LogicalPlan::Filter(Filter::try_new(
                         filter.predicate().clone(),
                         Arc::new(optimized_input),
-                    )?));
+                    )?)));
                 }
 
                 // iterate through all subqueries in predicate, turning each into a join
@@ -122,17 +132,21 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         cur_input = optimized_subquery;
                     } else {
                         // if we can't handle all of the subqueries then bail for now
-                        return Ok(LogicalPlan::Filter(Filter::try_new(
+                        return Ok(Some(LogicalPlan::Filter(Filter::try_new(
                             filter.predicate().clone(),
                             Arc::new(optimized_input),
-                        )?));
+                        )?)));
                     }
                 }
-                Ok(cur_input)
+                Ok(Some(cur_input))
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, optimizer_config)
+                Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
             }
         }
     }

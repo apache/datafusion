@@ -67,6 +67,16 @@ impl OptimizerRule for EliminateOuterJoin {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        Ok(self
+            .try_optimize(plan, optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => match filter.input().as_ref() {
                 LogicalPlan::Join(join) => {
@@ -110,11 +120,23 @@ impl OptimizerRule for EliminateOuterJoin {
                         null_equals_null: join.null_equals_null,
                     });
                     let new_plan = from_plan(plan, &plan.expressions(), &[new_join])?;
-                    utils::optimize_children(self, &new_plan, optimizer_config)
+                    Ok(Some(utils::optimize_children(
+                        self,
+                        &new_plan,
+                        optimizer_config,
+                    )?))
                 }
-                _ => utils::optimize_children(self, plan, optimizer_config),
+                _ => Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?)),
             },
-            _ => utils::optimize_children(self, plan, optimizer_config),
+            _ => Ok(Some(utils::optimize_children(
+                self,
+                plan,
+                optimizer_config,
+            )?)),
         }
     }
 

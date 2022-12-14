@@ -42,25 +42,43 @@ impl OptimizerRule for EliminateLimit {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        Ok(self
+            .try_optimize(plan, optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         if let LogicalPlan::Limit(limit) = plan {
             match limit.fetch {
                 Some(fetch) => {
                     if fetch == 0 {
-                        return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                        return Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
                             schema: limit.input.schema().clone(),
-                        }));
+                        })));
                     }
                 }
                 None => {
                     if limit.skip == 0 {
                         let input = &*limit.input;
-                        return utils::optimize_children(self, input, optimizer_config);
+                        return Ok(Some(utils::optimize_children(
+                            self,
+                            input,
+                            optimizer_config,
+                        )?));
                     }
                 }
             }
         }
-        utils::optimize_children(self, plan, optimizer_config)
+        Ok(Some(utils::optimize_children(
+            self,
+            plan,
+            optimizer_config,
+        )?))
     }
 
     fn name(&self) -> &str {

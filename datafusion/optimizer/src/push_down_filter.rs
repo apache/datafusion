@@ -508,19 +508,41 @@ impl OptimizerRule for PushDownFilter {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        Ok(self
+            .try_optimize(plan, optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         let filter = match plan {
             LogicalPlan::Filter(filter) => filter,
             // we also need to pushdown filter in Join.
             LogicalPlan::Join(join) => {
                 let optimized_plan = push_down_join(plan, join, None)?;
                 return match optimized_plan {
-                    Some(optimized_plan) => {
-                        utils::optimize_children(self, &optimized_plan, optimizer_config)
-                    }
-                    None => utils::optimize_children(self, plan, optimizer_config),
+                    Some(optimized_plan) => Ok(Some(utils::optimize_children(
+                        self,
+                        &optimized_plan,
+                        optimizer_config,
+                    )?)),
+                    None => Ok(Some(utils::optimize_children(
+                        self,
+                        plan,
+                        optimizer_config,
+                    )?)),
                 };
             }
-            _ => return utils::optimize_children(self, plan, optimizer_config),
+            _ => {
+                return Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
+            }
         };
 
         let child_plan = &**filter.input();
@@ -532,7 +554,7 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     child_filter.input().clone(),
                 )?);
-                return self.optimize(&new_plan, optimizer_config);
+                return self.try_optimize(&new_plan, optimizer_config);
             }
             LogicalPlan::Repartition(_)
             | LogicalPlan::Distinct(_)
@@ -733,7 +755,11 @@ impl OptimizerRule for PushDownFilter {
             _ => plan.clone(),
         };
 
-        utils::optimize_children(self, &new_plan, optimizer_config)
+        Ok(Some(utils::optimize_children(
+            self,
+            &new_plan,
+            optimizer_config,
+        )?))
     }
 }
 

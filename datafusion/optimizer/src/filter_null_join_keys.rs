@@ -40,12 +40,28 @@ impl OptimizerRule for FilterNullJoinKeys {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> datafusion_common::Result<LogicalPlan> {
+        Ok(self
+            .try_optimize(plan, optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> datafusion_common::Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
                 // recurse down first and optimize inputs
                 let mut join = join.clone();
-                join.left = Arc::new(self.optimize(&join.left, optimizer_config)?);
-                join.right = Arc::new(self.optimize(&join.right, optimizer_config)?);
+                join.left = Arc::new(
+                    self.try_optimize(&join.left, optimizer_config)?
+                        .unwrap_or_else(|| join.left.as_ref().clone()),
+                );
+                join.right = Arc::new(
+                    self.try_optimize(&join.right, optimizer_config)?
+                        .unwrap_or_else(|| join.right.as_ref().clone()),
+                );
 
                 let left_schema = join.left.schema();
                 let right_schema = join.right.schema();
@@ -80,11 +96,15 @@ impl OptimizerRule for FilterNullJoinKeys {
                         join.right.clone(),
                     )?));
                 }
-                Ok(LogicalPlan::Join(join))
+                Ok(Some(LogicalPlan::Join(join)))
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, optimizer_config)
+                Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
             }
         }
     }

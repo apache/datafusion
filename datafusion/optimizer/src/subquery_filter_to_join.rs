@@ -54,6 +54,16 @@ impl OptimizerRule for SubqueryFilterToJoin {
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
     ) -> Result<LogicalPlan> {
+        Ok(self
+            .try_optimize(plan, optimizer_config)?
+            .unwrap_or_else(|| plan.clone()))
+    }
+
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
                 // Apply optimizer rule to current input
@@ -78,10 +88,10 @@ impl OptimizerRule for SubqueryFilterToJoin {
                 })?;
 
                 if !subqueries_in_regular.is_empty() {
-                    return Ok(LogicalPlan::Filter(Filter::try_new(
+                    return Ok(Some(LogicalPlan::Filter(Filter::try_new(
                         filter.predicate().clone(),
                         Arc::new(optimized_input),
-                    )?));
+                    )?)));
                 };
 
                 // Add subquery joins to new_input
@@ -150,23 +160,27 @@ impl OptimizerRule for SubqueryFilterToJoin {
                 let new_input = match opt_result {
                     Ok(plan) => plan,
                     Err(_) => {
-                        return Ok(LogicalPlan::Filter(Filter::try_new(
+                        return Ok(Some(LogicalPlan::Filter(Filter::try_new(
                             filter.predicate().clone(),
                             Arc::new(optimized_input),
-                        )?))
+                        )?)))
                     }
                 };
 
                 // Apply regular filters to join output if some or just return join
                 if regular_filters.is_empty() {
-                    Ok(new_input)
+                    Ok(Some(new_input))
                 } else {
-                    utils::add_filter(new_input, &regular_filters)
+                    Ok(Some(utils::add_filter(new_input, &regular_filters)?))
                 }
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, optimizer_config)
+                Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
             }
         }
     }
