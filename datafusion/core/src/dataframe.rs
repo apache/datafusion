@@ -243,7 +243,8 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.union(df.clone())?;
+    /// let d2 = df.clone();
+    /// let df = df.union(d2)?;
     /// # Ok(())
     /// # }
     /// ```
@@ -264,7 +265,8 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.union_distinct(df.clone())?;
+    /// let d2 = df.clone();
+    /// let df = df.union_distinct(d2)?;
     /// # Ok(())
     /// # }
     /// ```
@@ -579,7 +581,8 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.intersect(df.clone())?;
+    /// let d2 = df.clone();
+    /// let df = df.intersect(d2)?;
     /// # Ok(())
     /// # }
     /// ```
@@ -601,7 +604,8 @@ impl DataFrame {
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.except(df.clone())?;
+    /// let d2 = df.clone();
+    /// let df = df.except(d2)?;
     /// # Ok(())
     /// # }
     /// ```
