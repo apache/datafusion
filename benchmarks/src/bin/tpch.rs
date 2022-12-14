@@ -423,9 +423,10 @@ async fn get_table(
 
     let listing_table = ListingTable::try_new(config)?;
 
+    // pre-populate stats so that they are available to logical plan optimizer rules
     // TODO should not do this here - we should simplify the code here to just use SessionContext to register tables
     let (_, stats) = listing_table.list_files_for_scan(ctx, &[], None).await?;
-    println!("{:?}", stats);
+    println!("list_files_for_scan: {:?}", stats);
 
     Ok(Arc::new(listing_table))
 }

@@ -39,7 +39,7 @@ use crate::{
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    ToDFSchema,
+    Statistics, ToDFSchema,
 };
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
@@ -995,7 +995,7 @@ pub fn table_scan(
     projection: Option<Vec<usize>>,
 ) -> Result<LogicalPlanBuilder> {
     let table_schema = Arc::new(table_schema.clone());
-    let table_source = Arc::new(LogicalTableSource { table_schema });
+    let table_source = Arc::new(LogicalTableSource::new(table_schema));
     LogicalPlanBuilder::scan(name.unwrap_or(UNNAMED_TABLE), table_source, projection)
 }
 
@@ -1066,12 +1066,24 @@ pub fn wrap_projection_for_join_if_necessary(
 /// DefaultTableSource.
 pub struct LogicalTableSource {
     table_schema: SchemaRef,
+    statistics: Option<Statistics>,
 }
 
 impl LogicalTableSource {
     /// Create a new LogicalTableSource
     pub fn new(table_schema: SchemaRef) -> Self {
-        Self { table_schema }
+        Self {
+            table_schema,
+            statistics: None,
+        }
+    }
+
+    /// Create a new LogicalTableSource with statistics
+    pub fn new_with_stats(table_schema: SchemaRef, statistics: Statistics) -> Self {
+        Self {
+            table_schema,
+            statistics: Some(statistics),
+        }
     }
 }
 
@@ -1082,6 +1094,10 @@ impl TableSource for LogicalTableSource {
 
     fn schema(&self) -> SchemaRef {
         self.table_schema.clone()
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        self.statistics.clone()
     }
 }
 

@@ -767,11 +767,13 @@ impl SessionContext {
             .with_schema(resolved_schema);
         let table = ListingTable::try_new(config)?.with_definition(sql_definition);
 
+        // pre-populate stats so that they are available to logical plan optimizer rules
         // TODO is this the correct place for this? and need to only do this based on opt-in
-        let (_, stats) = table
-            .list_files_for_scan(&self.state.read(), &[], None)
-            .await?;
-        println!("{:?}", stats);
+        //    let guard = self.state.read();
+        // let (_, stats) =            table
+        //    .list_files_for_scan(&guard, &[], None)
+        //    .await?;
+        //    println!("list_files_for_scan: {:?}", stats);
 
         self.register_table(TableReference::Bare { table: name }, Arc::new(table))?;
         Ok(())

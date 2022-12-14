@@ -170,7 +170,7 @@ impl OptimizerRule for JoinReorder {
                     println!("Optimized: {}", optimized.display_indent());
                     return Ok(Some(optimized));
                 } else {
-                    println!("Did not use all join conditions");
+                    println!("Did not use all join conditions: {:?}", conds);
                     return Ok(None);
                 }
             }
@@ -393,16 +393,14 @@ fn get_table_size(plan: &LogicalPlan) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
+    use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Result, Statistics};
+    use datafusion_expr::logical_plan::builder::LogicalTableSource;
     use datafusion_expr::{
-        col, lit, JoinType, LogicalPlan, LogicalPlanBuilder, SubqueryAlias,
+        col, lit, JoinType, LogicalPlan, LogicalPlanBuilder, SubqueryAlias, UNNAMED_TABLE,
     };
-
-    use super::*;
-    use crate::sql::table::DaskTableSource;
+    use std::sync::Arc;
 
     #[test]
     fn inner_join_supported() -> Result<()> {
@@ -610,13 +608,11 @@ mod tests {
         projection: Option<Vec<usize>>,
         table_size: usize,
     ) -> Result<LogicalPlanBuilder> {
-        let tbl_schema = Arc::new(table_schema.clone());
+        let table_schema = Arc::new(table_schema.clone());
         let mut statistics = Statistics::default();
         statistics.num_rows = Some(table_size);
-        let table_source = Arc::new(DaskTableSource::new_with_statistics(
-            tbl_schema,
-            Some(statistics),
-        ));
-        LogicalPlanBuilder::scan(name.unwrap_or("test"), table_source, projection)
+        let table_source =
+            Arc::new(LogicalTableSource::new_with_stats(table_schema, statistics));
+        LogicalPlanBuilder::scan(name.unwrap_or(UNNAMED_TABLE), table_source, projection)
     }
 }
