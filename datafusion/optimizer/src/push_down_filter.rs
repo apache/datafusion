@@ -1143,6 +1143,7 @@ mod tests {
             .alias("test2")?;
 
         let plan = table
+            .clone()
             .union(table.build()?)?
             .filter(col("b").eq(lit(1i64)))?
             .build()?;
@@ -1175,7 +1176,7 @@ mod tests {
             .build()?;
         let filter = and(col("test.a").eq(lit(1)), col("test1.d").gt(lit(2)));
         let plan = LogicalPlanBuilder::from(left)
-            .cross_join(&right)?
+            .cross_join(right)?
             .project(vec![col("test.a"), col("test1.d")])?
             .filter(filter)?
             .build()?;
@@ -1204,7 +1205,7 @@ mod tests {
             .build()?;
         let filter = and(col("test.a").eq(lit(1)), col("test1.a").gt(lit(2)));
         let plan = LogicalPlanBuilder::from(left)
-            .cross_join(&right)?
+            .cross_join(right)?
             .project(vec![col("test.a"), col("test1.a")])?
             .filter(filter)?
             .build()?;
@@ -1318,7 +1319,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -1358,7 +1359,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join_using(
-                &right,
+                right,
                 JoinType::Inner,
                 vec![Column::from_name("a".to_string())],
             )?
@@ -1399,7 +1400,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -1438,7 +1439,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -1479,7 +1480,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join_using(
-                &right,
+                right,
                 JoinType::Left,
                 vec![Column::from_name("a".to_string())],
             )?
@@ -1517,7 +1518,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join_using(
-                &right,
+                right,
                 JoinType::Right,
                 vec![Column::from_name("a".to_string())],
             )?
@@ -1556,7 +1557,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join_using(
-                &right,
+                right,
                 JoinType::Left,
                 vec![Column::from_name("a".to_string())],
             )?
@@ -1595,7 +1596,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join_using(
-                &right,
+                right,
                 JoinType::Right,
                 vec![Column::from_name("a".to_string())],
             )?
@@ -1639,7 +1640,7 @@ mod tests {
             .and(col("test2.c").gt(lit(4u32)));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 Some(filter),
@@ -1683,7 +1684,7 @@ mod tests {
             .and(col("test2.c").gt(lit(4u32)));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 Some(filter),
@@ -1725,7 +1726,7 @@ mod tests {
         let filter = col("test.a").gt(lit(1u32));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("b")]),
                 Some(filter),
@@ -1770,7 +1771,7 @@ mod tests {
             .and(col("test2.c").gt(lit(4u32)));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Left,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 Some(filter),
@@ -1814,7 +1815,7 @@ mod tests {
             .and(col("test2.c").gt(lit(4u32)));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Right,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 Some(filter),
@@ -1858,7 +1859,7 @@ mod tests {
             .and(col("test2.c").gt(lit(4u32)));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Full,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 Some(filter),
@@ -2110,7 +2111,7 @@ mod tests {
         let filter = col("c").gt(lit(1u32));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("c")], vec![Column::from_name("d")]),
                 Some(filter),
@@ -2289,7 +2290,7 @@ mod tests {
             and(col("b").eq(col("e")), col("c").lt(lit(10u32))),
         );
         let plan = LogicalPlanBuilder::from(left)
-            .cross_join(&right)?
+            .cross_join(right)?
             .filter(filter)?
             .build()?;
 

@@ -233,7 +233,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .limit(2, Some(1))?
             .join_using(
-                &table_scan_inner,
+                table_scan_inner,
                 JoinType::Inner,
                 vec![Column::from_name("a".to_string())],
             )?

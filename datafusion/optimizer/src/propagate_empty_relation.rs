@@ -272,7 +272,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left)
             .join_using(
-                &right,
+                right,
                 JoinType::Inner,
                 vec![Column::from_name("a".to_string())],
             )?
@@ -406,7 +406,7 @@ mod tests {
         let right = LogicalPlanBuilder::empty(false).build()?;
 
         let plan = LogicalPlanBuilder::from(left)
-            .cross_join(&right)?
+            .cross_join(right)?
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
 
