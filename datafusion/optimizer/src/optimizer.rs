@@ -55,17 +55,7 @@ pub trait OptimizerRule {
         &self,
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        self.optimize(plan, optimizer_config).map(Some)
-    }
-
-    /// Rewrite `plan` to an optimized form. This method will eventually be deprecated and
-    /// replace by `try_optimize`.
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan>;
+    ) -> Result<Option<LogicalPlan>>;
 
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
@@ -407,11 +397,11 @@ mod tests {
     struct BadRule {}
 
     impl OptimizerRule for BadRule {
-        fn optimize(
+        fn try_optimize(
             &self,
             _plan: &LogicalPlan,
             _optimizer_config: &mut OptimizerConfig,
-        ) -> datafusion_common::Result<LogicalPlan> {
+        ) -> datafusion_common::Result<Option<LogicalPlan>> {
             Err(DataFusionError::Plan("rule failed".to_string()))
         }
 
@@ -424,13 +414,13 @@ mod tests {
     struct GetTableScanRule {}
 
     impl OptimizerRule for GetTableScanRule {
-        fn optimize(
+        fn try_optimize(
             &self,
             _plan: &LogicalPlan,
             _optimizer_config: &mut OptimizerConfig,
-        ) -> datafusion_common::Result<LogicalPlan> {
+        ) -> datafusion_common::Result<Option<LogicalPlan>> {
             let table_scan = test_table_scan()?;
-            LogicalPlanBuilder::from(table_scan).build()
+            Ok(Some(LogicalPlanBuilder::from(table_scan).build()?))
         }
 
         fn name(&self) -> &str {

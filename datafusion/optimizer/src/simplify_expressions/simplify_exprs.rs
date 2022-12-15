@@ -43,15 +43,15 @@ impl OptimizerRule for SimplifyExpressions {
         "simplify_expressions"
     }
 
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<Option<LogicalPlan>> {
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time =
             optimizer_config.query_execution_start_time();
-        Self::optimize_internal(plan, &execution_props)
+        Ok(Some(Self::optimize_internal(plan, &execution_props)?))
     }
 }
 
@@ -172,7 +172,8 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let rule = SimplifyExpressions::new();
         let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -384,7 +385,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
 
         let err = rule
-            .optimize(plan, &mut config)
+            .try_optimize(plan, &mut config)
             .expect_err("expected optimization to fail");
 
         err.to_string()
@@ -399,7 +400,8 @@ mod tests {
         let rule = SimplifyExpressions::new();
 
         let optimized_plan = rule
-            .optimize(plan, &mut config)
+            .try_optimize(plan, &mut config)
+            .unwrap()
             .expect("failed to optimize plan");
         format!("{:?}", optimized_plan)
     }

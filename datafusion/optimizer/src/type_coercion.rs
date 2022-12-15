@@ -55,16 +55,6 @@ impl OptimizerRule for TypeCoercion {
         "type_coercion"
     }
 
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -617,7 +607,7 @@ mod test {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let rule = TypeCoercion::new();
         let mut config = OptimizerConfig::default();
-        let plan = rule.optimize(plan, &mut config)?;
+        let plan = rule.try_optimize(plan, &mut config)?.unwrap();
         assert_eq!(expected, &format!("{:?}", plan));
         Ok(())
     }
