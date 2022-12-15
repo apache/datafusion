@@ -19,7 +19,7 @@
 //!
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
-use datafusion_common::parsers::SQLFileCompressionType;
+use datafusion_common::parsers::CompressionTypeVariant;
 use sqlparser::{
     ast::{
         ColumnDef, ColumnOptionDef, ObjectName, Statement as SQLStatement,
@@ -63,7 +63,7 @@ pub struct CreateExternalTable {
     /// Option to not error if table already exists
     pub if_not_exists: bool,
     /// File compression type (GZIP, BZIP2, XZ)
-    pub file_compression_type: SQLFileCompressionType,
+    pub file_compression_type: CompressionTypeVariant,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
 }
@@ -338,7 +338,7 @@ impl<'a> DFParser<'a> {
         let file_compression_type = if self.parse_has_file_compression_type() {
             self.parse_file_compression_type()?
         } else {
-            SQLFileCompressionType::UNCOMPRESSED
+            CompressionTypeVariant::UNCOMPRESSED
         };
 
         let table_partition_cols = if self.parse_has_partition() {
@@ -382,9 +382,9 @@ impl<'a> DFParser<'a> {
     /// Parses the set of
     fn parse_file_compression_type(
         &mut self,
-    ) -> Result<SQLFileCompressionType, ParserError> {
+    ) -> Result<CompressionTypeVariant, ParserError> {
         match self.parser.next_token() {
-            Token::Word(w) => SQLFileCompressionType::from_str(&w.value),
+            Token::Word(w) => CompressionTypeVariant::from_str(&w.value),
             unexpected => self.expected("one of GZIP, BZIP2, XZ", unexpected),
         }
     }
@@ -450,7 +450,7 @@ impl<'a> DFParser<'a> {
 mod tests {
     use super::*;
     use sqlparser::ast::{DataType, Ident};
-    use SQLFileCompressionType::UNCOMPRESSED;
+    use CompressionTypeVariant::UNCOMPRESSED;
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
         let statements = DFParser::parse_sql(sql)?;
@@ -586,7 +586,7 @@ mod tests {
                 location: "foo.csv".into(),
                 table_partition_cols: vec![],
                 if_not_exists: false,
-                file_compression_type: SQLFileCompressionType::from_str(
+                file_compression_type: CompressionTypeVariant::from_str(
                     file_compression_type,
                 )?,
                 options: HashMap::new(),

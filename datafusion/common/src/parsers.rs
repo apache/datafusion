@@ -26,34 +26,26 @@ const SECONDS_PER_HOUR: f64 = 3_600_f64;
 const NANOS_PER_SECOND: f64 = 1_000_000_000_f64;
 
 /// Readable file compression type
-/// This is the counterpart of the
-/// `datafusion::datasource::file_format::file_type::FileCompressionType`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SQLFileCompressionType {
+pub enum CompressionTypeVariant {
     /// Gzip-ed file
     GZIP,
-    /// Gzip-ed file
-    GZ,
     /// Bzip2-ed file
     BZIP2,
-    /// Bzip2-ed file
-    BZ2,
     /// Xz-ed file (liblzma)
     XZ,
     /// Uncompressed file
     UNCOMPRESSED,
 }
 
-impl FromStr for SQLFileCompressionType {
+impl FromStr for CompressionTypeVariant {
     type Err = ParserError;
 
     fn from_str(s: &str) -> result::Result<Self, ParserError> {
         let s = s.to_uppercase();
         match s.as_str() {
-            "GZIP" => Ok(Self::GZIP),
-            "GZ" => Ok(Self::GZ),
-            "BZIP2" => Ok(Self::BZIP2),
-            "BZ2" => Ok(Self::BZ2),
+            "GZIP" | "GZ" => Ok(Self::GZIP),
+            "BZIP2" | "BZ2" => Ok(Self::BZIP2),
             "XZ" => Ok(Self::XZ),
             "" => Ok(Self::UNCOMPRESSED),
             _ => Err(ParserError::ParserError(format!(
@@ -64,17 +56,21 @@ impl FromStr for SQLFileCompressionType {
     }
 }
 
-impl ToString for SQLFileCompressionType {
+impl ToString for CompressionTypeVariant {
     fn to_string(&self) -> String {
         match self {
             Self::GZIP => "GZIP",
-            Self::GZ => "GZ",
             Self::BZIP2 => "BZIP2",
-            Self::BZ2 => "BZ2",
             Self::XZ => "XZ",
             Self::UNCOMPRESSED => "",
         }
         .to_string()
+    }
+}
+
+impl CompressionTypeVariant {
+    pub const fn is_compressed(&self) -> bool {
+        !matches!(self, &Self::UNCOMPRESSED)
     }
 }
 

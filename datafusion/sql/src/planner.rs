@@ -36,7 +36,7 @@ use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::ast::{TimezoneInfo, WildcardAdditionalOptions};
 use sqlparser::parser::ParserError::ParserError;
 
-use datafusion_common::parsers::{parse_interval, SQLFileCompressionType};
+use datafusion_common::parsers::{parse_interval, CompressionTypeVariant};
 use datafusion_common::ToDFSchema;
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -622,7 +622,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         if file_type != "CSV"
             && file_type != "JSON"
-            && file_compression_type != SQLFileCompressionType::UNCOMPRESSED
+            && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
         {
             Err(DataFusionError::Plan(
                 "File compression type can be specified for CSV/JSON files.".into(),

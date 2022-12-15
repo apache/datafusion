@@ -20,7 +20,7 @@ use crate::catalog::schema::SchemaProvider;
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
-use datafusion_common::parsers::SQLFileCompressionType;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DFSchema, DataFusionError, OwnedTableReference};
 use datafusion_expr::CreateExternalTable;
 use futures::TryStreamExt;
@@ -137,7 +137,7 @@ impl ListingSchemaProvider {
                             table_partition_cols: vec![],
                             if_not_exists: false,
                             definition: None,
-                            file_compression_type: SQLFileCompressionType::UNCOMPRESSED,
+                            file_compression_type: CompressionTypeVariant::UNCOMPRESSED,
                             options: Default::default(),
                         },
                     )

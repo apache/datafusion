@@ -38,7 +38,7 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
-use datafusion_common::parsers::SQLFileCompressionType;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{context, Column, DataFusionError, OwnedTableReference};
 use datafusion_expr::logical_plan::{builder::project, Prepare};
 use datafusion_expr::{
@@ -609,7 +609,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .table_partition_cols
                         .clone(),
                     if_not_exists: create_extern_table.if_not_exists,
-                    file_compression_type: SQLFileCompressionType::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
+                    file_compression_type: CompressionTypeVariant::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
                     definition,
                     options: create_extern_table.options.clone(),
                 }))
