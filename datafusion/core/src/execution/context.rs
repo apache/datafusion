@@ -363,7 +363,8 @@ impl SessionContext {
             LogicalPlan::SetVariable(SetVariable {
                 variable, value, ..
             }) => {
-                let config_options = &self.state.write().config.config_options;
+                let state = self.state.write();
+                let config_options = &state.config.config_options;
 
                 let old_value =
                     config_options.read().get(&variable).ok_or_else(|| {
@@ -410,6 +411,8 @@ impl SessionContext {
                         ))
                     }
                 }
+                drop(state);
+
                 self.return_empty_dataframe()
             }
 
