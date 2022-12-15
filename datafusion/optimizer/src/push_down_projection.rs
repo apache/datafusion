@@ -1015,8 +1015,6 @@ mod tests {
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         let rule = PushDownProjection::new();
-        Ok(rule
-            .try_optimize(plan, &OptimizerContext::new())?
-            .unwrap())
+        Ok(rule.try_optimize(plan, &OptimizerContext::new())?.unwrap())
     }
 }
