@@ -1358,6 +1358,8 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "Modulo" => Ok(Operator::Modulo),
         "Like" => Ok(Operator::Like),
         "NotLike" => Ok(Operator::NotLike),
+        "ILike" => Ok(Operator::ILike),
+        "NotILike" => Ok(Operator::NotILike),
         "IsDistinctFrom" => Ok(Operator::IsDistinctFrom),
         "IsNotDistinctFrom" => Ok(Operator::IsNotDistinctFrom),
         "BitwiseAnd" => Ok(Operator::BitwiseAnd),
