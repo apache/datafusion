@@ -1695,7 +1695,7 @@ async fn over_order_by_sort_keys_sorting_global_order_compacting() -> Result<()>
     let logical_plan = state.optimize(&plan)?;
     let physical_plan = state.create_physical_plan(&logical_plan).await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
-    // Only 1 SortExec was added
+    // 3 SortExec are added
     let expected = {
         vec![
             "SortExec: [c2@0 ASC NULLS LAST]",
