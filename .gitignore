@@ -93,6 +93,8 @@ rusty-tags.vi
 .vscode
 venv/*
 
+datafusion/proto/src/generated/datafusion.rs
+
 # apache release artifacts
 dev/dist
 
