@@ -273,14 +273,14 @@ impl BuiltInConfigs {
 
             ConfigDefinition::new_bool(
                 OPT_REPARTITION_WINDOWS,
-                "Should DataFusion collect statistics after listing files",
+                "Should DataFusion repartition data using the partitions keys to execute window \
+                 functions in parallel using the provided `target_partitions` level",
                 true
             ),
 
             ConfigDefinition::new_bool(
                 OPT_COLLECT_STATISTICS,
-                "Should DataFusion repartition data using the partitions keys to execute window \
-                 functions in parallel using the provided `target_partitions` level",
+                "Should DataFusion collect statistics after listing files",
                 false
             ),
 
