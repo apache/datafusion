@@ -380,7 +380,7 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
     Ok(())
 }
 
-fn create_test_table() -> Result<Arc<DataFrame>> {
+fn create_test_table() -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),
@@ -407,7 +407,7 @@ fn create_test_table() -> Result<Arc<DataFrame>> {
     ctx.table("test")
 }
 
-async fn aggregates_table(ctx: &SessionContext) -> Result<Arc<DataFrame>> {
+async fn aggregates_table(ctx: &SessionContext) -> Result<DataFrame> {
     let testdata = datafusion::test_util::arrow_test_data();
 
     ctx.read_csv(

@@ -57,7 +57,7 @@ impl Data {
                 .sql("SELECT int_col, double_col FROM alltypes_plain")
                 .await?;
 
-            df.show().await?;
+            df.clone().show().await?;
 
             df.collect().await?
         };
