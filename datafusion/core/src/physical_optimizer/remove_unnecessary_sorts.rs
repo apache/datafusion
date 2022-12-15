@@ -106,6 +106,10 @@ fn remove_unnecessary_sorts(
                     let sort_exec = convert_to_sort_exec(&sort_any)?;
                     let sort_output_ordering = sort_exec.output_ordering();
                     let sort_input_ordering = sort_exec.input().output_ordering();
+                    // TODO: Once we can ensure required ordering propagates to above without changes
+                    //       (or with changes trackable) compare `sort_input_ordering` and and `required_ordering`
+                    //       this changes will enable us to remove (a,b) -> Sort -> (a,b,c) -> Required(a,b) Sort
+                    //       from the plan. With current implementation we cannot remove Sort from above configuration.
                     // Do naive analysis, where a SortExec is already sorted according to desired Sorting
                     if ordering_satisfy(sort_input_ordering, sort_output_ordering, || {
                         sort_exec.input().equivalence_properties()
