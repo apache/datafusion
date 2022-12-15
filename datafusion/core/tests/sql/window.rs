@@ -1649,7 +1649,7 @@ async fn test_window_agg_sort() -> Result<()> {
 
 #[tokio::test]
 async fn over_order_by_sort_keys_sorting_prefix_compacting() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(2));
     register_aggregate_csv(&ctx).await?;
 
     let sql = "SELECT c2, MAX(c9) OVER (ORDER BY c2), SUM(c9) OVER (), MIN(c9) OVER (ORDER BY c2, c9) from aggregate_test_100";
@@ -1685,7 +1685,7 @@ async fn over_order_by_sort_keys_sorting_prefix_compacting() -> Result<()> {
 /// FIXME: for now we are not detecting prefix of sorting keys in order to re-arrange with global and save one SortExec
 #[tokio::test]
 async fn over_order_by_sort_keys_sorting_global_order_compacting() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(2));
     register_aggregate_csv(&ctx).await?;
 
     let sql = "SELECT c2, MAX(c9) OVER (ORDER BY c9, c2), SUM(c9) OVER (), MIN(c9) OVER (ORDER BY c2, c9) from aggregate_test_100 ORDER BY c2";
@@ -1701,7 +1701,7 @@ async fn over_order_by_sort_keys_sorting_global_order_compacting() -> Result<()>
             "SortExec: [c2@0 ASC NULLS LAST]",
             "  CoalescePartitionsExec",
             "    ProjectionExec: expr=[c2@3 as c2, MAX(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c9 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as MAX(aggregate_test_100.c9), SUM(aggregate_test_100.c9) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@0 as SUM(aggregate_test_100.c9), MIN(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c2 ASC NULLS LAST, aggregate_test_100.c9 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as MIN(aggregate_test_100.c9)]",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "      RepartitionExec: partitioning=RoundRobinBatch(2)",
             "        WindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)) }]",
             "          WindowAggExec: wdw=[MAX(aggregate_test_100.c9): Ok(Field { name: \"MAX(aggregate_test_100.c9)\", data_type: UInt32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(NULL)), end_bound: CurrentRow }]",
             "            SortExec: [c9@2 ASC NULLS LAST,c2@1 ASC NULLS LAST]",
@@ -1723,7 +1723,7 @@ async fn over_order_by_sort_keys_sorting_global_order_compacting() -> Result<()>
 
 #[tokio::test]
 async fn test_window_partition_by_order_by() -> Result<()> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(2));
     register_aggregate_csv(&ctx).await?;
 
     let sql = "SELECT \
@@ -1744,8 +1744,8 @@ async fn test_window_partition_by_order_by() -> Result<()> {
             "  WindowAggExec: wdw=[SUM(aggregate_test_100.c4): Ok(Field { name: \"SUM(aggregate_test_100.c4)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }, COUNT(UInt8(1)): Ok(Field { name: \"COUNT(UInt8(1))\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(1)) }]",
             "    SortExec: [c1@0 ASC NULLS LAST,c2@1 ASC NULLS LAST]",
             "      CoalesceBatchesExec: target_batch_size=4096",
-            "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 10)",
-            "          RepartitionExec: partitioning=RoundRobinBatch(10)",
+            "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2)",
+            "          RepartitionExec: partitioning=RoundRobinBatch(2)",
         ]
     };
 
