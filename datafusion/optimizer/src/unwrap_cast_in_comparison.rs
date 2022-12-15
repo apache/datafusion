@@ -309,25 +309,6 @@ fn is_support_data_type(data_type: &DataType) -> bool {
     )
 }
 
-fn is_decimal_type(dt: &DataType) -> bool {
-    matches!(dt, DataType::Decimal128(_, _))
-}
-
-fn is_unsigned_type(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
-    )
-}
-
-/// Until https://github.com/apache/arrow-rs/issues/1043 is done
-/// (support for unsigned <--> decimal casts) we also don't do that
-/// kind of cast in this optimizer
-fn is_unsupported_cast(dt1: &DataType, dt2: &DataType) -> bool {
-    (is_decimal_type(dt1) && is_unsigned_type(dt2))
-        || (is_decimal_type(dt2) && is_unsigned_type(dt1))
-}
-
 fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,
@@ -335,9 +316,6 @@ fn try_cast_literal_to_type(
     let lit_data_type = lit_value.get_datatype();
     // the rule just support the signed numeric data type now
     if !is_support_data_type(&lit_data_type) || !is_support_data_type(target_type) {
-        return Ok(None);
-    }
-    if is_unsupported_cast(&lit_data_type, target_type) {
         return Ok(None);
     }
     if lit_value.is_null() {
@@ -810,12 +788,7 @@ mod tests {
 
         for s1 in &scalars {
             for s2 in &scalars {
-                let expected_value =
-                    if is_unsupported_cast(&s1.get_datatype(), &s2.get_datatype()) {
-                        ExpectedCast::NoValue
-                    } else {
-                        ExpectedCast::Value(s2.clone())
-                    };
+                let expected_value = ExpectedCast::Value(s2.clone());
 
                 expect_cast(s1.clone(), s2.get_datatype(), expected_value);
             }
@@ -840,12 +813,7 @@ mod tests {
 
         for s1 in &scalars {
             for s2 in &scalars {
-                let expected_value =
-                    if is_unsupported_cast(&s1.get_datatype(), &s2.get_datatype()) {
-                        ExpectedCast::NoValue
-                    } else {
-                        ExpectedCast::Value(s2.clone())
-                    };
+                let expected_value = ExpectedCast::Value(s2.clone());
 
                 expect_cast(s1.clone(), s2.get_datatype(), expected_value);
             }
