@@ -91,16 +91,6 @@ impl CommonSubexprEliminate {
 }
 
 impl OptimizerRule for CommonSubexprEliminate {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -595,7 +585,8 @@ mod test {
     fn assert_optimized_plan_eq(expected: &str, plan: &LogicalPlan) {
         let optimizer = CommonSubexprEliminate {};
         let optimized_plan = optimizer
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(expected, formatted_plan);
@@ -839,7 +830,10 @@ mod test {
             .build()
             .unwrap();
         let rule = CommonSubexprEliminate {};
-        let optimized_plan = rule.optimize(&plan, &mut OptimizerConfig::new()).unwrap();
+        let optimized_plan = rule
+            .try_optimize(&plan, &mut OptimizerConfig::new())
+            .unwrap()
+            .unwrap();
 
         let schema = optimized_plan.schema();
         let fields_with_datatypes: Vec<_> = schema
