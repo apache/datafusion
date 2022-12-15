@@ -82,13 +82,13 @@ impl OptimizerRule for UnwrapCastInComparison {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let new_inputs = plan
             .inputs()
             .into_iter()
             .map(|input| {
-                self.try_optimize(input, _optimizer_config)
+                self.try_optimize(input, _config)
                     .map(|o| o.unwrap_or_else(|| input.clone()))
             })
             .collect::<Result<Vec<_>>>()?;

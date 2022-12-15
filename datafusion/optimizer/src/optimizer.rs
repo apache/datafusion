@@ -41,6 +41,7 @@ use chrono::{DateTime, Utc};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -54,7 +55,7 @@ pub trait OptimizerRule {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>>;
 
     /// A human readable name for this optimizer rule
@@ -62,15 +63,35 @@ pub trait OptimizerRule {
 }
 
 /// Options to control the DataFusion Optimizer.
+pub trait OptimizerConfig {
+    /// Return the time at which the query execution started. This
+    /// time is used as the value for now()
+    fn query_execution_start_time(&self) -> DateTime<Utc>;
+
+    /// Returns false if the given rule should be skipped
+    fn rule_enabled(&self, name: &str) -> bool;
+
+    /// The optimizer will skip failing rules if this returns true
+    fn skip_failing_rules(&self) -> bool;
+
+    /// How many times to attempt to optimize the plan
+    fn max_passes(&self) -> u8;
+
+    /// Return a unique ID
+    ///
+    /// This is useful for assigning unique names to aliases
+    fn next_id(&self) -> usize;
+}
+
+/// A standalone [`OptimizerConfig`] that can be used independently
+/// of DataFusion's config management
 #[derive(Debug)]
-pub struct OptimizerConfig {
+pub struct OptimizerContext {
     /// Query execution start time that can be used to rewrite
     /// expressions such as `now()` to use a literal value instead
     query_execution_start_time: DateTime<Utc>,
     /// id generator for optimizer passes
-    // TODO this should not be on the config,
-    // it should be its own 'OptimizerState' or something)
-    next_id: usize,
+    next_id: AtomicUsize,
     /// Option to skip rules that produce errors
     skip_failing_rules: bool,
     /// Specify whether to enable the filter_null_keys rule
@@ -79,12 +100,12 @@ pub struct OptimizerConfig {
     max_passes: u8,
 }
 
-impl OptimizerConfig {
+impl OptimizerContext {
     /// Create optimizer config
     pub fn new() -> Self {
         Self {
             query_execution_start_time: Utc::now(),
-            next_id: 0, // useful for generating things like unique subquery aliases
+            next_id: AtomicUsize::new(1),
             skip_failing_rules: true,
             filter_null_keys: true,
             max_passes: 3,
@@ -119,24 +140,36 @@ impl OptimizerConfig {
         self.max_passes = v;
         self
     }
-
-    /// Generate the next ID needed
-    pub fn next_id(&mut self) -> usize {
-        self.next_id += 1;
-        self.next_id
-    }
-
-    /// Return the time at which the query execution started. This
-    /// time is used as the value for now()
-    pub fn query_execution_start_time(&self) -> DateTime<Utc> {
-        self.query_execution_start_time
-    }
 }
 
-impl Default for OptimizerConfig {
+impl Default for OptimizerContext {
     /// Create optimizer config
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl OptimizerConfig for OptimizerContext {
+    fn query_execution_start_time(&self) -> DateTime<Utc> {
+        self.query_execution_start_time
+    }
+
+    fn rule_enabled(&self, name: &str) -> bool {
+        self.filter_null_keys || name != FilterNullJoinKeys::NAME
+    }
+
+    fn skip_failing_rules(&self) -> bool {
+        self.skip_failing_rules
+    }
+
+    fn max_passes(&self) -> u8 {
+        self.max_passes
+    }
+
+    fn next_id(&self) -> usize {
+        use std::sync::atomic::Ordering;
+        // Can use relaxed ordering as not used for synchronisation
+        self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -147,10 +180,16 @@ pub struct Optimizer {
     pub rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
 }
 
+impl Default for Optimizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
-    pub fn new(config: &OptimizerConfig) -> Self {
-        let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+    pub fn new() -> Self {
+        let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
             Arc::new(InlineTableScan::new()),
             Arc::new(TypeCoercion::new()),
             Arc::new(SimplifyExpressions::new()),
@@ -169,22 +208,19 @@ impl Optimizer {
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
+            Arc::new(FilterNullJoinKeys::default()),
+            Arc::new(EliminateOuterJoin::new()),
+            // Filters can't be pushed down past Limits, we should do PushDownFilter after LimitPushDown
+            Arc::new(PushDownLimit::new()),
+            Arc::new(PushDownFilter::new()),
+            Arc::new(SingleDistinctToGroupBy::new()),
+            // The previous optimizations added expressions and projections,
+            // that might benefit from the following rules
+            Arc::new(SimplifyExpressions::new()),
+            Arc::new(UnwrapCastInComparison::new()),
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(PushDownProjection::new()),
         ];
-        if config.filter_null_keys {
-            rules.push(Arc::new(FilterNullJoinKeys::default()));
-        }
-        rules.push(Arc::new(EliminateOuterJoin::new()));
-        // Filters can't be pushed down past Limits, we should do PushDownFilter after LimitPushDown
-        rules.push(Arc::new(PushDownLimit::new()));
-        rules.push(Arc::new(PushDownFilter::new()));
-        rules.push(Arc::new(SingleDistinctToGroupBy::new()));
-
-        // The previous optimizations added expressions and projections,
-        // that might benefit from the following rules
-        rules.push(Arc::new(SimplifyExpressions::new()));
-        rules.push(Arc::new(UnwrapCastInComparison::new()));
-        rules.push(Arc::new(CommonSubexprEliminate::new()));
-        rules.push(Arc::new(PushDownProjection::new()));
 
         Self::with_rules(rules)
     }
@@ -199,7 +235,7 @@ impl Optimizer {
     pub fn optimize<F>(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
         mut observer: F,
     ) -> Result<LogicalPlan>
     where
@@ -209,11 +245,15 @@ impl Optimizer {
         let mut plan_str = format!("{}", plan.display_indent());
         let mut new_plan = plan.clone();
         let mut i = 0;
-        while i < optimizer_config.max_passes {
+        while i < config.max_passes() {
             log_plan(&format!("Optimizer input (pass {})", i), &new_plan);
 
             for rule in &self.rules {
-                let result = rule.try_optimize(&new_plan, optimizer_config);
+                if !config.rule_enabled(rule.name()) {
+                    continue;
+                }
+
+                let result = rule.try_optimize(&new_plan, config);
                 match result {
                     Ok(Some(plan)) => {
                         if !plan.schema().equivalent_names_and_types(new_plan.schema()) {
@@ -237,7 +277,7 @@ impl Optimizer {
                         );
                     }
                     Err(ref e) => {
-                        if optimizer_config.skip_failing_rules {
+                        if config.skip_failing_rules() {
                             // Note to future readers: if you see this warning it signals a
                             // bug in the DataFusion optimizer. Please consider filing a ticket
                             // https://github.com/apache/arrow-datafusion
@@ -286,51 +326,49 @@ fn log_plan(description: &str, plan: &LogicalPlan) {
 mod tests {
     use crate::optimizer::Optimizer;
     use crate::test::test_table_scan;
-    use crate::{OptimizerConfig, OptimizerRule};
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError};
+    use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
+    use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, LogicalPlan, LogicalPlanBuilder, Projection};
     use std::sync::Arc;
 
     #[test]
-    fn skip_failing_rule() -> Result<(), DataFusionError> {
+    fn skip_failing_rule() {
         let opt = Optimizer::with_rules(vec![Arc::new(BadRule {})]);
-        let mut config = OptimizerConfig::new().with_skip_failing_rules(true);
+        let config = OptimizerContext::new().with_skip_failing_rules(true);
         let plan = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
-        opt.optimize(&plan, &mut config, &observe)?;
-        Ok(())
+        opt.optimize(&plan, &config, &observe).unwrap();
     }
 
     #[test]
-    fn no_skip_failing_rule() -> Result<(), DataFusionError> {
+    fn no_skip_failing_rule() {
         let opt = Optimizer::with_rules(vec![Arc::new(BadRule {})]);
-        let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
+        let config = OptimizerContext::new().with_skip_failing_rules(false);
         let plan = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
-        let result = opt.optimize(&plan, &mut config, &observe);
+        let err = opt.optimize(&plan, &config, &observe).unwrap_err();
         assert_eq!(
             "Internal error: Optimizer rule 'bad rule' failed due to unexpected error: \
             Error during planning: rule failed. This was likely caused by a bug in \
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
-            format!("{}", result.err().unwrap())
+            err.to_string()
         );
-        Ok(())
     }
 
     #[test]
-    fn generate_different_schema() -> Result<(), DataFusionError> {
+    fn generate_different_schema() {
         let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
-        let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
+        let config = OptimizerContext::new().with_skip_failing_rules(false);
         let plan = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
-        let result = opt.optimize(&plan, &mut config, &observe);
+        let err = opt.optimize(&plan, &config, &observe).unwrap_err();
         assert_eq!(
             "Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
              original schema: DFSchema { fields: [], metadata: {} }, \
@@ -341,9 +379,8 @@ mod tests {
              metadata: {} }. \
              This was likely caused by a bug in DataFusion's code \
              and we would welcome that you file an bug report in our issue tracker",
-            format!("{}", result.err().unwrap())
+            err.to_string()
         );
-        Ok(())
     }
 
     #[test]
@@ -351,7 +388,7 @@ mod tests {
         // if the plan creates more metadata than previously (because
         // some wrapping functions are removed, etc) do not error
         let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
-        let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
+        let config = OptimizerContext::new().with_skip_failing_rules(false);
 
         let input = Arc::new(test_table_scan().unwrap());
         let input_schema = input.schema().clone();
@@ -364,7 +401,7 @@ mod tests {
 
         // optimizing should be ok, but the schema will have changed  (no metadata)
         assert_ne!(plan.schema().as_ref(), input_schema.as_ref());
-        let optimized_plan = opt.optimize(&plan, &mut config, &observe).unwrap();
+        let optimized_plan = opt.optimize(&plan, &config, &observe).unwrap();
         // metadata was removed
         assert_eq!(optimized_plan.schema().as_ref(), input_schema.as_ref());
     }
@@ -399,9 +436,9 @@ mod tests {
     impl OptimizerRule for BadRule {
         fn try_optimize(
             &self,
-            _plan: &LogicalPlan,
-            _optimizer_config: &mut OptimizerConfig,
-        ) -> datafusion_common::Result<Option<LogicalPlan>> {
+            _: &LogicalPlan,
+            _: &dyn OptimizerConfig,
+        ) -> Result<Option<LogicalPlan>> {
             Err(DataFusionError::Plan("rule failed".to_string()))
         }
 
@@ -416,9 +453,9 @@ mod tests {
     impl OptimizerRule for GetTableScanRule {
         fn try_optimize(
             &self,
-            _plan: &LogicalPlan,
-            _optimizer_config: &mut OptimizerConfig,
-        ) -> datafusion_common::Result<Option<LogicalPlan>> {
+            _: &LogicalPlan,
+            _: &dyn OptimizerConfig,
+        ) -> Result<Option<LogicalPlan>> {
             let table_scan = test_table_scan()?;
             Ok(Some(LogicalPlanBuilder::from(table_scan).build()?))
         }

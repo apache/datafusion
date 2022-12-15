@@ -78,17 +78,11 @@ impl OptimizerRule for PushDownLimit {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let limit = match plan {
             LogicalPlan::Limit(limit) => limit,
-            _ => {
-                return Ok(Some(utils::optimize_children(
-                    self,
-                    plan,
-                    optimizer_config,
-                )?))
-            }
+            _ => return Ok(Some(utils::optimize_children(self, plan, config)?)),
         };
 
         if let LogicalPlan::Limit(child_limit) = &*limit.input {
@@ -118,18 +112,12 @@ impl OptimizerRule for PushDownLimit {
                 fetch: new_fetch,
                 input: Arc::new((*child_limit.input).clone()),
             });
-            return self.try_optimize(&plan, optimizer_config);
+            return self.try_optimize(&plan, config);
         }
 
         let fetch = match limit.fetch {
             Some(fetch) => fetch,
-            None => {
-                return Ok(Some(utils::optimize_children(
-                    self,
-                    plan,
-                    optimizer_config,
-                )?))
-            }
+            None => return Ok(Some(utils::optimize_children(self, plan, config)?)),
         };
         let skip = limit.skip;
 
@@ -237,11 +225,7 @@ impl OptimizerRule for PushDownLimit {
             _ => plan.clone(),
         };
 
-        Ok(Some(utils::optimize_children(
-            self,
-            &plan,
-            optimizer_config,
-        )?))
+        Ok(Some(utils::optimize_children(self, &plan, config)?))
     }
 
     fn name(&self) -> &str {
@@ -263,6 +247,7 @@ mod test {
 
     use super::*;
     use crate::test::*;
+    use crate::OptimizerContext;
     use datafusion_expr::{
         col, exists,
         logical_plan::{builder::LogicalPlanBuilder, JoinType, LogicalPlan},
@@ -271,7 +256,7 @@ mod test {
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let optimized_plan = PushDownLimit::new()
-            .try_optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
 

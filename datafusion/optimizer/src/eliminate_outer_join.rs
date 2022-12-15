@@ -65,7 +65,7 @@ impl OptimizerRule for EliminateOuterJoin {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => match filter.input().as_ref() {
@@ -110,23 +110,11 @@ impl OptimizerRule for EliminateOuterJoin {
                         null_equals_null: join.null_equals_null,
                     });
                     let new_plan = from_plan(plan, &plan.expressions(), &[new_join])?;
-                    Ok(Some(utils::optimize_children(
-                        self,
-                        &new_plan,
-                        optimizer_config,
-                    )?))
+                    Ok(Some(utils::optimize_children(self, &new_plan, config)?))
                 }
-                _ => Ok(Some(utils::optimize_children(
-                    self,
-                    plan,
-                    optimizer_config,
-                )?)),
+                _ => Ok(Some(utils::optimize_children(self, plan, config)?)),
             },
-            _ => Ok(Some(utils::optimize_children(
-                self,
-                plan,
-                optimizer_config,
-            )?)),
+            _ => Ok(Some(utils::optimize_children(self, plan, config)?)),
         }
     }
 
@@ -308,6 +296,7 @@ fn extract_non_nullable_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::optimizer::OptimizerContext;
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
@@ -320,7 +309,7 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let rule = EliminateOuterJoin::new();
         let optimized_plan = rule
-            .try_optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);

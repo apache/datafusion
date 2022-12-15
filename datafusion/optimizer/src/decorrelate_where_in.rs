@@ -20,7 +20,7 @@ use crate::utils::{
     only_or_err, split_conjunction, swap_table, verify_not_disjunction,
 };
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::context;
+use datafusion_common::{context, Result};
 use datafusion_expr::logical_plan::{Filter, JoinType, Projection, Subquery};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use log::debug;
@@ -46,7 +46,7 @@ impl DecorrelateWhereIn {
     fn extract_subquery_exprs(
         &self,
         predicate: &Expr,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> datafusion_common::Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
         let filters = split_conjunction(predicate); // TODO: disjunctions
 
@@ -60,7 +60,7 @@ impl DecorrelateWhereIn {
                     negated,
                 } => {
                     let subquery = self
-                        .try_optimize(&subquery.subquery, optimizer_config)?
+                        .try_optimize(&subquery.subquery, config)?
                         .map(Arc::new)
                         .unwrap_or_else(|| subquery.subquery.clone());
                     let subquery = Subquery { subquery };
@@ -81,8 +81,8 @@ impl OptimizerRule for DecorrelateWhereIn {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<Option<LogicalPlan>> {
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
                 let predicate = filter.predicate();
@@ -90,11 +90,11 @@ impl OptimizerRule for DecorrelateWhereIn {
 
                 // Apply optimizer rule to current input
                 let optimized_input = self
-                    .try_optimize(filter_input, optimizer_config)?
+                    .try_optimize(filter_input, config)?
                     .unwrap_or_else(|| filter_input.clone());
 
                 let (subqueries, other_exprs) =
-                    self.extract_subquery_exprs(predicate, optimizer_config)?;
+                    self.extract_subquery_exprs(predicate, config)?;
                 let optimized_plan = LogicalPlan::Filter(Filter::try_new(
                     predicate.clone(),
                     Arc::new(optimized_input),
@@ -107,22 +107,14 @@ impl OptimizerRule for DecorrelateWhereIn {
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = filter_input.clone();
                 for subquery in subqueries {
-                    cur_input = optimize_where_in(
-                        &subquery,
-                        &cur_input,
-                        &other_exprs,
-                        optimizer_config,
-                    )?;
+                    cur_input =
+                        optimize_where_in(&subquery, &cur_input, &other_exprs, config)?;
                 }
                 Ok(Some(cur_input))
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                Ok(Some(utils::optimize_children(
-                    self,
-                    plan,
-                    optimizer_config,
-                )?))
+                Ok(Some(utils::optimize_children(self, plan, config)?))
             }
         }
     }
@@ -136,7 +128,7 @@ fn optimize_where_in(
     query_info: &SubqueryInfo,
     outer_input: &LogicalPlan,
     outer_other_exprs: &[Expr],
-    optimizer_config: &mut OptimizerConfig,
+    config: &dyn OptimizerConfig,
 ) -> datafusion_common::Result<LogicalPlan> {
     let proj = Projection::try_from_plan(&query_info.query.subquery)
         .map_err(|e| context!("a projection is required", e))?;
@@ -179,7 +171,7 @@ fn optimize_where_in(
         merge_cols((&[subquery_col], &subqry_cols), (&[outer_col], &outer_cols));
 
     // build subquery side of join - the thing the subquery was querying
-    let subqry_alias = format!("__sq_{}", optimizer_config.next_id());
+    let subqry_alias = format!("__sq_{}", config.next_id());
     let mut subqry_plan = LogicalPlanBuilder::from((*subqry_input).clone());
     if let Some(expr) = conjunction(other_subqry_exprs) {
         // if the subquery had additional expressions, restore them
