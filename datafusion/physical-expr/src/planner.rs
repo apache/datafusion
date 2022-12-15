@@ -29,7 +29,7 @@ use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::Cast;
 use datafusion_expr::{
-    binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator,
+    binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
 };
 use std::sync::Arc;
 
@@ -303,7 +303,7 @@ pub fn create_physical_expr(
             input_schema,
             data_type.clone(),
         ),
-        Expr::TryCast { expr, data_type } => expressions::try_cast(
+        Expr::TryCast(TryCast { expr, data_type }) => expressions::try_cast(
             create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
             input_schema,
             data_type.clone(),

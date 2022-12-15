@@ -148,12 +148,7 @@ pub enum Expr {
     Cast(Cast),
     /// Casts the expression to a given type and will return a null value if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
-    TryCast {
-        /// The expression being cast
-        expr: Box<Expr>,
-        /// The `DataType` the expression will yield
-        data_type: DataType,
-    },
+    TryCast(TryCast),
     /// A sort expression, that can be used to sort values.
     Sort {
         /// The expression to sort on
@@ -441,6 +436,22 @@ pub struct Cast {
 
 impl Cast {
     /// Create a new Cast expression
+    pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
+        Self { expr, data_type }
+    }
+}
+
+/// TryCast Expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct TryCast {
+    /// The expression being cast
+    pub expr: Box<Expr>,
+    /// The `DataType` the expression will yield
+    pub data_type: DataType,
+}
+
+impl TryCast {
+    /// Create a new TryCast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
         Self { expr, data_type }
     }
@@ -790,7 +801,7 @@ impl fmt::Debug for Expr {
             Expr::Cast(Cast { expr, data_type }) => {
                 write!(f, "CAST({:?} AS {:?})", expr, data_type)
             }
-            Expr::TryCast { expr, data_type } => {
+            Expr::TryCast(TryCast { expr, data_type }) => {
                 write!(f, "TRY_CAST({:?} AS {:?})", expr, data_type)
             }
             Expr::Not(expr) => write!(f, "NOT {:?}", expr),
@@ -1142,7 +1153,7 @@ fn create_name(e: &Expr) -> Result<String> {
             // CAST does not change the expression name
             create_name(expr)
         }
-        Expr::TryCast { expr, .. } => {
+        Expr::TryCast(TryCast { expr, .. }) => {
             // CAST does not change the expression name
             create_name(expr)
         }
