@@ -73,7 +73,7 @@ async fn get_parquet_exec(filter: Expr, session_ctx: SessionContext) -> ParquetE
             table_partition_cols: vec![],
             config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
-            infinite_data_source: false,
+            infinite_source: false,
         },
         Some(filter),
         None,

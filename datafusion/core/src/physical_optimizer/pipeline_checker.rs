@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! PipelineChecker rule is used to ensure sure the plan's data source
-//! requirements are met.
+//! PipelineChecker rule is ensures that a given plan can accommodate its
+//! infinite sources, if there are any.
 //!
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
@@ -32,8 +32,9 @@ use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;
 use std::sync::Arc;
 
-/// PipelineChecker rule, it ensures the data source requirements are met
-/// in the strictest way. It might reject the plan with an error.
+/// The PipelineChecker rule ensures that the given plan can accommodate
+/// its infinite sources, if there are any. It will reject any plan with
+/// pipeline-breaking operators with an diagnostic error message.
 #[derive(Default)]
 pub struct PipelineChecker {}
 
@@ -50,9 +51,7 @@ impl PhysicalOptimizerRule for PipelineChecker {
         plan: Arc<dyn ExecutionPlan>,
         _config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_up(&{
-            |plan| Ok(Some(adjust_unbounded_bounded_unified_pipeline(plan)?))
-        })
+        plan.transform_up(&{ |plan| Ok(Some(check_finiteness_requirements(plan)?)) })
     }
 
     fn name(&self) -> &str {
@@ -64,7 +63,7 @@ impl PhysicalOptimizerRule for PipelineChecker {
     }
 }
 
-fn adjust_unbounded_bounded_unified_pipeline(
+fn check_finiteness_requirements(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let plan_any = plan.as_any();
@@ -77,18 +76,17 @@ fn adjust_unbounded_bounded_unified_pipeline(
     {
         let left = left.unbounded_output();
         let right = right.unbounded_output();
-        let runnable = match (left, right, join_type) {
-            (false, true, JoinType::Right | JoinType::Full | JoinType::RightAnti) => {
-                false
-            }
-            (true, _, _) => false,
-            (false, _, _) => true,
-        };
-        if !runnable {
+        let breaking = left
+            || (right
+                && matches!(
+                    join_type,
+                    JoinType::Right | JoinType::Full | JoinType::RightAnti
+                ));
+        if breaking {
             Err(DataFusionError::Plan(format!(
                 "Join Error: The join with cannot be executed. {}",
                 if left && right {
-                    "Currently, we do not support unbounded streams on both sides."
+                    "Currently, we do not support unbounded inputs on both sides."
                 } else {
                     "Please consider a different type of join or sources."
                 }
@@ -99,7 +97,7 @@ fn adjust_unbounded_bounded_unified_pipeline(
     } else if let Some(SortExec { input, .. }) = plan_any.downcast_ref::<SortExec>() {
         if input.unbounded_output() {
             Err(DataFusionError::Plan(
-                "Sort Error: Sorting is not supported for unbounded inputs.".to_string(),
+                "Sort Error: Can not sort unbounded inputs.".to_string(),
             ))
         } else {
             Ok(plan)
@@ -129,7 +127,7 @@ fn adjust_unbounded_bounded_unified_pipeline(
     {
         if input.unbounded_output() {
             Err(DataFusionError::Plan(
-                "Analyzer Error: Analyzing is not supported for unbounded inputs"
+                "Analyze Error: Analysis is not supported for unbounded inputs"
                     .to_string(),
             ))
         } else {
@@ -291,8 +289,8 @@ mod tests {
         };
         let case = QueryCase {
             sql: "SELECT
-                      c9,
-                      SUM(c9) OVER(PARTITION BY c1 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1
+                    c9,
+                    SUM(c9) OVER(PARTITION BY c1 ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1
                   FROM test
                   LIMIT 5".to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2)],
@@ -315,8 +313,8 @@ mod tests {
         };
         let case = QueryCase {
             sql: "SELECT
-                      c9,
-                      SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1
+                        c9,
+                        SUM(c9) OVER(ORDER BY c9 ASC ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING) as sum1
                   FROM test".to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2)],
             error_operator: "Sort Error".to_string()
@@ -371,7 +369,7 @@ mod tests {
         let case = QueryCase {
             sql: "EXPLAIN ANALYZE SELECT * FROM test".to_string(),
             cases: vec![Arc::new(test1), Arc::new(test2)],
-            error_operator: "Analyzer Error".to_string(),
+            error_operator: "Analyze Error".to_string(),
         };
 
         case.run().await?;

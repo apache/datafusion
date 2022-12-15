@@ -90,20 +90,22 @@ fn supports_collect_by_size(
         false
     }
 }
-/// Returns if join type support swapping
+/// Predicate that checks whether the given join type supports input swapping.
 pub fn supports_swap(join_type: JoinType) -> bool {
-    match join_type {
+    matches!(
+        join_type,
         JoinType::Inner
-        | JoinType::Left
-        | JoinType::Right
-        | JoinType::Full
-        | JoinType::LeftSemi
-        | JoinType::RightSemi
-        | JoinType::LeftAnti
-        | JoinType::RightAnti => true,
-    }
+            | JoinType::Left
+            | JoinType::Right
+            | JoinType::Full
+            | JoinType::LeftSemi
+            | JoinType::RightSemi
+            | JoinType::LeftAnti
+            | JoinType::RightAnti
+    )
 }
-/// Returns swapped join type
+/// This function returns the new join type we get after swapping the given
+/// join's inputs.
 pub fn swap_join_type(join_type: JoinType) -> JoinType {
     match join_type {
         JoinType::Inner => JoinType::Inner,
@@ -117,7 +119,7 @@ pub fn swap_join_type(join_type: JoinType) -> JoinType {
     }
 }
 
-/// Swaps hash join sides
+/// This function swaps the inputs of the given join operator.
 pub fn swap_hash_join(
     hash_join: &HashJoinExec,
     partition_mode: PartitionMode,
@@ -155,11 +157,10 @@ pub fn swap_hash_join(
     }
 }
 
-/// When the order of the join is changed by the optimizer,
-/// the columns in the output should not be impacted.
-/// This helper creates the expressions that will allow to swap
-/// back the values from the original left as first columns and
-/// those on the right next
+/// When the order of the join is changed by the optimizer, the columns in
+/// the output should not be impacted. This function creates the expressions
+/// that will allow to swap back the values from the original left as the first
+/// columns and those on the right next.
 pub fn swap_reverting_projection(
     left_schema: &Schema,
     right_schema: &Schema,

@@ -110,7 +110,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Specifies the output partitioning scheme of this plan
     fn output_partitioning(&self) -> Partitioning;
 
-    /// Specifies the output generation must be done without reading the whole data
+    /// Specifies whether this plan generates an infinite stream of records
     fn unbounded_output(&self) -> bool {
         false
     }

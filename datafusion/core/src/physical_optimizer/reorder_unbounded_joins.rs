@@ -16,6 +16,7 @@
 // under the License.
 
 //! Select the proper PartitionMode and build side based on whether the input is unbounded or not.
+use log::warn;
 use std::sync::Arc;
 
 use datafusion_common::DataFusionError;
@@ -30,13 +31,15 @@ use crate::error::Result;
 use crate::physical_optimizer::join_selection::{supports_swap, swap_hash_join};
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 
-/// ReorderJoinsSourceType rule will reorder the build and probe phase of the hash joins
-/// based on the source type.
-/// The rule enforces the order such that the left (build) side of the join is the bounded.
-/// If the left side can not enforced to be bounded, the order stays the same as the original query.
-/// '''
+/// ReorderUnboundedJoins rule will reorder the build and probe sides of a hash
+/// join depending on whether its inputs may produce an infinite stream of records.
+/// The rule ensure that the left (build) side of the join always operates on an
+/// input stream that will produce a finite set of records.
+/// If the left side can not be chosen to be "finite", the order stays the same as
+/// the original query.
+/// ```text
 ///
-//  	 Apply side changes according to the side's data source
+//  	 For example, this rule makes the following transformation:
 //
 //
 //
@@ -70,27 +73,17 @@ use crate::physical_plan::rewrite::TreeNodeRewritable;
 //           |              |              |              |
 //           +--------------+              +--------------+
 //
-/// '''
+/// ```
 #[derive(Default)]
-pub struct ReorderJoinsSourceType {}
+pub struct ReorderUnboundedJoins {}
 
-impl ReorderJoinsSourceType {
+impl ReorderUnboundedJoins {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
-/// A hash join can support a continuous stream from right side. This function provides alignment
-/// information about sides.
-fn must_swap_join_order_to_adjust_unbounded_side(
-    left: &dyn ExecutionPlan,
-    right: &dyn ExecutionPlan,
-) -> bool {
-    match (left.unbounded_output(), right.unbounded_output()) {
-        (true, false) => true,
-        (_, _) => false,
-    }
-}
+
 /// For [JoinType::Full], it is always unable to run [PartitionMode::CollectLeft] mode and will
 /// return None.
 /// For [JoinType::Left] and [JoinType::LeftAnti], can not run [PartitionMode::CollectLeft] mode,
@@ -109,55 +102,59 @@ fn swap(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
             PartitionMode::CollectLeft,
             JoinType::LeftSemi | JoinType::RightSemi | JoinType::Inner,
         ) => swap_hash_join(hash_join, PartitionMode::CollectLeft),
-        (PartitionMode::CollectLeft, JoinType::Left | JoinType::LeftAnti) => {
-            swap_hash_join(hash_join, PartitionMode::CollectLeft)
-        }
         (
             PartitionMode::CollectLeft,
-            JoinType::Right | JoinType::RightAnti | JoinType::Full,
-        ) => swap_hash_join(hash_join, PartitionMode::Partitioned),
+            JoinType::Left | JoinType::LeftAnti | JoinType::Full,
+        ) => {
+            warn!("Warning: Left, LeftAnti and Full joins were not supported in CollectLeft mode, but it seems like they are now. Double check the code and remove this warning.");
+            swap_hash_join(hash_join, PartitionMode::Partitioned)
+        }
+        (PartitionMode::CollectLeft, JoinType::Right | JoinType::RightAnti) => {
+            swap_hash_join(hash_join, PartitionMode::Partitioned)
+        }
         (PartitionMode::Auto, _) => Err(DataFusionError::Internal(
             "Auto is not acceptable here.".to_string(),
         )),
     }
 }
 
-impl PhysicalOptimizerRule for ReorderJoinsSourceType {
+impl PhysicalOptimizerRule for ReorderUnboundedJoins {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _session_config: &SessionConfig,
+        _config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(&|plan| {
-            if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
-                let left = hash_join.left();
-                let right = hash_join.right();
-                match must_swap_join_order_to_adjust_unbounded_side(&**left, &**right) {
-                    true => {
+            Ok(
+                if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+                    let left = hash_join.left();
+                    let right = hash_join.right();
+                    if left.unbounded_output() && !right.unbounded_output() {
                         if supports_swap(*hash_join.join_type()) {
-                            Ok(Some(swap(hash_join)?))
+                            Some(swap(hash_join)?)
                         } else {
-                            Ok(None)
+                            None
                         }
+                    } else {
+                        Some(Arc::new(HashJoinExec::try_new(
+                            Arc::clone(left),
+                            Arc::clone(right),
+                            hash_join.on().to_vec(),
+                            hash_join.filter().cloned(),
+                            hash_join.join_type(),
+                            *hash_join.partition_mode(),
+                            hash_join.null_equals_null(),
+                        )?))
                     }
-                    false => Ok(Some(Arc::new(HashJoinExec::try_new(
-                        Arc::clone(left),
-                        Arc::clone(right),
-                        hash_join.on().to_vec(),
-                        hash_join.filter().cloned(),
-                        hash_join.join_type(),
-                        *hash_join.partition_mode(),
-                        hash_join.null_equals_null(),
-                    )?))),
-                }
-            } else {
-                Ok(None)
-            }
+                } else {
+                    None
+                },
+            )
         })
     }
 
     fn name(&self) -> &str {
-        "ReorderJoinsSourceType"
+        "ReorderUnboundedJoins"
     }
 
     fn schema_check(&self) -> bool {
@@ -174,7 +171,7 @@ mod tests {
     use crate::physical_plan::projection::ProjectionExec;
     use crate::{
         physical_plan::joins::PartitionMode, prelude::SessionConfig,
-        test::exec::UnboundableExec,
+        test::exec::UnboundedExec,
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use std::sync::Arc;
@@ -193,10 +190,11 @@ mod tests {
     #[tokio::test]
     async fn test_join_with_swap_full() {
         let mut cases = vec![];
-        // !!! We cannot have some initial conditions after join order selection. Full join always
-        // come with partitioned mode.
+        // NOTE: Currently, some initial conditions are not viable after join order selection.
+        //       For example, full join always comes in partitioned mode. See the warning in
+        //       function "swap". If this changes in the future, we should update these tests.
         cases.push(TestCase {
-            case: "Case4".to_string(),
+            case: "Bounded - Unbounded".to_string(),
             initial_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
             initial_join_type: JoinType::Full,
             initial_mode: PartitionMode::Partitioned,
@@ -206,7 +204,7 @@ mod tests {
             expecting_swap: false,
         });
         cases.push(TestCase {
-            case: "Case3".to_string(),
+            case: "Unbounded - Bounded".to_string(),
             initial_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
             initial_join_type: JoinType::Full,
             initial_mode: PartitionMode::Partitioned,
@@ -217,7 +215,7 @@ mod tests {
         });
 
         cases.push(TestCase {
-            case: "Case5".to_string(),
+            case: "Bounded - Bounded".to_string(),
             initial_sources_unbounded: (SourceType::Bounded, SourceType::Bounded),
             initial_join_type: JoinType::Full,
             initial_mode: PartitionMode::Partitioned,
@@ -227,7 +225,7 @@ mod tests {
             expecting_swap: false,
         });
         cases.push(TestCase {
-            case: "Case6".to_string(),
+            case: "Unbounded - Unbounded".to_string(),
             initial_sources_unbounded: (SourceType::Unbounded, SourceType::Unbounded),
             initial_join_type: JoinType::Full,
             initial_mode: PartitionMode::Partitioned,
@@ -247,7 +245,7 @@ mod tests {
         let join_types = vec![JoinType::LeftSemi, JoinType::RightSemi, JoinType::Inner];
         for join_type in join_types {
             cases.push(TestCase {
-                case: "Case 1".to_string(),
+                case: "Unbounded - Bounded / CollectLeft".to_string(),
                 initial_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::CollectLeft,
@@ -257,7 +255,7 @@ mod tests {
                 expecting_swap: true,
             });
             cases.push(TestCase {
-                case: "Case 2".to_string(),
+                case: "Bounded - Unbounded / CollectLeft".to_string(),
                 initial_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::CollectLeft,
@@ -267,7 +265,7 @@ mod tests {
                 expecting_swap: false,
             });
             cases.push(TestCase {
-                case: "Case 3".to_string(),
+                case: "Unbounded - Unbounded / CollectLeft".to_string(),
                 initial_sources_unbounded: (SourceType::Unbounded, SourceType::Unbounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::CollectLeft,
@@ -280,7 +278,7 @@ mod tests {
                 expecting_swap: false,
             });
             cases.push(TestCase {
-                case: "Case 4".to_string(),
+                case: "Bounded - Bounded / CollectLeft".to_string(),
                 initial_sources_unbounded: (SourceType::Bounded, SourceType::Bounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::CollectLeft,
@@ -290,7 +288,7 @@ mod tests {
                 expecting_swap: false,
             });
             cases.push(TestCase {
-                case: "Case 5".to_string(),
+                case: "Unbounded - Bounded / Partitioned".to_string(),
                 initial_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
@@ -300,7 +298,7 @@ mod tests {
                 expecting_swap: true,
             });
             cases.push(TestCase {
-                case: "Case 6".to_string(),
+                case: "Bounded - Unbounded / Partitioned".to_string(),
                 initial_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
@@ -310,7 +308,7 @@ mod tests {
                 expecting_swap: false,
             });
             cases.push(TestCase {
-                case: "Case 7".to_string(),
+                case: "Bounded - Bounded / Partitioned".to_string(),
                 initial_sources_unbounded: (SourceType::Bounded, SourceType::Bounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
@@ -320,7 +318,7 @@ mod tests {
                 expecting_swap: false,
             });
             cases.push(TestCase {
-                case: "Case 8".to_string(),
+                case: "Unbounded - Unbounded / Partitioned".to_string(),
                 initial_sources_unbounded: (SourceType::Unbounded, SourceType::Unbounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
@@ -346,7 +344,7 @@ mod tests {
         let the_ones_not_support_collect_left = vec![JoinType::Left, JoinType::LeftAnti];
         for join_type in the_ones_not_support_collect_left {
             cases.push(TestCase {
-                case: "Case: 5".to_string(),
+                case: "Unbounded - Bounded".to_string(),
                 initial_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
@@ -356,7 +354,7 @@ mod tests {
                 expecting_swap: true,
             });
             cases.push(TestCase {
-                case: "Case: 6".to_string(),
+                case: "Bounded - Unbounded".to_string(),
                 initial_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
@@ -366,7 +364,7 @@ mod tests {
                 expecting_swap: false,
             });
             cases.push(TestCase {
-                case: "Case: 7".to_string(),
+                case: "Bounded - Bounded".to_string(),
                 initial_sources_unbounded: (SourceType::Bounded, SourceType::Bounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
@@ -376,7 +374,7 @@ mod tests {
                 expecting_swap: false,
             });
             cases.push(TestCase {
-                case: "Case: 8".to_string(),
+                case: "Unbounded - Unbounded".to_string(),
                 initial_sources_unbounded: (SourceType::Unbounded, SourceType::Unbounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
@@ -404,7 +402,7 @@ mod tests {
             // We expect that (SourceType::Unbounded, SourceType::Bounded) will change, regardless of the
             // statistics.
             cases.push(TestCase {
-                case: "Case: 1".to_string(),
+                case: "Unbounded - Bounded / CollectLeft".to_string(),
                 initial_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::CollectLeft,
@@ -416,7 +414,7 @@ mod tests {
             // We expect that (SourceType::Bounded, SourceType::Unbounded) will stay same, regardless of the
             // statistics.
             cases.push(TestCase {
-                case: "Case: 2".to_string(),
+                case: "Bounded - Unbounded / CollectLeft".to_string(),
                 initial_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::CollectLeft,
@@ -426,7 +424,7 @@ mod tests {
                 expecting_swap: false,
             });
             cases.push(TestCase {
-                case: "Case: 3".to_string(),
+                case: "Unbounded - Unbounded / CollectLeft".to_string(),
                 initial_sources_unbounded: (SourceType::Unbounded, SourceType::Unbounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::CollectLeft,
@@ -440,7 +438,7 @@ mod tests {
             });
             //
             cases.push(TestCase {
-                case: "Case: 4".to_string(),
+                case: "Bounded - Bounded / CollectLeft".to_string(),
                 initial_sources_unbounded: (SourceType::Bounded, SourceType::Bounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::CollectLeft,
@@ -451,7 +449,7 @@ mod tests {
             });
             // If cases are partitioned, only unbounded & bounded check will affect the order.
             cases.push(TestCase {
-                case: "Case: 5".to_string(),
+                case: "Unbounded - Bounded / Partitioned".to_string(),
                 initial_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
@@ -461,7 +459,7 @@ mod tests {
                 expecting_swap: true,
             });
             cases.push(TestCase {
-                case: "Case: 6".to_string(),
+                case: "Bounded - Unbounded / Partitioned".to_string(),
                 initial_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
@@ -471,7 +469,7 @@ mod tests {
                 expecting_swap: false,
             });
             cases.push(TestCase {
-                case: "Case: 7".to_string(),
+                case: "Bounded - Bounded / Partitioned".to_string(),
                 initial_sources_unbounded: (SourceType::Bounded, SourceType::Bounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
@@ -481,7 +479,7 @@ mod tests {
                 expecting_swap: false,
             });
             cases.push(TestCase {
-                case: "Case: 8".to_string(),
+                case: "Unbounded - Unbounded / Partitioned".to_string(),
                 initial_sources_unbounded: (SourceType::Unbounded, SourceType::Unbounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
@@ -501,11 +499,11 @@ mod tests {
     }
     #[allow(clippy::vtable_address_comparisons)]
     async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) {
-        let left_exec = Arc::new(UnboundableExec::new(
+        let left_exec = Arc::new(UnboundedExec::new(
             t.initial_sources_unbounded.0 == SourceType::Unbounded,
             Schema::new(vec![Field::new("a", DataType::Int32, false)]),
         )) as Arc<dyn ExecutionPlan>;
-        let right_exec = Arc::new(UnboundableExec::new(
+        let right_exec = Arc::new(UnboundedExec::new(
             t.initial_sources_unbounded.1 == SourceType::Unbounded,
             Schema::new(vec![Field::new("b", DataType::Int32, false)]),
         )) as Arc<dyn ExecutionPlan>;
@@ -524,11 +522,11 @@ mod tests {
         )
         .unwrap();
 
-        let optimized_join = ReorderJoinsSourceType::new()
+        let optimized_join = ReorderUnboundedJoins::new()
             .optimize(Arc::new(join), &SessionConfig::new())
             .unwrap();
 
-        // If swap did not happened
+        // If swap did not happen
         let projection_added = optimized_join.as_any().is::<ProjectionExec>();
         let plan = if projection_added {
             let proj = optimized_join
@@ -603,47 +601,38 @@ mod tests {
         use std::time::{Duration, Instant};
         use tempfile::TempDir;
 
+        // This test provides a relatively realistic end-to-end scenario where
+        // we ensure that we swap join sides correctly to accommodate a FIFO source.
+
         #[tokio::test]
         async fn unbounded_file_with_swapped_join() -> Result<()> {
             // Create a new temporary FIFO file
-            let tmp_dir = TempDir::new().unwrap();
+            let tmp_dir = TempDir::new()?;
             let file_path = tmp_dir.path().join("my_fifo.csv");
             let writer_path = file_path.clone();
-            let path_string = file_path.clone().into_os_string().into_string().unwrap();
+            // Simulate an infinite environment via a FIFO file
+            unistd::mkfifo(&file_path, stat::Mode::S_IRWXU).unwrap();
             // Timeout for a long period of BrokenPipe error
             let timeout = Duration::from_secs(10);
-            // Simulate an infinite environment
-            let record_count = 20_000;
-            // Create FIFO file
-            unistd::mkfifo(&file_path, stat::Mode::S_IRWXU).unwrap();
             // Spawn a new thread to write to the FIFO file
             let writer = thread::spawn(move || {
-                let mut file = OpenOptions::new()
-                    .write(true)
-                    .open(writer_path)
-                    .expect("Failed to open FIFO file");
+                let mut file = OpenOptions::new().write(true).open(writer_path).unwrap();
                 // Create a vector of characters
-                let idx = vec!["b", "z", "t", "g", "x"];
-                // Initialize the counter
-                let mut cnt = 1;
+                let chars = vec!["b", "z", "t", "g", "x"];
                 // Get a reference to the thread-local random number generator
                 let mut rng = thread_rng();
-                // Sync timeout
-                let now = Instant::now();
-                loop {
+                // Reference time to use when deciding to fail the test
+                let begin = Instant::now();
+                for cnt in 1..20_000 {
                     // Choose a random element from the vector
-                    let chosen_idx = *idx
-                        .choose(&mut rng)
-                        .expect("Failed to select a random number");
-                    // Line
-                    match file
-                        .write(format!("{},{}\n", chosen_idx, cnt).to_owned().as_bytes())
-                    {
+                    let chosen_idx = *chars.choose(&mut rng).unwrap();
+                    let line = format!("{},{}\n", chosen_idx, cnt).to_owned();
+                    match file.write(line.as_bytes()) {
                         Ok(_) => {}
                         Err(e) => {
                             // Broken Pipe error
                             if e.raw_os_error().unwrap() == 32 {
-                                if Instant::now().duration_since(now) > timeout {
+                                if Instant::now().duration_since(begin) > timeout {
                                     panic!("Cannot read the FIFO file.")
                                 }
                                 thread::sleep(Duration::from_millis(100));
@@ -651,11 +640,6 @@ mod tests {
                                 panic!("{}", e.to_string())
                             }
                         }
-                    }
-                    cnt += 1;
-                    // Finalize the writing
-                    if cnt > record_count {
-                        break;
                     }
                 }
             });
@@ -669,7 +653,7 @@ mod tests {
             ]));
             ctx.register_csv(
                 "left",
-                path_string.as_str(),
+                file_path.as_os_str().to_str().unwrap(),
                 CsvReadOptions::new()
                     .schema(left_schema.as_ref())
                     .has_header(false)
@@ -685,15 +669,13 @@ mod tests {
                 CsvReadOptions::new().schema(schema.as_ref()),
             )
             .await?;
-            // execute the query
+            // Execute the query
             let df = ctx.sql("SELECT t1.a2, t2.c1, t2.c4, t2.c5 FROM left as t1 JOIN right as t2 ON t1.a1 = t2.c1").await?;
             let mut stream = df.execute_stream().await?;
             while let Some(_result) = stream.next().await {
                 {}
             }
-            writer
-                .join()
-                .expect("Normally, it will not join since it is infinite.");
+            writer.join().unwrap();
             Ok(())
         }
     }

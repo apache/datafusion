@@ -110,7 +110,7 @@ impl ExecutionPlan for CsvExec {
     }
 
     fn unbounded_output(&self) -> bool {
-        self.base_config.infinite_data_source
+        self.base_config.infinite_source
     }
 
     /// See comments on `impl ExecutionPlan for ParquetExec`: output order can't be

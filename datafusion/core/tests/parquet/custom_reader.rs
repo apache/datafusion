@@ -85,7 +85,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
             table_partition_cols: vec![],
             config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
-            infinite_data_source: false,
+            infinite_source: false,
         },
         None,
         None,

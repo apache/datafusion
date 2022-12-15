@@ -511,11 +511,11 @@ impl ExecutionPlan for StatisticsExec {
 
 /// A mock execution plan that simply returns the provided data source characteristic
 #[derive(Debug, Clone)]
-pub struct UnboundableExec {
+pub struct UnboundedExec {
     unbounded: bool,
     schema: Arc<Schema>,
 }
-impl UnboundableExec {
+impl UnboundedExec {
     pub fn new(unbounded: bool, schema: Schema) -> Self {
         Self {
             unbounded,
@@ -523,7 +523,7 @@ impl UnboundableExec {
         }
     }
 }
-impl ExecutionPlan for UnboundableExec {
+impl ExecutionPlan for UnboundedExec {
     fn as_any(&self) -> &dyn Any {
         self
     }

@@ -194,7 +194,7 @@ impl BatchPartitioner {
 #[derive(Debug)]
 pub struct RepartitionExec {
     /// Input execution plan
-    pub input: Arc<dyn ExecutionPlan>,
+    input: Arc<dyn ExecutionPlan>,
 
     /// Partitioning scheme to use
     partitioning: Partitioning,

@@ -88,7 +88,7 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     fn unbounded_output(&self) -> bool {
-        self.base_config.infinite_data_source
+        self.base_config.infinite_source
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
@@ -390,7 +390,7 @@ mod tests {
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
-                infinite_data_source: false,
+                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );
@@ -465,7 +465,7 @@ mod tests {
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
-                infinite_data_source: false,
+                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );
@@ -510,7 +510,7 @@ mod tests {
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
-                infinite_data_source: false,
+                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );

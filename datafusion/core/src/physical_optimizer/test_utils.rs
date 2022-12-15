@@ -16,7 +16,6 @@
 // under the License.
 
 //! Collection of testing utility functions that are leveraged by the query optimizer rules
-//!
 
 use crate::error::Result;
 use crate::prelude::{CsvReadOptions, SessionContext};

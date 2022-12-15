@@ -235,9 +235,12 @@ pub struct ListingOptions {
     ///
     /// See <https://github.com/apache/arrow-datafusion/issues/4177>
     pub file_sort_order: Option<Vec<Expr>>,
-    /// DataFusion may take advantage of incremental execution while having low memory constraints.
-    /// For CSV, JSON, and AVRO types, optimization rules can exploit this flag.
-    pub infinite_data_source: bool,
+    /// DataFusion may optimize or adjust query plans (e.g. joins) to
+    /// accommodate infinite data sources and run the given query in full
+    /// pipelining mode. This flag lets Datafusion know that this file
+    /// is potentially infinite. Currently, CSV, JSON, and AVRO formats
+    /// are supported.
+    pub infinite_source: bool,
 }
 
 impl ListingOptions {
@@ -255,7 +258,7 @@ impl ListingOptions {
             collect_stat: true,
             target_partitions: 1,
             file_sort_order: None,
-            infinite_data_source: false,
+            infinite_source: false,
         }
     }
 
@@ -268,12 +271,12 @@ impl ListingOptions {
     /// let ctx = SessionContext::new();
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     CsvFormat::default()
-    ///   )).with_infinite_mark(true);
+    ///   )).with_infinite_source(true);
     ///
-    /// assert_eq!(listing_options.infinite_data_source, true);
+    /// assert_eq!(listing_options.infinite_source, true);
     /// ```
-    pub fn with_infinite_mark(mut self, infinite_data_source: bool) -> Self {
-        self.infinite_data_source = infinite_data_source;
+    pub fn with_infinite_source(mut self, infinite_source: bool) -> Self {
+        self.infinite_source = infinite_source;
         self
     }
 
@@ -454,7 +457,7 @@ pub struct ListingTable {
     options: ListingOptions,
     definition: Option<String>,
     collected_statistics: StatisticsCache,
-    infinite_data_source: bool,
+    infinite_source: bool,
 }
 
 impl ListingTable {
@@ -483,7 +486,7 @@ impl ListingTable {
                 false,
             ));
         }
-        let infinite_data_source = options.infinite_data_source;
+        let infinite_source = options.infinite_source;
 
         let table = Self {
             table_paths: config.table_paths,
@@ -492,7 +495,7 @@ impl ListingTable {
             options,
             definition: None,
             collected_statistics: Default::default(),
-            infinite_data_source,
+            infinite_source,
         };
 
         Ok(table)
@@ -616,7 +619,7 @@ impl TableProvider for ListingTable {
                     output_ordering: self.try_create_output_ordering()?,
                     table_partition_cols,
                     config_options: ctx.config.config_options(),
-                    infinite_data_source: self.infinite_data_source,
+                    infinite_source: self.infinite_source,
                 },
                 filters,
             )

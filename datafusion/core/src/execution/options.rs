@@ -63,7 +63,7 @@ pub struct CsvReadOptions<'a> {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
-    /// Assume unbounded
+    /// Flag indicating whether this file may be unbounded (as in a FIFO file).
     pub infinite: bool,
 }
 
@@ -164,7 +164,7 @@ impl<'a> CsvReadOptions<'a> {
             .with_table_partition_cols(self.table_partition_cols.clone())
             // TODO: Add file sort order into CsvReadOptions and introduce here.
             .with_file_sort_order(None)
-            .with_infinite_mark(self.infinite)
+            .with_infinite_source(self.infinite)
     }
 }
 
@@ -256,7 +256,7 @@ pub struct AvroReadOptions<'a> {
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<(String, DataType)>,
-    /// Assume unbounded data source
+    /// Flag indicating whether this file may be unbounded (as in a FIFO file).
     pub infinite: bool,
 }
 
@@ -289,7 +289,7 @@ impl<'a> AvroReadOptions<'a> {
             .with_file_extension(self.file_extension)
             .with_target_partitions(target_partitions)
             .with_table_partition_cols(self.table_partition_cols.clone())
-            .with_infinite_mark(self.infinite)
+            .with_infinite_source(self.infinite)
     }
 
     /// Configure mark_infinite setting
@@ -324,7 +324,7 @@ pub struct NdJsonReadOptions<'a> {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
-    /// Assume unbounded data source
+    /// Flag indicating whether this file may be unbounded (as in a FIFO file).
     pub infinite: bool,
 }
 
@@ -387,6 +387,6 @@ impl<'a> NdJsonReadOptions<'a> {
             .with_file_extension(self.file_extension)
             .with_target_partitions(target_partitions)
             .with_table_partition_cols(self.table_partition_cols.clone())
-            .with_infinite_mark(self.infinite)
+            .with_infinite_source(self.infinite)
     }
 }

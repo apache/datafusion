@@ -102,8 +102,8 @@ pub struct FileScanConfig {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// The order in which the data is sorted, if known.
     pub output_ordering: Option<Vec<PhysicalSortExpr>>,
-    /// True if the number of records to read from this plan can be infinite.
-    pub infinite_data_source: bool,
+    /// Indicates whether this plan may produce an infinite stream of records.
+    pub infinite_source: bool,
     /// Configuration options passed to the physical plans
     pub config_options: Arc<RwLock<ConfigOptions>>,
 }
@@ -815,7 +815,7 @@ mod tests {
             table_partition_cols,
             config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
-            infinite_data_source: false,
+            infinite_source: false,
         }
     }
 

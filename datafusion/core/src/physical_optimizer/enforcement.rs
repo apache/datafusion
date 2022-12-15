@@ -87,7 +87,6 @@ impl PhysicalOptimizerRule for BasicEnforcement {
         } else {
             plan
         };
-
         // Distribution and Ordering enforcement need to be applied bottom-up.
         new_plan.transform_up(&{
             |plan| {
@@ -1084,7 +1083,7 @@ mod tests {
                 table_partition_cols: vec![],
                 config_options: ConfigOptions::new().into_shareable(),
                 output_ordering,
-                infinite_data_source: false,
+                infinite_source: false,
             },
             None,
             None,

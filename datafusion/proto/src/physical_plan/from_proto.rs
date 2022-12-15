@@ -411,7 +411,7 @@ impl TryInto<FileScanConfig> for &protobuf::FileScanExecConf {
             projection,
             limit: self.limit.as_ref().map(|sl| sl.limit as usize),
             table_partition_cols: vec![],
-            infinite_data_source: false,
+            infinite_source: false,
             output_ordering: None,
         })
     }

@@ -100,7 +100,7 @@ use url::Url;
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
-use crate::physical_optimizer::reorder_joins_according_to_source_type::ReorderJoinsSourceType;
+use crate::physical_optimizer::reorder_unbounded_joins::ReorderUnboundedJoins;
 use uuid::Uuid;
 
 use super::options::{
@@ -622,11 +622,10 @@ impl SessionContext {
 
         let listing_options = options.to_listing_options(target_partitions);
 
-        let unbounded_table = options.infinite;
-        let resolved_schema = match (options.schema, unbounded_table) {
-            (None, false) => listing_options.infer_schema(&self.state(), &table_path).await?,
+        let resolved_schema = match (options.schema, options.infinite) {
             (Some(s), _) => Arc::new(s.to_owned()),
-            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support inferring schema for an infinite data source.".to_string()))
+            (None, false) => listing_options.infer_schema(&self.state(), &table_path).await?,
+            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support schema inference for infinite data sources.".to_string())),
         };
 
         let config = ListingTableConfig::new(table_path)
@@ -647,11 +646,10 @@ impl SessionContext {
 
         let listing_options = options.to_listing_options(target_partitions);
 
-        let unbounded_table = options.infinite;
-        let resolved_schema = match (options.schema, unbounded_table) {
-            (None, false) => listing_options.infer_schema(&self.state(), &table_path).await?,
+        let resolved_schema = match (options.schema, options.infinite) {
             (Some(s), _) => Arc::new(s.to_owned()),
-            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support inferring schema for an infinite data source.".to_string()))
+            (None, false) => listing_options.infer_schema(&self.state(), &table_path).await?,
+            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support schema inference for infinite data sources.".to_string()))
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(listing_options)
@@ -678,11 +676,10 @@ impl SessionContext {
         let table_path = ListingTableUrl::parse(table_path)?;
         let target_partitions = self.copied_config().target_partitions();
         let listing_options = options.to_listing_options(target_partitions);
-        let unbounded_table = options.infinite;
-        let resolved_schema = match (options.schema, unbounded_table) {
-            (None, false) => listing_options.infer_schema(&self.state(), &table_path).await?,
+        let resolved_schema = match (options.schema, options.infinite) {
             (Some(s), _) => Arc::new(s.to_owned()),
-            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support inferring schema for an infinite data source.".to_string()))
+            (None, false) => listing_options.infer_schema(&self.state(), &table_path).await?,
+            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support schema inference for infinite data sources.".to_string()))
         };
         let config = ListingTableConfig::new(table_path.clone())
             .with_listing_options(listing_options)
@@ -753,11 +750,10 @@ impl SessionContext {
         sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let unbounded_table = options.infinite_data_source;
-        let resolved_schema = match (provided_schema, unbounded_table) {
-            (None, false) => options.infer_schema(&self.state(), &table_path).await?,
+        let resolved_schema = match (provided_schema, options.infinite_source) {
             (Some(s), _) => s,
-            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support inferring schema for an infinite data source.".to_string()))
+            (None, false) => options.infer_schema(&self.state(), &table_path).await?,
+            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support schema inference for infinite data sources.".to_string()))
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
@@ -777,6 +773,7 @@ impl SessionContext {
     ) -> Result<()> {
         let listing_options =
             options.to_listing_options(self.copied_config().target_partitions());
+
         self.register_listing_table(
             name,
             table_path,
@@ -1570,7 +1567,7 @@ impl SessionState {
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
             Arc::new(JoinSelection::new()),
-            Arc::new(ReorderJoinsSourceType::new()),
+            Arc::new(ReorderUnboundedJoins::new()),
         ];
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
         if config
