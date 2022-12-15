@@ -853,11 +853,13 @@ fn ensure_distribution_and_ordering(
         .as_any()
         .downcast_ref::<SortExec>()
         .and_then(|sort_exec| {
-            // There are two situations that there's no need for this optimization
+            // There are three situations that there's no need for this optimization
             // - There's only one input partition;
             // - It's already preserving the partitioning so that it can be regarded as a local sort
+            // - There's no limit pushed down to the local sort (It's still controversial)
             if sort_exec.input().output_partitioning().partition_count() > 1
                 && !sort_exec.preserve_partitioning()
+                && sort_exec.fetch().is_some()
             {
                 let sort = SortExec::new_with_partitioning(
                     sort_exec.expr().to_vec(),
