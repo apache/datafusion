@@ -73,6 +73,11 @@ impl PhysicalOptimizerRule for RemoveUnnecessarySorts {
 fn remove_unnecessary_sorts(
     requirements: PlanWithCorrespondingSort,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
+    // Do analysis of naive SortRemoval at the beginning
+    // Remove Sorts that are already satisfied
+    if let Some(res) = analyze_immediate_sort_removal(&requirements)? {
+        return Ok(Some(res));
+    }
     let mut new_children = requirements.plan.children().clone();
     let mut new_sort_onwards = requirements.sort_onwards.clone();
     for (idx, (child, sort_onward)) in new_children
@@ -90,7 +95,6 @@ fn remove_unnecessary_sorts(
                     });
                 if !is_ordering_satisfied {
                     // During sort Removal we have invalidated ordering invariant fix it
-                    // This is effectively moving sort above in the physical plan
                     update_child_to_remove_unnecessary_sort(child, sort_onward)?;
                     let sort_expr = required_ordering.to_vec();
                     *child = add_sort_above_child(child, sort_expr)?;
@@ -144,10 +148,10 @@ fn remove_unnecessary_sorts(
             .enumerate()
             .take(new_plan.children().len())
         {
-            let is_require_ordering = new_plan.required_input_ordering()[idx].is_none();
+            let requires_ordering = new_plan.required_input_ordering()[idx].is_some();
             //TODO: when `maintains_input_order` returns `Vec<bool>` use corresponding index
             if new_plan.maintains_input_order()
-                && is_require_ordering
+                && !requires_ordering
                 && !new_sort_onward.is_empty()
             {
                 new_sort_onward.push((idx, new_plan.clone()));
@@ -155,6 +159,8 @@ fn remove_unnecessary_sorts(
                 new_sort_onward.clear();
                 new_sort_onward.push((idx, new_plan.clone()));
             } else {
+                // These executors use SortExec, hence doesn't propagate
+                // sort above in the physical plan
                 new_sort_onward.clear();
             }
         }
@@ -233,6 +239,33 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
     }
 }
 
+/// Analyzes `SortExec` to determine whether this Sort can be removed
+fn analyze_immediate_sort_removal(
+    requirements: &PlanWithCorrespondingSort,
+) -> Result<Option<PlanWithCorrespondingSort>> {
+    if let Some(sort_exec) = requirements.plan.as_any().downcast_ref::<SortExec>() {
+        if ordering_satisfy(
+            sort_exec.input().output_ordering(),
+            sort_exec.output_ordering(),
+            || sort_exec.input().equivalence_properties(),
+        ) {
+            // This sort is unnecessary we should remove it
+            let new_plan = sort_exec.input();
+            // Since we know that Sort have exactly one child we can use first index safely
+            assert_eq!(requirements.sort_onwards.len(), 1);
+            let mut new_sort_onward = requirements.sort_onwards[0].to_vec();
+            if !new_sort_onward.is_empty() {
+                new_sort_onward.pop();
+            }
+            return Ok(Some(PlanWithCorrespondingSort {
+                plan: new_plan.clone(),
+                sort_onwards: vec![new_sort_onward],
+            }));
+        }
+    }
+    Ok(None)
+}
+
 /// Analyzes `WindowAggExec` to determine whether Sort can be removed
 fn analyze_window_sort_removal(
     window_agg_exec: &WindowAggExec,
@@ -284,6 +317,7 @@ fn analyze_window_sort_removal(
         Ok(None)
     }
 }
+
 /// Updates child such that unnecessary sorting below it is removed
 fn update_child_to_remove_unnecessary_sort(
     child: &mut Arc<dyn ExecutionPlan>,
