@@ -31,6 +31,7 @@ use async_compression::tokio::bufread::{
 use bytes::Bytes;
 #[cfg(feature = "compression")]
 use bzip2::read::BzDecoder;
+use datafusion_common::parsers::SQLFileCompressionType;
 #[cfg(feature = "compression")]
 use flate2::read::GzDecoder;
 use futures::Stream;
@@ -68,6 +69,19 @@ impl GetExt for FileCompressionType {
             FileCompressionType::BZIP2 => ".bz2".to_owned(),
             FileCompressionType::XZ => ".xz".to_owned(),
             FileCompressionType::UNCOMPRESSED => "".to_owned(),
+        }
+    }
+}
+
+impl From<SQLFileCompressionType> for FileCompressionType {
+    fn from(t: SQLFileCompressionType) -> Self {
+        use SQLFileCompressionType::*;
+
+        match t {
+            GZIP | GZ => Self::GZIP,
+            BZIP2 | BZ2 => Self::BZIP2,
+            XZ => Self::XZ,
+            UNCOMPRESSED => Self::UNCOMPRESSED,
         }
     }
 }

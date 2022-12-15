@@ -27,6 +27,7 @@ use crate::utils::{
 };
 use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::parsers::SQLFileCompressionType;
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     ScalarValue,
@@ -1487,7 +1488,7 @@ pub struct CreateExternalTable {
     /// SQL used to create the table, if available
     pub definition: Option<String>,
     /// File compression type (GZIP, BZIP2, XZ)
-    pub file_compression_type: String,
+    pub file_compression_type: SQLFileCompressionType,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
 }
