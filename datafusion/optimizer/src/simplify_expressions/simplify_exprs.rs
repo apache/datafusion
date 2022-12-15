@@ -747,6 +747,26 @@ mod tests {
     }
 
     #[test]
+    fn simplify_not_ilike() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)
+            .expect("creating scan")
+            .build()
+            .expect("building plan");
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").ilike(col("b")).not())?
+            .build()?;
+        let expected = "Filter: test.a NOT ILIKE test.b\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
     fn simplify_not_distinct_from() -> Result<()> {
         let table_scan = test_table_scan();
 

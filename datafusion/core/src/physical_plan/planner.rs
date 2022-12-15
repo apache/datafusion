@@ -1946,6 +1946,12 @@ mod tests {
             col("c2").and(bool_expr),
             // utf8 LIKE u32
             col("c1").like(col("c2")),
+            // utf8 NOT LIKE u32
+            col("c1").not_like(col("c2")),
+            // utf8 ILIKE u32
+            col("c1").ilike(col("c2")),
+            // utf8 NOT ILIKE u32
+            col("c1").not_ilike(col("c2")),
         ];
         for case in cases {
             let logical_plan = test_csv_scan().await?.project(vec![case.clone()]);

@@ -277,7 +277,9 @@ impl BinaryExpr {
         match self.op {
             Operator::Or => 5,
             Operator::And => 10,
-            Operator::Like | Operator::NotLike => 19,
+            Operator::Like | Operator::NotLike | Operator::ILike | Operator::NotILike => {
+                19
+            }
             Operator::NotEq
             | Operator::Eq
             | Operator::Lt
@@ -286,7 +288,18 @@ impl BinaryExpr {
             | Operator::GtEq => 20,
             Operator::Plus | Operator::Minus => 30,
             Operator::Multiply | Operator::Divide | Operator::Modulo => 40,
-            _ => 0,
+            Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+            | Operator::RegexMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotIMatch
+            | Operator::BitwiseAnd
+            | Operator::BitwiseOr
+            | Operator::BitwiseShiftLeft
+            | Operator::BitwiseShiftRight
+            | Operator::BitwiseXor
+            | Operator::StringConcat => 0,
         }
     }
 }
@@ -609,6 +622,16 @@ impl Expr {
     /// Return `self NOT LIKE other`
     pub fn not_like(self, other: Expr) -> Expr {
         binary_expr(self, Operator::NotLike, other)
+    }
+
+    /// Return `self ILIKE other`
+    pub fn ilike(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::ILike, other)
+    }
+
+    /// Return `self NOT ILIKE other`
+    pub fn not_ilike(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::NotILike, other)
     }
 
     /// Return `self AS name` alias expression
