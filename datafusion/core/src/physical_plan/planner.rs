@@ -63,7 +63,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
+    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, TryCast,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::expand_wildcard;
@@ -135,7 +135,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             // CAST does not change the expression name
             create_physical_name(expr, false)
         }
-        Expr::TryCast { expr, .. } => {
+        Expr::TryCast(TryCast { expr, .. }) => {
             // CAST does not change the expression name
             create_physical_name(expr, false)
         }

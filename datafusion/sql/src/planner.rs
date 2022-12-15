@@ -42,7 +42,9 @@ use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_common::{OwnedTableReference, TableReference};
-use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
+use datafusion_expr::expr::{
+    Between, BinaryExpr, Case, Cast, GroupingSet, Like, TryCast,
+};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::builder::{
@@ -2060,10 +2062,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::TryCast {
                 expr,
                 data_type,
-            } => Ok(Expr::TryCast {
-                expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
-                data_type: self.convert_data_type(&data_type)?,
-            }),
+            } => Ok(Expr::TryCast(TryCast::new(
+                Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
+                self.convert_data_type(&data_type)?,
+            ))),
 
             SQLExpr::TypedString {
                 data_type,
