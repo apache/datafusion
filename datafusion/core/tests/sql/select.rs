@@ -650,7 +650,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     ])
     .unwrap();
 
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(4));
     ctx.register_batch("test", batch)?;
 
     // Basic SELECT
