@@ -28,19 +28,23 @@ use crate::physical_plan::{
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use arrow::compute::concat_batches;
+use arrow::compute::{
+    concat, concat_batches, lexicographical_partition_ranges, SortColumn,
+};
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
+use datafusion_common::{transpose, DataFusionError};
 use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 use datafusion_physical_expr::EquivalentClass;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use log::debug;
 use std::any::Any;
+use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -130,6 +134,25 @@ impl WindowAggExec {
     /// Get the input schema before any window functions are applied
     pub fn input_schema(&self) -> SchemaRef {
         self.input_schema.clone()
+    }
+
+    /// Get Partition Columns
+    pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
+        // All window exprs have same partition by hance we just use first one
+        let partition_by = self.window_expr()[0].partition_by();
+        let mut partition_columns = vec![];
+        for elem in partition_by {
+            if let Some(sort_keys) = &self.sort_keys {
+                for a in sort_keys {
+                    if a.expr.eq(elem) {
+                        partition_columns.push(a.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        assert_eq!(partition_by.len(), partition_columns.len());
+        Ok(partition_columns)
     }
 }
 
@@ -253,6 +276,7 @@ impl ExecutionPlan for WindowAggExec {
             self.window_expr.clone(),
             input,
             BaselineMetrics::new(&self.metrics, partition),
+            self.partition_by_sort_keys()?,
         ));
         Ok(stream)
     }
@@ -337,6 +361,7 @@ pub struct WindowAggStream {
     batches: Vec<RecordBatch>,
     finished: bool,
     window_expr: Vec<Arc<dyn WindowExpr>>,
+    partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
 }
 
@@ -347,6 +372,7 @@ impl WindowAggStream {
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
+        partition_by_sort_keys: Vec<PhysicalSortExpr>,
     ) -> Self {
         Self {
             schema,
@@ -355,6 +381,7 @@ impl WindowAggStream {
             finished: false,
             window_expr,
             baseline_metrics,
+            partition_by_sort_keys,
         }
     }
 
@@ -369,14 +396,60 @@ impl WindowAggStream {
         let batch = concat_batches(&self.input.schema(), &self.batches)?;
 
         // calculate window cols
-        let mut columns = compute_window_aggregates(&self.window_expr, &batch)
-            .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+        let partition_columns = self.partition_columns(&batch)?;
+        let partition_points =
+            self.evaluate_partition_points(batch.num_rows(), &partition_columns)?;
+
+        let mut partition_results = vec![];
+        for partition_point in partition_points {
+            let length = partition_point.end - partition_point.start;
+            partition_results.push(
+                compute_window_aggregates(
+                    &self.window_expr,
+                    &batch.slice(partition_point.start, length),
+                )
+                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?,
+            )
+        }
+        let mut columns = transpose(partition_results)
+            .iter()
+            .map(|elems| concat(&elems.iter().map(|x| x.as_ref()).collect::<Vec<_>>()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .collect::<ArrowResult<Vec<ArrayRef>>>()?;
 
         // combine with the original cols
         // note the setup of window aggregates is that they newly calculated window
         // expressions are always prepended to the columns
         columns.extend_from_slice(batch.columns());
         RecordBatch::try_new(self.schema.clone(), columns)
+    }
+
+    /// Get Partition Columns
+    pub fn partition_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
+        self.partition_by_sort_keys
+            .iter()
+            .map(|elem| elem.evaluate_to_sort_column(batch))
+            .collect::<Result<Vec<_>>>()
+    }
+
+    /// evaluate the partition points given the sort columns; if the sort columns are
+    /// empty then the result will be a single element vec of the whole column rows.
+    fn evaluate_partition_points(
+        &self,
+        num_rows: usize,
+        partition_columns: &[SortColumn],
+    ) -> Result<Vec<Range<usize>>> {
+        if partition_columns.is_empty() {
+            Ok(vec![Range {
+                start: 0,
+                end: num_rows,
+            }])
+        } else {
+            Ok(lexicographical_partition_ranges(partition_columns)
+                .map_err(DataFusionError::ArrowError)?
+                .collect::<Vec<_>>())
+        }
     }
 }
 

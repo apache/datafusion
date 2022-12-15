@@ -17,7 +17,7 @@
 
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::compute::kernels::partition::lexicographical_partition_ranges;
-use arrow::compute::kernels::sort::{SortColumn, SortOptions};
+use arrow::compute::kernels::sort::SortColumn;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{reverse_sort_options, DataFusionError, Result};
@@ -86,20 +86,6 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// expressions that's from the window function's order by clause, empty if absent
     fn order_by(&self) -> &[PhysicalSortExpr];
 
-    /// get partition columns that can be used for partitioning, empty if absent
-    fn partition_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        self.partition_by()
-            .iter()
-            .map(|expr| {
-                PhysicalSortExpr {
-                    expr: expr.clone(),
-                    options: SortOptions::default(),
-                }
-                .evaluate_to_sort_column(batch)
-            })
-            .collect()
-    }
-
     /// get order by columns, empty if absent
     fn order_by_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
         self.order_by()
@@ -110,10 +96,8 @@ pub trait WindowExpr: Send + Sync + Debug {
 
     /// get sort columns that can be used for peer evaluation, empty if absent
     fn sort_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        let mut sort_columns = self.partition_columns(batch)?;
         let order_by_columns = self.order_by_columns(batch)?;
-        sort_columns.extend(order_by_columns);
-        Ok(sort_columns)
+        Ok(order_by_columns)
     }
 
     /// Get values columns(argument of Window Function)

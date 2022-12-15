@@ -28,7 +28,6 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use std::any::Any;
 use std::ops::Neg;
-use std::ops::Range;
 use std::sync::Arc;
 
 /// window shift expression
@@ -178,15 +177,10 @@ fn shift_with_default_value(
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {
-    fn evaluate_partition(
-        &self,
-        values: &[ArrayRef],
-        partition: Range<usize>,
-    ) -> Result<ArrayRef> {
+    fn evaluate(&self, values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
         // LEAD, LAG window functions take single column, values will have size 1
         let value = &values[0];
-        let value = value.slice(partition.start, partition.end - partition.start);
-        shift_with_default_value(&value, self.shift_offset, self.default_value.as_ref())
+        shift_with_default_value(value, self.shift_offset, self.default_value.as_ref())
     }
 }
 
@@ -205,9 +199,10 @@ mod tests {
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
         let values = expr.evaluate_args(&batch)?;
-        let result = expr.create_evaluator()?.evaluate(&values, vec![0..8])?;
-        assert_eq!(1, result.len());
-        let result = as_int32_array(&result[0])?;
+        let result = expr
+            .create_evaluator()?
+            .evaluate(&values, batch.num_rows())?;
+        let result = as_int32_array(&result)?;
         assert_eq!(expected, *result);
         Ok(())
     }

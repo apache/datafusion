@@ -364,16 +364,15 @@ pub fn can_skip_sort(
         .iter()
         .filter(|elem| elem.is_partition)
         .collect::<Vec<_>>();
-    let (can_skip_partition_bys, should_reverse_partition_bys) =
-        if partition_by_sections.is_empty() {
-            (true, false)
-        } else {
-            let first_reverse = partition_by_sections[0].reverse;
-            let can_skip_partition_bys = partition_by_sections
-                .iter()
-                .all(|c| c.is_aligned && c.reverse == first_reverse);
-            (can_skip_partition_bys, first_reverse)
-        };
+    let can_skip_partition_bys = if partition_by_sections.is_empty() {
+        true
+    } else {
+        let first_reverse = partition_by_sections[0].reverse;
+        let can_skip_partition_bys = partition_by_sections
+            .iter()
+            .all(|c| c.is_aligned && c.reverse == first_reverse);
+        can_skip_partition_bys
+    };
     let order_by_sections = col_infos
         .iter()
         .filter(|elem| !elem.is_partition)
@@ -387,11 +386,7 @@ pub fn can_skip_sort(
             .all(|c| c.is_aligned && c.reverse == first_reverse);
         (can_skip_order_bys, first_reverse)
     };
-    // TODO: We cannot skip partition by keys when sort direction is reversed,
-    //       by propogating partition by sort direction to `WindowAggExec` we can skip
-    //       these columns also. Add support for that (Use direction during partition range calculation).
-    let can_skip =
-        can_skip_order_bys && can_skip_partition_bys && !should_reverse_partition_bys;
+    let can_skip = can_skip_order_bys && can_skip_partition_bys;
     Ok((can_skip, should_reverse_order_bys))
 }
 
