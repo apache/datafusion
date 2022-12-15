@@ -22,6 +22,7 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::physical_plan::metrics::MemTrackingMetrics;
 use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statistics};
+use arrow::compute::concat;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
@@ -93,6 +94,33 @@ pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatc
         .try_collect::<Vec<_>>()
         .await
         .map_err(DataFusionError::from)
+}
+
+/// Combine a slice of record batches into one, or returns None if the slice itself
+/// is empty; all the record batches inside the slice must be of the same schema.
+/// Same with above implementation except receives reference
+pub fn combine_batches_with_ref(
+    batches: &[&RecordBatch],
+    schema: SchemaRef,
+) -> ArrowResult<Option<RecordBatch>> {
+    if batches.is_empty() {
+        Ok(None)
+    } else {
+        let columns = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                concat(
+                    &batches
+                        .iter()
+                        .map(|batch| batch.column(i).as_ref())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<ArrowResult<Vec<_>>>()?;
+        Ok(Some(RecordBatch::try_new(schema.clone(), columns)?))
+    }
 }
 
 /// Recursively builds a list of files in a directory with a given extension

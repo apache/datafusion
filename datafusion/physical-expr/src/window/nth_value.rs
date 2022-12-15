@@ -19,7 +19,8 @@
 //! that can evaluated at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::BuiltInWindowFunctionExpr;
+use crate::window::window_expr::{BuiltinWindowState, NthValueState};
+use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
@@ -121,7 +122,10 @@ impl BuiltInWindowFunctionExpr for NthValue {
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        Ok(Box::new(NthValueEvaluator { kind: self.kind }))
+        Ok(Box::new(NthValueEvaluator {
+            state: NthValueState::default(),
+            kind: self.kind,
+        }))
     }
 
     fn is_window_fn_reversible(&self) -> bool {
@@ -129,6 +133,14 @@ impl BuiltInWindowFunctionExpr for NthValue {
             NthValueKind::First | NthValueKind::Last => true,
             NthValueKind::Nth(_) => false,
         }
+    }
+
+    fn bounded_exec_supported(&self) -> bool {
+        true
+    }
+
+    fn uses_window_frame(&self) -> bool {
+        true
     }
 
     fn reverse_expr(&self) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
@@ -151,13 +163,45 @@ impl BuiltInWindowFunctionExpr for NthValue {
 }
 
 /// Value evaluator for nth_value functions
+#[derive(Debug)]
 pub(crate) struct NthValueEvaluator {
+    state: NthValueState,
     kind: NthValueKind,
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
-    fn uses_window_frame(&self) -> bool {
-        true
+    fn state(&self) -> Result<BuiltinWindowState> {
+        // If we do not use state we just return Default
+        Ok(BuiltinWindowState::NthValue(self.state.clone()))
+    }
+
+    fn set_state(&mut self, state: &BuiltinWindowState) -> Result<()> {
+        match &state {
+            BuiltinWindowState::NthValue(nth_value_state) => {
+                self.state = nth_value_state.clone();
+            }
+            _ => self.state = NthValueState::default(),
+        }
+        Ok(())
+    }
+
+    fn update_state(
+        &mut self,
+        state: &WindowAggState,
+        _range_columns: &[ArrayRef],
+        _sort_partition_points: &[Range<usize>],
+    ) -> Result<()> {
+        // If we do not use state, update_state does nothing
+        self.state.range = state.current_range_of_sliding_window.clone();
+        Ok(())
+    }
+
+    // fn uses_window_frame(&self) -> bool {
+    //     true
+    // }
+
+    fn evaluate_bounded(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
+        self.evaluate_inside_range(values, self.state.range.clone())
     }
 
     fn evaluate_inside_range(

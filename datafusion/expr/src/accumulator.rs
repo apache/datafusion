@@ -79,12 +79,18 @@ pub trait Accumulator: Send + Sync + Debug {
     /// Allocated means that for internal containers such as `Vec`, the `capacity` should be used
     /// not the `len`
     fn size(&self) -> usize;
+
+    fn clone_dyn(&self) -> Result<Box<dyn Accumulator>> {
+        Err(DataFusionError::NotImplemented(
+            "clone_dyn is not implemented by default for this accumulator, to use it in for cloning implement this method".into(),
+        ))
+    }
 }
 
 /// Representation of internal accumulator state. Accumulators can potentially have a mix of
 /// scalar and array values. It may be desirable to add custom aggregator states here as well
 /// in the future (perhaps `Custom(Box<dyn Any>)`?).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AggregateState {
     /// Simple scalar value. Note that `ScalarValue::List` can be used to pass multiple
     /// values around

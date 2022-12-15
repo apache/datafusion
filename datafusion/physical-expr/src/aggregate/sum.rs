@@ -123,6 +123,10 @@ impl AggregateExpr for Sum {
         )
     }
 
+    fn bounded_exec_supported(&self) -> bool {
+        true
+    }
+
     fn create_row_accumulator(
         &self,
         start_index: usize,

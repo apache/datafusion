@@ -64,8 +64,13 @@ impl BuiltInWindowFunctionExpr for CumeDist {
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(CumeDistEvaluator {}))
     }
+
+    fn bounded_exec_supported(&self) -> bool {
+        false
+    }
 }
 
+#[derive(Debug)]
 pub(crate) struct CumeDistEvaluator;
 
 impl PartitionEvaluator for CumeDistEvaluator {

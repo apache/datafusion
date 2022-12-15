@@ -26,6 +26,7 @@ pub mod optimizer;
 pub mod pruning;
 pub mod remove_unnecessary_sorts;
 pub mod repartition;
+pub mod replace_window_with_bounded_impl;
 mod utils;
 
 pub use optimizer::PhysicalOptimizerRule;

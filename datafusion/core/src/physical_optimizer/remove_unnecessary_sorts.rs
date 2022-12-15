@@ -104,12 +104,13 @@ fn remove_unnecessary_sorts(
                     // can do analysis for sort removal
                     let (_, sort_any) = sort_onward[0].clone();
                     let sort_exec = convert_to_sort_exec(&sort_any)?;
-                    let sort_output_ordering = sort_exec.output_ordering();
                     let sort_input_ordering = sort_exec.input().output_ordering();
                     // Do naive analysis, where a SortExec is already sorted according to desired Sorting
-                    if ordering_satisfy(sort_input_ordering, sort_output_ordering, || {
-                        sort_exec.input().equivalence_properties()
-                    }) {
+                    if ordering_satisfy(
+                        sort_input_ordering,
+                        Some(required_ordering),
+                        || sort_exec.input().equivalence_properties(),
+                    ) {
                         update_child_to_remove_unnecessary_sort(child, sort_onward)?;
                     } else if let Some(window_agg_exec) =
                         requirements.plan.as_any().downcast_ref::<WindowAggExec>()
@@ -792,6 +793,80 @@ mod tests {
             vec![
                 "SortPreservingMergeExec: [nullable_col@0 ASC]",
                 "  SortExec: [nullable_col@0 ASC]",
+                "    SortPreservingMergeExec: [nullable_col@0 ASC]",
+                "      SortExec: [nullable_col@0 ASC]",
+                "        MemoryExec: partitions=0, partition_sizes=[]",
+            ]
+        };
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+            expected, actual
+        );
+        let optimized_physical_plan =
+            RemoveUnnecessarySorts::new().optimize(physical_plan, &conf)?;
+        let formatted = displayable(optimized_physical_plan.as_ref())
+            .indent()
+            .to_string();
+        let expected = {
+            vec![
+                "SortPreservingMergeExec: [nullable_col@0 ASC]",
+                "  SortPreservingMergeExec: [nullable_col@0 ASC]",
+                "    SortExec: [nullable_col@0 ASC]",
+                "      MemoryExec: partitions=0, partition_sizes=[]",
+            ]
+        };
+        let actual: Vec<&str> = formatted.trim().lines().collect();
+        assert_eq!(
+            expected, actual,
+            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+            expected, actual
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_remove_unnecessary_sort2() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let conf = session_ctx.copied_config();
+        let schema = create_test_schema()?;
+        let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
+            as Arc<dyn ExecutionPlan>;
+        let sort_exprs = vec![PhysicalSortExpr {
+            expr: col("nullable_col", schema.as_ref()).unwrap(),
+            options: SortOptions::default(),
+        }];
+        let sort_exec = Arc::new(SortExec::try_new(sort_exprs.clone(), source, None)?)
+            as Arc<dyn ExecutionPlan>;
+        let sort_preserving_merge_exec =
+            Arc::new(SortPreservingMergeExec::new(sort_exprs, sort_exec))
+                as Arc<dyn ExecutionPlan>;
+        let sort_exprs = vec![
+            PhysicalSortExpr {
+                expr: col("nullable_col", schema.as_ref()).unwrap(),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("non_nullable_col", schema.as_ref()).unwrap(),
+                options: SortOptions::default(),
+            },
+        ];
+        let sort_exec = Arc::new(SortExec::try_new(
+            sort_exprs.clone(),
+            sort_preserving_merge_exec,
+            None,
+        )?) as Arc<dyn ExecutionPlan>;
+        let sort_preserving_merge_exec = Arc::new(SortPreservingMergeExec::new(
+            vec![sort_exprs[0].clone()],
+            sort_exec,
+        )) as Arc<dyn ExecutionPlan>;
+        let physical_plan = sort_preserving_merge_exec;
+        let formatted = displayable(physical_plan.as_ref()).indent().to_string();
+        let expected = {
+            vec![
+                "SortPreservingMergeExec: [nullable_col@0 ASC]",
+                "  SortExec: [nullable_col@0 ASC,non_nullable_col@1 ASC]",
                 "    SortPreservingMergeExec: [nullable_col@0 ASC]",
                 "      SortExec: [nullable_col@0 ASC]",
                 "        MemoryExec: partitions=0, partition_sizes=[]",

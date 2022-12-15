@@ -100,6 +100,7 @@ use url::Url;
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::physical_optimizer::remove_unnecessary_sorts::RemoveUnnecessarySorts;
+use crate::physical_optimizer::replace_window_with_bounded_impl::ReplaceWindowWithBoundedImpl;
 use uuid::Uuid;
 
 use super::options::{
@@ -1601,6 +1602,9 @@ impl SessionState {
         // a deep analysis of window frames. Such analysis may sometimes reveal that a `SortExec` is
         // actually unnecessary. The rule below performs this analysis and removes such `SortExec`s.
         physical_optimizers.push(Arc::new(RemoveUnnecessarySorts::new()));
+
+        // Replace WindowAggExec with BoundedWindowAggExec if conditions are met
+        physical_optimizers.push(Arc::new(ReplaceWindowWithBoundedImpl::new()));
 
         SessionState {
             session_id,

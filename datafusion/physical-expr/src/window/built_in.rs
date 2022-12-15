@@ -20,9 +20,14 @@
 use super::window_frame_state::WindowFrameContext;
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
-use crate::window::window_expr::reverse_order_bys;
+use crate::window::window_expr::{
+    reverse_order_bys, BuiltinWindowState, WindowFn, WindowFunctionState,
+};
+use crate::window::{
+    PartitionBatches, PartitionWindowAggStates, WindowAggState, WindowState,
+};
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
-use arrow::compute::SortOptions;
+use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::Result;
@@ -91,7 +96,7 @@ impl WindowExpr for BuiltInWindowExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let evaluator = self.expr.create_evaluator()?;
         let num_rows = batch.num_rows();
-        if evaluator.uses_window_frame() {
+        if self.expr.uses_window_frame() {
             let sort_options: Vec<SortOptions> =
                 self.order_by.iter().map(|o| o.options).collect();
             let mut row_wise_results = vec![];
@@ -122,6 +127,101 @@ impl WindowExpr for BuiltInWindowExpr {
         }
     }
 
+    /// evaluate the window function values against the batch
+    fn evaluate_bounded(
+        &self,
+        partition_batches: &PartitionBatches,
+        window_agg_state: &mut PartitionWindowAggStates,
+    ) -> Result<()> {
+        let sort_options: Vec<SortOptions> =
+            self.order_by.iter().map(|o| o.options).collect();
+        for (partition_row, partition_batch_state) in partition_batches.iter() {
+            if !window_agg_state.contains_key(partition_row) {
+                let evaluator = self.expr.create_evaluator()?;
+                let field = self.expr.field()?;
+                let out_type = field.data_type();
+                window_agg_state.insert(
+                    partition_row.clone(),
+                    WindowState {
+                        state: WindowAggState::new(
+                            out_type,
+                            WindowFunctionState::BuiltinWindowState(
+                                BuiltinWindowState::Default,
+                            ),
+                        )?,
+                        window_fn: WindowFn::Builtin(evaluator),
+                    },
+                );
+            };
+            let window_state = window_agg_state.get_mut(partition_row).unwrap();
+            let evaluator = match &mut window_state.window_fn {
+                WindowFn::Builtin(evaluator) => evaluator,
+                _ => unreachable!(),
+            };
+            let mut state = &mut window_state.state;
+            state.is_end = partition_batch_state.is_end;
+            let num_rows = partition_batch_state.record_batch.num_rows();
+
+            let columns = self.sort_columns(&partition_batch_state.record_batch)?;
+            let sort_partition_points =
+                self.evaluate_partition_points(num_rows, &columns)?;
+            let (values, order_bys) =
+                self.get_values_orderbys(&partition_batch_state.record_batch)?;
+
+            // We iterate on each row to perform a running calculation.
+            // First, current_range_of_sliding_window is calculated, then it is compared with last_range.
+            let mut row_wise_results: Vec<ScalarValue> = vec![];
+            let mut last_range = state.current_range_of_sliding_window.clone();
+            let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
+            for idx in state.last_calculated_index..num_rows {
+                state.current_range_of_sliding_window = if !self.expr.uses_window_frame()
+                {
+                    evaluator.get_range(state, num_rows)?
+                } else {
+                    window_frame_ctx.calculate_range(
+                        &order_bys,
+                        &sort_options,
+                        num_rows,
+                        idx,
+                    )?
+                };
+                evaluator.update_state(state, &order_bys, &sort_partition_points)?;
+                // exit if range end index is length, need kind of flag to stop
+                if state.current_range_of_sliding_window.end == num_rows
+                    && !partition_batch_state.is_end
+                {
+                    state.current_range_of_sliding_window = last_range.clone();
+                    break;
+                }
+                if state.current_range_of_sliding_window.start
+                    == state.current_range_of_sliding_window.end
+                {
+                    // We produce None if the window is empty.
+                    row_wise_results
+                        .push(ScalarValue::try_from(self.expr.field()?.data_type())?)
+                } else {
+                    let res = evaluator.evaluate_bounded(&values)?;
+                    row_wise_results.push(res);
+                }
+                last_range = state.current_range_of_sliding_window.clone();
+                state.last_calculated_index = idx + 1;
+            }
+            state.current_range_of_sliding_window = last_range;
+            let out_col = if !row_wise_results.is_empty() {
+                ScalarValue::iter_to_array(row_wise_results.into_iter())?
+            } else {
+                let a = ScalarValue::try_from(self.expr.field()?.data_type())?;
+                a.to_array_of_size(0)
+            };
+
+            state.out_col = concat(&[&state.out_col, &out_col])?;
+            state.n_row_result_missing = num_rows - state.last_calculated_index;
+            state.window_function_state =
+                WindowFunctionState::BuiltinWindowState(evaluator.state()?);
+        }
+        Ok(())
+    }
+
     fn get_window_frame(&self) -> &Arc<WindowFrame> {
         &self.window_frame
     }
@@ -137,5 +237,15 @@ impl WindowExpr for BuiltInWindowExpr {
             &reverse_order_bys(&self.order_by),
             Arc::new(self.window_frame.reverse()),
         )))
+    }
+
+    fn can_run_bounded(&self) -> bool {
+        if self.expr.uses_window_frame() {
+            self.expr.bounded_exec_supported()
+                && !self.window_frame.start_bound.is_unbounded()
+                && !self.window_frame.end_bound.is_unbounded()
+        } else {
+            self.expr.bounded_exec_supported()
+        }
     }
 }
