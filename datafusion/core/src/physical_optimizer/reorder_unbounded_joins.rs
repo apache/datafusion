@@ -588,63 +588,72 @@ mod tests {
             test_util::{aggr_test_schema, arrow_test_data},
         };
         use arrow::datatypes::{DataType, Field, Schema};
-        use datafusion_common::Result;
+        use datafusion_common::{DataFusionError, Result};
         use futures::StreamExt;
         use nix::sys::stat;
         use nix::unistd;
         use rand::seq::SliceRandom;
         use rand::thread_rng;
-        use std::fs::OpenOptions;
+        use rstest::*;
+        use std::fs::{File, OpenOptions};
         use std::io::Write;
-        use std::sync::Arc;
+        use std::path::PathBuf;
+        use std::sync::mpsc;
+        use std::sync::mpsc::{Receiver, Sender};
+        use std::sync::{Arc, Mutex};
         use std::thread;
         use std::time::{Duration, Instant};
         use tempfile::TempDir;
+        // Session batch size
+        const TEST_BATCH_SIZE: u64 = 20;
+        // Number of lines written to FIFO
+        const TEST_DATA_SIZE: u64 = 20_000;
 
-        // This test provides a relatively realistic end-to-end scenario where
-        // we ensure that we swap join sides correctly to accommodate a FIFO source.
-
-        #[tokio::test]
-        async fn unbounded_file_with_swapped_join() -> Result<()> {
-            // Create a new temporary FIFO file
-            let tmp_dir = TempDir::new()?;
-            let file_path = tmp_dir.path().join("my_fifo.csv");
-            let writer_path = file_path.clone();
-            // Simulate an infinite environment via a FIFO file
-            unistd::mkfifo(&file_path, stat::Mode::S_IRWXU).unwrap();
-            // Timeout for a long period of BrokenPipe error
-            let timeout = Duration::from_secs(10);
-            // Spawn a new thread to write to the FIFO file
-            let writer = thread::spawn(move || {
-                let mut file = OpenOptions::new().write(true).open(writer_path).unwrap();
-                // Create a vector of characters
-                let chars = vec!["b", "z", "t", "g", "x"];
-                // Get a reference to the thread-local random number generator
-                let mut rng = thread_rng();
-                // Reference time to use when deciding to fail the test
-                let begin = Instant::now();
-                for cnt in 1..20_000 {
-                    // Choose a random element from the vector
-                    let chosen_idx = *chars.choose(&mut rng).unwrap();
-                    let line = format!("{},{}\n", chosen_idx, cnt).to_owned();
-                    match file.write(line.as_bytes()) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            // Broken Pipe error
-                            if e.raw_os_error().unwrap() == 32 {
-                                if Instant::now().duration_since(begin) > timeout {
-                                    panic!("Cannot read the FIFO file.")
-                                }
-                                thread::sleep(Duration::from_millis(100));
-                            } else {
-                                panic!("{}", e.to_string())
-                            }
+        /// We need to handle broken pipe error until the reader is ready. This is why we put a timout
+        /// to limit the wait duration for the reader. If the error is different than broken pipe,
+        /// we fail immediately.
+        fn write_to_file(
+            mut file: &File,
+            line: &str,
+            execution_start: Instant,
+            broken_pipe_timeout: Duration,
+        ) {
+            match file.write(line.as_bytes()) {
+                Ok(_) => {}
+                Err(e) => {
+                    // Broken Pipe error
+                    if e.raw_os_error().unwrap() == 32 {
+                        if Instant::now().duration_since(execution_start)
+                            > broken_pipe_timeout
+                        {
+                            panic!("Cannot read the FIFO file.")
                         }
+                        thread::sleep(Duration::from_millis(100));
+                    } else {
+                        panic!("{}", e.to_string())
                     }
                 }
-            });
+            }
+        }
 
-            let config = SessionConfig::new();
+        fn create_fifo_file(tmp_dir: &TempDir, file_name: &str) -> Result<PathBuf> {
+            let file_path = tmp_dir.path().join(file_name);
+            // Simulate an infinite environment via a FIFO file
+            unistd::mkfifo(&file_path, stat::Mode::S_IRWXU)
+                .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+            Ok(file_path)
+        }
+
+        async fn create_ctx(
+            fifo_path: &PathBuf,
+            with_unbounded_execution: bool,
+        ) -> Result<SessionContext> {
+            let config = SessionConfig::new()
+                .with_batch_size(TEST_BATCH_SIZE as usize)
+                .set_u64(
+                    "datafusion.execution.coalesce_target_batch_size",
+                    TEST_BATCH_SIZE,
+                );
             let ctx = SessionContext::with_config(config);
             // Register left table
             let left_schema = Arc::new(Schema::new(vec![
@@ -653,11 +662,11 @@ mod tests {
             ]));
             ctx.register_csv(
                 "left",
-                file_path.as_os_str().to_str().unwrap(),
+                fifo_path.as_os_str().to_str().unwrap(),
                 CsvReadOptions::new()
                     .schema(left_schema.as_ref())
                     .has_header(false)
-                    .mark_infinite(true),
+                    .mark_infinite(with_unbounded_execution),
             )
             .await?;
             // Register right table
@@ -669,13 +678,108 @@ mod tests {
                 CsvReadOptions::new().schema(schema.as_ref()),
             )
             .await?;
+            Ok(ctx)
+        }
+        /// Checks if there is a [Operation::Reading] between [Operation::Writing]s.
+        /// This indicates we did not wait for the file to finish.
+        /// Vector([Operation::Reading], [Operation::Writing], (if a [Operation::Reading] here again)).
+        fn interleave(result: &mut Vec<Operation>) -> bool {
+            let mut interleave = false;
+            let mut reading_found = false;
+            let mut iterator = result.into_iter();
+            while let Some(op) = iterator.next() {
+                if reading_found && op == &Operation::Writing {
+                    interleave = true;
+                    break;
+                }
+                if op == &Operation::Reading {
+                    reading_found = true;
+                }
+            }
+            interleave
+        }
+        #[derive(Debug, PartialEq)]
+        enum Operation {
+            Reading,
+            Writing,
+        }
+        // This test provides a relatively realistic end-to-end scenario where
+        // we ensure that we swap join sides correctly to accommodate a FIFO source.
+        #[rstest]
+        #[timeout(std::time::Duration::from_secs(60))]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
+        async fn unbounded_file_with_swapped_join(#[values(true, false)] unbounded_file: bool) -> Result<()> {
+            // To make unbounded deterministic
+            let waiting = Arc::new(Mutex::new(unbounded_file));
+            let waiting_thread = waiting.clone();
+            // Create a channel
+            let (tx, rx): (Sender<Operation>, Receiver<Operation>) = mpsc::channel();
+            // Create a new temporary FIFO file
+            let tmp_dir = TempDir::new()?;
+            let fifo_path = create_fifo_file(&tmp_dir, "fisrt_fifo.csv")?;
+            // Prevent move
+            let fifo_path_thread = fifo_path.clone();
+            // Timeout for a long period of BrokenPipe error
+            let broken_pipe_timeout = Duration::from_secs(10);
+            // The sender endpoint can be copied
+            let thread_tx = tx.clone();
+            // Spawn a new thread to write to the FIFO file
+            let fifo_writer = thread::spawn(move || {
+                let first_file = OpenOptions::new()
+                    .write(true)
+                    .open(fifo_path_thread)
+                    .unwrap();
+                // Create a vector of characters
+                let chars = vec!["b", "z", "t", "g", "x"];
+                // Get a reference to the thread-local random number generator
+                let mut rng = thread_rng();
+                // Reference time to use when deciding to fail the test
+                let execution_start = Instant::now();
+                for cnt in 1..TEST_DATA_SIZE {
+                    // Each thread queues a message in the channel
+                    if cnt % TEST_BATCH_SIZE == 0 {
+                        thread_tx.send(Operation::Writing).unwrap();
+                    }
+                    // Choose a random element from the vector
+                    let chosen_idx = *chars.choose(&mut rng).unwrap();
+                    let line = format!("{},{}\n", chosen_idx, cnt).to_owned();
+                    write_to_file(
+                        &first_file,
+                        &line,
+                        execution_start,
+                        broken_pipe_timeout,
+                    );
+                }
+                while let lock = waiting_thread.lock().unwrap() {
+                    if !*lock {
+                        break;
+                    } else {
+                        thread::sleep(Duration::from_millis(200))
+                    }
+                }
+            });
+            // Collects operations from both writer and executor.
+            let result_collector = thread::spawn(move || {
+                let mut results = vec![];
+                while let Ok(res) = rx.recv() {
+                    results.push(res);
+                }
+                results
+            });
+            // Create an execution case with bounded or unbounded flag.
+            let ctx = create_ctx(&fifo_path, unbounded_file).await?;
             // Execute the query
             let df = ctx.sql("SELECT t1.a2, t2.c1, t2.c4, t2.c5 FROM left as t1 JOIN right as t2 ON t1.a1 = t2.c1").await?;
             let mut stream = df.execute_stream().await?;
-            while let Some(_result) = stream.next().await {
-                {}
+            while (stream.next().await).is_some() {
+                let mut lock = waiting.lock().unwrap();
+                *lock = false;
+                tx.send(Operation::Reading).unwrap();
             }
-            writer.join().unwrap();
+            fifo_writer.join().unwrap();
+            drop(tx);
+            let mut result = result_collector.join().unwrap();
+            assert_eq!(interleave(&mut result), unbounded_file);
             Ok(())
         }
     }
