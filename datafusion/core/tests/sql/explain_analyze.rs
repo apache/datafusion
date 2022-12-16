@@ -92,10 +92,11 @@ async fn explain_analyze_baseline_metrics() {
         "CoalesceBatchesExec: target_batch_size=4096",
         "metrics=[output_rows=5, elapsed_compute"
     );
+    // The number of output rows becomes less after changing the global sort to the local sort with limit push down
     assert_metrics!(
         &formatted,
         "CoalescePartitionsExec",
-        "metrics=[output_rows=5, elapsed_compute="
+        "metrics=[output_rows=3, elapsed_compute="
     );
     assert_metrics!(
         &formatted,
