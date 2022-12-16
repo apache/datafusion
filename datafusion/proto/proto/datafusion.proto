@@ -1139,6 +1139,13 @@ message FileScanExecConf {
   Statistics statistics = 6;
   repeated string table_partition_cols = 7;
   string object_store_url = 8;
+  repeated PhysicalSortExprNode output_ordering = 9;
+  repeated ConfigOption options = 10;
+}
+
+message ConfigOption {
+  string key = 1;
+  ScalarValue value = 2;
 }
 
 message ParquetScanExecNode {

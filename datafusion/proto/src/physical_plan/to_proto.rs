@@ -40,6 +40,7 @@ use datafusion::physical_plan::expressions::{Avg, BinaryExpr, Column, Max, Min, 
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
 use crate::protobuf;
+use crate::protobuf::{ConfigOption, PhysicalSortExprNode};
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
 use datafusion::physical_expr::ScalarFunctionExpr;
@@ -440,6 +441,35 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
             .map(|p| p.as_slice().try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
+        let output_ordering = if let Some(output_ordering) = &conf.output_ordering {
+            output_ordering
+                .iter()
+                .map(|o| {
+                    let expr = o.expr.clone().try_into()?;
+                    Ok(PhysicalSortExprNode {
+                        expr: Some(Box::new(expr)),
+                        asc: !o.options.descending,
+                        nulls_first: o.options.nulls_first,
+                    })
+                })
+                .collect::<Result<Vec<PhysicalSortExprNode>, DataFusionError>>()?
+        } else {
+            vec![]
+        };
+        let options = {
+            let config_options = conf.config_options.read().options().clone();
+            config_options
+                .into_iter()
+                .map(|(key, value)| {
+                    let value = (&value).try_into()?;
+                    Ok(ConfigOption {
+                        key,
+                        value: Some(value),
+                    })
+                })
+                .collect::<Result<Vec<ConfigOption>, DataFusionError>>()?
+        };
+
         Ok(protobuf::FileScanExecConf {
             file_groups,
             statistics: Some((&conf.statistics).into()),
@@ -458,6 +488,8 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
                 .map(|x| x.0.clone())
                 .collect::<Vec<_>>(),
             object_store_url: conf.object_store_url.to_string(),
+            output_ordering,
+            options,
         })
     }
 }

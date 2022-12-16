@@ -1504,6 +1504,17 @@ pub struct FileScanExecConf {
     pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "8")]
     pub object_store_url: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "9")]
+    pub output_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    #[prost(message, repeated, tag = "10")]
+    pub options: ::prost::alloc::vec::Vec<ConfigOption>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ConfigOption {
+    #[prost(string, tag = "1")]
+    pub key: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub value: ::core::option::Option<ScalarValue>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
@@ -1768,135 +1779,6 @@ pub struct ColumnStats {
     pub null_count: u32,
     #[prost(uint32, tag = "4")]
     pub distinct_count: u32,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PartitionLocation {
-    /// partition_id of the map stage who produces the shuffle.
-    #[prost(uint32, tag = "1")]
-    pub map_partition_id: u32,
-    /// partition_id of the shuffle, a composition of(job_id + map_stage_id + partition_id).
-    #[prost(message, optional, tag = "2")]
-    pub partition_id: ::core::option::Option<PartitionId>,
-    #[prost(message, optional, tag = "3")]
-    pub executor_meta: ::core::option::Option<ExecutorMetadata>,
-    #[prost(message, optional, tag = "4")]
-    pub partition_stats: ::core::option::Option<PartitionStats>,
-    #[prost(string, tag = "5")]
-    pub path: ::prost::alloc::string::String,
-}
-/// Unique identifier for a materialized partition of data
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PartitionId {
-    #[prost(string, tag = "1")]
-    pub job_id: ::prost::alloc::string::String,
-    #[prost(uint32, tag = "2")]
-    pub stage_id: u32,
-    #[prost(uint32, tag = "4")]
-    pub partition_id: u32,
-}
-/// Used by scheduler
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorMetadata {
-    #[prost(string, tag = "1")]
-    pub id: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
-    pub host: ::prost::alloc::string::String,
-    #[prost(uint32, tag = "3")]
-    pub port: u32,
-    #[prost(uint32, tag = "4")]
-    pub grpc_port: u32,
-    #[prost(message, optional, tag = "5")]
-    pub specification: ::core::option::Option<ExecutorSpecification>,
-}
-/// Used by grpc
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorRegistration {
-    #[prost(string, tag = "1")]
-    pub id: ::prost::alloc::string::String,
-    #[prost(uint32, tag = "3")]
-    pub port: u32,
-    #[prost(uint32, tag = "4")]
-    pub grpc_port: u32,
-    #[prost(message, optional, tag = "5")]
-    pub specification: ::core::option::Option<ExecutorSpecification>,
-    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see <https://github.com/tokio-rs/prost/issues/430> and <https://github.com/tokio-rs/prost/pull/455>)
-    /// this syntax is ugly but is binary compatible with the "optional" keyword (see <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
-    #[prost(oneof = "executor_registration::OptionalHost", tags = "2")]
-    pub optional_host: ::core::option::Option<executor_registration::OptionalHost>,
-}
-/// Nested message and enum types in `ExecutorRegistration`.
-pub mod executor_registration {
-    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see <https://github.com/tokio-rs/prost/issues/430> and <https://github.com/tokio-rs/prost/pull/455>)
-    /// this syntax is ugly but is binary compatible with the "optional" keyword (see <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum OptionalHost {
-        #[prost(string, tag = "2")]
-        Host(::prost::alloc::string::String),
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorHeartbeat {
-    #[prost(string, tag = "1")]
-    pub executor_id: ::prost::alloc::string::String,
-    /// Unix epoch-based timestamp in seconds
-    #[prost(uint64, tag = "2")]
-    pub timestamp: u64,
-    #[prost(message, repeated, tag = "3")]
-    pub metrics: ::prost::alloc::vec::Vec<ExecutorMetric>,
-    #[prost(message, optional, tag = "4")]
-    pub status: ::core::option::Option<ExecutorStatus>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorSpecification {
-    #[prost(message, repeated, tag = "1")]
-    pub resources: ::prost::alloc::vec::Vec<ExecutorResource>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorResource {
-    /// TODO add more resources
-    #[prost(oneof = "executor_resource::Resource", tags = "1")]
-    pub resource: ::core::option::Option<executor_resource::Resource>,
-}
-/// Nested message and enum types in `ExecutorResource`.
-pub mod executor_resource {
-    /// TODO add more resources
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Resource {
-        #[prost(uint32, tag = "1")]
-        TaskSlots(u32),
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorMetric {
-    /// TODO add more metrics
-    #[prost(oneof = "executor_metric::Metric", tags = "1")]
-    pub metric: ::core::option::Option<executor_metric::Metric>,
-}
-/// Nested message and enum types in `ExecutorMetric`.
-pub mod executor_metric {
-    /// TODO add more metrics
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Metric {
-        #[prost(uint64, tag = "1")]
-        AvailableMemory(u64),
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorStatus {
-    #[prost(oneof = "executor_status::Status", tags = "1, 2, 3")]
-    pub status: ::core::option::Option<executor_status::Status>,
-}
-/// Nested message and enum types in `ExecutorStatus`.
-pub mod executor_status {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Status {
-        #[prost(string, tag = "1")]
-        Active(::prost::alloc::string::String),
-        #[prost(string, tag = "2")]
-        Dead(::prost::alloc::string::String),
-        #[prost(string, tag = "3")]
-        Unknown(::prost::alloc::string::String),
-    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

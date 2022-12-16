@@ -18,6 +18,7 @@
 //! Serde code to convert from protocol buffers to Rust data structures.
 
 use crate::protobuf;
+use arrow::datatypes::DataType;
 use chrono::TimeZone;
 use chrono::Utc;
 use datafusion::arrow::datatypes::Schema;
@@ -28,7 +29,7 @@ use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
 use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
-use datafusion::physical_expr::ScalarFunctionExpr;
+use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
     expressions::{
@@ -50,6 +51,7 @@ use crate::convert_required;
 use crate::from_proto::from_proto_binary_op;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::JoinSide;
+use datafusion::physical_plan::sorts::sort::SortOptions;
 use parking_lot::RwLock;
 
 impl From<&protobuf::PhysicalColumn> for Column {
@@ -304,6 +306,96 @@ pub fn parse_protobuf_hash_partitioning(
     }
 }
 
+pub fn parse_protobuf_file_scan_config(
+    proto: &protobuf::FileScanExecConf,
+    registry: &dyn FunctionRegistry,
+) -> Result<FileScanConfig, DataFusionError> {
+    let schema: Arc<Schema> = Arc::new(convert_required!(proto.schema)?);
+    let projection = proto
+        .projection
+        .iter()
+        .map(|i| *i as usize)
+        .collect::<Vec<_>>();
+    let projection = if projection.is_empty() {
+        None
+    } else {
+        Some(projection)
+    };
+    let statistics = convert_required!(proto.statistics)?;
+
+    let file_groups: Vec<Vec<PartitionedFile>> = proto
+        .file_groups
+        .iter()
+        .map(|f| f.try_into())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let object_store_url = match proto.object_store_url.is_empty() {
+        false => ObjectStoreUrl::parse(&proto.object_store_url)?,
+        true => ObjectStoreUrl::local_filesystem(),
+    };
+
+    // extract types of partition columns
+    let table_partition_cols = proto
+        .table_partition_cols
+        .iter()
+        .map(|col| {
+            Ok((
+                col.to_owned(),
+                schema.field_with_name(col)?.data_type().clone(),
+            ))
+        })
+        .collect::<Result<Vec<(String, DataType)>, DataFusionError>>()?;
+
+    let output_ordering = proto
+        .output_ordering
+        .iter()
+        .map(|o| {
+            let expr = o
+                .expr
+                .as_ref()
+                .map(|e| parse_physical_expr(e.as_ref(), registry, &schema))
+                .unwrap()?;
+            Ok(PhysicalSortExpr {
+                expr,
+                options: SortOptions {
+                    descending: !o.asc,
+                    nulls_first: o.nulls_first,
+                },
+            })
+        })
+        .collect::<Result<Vec<PhysicalSortExpr>, DataFusionError>>()?;
+    let output_ordering = if output_ordering.is_empty() {
+        None
+    } else {
+        Some(output_ordering)
+    };
+
+    let mut config_options = ConfigOptions::new();
+    for option in proto.options.iter() {
+        config_options.set(
+            &option.key,
+            option
+                .value
+                .as_ref()
+                .map(|value| value.try_into())
+                .transpose()?
+                .unwrap(),
+        );
+    }
+
+    Ok(FileScanConfig {
+        object_store_url,
+        file_schema: schema,
+        file_groups,
+        statistics,
+        projection,
+        limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
+        table_partition_cols,
+        output_ordering,
+        config_options: Arc::new(RwLock::new(config_options)),
+    })
+}
+
 impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
     type Error = DataFusionError;
 
@@ -377,41 +469,6 @@ impl TryInto<Statistics> for &protobuf::Statistics {
                 Some(column_statistics)
             },
             is_exact: self.is_exact,
-        })
-    }
-}
-
-impl TryInto<FileScanConfig> for &protobuf::FileScanExecConf {
-    type Error = DataFusionError;
-
-    fn try_into(self) -> Result<FileScanConfig, Self::Error> {
-        let schema = Arc::new(convert_required!(self.schema)?);
-        let projection = self
-            .projection
-            .iter()
-            .map(|i| *i as usize)
-            .collect::<Vec<_>>();
-        let projection = if projection.is_empty() {
-            None
-        } else {
-            Some(projection)
-        };
-        let statistics = convert_required!(self.statistics)?;
-
-        Ok(FileScanConfig {
-            config_options: Arc::new(RwLock::new(ConfigOptions::new())), // TODO add serde
-            object_store_url: ObjectStoreUrl::parse(&self.object_store_url)?,
-            file_schema: schema,
-            file_groups: self
-                .file_groups
-                .iter()
-                .map(|f| f.try_into())
-                .collect::<Result<Vec<_>, _>>()?,
-            statistics,
-            projection,
-            limit: self.limit.as_ref().map(|sl| sl.limit as usize),
-            table_partition_cols: vec![],
-            output_ordering: None,
         })
     }
 }
