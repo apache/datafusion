@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::execution::memory_manager::{
+use crate::execution::memory_pool::{
     AllocationOptions, MemoryPool, TrackedAllocation,
 };
 use datafusion_common::{DataFusionError, Result};
@@ -220,7 +220,7 @@ fn insufficient_capacity_err(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::execution::memory_manager::AllocationOptions;
+    use crate::execution::memory_pool::AllocationOptions;
     use std::sync::Arc;
 
     #[test]

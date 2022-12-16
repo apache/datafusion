@@ -29,7 +29,7 @@ use futures::stream::{Stream, StreamExt};
 
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::execution::memory_manager::proxy::{RawTableAllocExt, VecAllocExt};
+use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, AccumulatorItem, AggregateMode, PhysicalGroupBy,
 };
@@ -39,7 +39,7 @@ use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use crate::scalar::ScalarValue;
 
-use crate::execution::memory_manager::TrackedAllocation;
+use crate::execution::memory_pool::TrackedAllocation;
 use arrow::{array::ArrayRef, compute, compute::cast};
 use arrow::{
     array::{Array, UInt32Builder},

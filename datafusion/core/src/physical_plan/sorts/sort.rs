@@ -21,7 +21,7 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
-use crate::execution::memory_manager::{
+use crate::execution::memory_pool::{
     human_readable_size, AllocationOptions, TrackedAllocation,
 };
 use crate::execution::runtime_env::RuntimeEnv;

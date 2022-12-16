@@ -200,7 +200,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_memory_manager_underflow() {
+    fn test_memory_pool_underflow() {
         let pool = Arc::new(GreedyMemoryPool::new(50)) as _;
         let mut a1 = TrackedAllocation::new(&pool, "a1".to_string());
         assert_eq!(pool.allocated(), 0);

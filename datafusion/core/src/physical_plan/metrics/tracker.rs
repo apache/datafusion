@@ -23,11 +23,11 @@ use crate::physical_plan::metrics::{
 use std::sync::Arc;
 use std::task::Poll;
 
-use crate::execution::memory_manager::{MemoryPool, TrackedAllocation};
+use crate::execution::memory_pool::{MemoryPool, TrackedAllocation};
 use arrow::{error::ArrowError, record_batch::RecordBatch};
 
 /// Simplified version of tracking memory consumer,
-/// see also: [`Tracking`](crate::execution::memory_manager::ConsumerType::Tracking)
+/// see also: [`Tracking`](crate::execution::memory_pool::ConsumerType::Tracking)
 ///
 /// You could use this to replace [BaselineMetrics], report the memory,
 /// and get the memory usage bookkeeping in the memory manager easily.

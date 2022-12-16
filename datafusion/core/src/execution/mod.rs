@@ -42,7 +42,7 @@
 
 pub mod context;
 pub mod disk_manager;
-pub mod memory_manager;
+pub mod memory_pool;
 pub mod options;
 pub mod registry;
 pub mod runtime_env;

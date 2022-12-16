@@ -99,7 +99,7 @@ use url::Url;
 
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
-use crate::execution::memory_manager::MemoryPool;
+use crate::execution::memory_pool::MemoryPool;
 use uuid::Uuid;
 
 use super::options::{
@@ -2032,7 +2032,7 @@ mod tests {
     use super::*;
     use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
-    use crate::execution::memory_manager::TrackedAllocation;
+    use crate::execution::memory_pool::TrackedAllocation;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;

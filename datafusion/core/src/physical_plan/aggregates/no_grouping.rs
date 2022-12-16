@@ -33,7 +33,7 @@ use futures::stream::BoxStream;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::execution::memory_manager::TrackedAllocation;
+use crate::execution::memory_pool::TrackedAllocation;
 use futures::stream::{Stream, StreamExt};
 
 /// stream struct for aggregation without grouping columns

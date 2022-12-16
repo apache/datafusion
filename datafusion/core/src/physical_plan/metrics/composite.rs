@@ -17,7 +17,7 @@
 
 //! Metrics common for complex operators with multiple steps.
 
-use crate::execution::memory_manager::MemoryPool;
+use crate::execution::memory_pool::MemoryPool;
 use crate::physical_plan::metrics::tracker::MemTrackingMetrics;
 use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricValue, MetricsSet, Time,
