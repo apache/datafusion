@@ -20,10 +20,10 @@
 //! on a plan with an empty relation.
 //! This rule also removes OFFSET 0 from the [LogicalPlan]
 //! This saves time in planning and executing the query.
+use crate::optimizer::ApplyOrder;
+use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::{EmptyRelation, LogicalPlan};
-
-use crate::{utils, OptimizerConfig, OptimizerRule};
 
 /// Optimization rule that eliminate LIMIT 0 or useless LIMIT(skip:0, fetch:None).
 /// It can cooperate with `propagate_empty_relation` and `limit_push_down`.
@@ -41,54 +41,71 @@ impl OptimizerRule for EliminateLimit {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        if let LogicalPlan::Limit(limit) = plan {
-            match limit.fetch {
-                Some(fetch) => {
-                    if fetch == 0 {
-                        return Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
-                            produce_one_row: false,
-                            schema: limit.input.schema().clone(),
-                        })));
-                    }
+        let limit = match plan {
+            LogicalPlan::Limit(limit) => limit,
+            _ => return Ok(None),
+        };
+
+        match limit.fetch {
+            Some(fetch) => {
+                if fetch == 0 {
+                    return Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema: limit.input.schema().clone(),
+                    })));
                 }
-                None => {
-                    if limit.skip == 0 {
-                        let input = &*limit.input;
-                        return Ok(Some(utils::optimize_children(self, input, config)?));
-                    }
+            }
+            None => {
+                if limit.skip == 0 {
+                    let input = limit.input.as_ref();
+                    // input also can be Limit, so we should apply again.
+                    return Ok(Some(
+                        self.try_optimize(input, _config)?
+                            .unwrap_or_else(|| input.clone()),
+                    ));
                 }
             }
         }
-        Ok(Some(utils::optimize_children(self, plan, config)?))
+        Ok(None)
     }
 
     fn name(&self) -> &str {
         "eliminate_limit"
     }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::optimizer::Optimizer;
+    use crate::test::*;
+    use crate::OptimizerContext;
     use datafusion_common::Column;
     use datafusion_expr::{
         col,
         logical_plan::{builder::LogicalPlanBuilder, JoinType},
         sum,
     };
+    use std::sync::Arc;
 
-    use crate::optimizer::OptimizerContext;
     use crate::push_down_limit::PushDownLimit;
-    use crate::test::*;
-
-    use super::*;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        let optimized_plan = EliminateLimit::new()
-            .try_optimize(plan, &OptimizerContext::new())
-            .unwrap()
-            .expect("failed to optimize plan");
+        let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateLimit::new())]);
+        let optimized_plan = optimizer
+            .optimize_recursively(
+                optimizer.rules.get(0).unwrap(),
+                plan,
+                &OptimizerContext::new(),
+            )?
+            .unwrap_or_else(|| plan.clone());
+
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
         assert_eq!(plan.schema(), optimized_plan.schema());
@@ -99,13 +116,14 @@ mod tests {
         plan: &LogicalPlan,
         expected: &str,
     ) -> Result<()> {
-        let optimized_plan = PushDownLimit::new()
-            .try_optimize(plan, &OptimizerContext::new())
-            .unwrap()
-            .expect("failed to optimize plan");
-        let optimized_plan = EliminateLimit::new()
-            .try_optimize(&optimized_plan, &OptimizerContext::new())
-            .unwrap()
+        fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
+        let config = OptimizerContext::new().with_max_passes(1);
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(PushDownLimit::new()),
+            Arc::new(EliminateLimit::new()),
+        ]);
+        let optimized_plan = optimizer
+            .optimize(plan, &config, observe)
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
