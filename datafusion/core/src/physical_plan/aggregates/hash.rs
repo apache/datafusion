@@ -124,9 +124,10 @@ impl GroupedHashAggregateStream {
 
         timer.done();
 
-        let allocation = context
-            .memory_manager()
-            .new_allocation(format!("GroupedHashAggregateStream[{}]", partition));
+        let allocation = TrackedAllocation::new(
+            context.memory_pool(),
+            format!("GroupedHashAggregateStream[{}]", partition),
+        );
 
         let inner = GroupedHashAggregateStreamInner {
             schema: Arc::clone(&schema),

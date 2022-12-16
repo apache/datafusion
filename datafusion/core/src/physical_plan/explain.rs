@@ -153,7 +153,7 @@ impl ExecutionPlan for ExplainExec {
 
         let metrics = ExecutionPlanMetricsSet::new();
         let tracking_metrics =
-            MemTrackingMetrics::new(&metrics, context.memory_manager(), partition);
+            MemTrackingMetrics::new(&metrics, context.memory_pool(), partition);
 
         debug!(
             "Before returning SizedRecordBatch in ExplainExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());

@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::execution::memory_manager::{AllocationOptions, MemoryPool};
-use crate::execution::TrackedAllocation;
+use crate::execution::memory_manager::{
+    AllocationOptions, MemoryPool, TrackedAllocation,
+};
 use datafusion_common::{DataFusionError, Result};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -220,24 +221,23 @@ fn insufficient_capacity_err(
 mod tests {
     use super::*;
     use crate::execution::memory_manager::AllocationOptions;
-    use crate::execution::MemoryManager;
     use std::sync::Arc;
 
     #[test]
     fn test_fair() {
-        let manager = MemoryManager::new(Arc::new(FairSpillPool::new(100)));
+        let pool = Arc::new(FairSpillPool::new(100)) as _;
 
-        let mut a1 = manager.new_allocation("unspillable".to_string());
+        let mut a1 = TrackedAllocation::new(&pool, "unspillable".to_string());
         // Can grow beyond capacity of pool
         a1.grow(2000);
-        assert_eq!(manager.allocated(), 2000);
+        assert_eq!(pool.allocated(), 2000);
 
         let options = AllocationOptions::new("s1".to_string()).with_can_spill(true);
-        let mut a2 = manager.new_allocation_with_options(options);
+        let mut a2 = TrackedAllocation::new_with_options(&pool, options);
         // Can grow beyond capacity of pool
         a2.grow(2000);
 
-        assert_eq!(manager.allocated(), 4000);
+        assert_eq!(pool.allocated(), 4000);
 
         let err = a2.try_grow(1).unwrap_err().to_string();
         assert_eq!(err, "Resources exhausted: Failed to allocate additional 1 bytes for s1 with 2000 bytes already allocated - maximum available is 0");
@@ -248,23 +248,23 @@ mod tests {
         a1.shrink(1990);
         a2.shrink(2000);
 
-        assert_eq!(manager.allocated(), 10);
+        assert_eq!(pool.allocated(), 10);
 
         a1.try_grow(10).unwrap();
-        assert_eq!(manager.allocated(), 20);
+        assert_eq!(pool.allocated(), 20);
 
         // Can grow a2 to 80 as only spilling consumer
         a2.try_grow(80).unwrap();
-        assert_eq!(manager.allocated(), 100);
+        assert_eq!(pool.allocated(), 100);
 
         a2.shrink(70);
 
         assert_eq!(a1.size(), 20);
         assert_eq!(a2.size(), 10);
-        assert_eq!(manager.allocated(), 30);
+        assert_eq!(pool.allocated(), 30);
 
         let options = AllocationOptions::new("s2".to_string()).with_can_spill(true);
-        let mut a3 = manager.new_allocation_with_options(options);
+        let mut a3 = TrackedAllocation::new_with_options(&pool, options);
 
         let err = a3.try_grow(70).unwrap_err().to_string();
         assert_eq!(err, "Resources exhausted: Failed to allocate additional 70 bytes for s2 with 0 bytes already allocated - maximum available is 40");
@@ -276,7 +276,7 @@ mod tests {
 
         // But dropping a2 does
         drop(a2);
-        assert_eq!(manager.allocated(), 20);
+        assert_eq!(pool.allocated(), 20);
         a3.try_grow(80).unwrap();
     }
 }

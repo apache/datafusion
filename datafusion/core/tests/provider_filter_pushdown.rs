@@ -94,7 +94,7 @@ impl ExecutionPlan for CustomPlan {
     ) -> Result<SendableRecordBatchStream> {
         let metrics = ExecutionPlanMetricsSet::new();
         let tracking_metrics =
-            MemTrackingMetrics::new(&metrics, context.memory_manager(), partition);
+            MemTrackingMetrics::new(&metrics, context.memory_pool(), partition);
         Ok(Box::pin(SizedRecordBatchStream::new(
             self.schema(),
             self.batches.clone(),

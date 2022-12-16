@@ -30,7 +30,6 @@ use crate::datasource::object_store::ObjectStoreRegistry;
 use crate::execution::memory_manager::{
     GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
 };
-use crate::execution::MemoryManager;
 use datafusion_common::DataFusionError;
 use object_store::ObjectStore;
 use std::fmt::{Debug, Formatter};
@@ -42,7 +41,7 @@ use url::Url;
 /// Execution runtime environment.
 pub struct RuntimeEnv {
     /// Runtime memory management
-    pub memory_manager: Arc<MemoryManager>,
+    pub memory_pool: Arc<dyn MemoryPool>,
     /// Manage temporary files during query execution
     pub disk_manager: Arc<DiskManager>,
     /// Object Store Registry
@@ -67,11 +66,11 @@ impl RuntimeEnv {
             table_factories,
         } = config;
 
-        let pool =
+        let memory_pool =
             memory_pool.unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
 
         Ok(Self {
-            memory_manager: Arc::new(MemoryManager::new(pool)),
+            memory_pool,
             disk_manager: DiskManager::try_new(disk_manager)?,
             object_store_registry,
             table_factories,

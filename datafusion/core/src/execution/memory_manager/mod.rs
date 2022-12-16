@@ -50,45 +50,6 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     fn allocated(&self) -> usize;
 }
 
-/// A cooperative MemoryManager which tracks memory in a cooperative fashion.
-/// `ExecutionPlan` nodes such as `SortExec`, which require large amounts of memory
-/// register their memory requests with the MemoryManager which then tracks the total
-///  memory that has been allocated across all such nodes.
-///
-/// The associated [`MemoryPool`] determines how to respond to memory allocation
-/// requests, and any associated fairness control
-#[derive(Debug)]
-pub struct MemoryManager {
-    pool: Arc<dyn MemoryPool>,
-}
-
-impl MemoryManager {
-    /// Create new memory manager based on the configuration
-    pub fn new(pool: Arc<dyn MemoryPool>) -> Self {
-        Self { pool }
-    }
-
-    /// Returns the number of allocated bytes
-    ///
-    /// Note: this can exceed the pool size as a result of [`MemoryManager::allocate`]
-    pub fn allocated(&self) -> usize {
-        self.pool.allocated()
-    }
-
-    /// Returns a new empty allocation identified by `name`
-    pub fn new_allocation(&self, name: String) -> TrackedAllocation {
-        self.new_allocation_with_options(AllocationOptions::new(name))
-    }
-
-    /// Returns a new empty allocation with the provided [`AllocationOptions`]
-    pub fn new_allocation_with_options(
-        &self,
-        options: AllocationOptions,
-    ) -> TrackedAllocation {
-        TrackedAllocation::new_empty(options, Arc::clone(&self.pool))
-    }
-}
-
 /// Options associated with a [`TrackedAllocation`]
 #[derive(Debug)]
 pub struct AllocationOptions {
@@ -131,12 +92,21 @@ pub struct TrackedAllocation {
 }
 
 impl TrackedAllocation {
-    fn new_empty(options: AllocationOptions, policy: Arc<dyn MemoryPool>) -> Self {
-        policy.allocate(&options);
+    /// Create a new [`TrackedAllocation`] in the provided [`MemoryPool`]
+    pub fn new(pool: &Arc<dyn MemoryPool>, name: String) -> Self {
+        Self::new_with_options(pool, AllocationOptions::new(name))
+    }
+
+    /// Create a new [`TrackedAllocation`] in the provided [`MemoryPool`]
+    pub fn new_with_options(
+        pool: &Arc<dyn MemoryPool>,
+        options: AllocationOptions,
+    ) -> Self {
+        pool.allocate(&options);
         Self {
             options,
             size: 0,
-            policy,
+            policy: Arc::clone(pool),
         }
     }
 
@@ -231,31 +201,30 @@ mod tests {
 
     #[test]
     fn test_memory_manager_underflow() {
-        let policy = Arc::new(GreedyMemoryPool::new(50));
-        let manager = MemoryManager::new(policy);
-        let mut a1 = manager.new_allocation("a1".to_string());
-        assert_eq!(manager.allocated(), 0);
+        let pool = Arc::new(GreedyMemoryPool::new(50)) as _;
+        let mut a1 = TrackedAllocation::new(&pool, "a1".to_string());
+        assert_eq!(pool.allocated(), 0);
 
         a1.grow(100);
-        assert_eq!(manager.allocated(), 100);
+        assert_eq!(pool.allocated(), 100);
 
         assert_eq!(a1.free(), 100);
-        assert_eq!(manager.allocated(), 0);
+        assert_eq!(pool.allocated(), 0);
 
         a1.try_grow(100).unwrap_err();
-        assert_eq!(manager.allocated(), 0);
+        assert_eq!(pool.allocated(), 0);
 
         a1.try_grow(30).unwrap();
-        assert_eq!(manager.allocated(), 30);
+        assert_eq!(pool.allocated(), 30);
 
-        let mut a2 = manager.new_allocation("a2".to_string());
+        let mut a2 = TrackedAllocation::new(&pool, "a2".to_string());
         a2.try_grow(25).unwrap_err();
-        assert_eq!(manager.allocated(), 30);
+        assert_eq!(pool.allocated(), 30);
 
         drop(a1);
-        assert_eq!(manager.allocated(), 0);
+        assert_eq!(pool.allocated(), 0);
 
         a2.try_grow(25).unwrap();
-        assert_eq!(manager.allocated(), 25);
+        assert_eq!(pool.allocated(), 25);
     }
 }

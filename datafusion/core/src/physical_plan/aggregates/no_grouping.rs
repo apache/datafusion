@@ -72,9 +72,10 @@ impl AggregateStream {
         let aggregate_expressions = aggregate_expressions(&aggr_expr, &mode, 0)?;
         let accumulators = create_accumulators(&aggr_expr)?;
 
-        let allocation = context
-            .memory_manager()
-            .new_allocation(format!("AggregateStream[{}]", partition));
+        let allocation = TrackedAllocation::new(
+            context.memory_pool(),
+            format!("AggregateStream[{}]", partition),
+        );
 
         let inner = AggregateStreamInner {
             schema: Arc::clone(&schema),

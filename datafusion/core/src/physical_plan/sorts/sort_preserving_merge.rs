@@ -170,7 +170,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         }
 
         let tracking_metrics =
-            MemTrackingMetrics::new(&self.metrics, context.memory_manager(), partition);
+            MemTrackingMetrics::new(&self.metrics, context.memory_pool(), partition);
 
         let input_partitions = self.input.output_partitioning().partition_count();
         debug!(
@@ -1260,7 +1260,7 @@ mod tests {
 
         let metrics = ExecutionPlanMetricsSet::new();
         let tracking_metrics =
-            MemTrackingMetrics::new(&metrics, task_ctx.memory_manager(), 0);
+            MemTrackingMetrics::new(&metrics, task_ctx.memory_pool(), 0);
 
         let merge_stream = SortPreservingMergeStream::new_from_streams(
             streams,

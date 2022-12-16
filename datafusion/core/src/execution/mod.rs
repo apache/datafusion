@@ -48,5 +48,4 @@ pub mod registry;
 pub mod runtime_env;
 
 pub use disk_manager::DiskManager;
-pub use memory_manager::{human_readable_size, MemoryManager, TrackedAllocation};
 pub use registry::FunctionRegistry;

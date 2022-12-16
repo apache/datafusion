@@ -21,9 +21,10 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
-use crate::execution::memory_manager::{human_readable_size, AllocationOptions};
+use crate::execution::memory_manager::{
+    human_readable_size, AllocationOptions, TrackedAllocation,
+};
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::execution::TrackedAllocation;
 use crate::physical_plan::common::{batch_byte_size, IPCWriter, SizedRecordBatchStream};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
@@ -98,7 +99,8 @@ impl ExternalSorter {
         let options = AllocationOptions::new(format!("ExternalSorter[{}]", partition_id))
             .with_can_spill(true);
 
-        let allocation = runtime.memory_manager.new_allocation_with_options(options);
+        let allocation =
+            TrackedAllocation::new_with_options(&runtime.memory_pool, options);
 
         Self {
             schema,
@@ -168,10 +170,9 @@ impl ExternalSorter {
         let batch_size = self.session_config.batch_size();
 
         if self.spilled_before().await {
-            let tracking_metrics = self.metrics_set.new_intermediate_tracking(
-                self.partition_id,
-                self.runtime.memory_manager.as_ref(),
-            );
+            let tracking_metrics = self
+                .metrics_set
+                .new_intermediate_tracking(self.partition_id, &self.runtime.memory_pool);
             let mut streams: Vec<SortedStream> = vec![];
             if !self.in_mem_batches.is_empty() {
                 let in_mem_stream = in_mem_partial_sort(
@@ -190,10 +191,9 @@ impl ExternalSorter {
                 let stream = read_spill_as_stream(spill, self.schema.clone())?;
                 streams.push(SortedStream::new(stream, 0));
             }
-            let tracking_metrics = self.metrics_set.new_final_tracking(
-                self.partition_id,
-                self.runtime.memory_manager.as_ref(),
-            );
+            let tracking_metrics = self
+                .metrics_set
+                .new_final_tracking(self.partition_id, &self.runtime.memory_pool);
             Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
                 streams,
                 self.schema.clone(),
@@ -202,10 +202,9 @@ impl ExternalSorter {
                 self.session_config.batch_size(),
             )?))
         } else if !self.in_mem_batches.is_empty() {
-            let tracking_metrics = self.metrics_set.new_final_tracking(
-                self.partition_id,
-                self.runtime.memory_manager.as_ref(),
-            );
+            let tracking_metrics = self
+                .metrics_set
+                .new_final_tracking(self.partition_id, &self.runtime.memory_pool);
             let result = in_mem_partial_sort(
                 &mut self.in_mem_batches,
                 self.schema.clone(),
@@ -242,10 +241,9 @@ impl ExternalSorter {
 
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
-        let tracking_metrics = self.metrics_set.new_intermediate_tracking(
-            self.partition_id,
-            self.runtime.memory_manager.as_ref(),
-        );
+        let tracking_metrics = self
+            .metrics_set
+            .new_intermediate_tracking(self.partition_id, &self.runtime.memory_pool);
 
         let spillfile = self.runtime.disk_manager.create_tmp_file("Sorting")?;
         let stream = in_mem_partial_sort(
@@ -872,7 +870,7 @@ async fn do_sort(
     );
     let schema = input.schema();
     let tracking_metrics =
-        metrics_set.new_intermediate_tracking(partition_id, context.memory_manager());
+        metrics_set.new_intermediate_tracking(partition_id, context.memory_pool());
     let mut sorter = ExternalSorter::new(
         partition_id,
         schema.clone(),
@@ -965,7 +963,7 @@ mod tests {
         assert_eq!(c7.value(c7.len() - 1), 254,);
 
         assert_eq!(
-            session_ctx.runtime_env().memory_manager.allocated(),
+            session_ctx.runtime_env().memory_pool.allocated(),
             0,
             "The sort should have returned all memory used back to the memory manager"
         );
@@ -1034,7 +1032,7 @@ mod tests {
         assert_eq!(c7.value(c7.len() - 1), 254,);
 
         assert_eq!(
-            session_ctx.runtime_env().memory_manager.allocated(),
+            session_ctx.runtime_env().memory_pool.allocated(),
             0,
             "The sort should have returned all memory used back to the memory manager"
         );
@@ -1285,7 +1283,7 @@ mod tests {
         assert_strong_count_converges_to_zero(refs).await;
 
         assert_eq!(
-            session_ctx.runtime_env().memory_manager.allocated(),
+            session_ctx.runtime_env().memory_pool.allocated(),
             0,
             "The sort should have returned all memory used back to the memory manager"
         );

@@ -20,10 +20,10 @@
 use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Time,
 };
+use std::sync::Arc;
 use std::task::Poll;
 
-use crate::execution::memory_manager::TrackedAllocation;
-use crate::execution::MemoryManager;
+use crate::execution::memory_manager::{MemoryPool, TrackedAllocation};
 use arrow::{error::ArrowError, record_batch::RecordBatch};
 
 /// Simplified version of tracking memory consumer,
@@ -43,12 +43,12 @@ impl MemTrackingMetrics {
     /// Create memory tracking metrics with reference to memory manager
     pub fn new(
         metrics: &ExecutionPlanMetricsSet,
-        memory_manager: &MemoryManager,
+        pool: &Arc<dyn MemoryPool>,
         partition: usize,
     ) -> Self {
+        let name = format!("MemTrackingMetrics[{}]", partition);
         Self {
-            allocation: memory_manager
-                .new_allocation(format!("MemTrackingMetrics[{}]", partition)),
+            allocation: TrackedAllocation::new(pool, name),
             metrics: BaselineMetrics::new(metrics, partition),
         }
     }

@@ -78,7 +78,7 @@ use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
     OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
-use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry, MemoryManager};
+use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_optimizer::enforcement::BasicEnforcement;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
@@ -99,6 +99,7 @@ use url::Url;
 
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
+use crate::execution::memory_manager::MemoryPool;
 use uuid::Uuid;
 
 use super::options::{
@@ -1961,9 +1962,9 @@ impl TaskContext {
         self.task_id.clone()
     }
 
-    /// Return the [`MemoryManager`] associated with this [TaskContext]
-    pub fn memory_manager(&self) -> &Arc<MemoryManager> {
-        &self.runtime.memory_manager
+    /// Return the [`MemoryPool`] associated with this [TaskContext]
+    pub fn memory_pool(&self) -> &Arc<dyn MemoryPool> {
+        &self.runtime.memory_pool
     }
 
     /// Return the [RuntimeEnv] associated with this [TaskContext]
@@ -2031,6 +2032,7 @@ mod tests {
     use super::*;
     use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
+    use crate::execution::memory_manager::TrackedAllocation;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
@@ -2056,20 +2058,23 @@ mod tests {
         let ctx1 = SessionContext::new();
 
         // configure with same memory / disk manager
-        let memory_manager = ctx1.runtime_env().memory_manager.clone();
+        let memory_pool = ctx1.runtime_env().memory_pool.clone();
+
+        let mut allocation = TrackedAllocation::new(&memory_pool, "test".to_string());
+        allocation.grow(100);
+
         let disk_manager = ctx1.runtime_env().disk_manager.clone();
 
         let ctx2 =
             SessionContext::with_config_rt(SessionConfig::new(), ctx1.runtime_env());
 
-        assert!(std::ptr::eq(
-            Arc::as_ptr(&memory_manager),
-            Arc::as_ptr(&ctx1.runtime_env().memory_manager)
-        ));
-        assert!(std::ptr::eq(
-            Arc::as_ptr(&memory_manager),
-            Arc::as_ptr(&ctx2.runtime_env().memory_manager)
-        ));
+        assert_eq!(ctx1.runtime_env().memory_pool.allocated(), 100);
+        assert_eq!(ctx2.runtime_env().memory_pool.allocated(), 100);
+
+        drop(allocation);
+
+        assert_eq!(ctx1.runtime_env().memory_pool.allocated(), 0);
+        assert_eq!(ctx2.runtime_env().memory_pool.allocated(), 0);
 
         assert!(std::ptr::eq(
             Arc::as_ptr(&disk_manager),
