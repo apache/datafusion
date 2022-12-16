@@ -542,7 +542,7 @@ pub fn max_row(index: usize, accessor: &mut RowAccessor, s: &ScalarValue) -> Res
 #[derive(Debug)]
 pub struct MaxAccumulator {
     max: ScalarValue,
-    moving_max: Box<moving_min_max::MovingMax<f64>>,
+    moving_max: moving_min_max::MovingMax<ScalarValue>,
 }
 
 impl MaxAccumulator {
@@ -550,27 +550,30 @@ impl MaxAccumulator {
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
             max: ScalarValue::try_from(datatype)?,
-            moving_max: Box::new(moving_min_max::MovingMax::<f64>::new()),
+            moving_max: moving_min_max::MovingMax::<ScalarValue>::new(),
         })
     }
 }
 
 impl Accumulator for MaxAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = downcast_value!(values[0], Float64Array);
-        for i in 0..values.len() {
-            (self.moving_max).push(values.value(i));
+        for idx in 0..values[0].len() {
+            let val = ScalarValue::try_from_array(&values[0], idx)?;
+            self.moving_max.push(val);
         }
-        self.max = ScalarValue::from(*self.moving_max.max().unwrap());
+        if let Some(res) = self.moving_max.max() {
+            self.max = res.clone();
+        }
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = downcast_value!(values[0], Float64Array);
-        for i in 0..values.len() {
+        for i in 0..values[0].len() {
             (self.moving_max).pop();
         }
-        self.max = ScalarValue::from(*self.moving_max.max().unwrap());
+        if let Some(res) = self.moving_max.max() {
+            self.max = res.clone();
+        }
         Ok(())
     }
 
@@ -723,7 +726,7 @@ impl AggregateExpr for Min {
 #[derive(Debug)]
 pub struct MinAccumulator {
     min: ScalarValue,
-    moving_min: Box<moving_min_max::MovingMin<f64>>,
+    moving_min: moving_min_max::MovingMin<ScalarValue>,
 }
 
 impl MinAccumulator {
@@ -731,7 +734,7 @@ impl MinAccumulator {
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
             min: ScalarValue::try_from(datatype)?,
-            moving_min: Box::new(moving_min_max::MovingMin::<f64>::new()),
+            moving_min: moving_min_max::MovingMin::<ScalarValue>::new(),
         })
     }
 }
@@ -742,20 +745,23 @@ impl Accumulator for MinAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = downcast_value!(values[0], Float64Array);
-        for i in 0..values.len() {
-            (self.moving_min).push(values.value(i));
+        for idx in 0..values[0].len() {
+            let val = ScalarValue::try_from_array(&values[0], idx)?;
+            self.moving_min.push(val);
         }
-        self.min = ScalarValue::from(*self.moving_min.min().unwrap());
+        if let Some(res) = self.moving_min.min() {
+            self.min = res.clone();
+        }
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = downcast_value!(values[0], Float64Array);
-        for i in 0..values.len() {
+        for i in 0..values[0].len() {
             (self.moving_min).pop();
         }
-        self.min = ScalarValue::from(*self.moving_min.min().unwrap());
+        if let Some(res) = self.moving_min.min() {
+            self.min = res.clone();
+        }
         Ok(())
     }
 
