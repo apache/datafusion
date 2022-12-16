@@ -28,7 +28,7 @@ use datafusion_common::{DataFusionError, Result, ScalarValue};
 pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Field> {
     match (data_type, key) {
         (DataType::List(lt), ScalarValue::Int64(Some(i))) => {
-            Ok(Field::new(&i.to_string(), lt.data_type().clone(), true))
+            Ok(Field::new(i.to_string(), lt.data_type().clone(), true))
         }
         (DataType::Struct(fields), ScalarValue::Utf8(Some(s))) => {
             if s.is_empty() {

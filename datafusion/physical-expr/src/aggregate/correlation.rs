@@ -72,32 +72,32 @@ impl AggregateExpr for Correlation {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
-                &format_state_name(&self.name, "count"),
+                format_state_name(&self.name, "count"),
                 DataType::UInt64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "mean1"),
+                format_state_name(&self.name, "mean1"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "m2_1"),
+                format_state_name(&self.name, "m2_1"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "mean2"),
+                format_state_name(&self.name, "mean2"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "m2_2"),
+                format_state_name(&self.name, "m2_2"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "algo_const"),
+                format_state_name(&self.name, "algo_const"),
                 DataType::Float64,
                 true,
             ),

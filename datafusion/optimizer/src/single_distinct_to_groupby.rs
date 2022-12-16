@@ -174,7 +174,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     let mut alias_expr: Vec<Expr> = Vec::new();
                     for (alias, original_field) in group_expr_alias {
                         alias_expr
-                            .push(col(&alias).alias(original_field.qualified_name()));
+                            .push(col(alias).alias(original_field.qualified_name()));
                     }
                     for (i, expr) in new_aggr_exprs.iter().enumerate() {
                         alias_expr.push(columnize_expr(

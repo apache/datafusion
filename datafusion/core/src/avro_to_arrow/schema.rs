@@ -131,7 +131,7 @@ fn schema_to_field_with_props(
         }
         AvroSchema::Enum { symbols, name, .. } => {
             return Ok(Field::new_dict(
-                &name.fullname(None),
+                name.fullname(None),
                 index_type(symbols.len()),
                 false,
                 0,

@@ -75,7 +75,7 @@ impl AggregateExpr for ArrayAgg {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "array_agg"),
+            format_state_name(&self.name, "array_agg"),
             DataType::List(Box::new(Field::new(
                 "item",
                 self.input_data_type.clone(),
