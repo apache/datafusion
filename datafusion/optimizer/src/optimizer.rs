@@ -250,6 +250,7 @@ impl Optimizer {
 
             for rule in &self.rules {
                 if !config.rule_enabled(rule.name()) {
+                    debug!("Skipping rule {} due to optimizer config", rule.name());
                     continue;
                 }
 
