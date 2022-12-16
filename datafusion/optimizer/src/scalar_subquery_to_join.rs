@@ -314,10 +314,10 @@ fn optimize_scalar(
     let new_plan = LogicalPlanBuilder::from(filter_input.clone());
     let mut new_plan = if join_keys.0.is_empty() {
         // if not correlated, group down to 1 row and cross join on that (preserving row count)
-        new_plan.cross_join(&subqry_plan)?
+        new_plan.cross_join(subqry_plan)?
     } else {
         // inner join if correlated, grouping by the join keys so we don't change row count
-        new_plan.join(&subqry_plan, JoinType::Inner, join_keys, None)?
+        new_plan.join(subqry_plan, JoinType::Inner, join_keys, None)?
     };
 
     // restore where in condition

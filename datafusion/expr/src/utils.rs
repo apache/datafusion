@@ -499,7 +499,7 @@ pub fn from_plan(
         }
         LogicalPlan::CrossJoin(_) => {
             let left = inputs[0].clone();
-            let right = &inputs[1];
+            let right = inputs[1].clone();
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }
         LogicalPlan::Subquery(_) => {
