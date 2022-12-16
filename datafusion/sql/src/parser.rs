@@ -726,4 +726,13 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn invalid_compression_type() {
+        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION TYPE ZZZ LOCATION 'blahblah'";
+        expect_parse_error(
+            sql,
+            "sql parser error: Unsupported file compression type ZZZ",
+        )
+    }
 }
