@@ -21,7 +21,7 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
-use crate::execution::memory_manager::human_readable_size;
+use crate::execution::memory_manager::{human_readable_size, AllocationOptions};
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::execution::TrackedAllocation;
 use crate::physical_plan::common::{batch_byte_size, IPCWriter, SizedRecordBatchStream};
@@ -95,9 +95,10 @@ impl ExternalSorter {
         fetch: Option<usize>,
     ) -> Self {
         let metrics = metrics_set.new_intermediate_baseline(partition_id);
-        let allocation = runtime
-            .memory_manager
-            .new_tracked_allocation(format!("ExternalSorter[{}]", partition_id));
+        let options = AllocationOptions::new(format!("ExternalSorter[{}]", partition_id))
+            .with_can_spill(true);
+
+        let allocation = runtime.memory_manager.new_allocation_with_options(options);
 
         Self {
             schema,

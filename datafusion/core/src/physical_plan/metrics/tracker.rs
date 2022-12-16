@@ -48,7 +48,7 @@ impl MemTrackingMetrics {
     ) -> Self {
         Self {
             allocation: memory_manager
-                .new_tracked_allocation(format!("MemTrackingMetrics[{}]", partition)),
+                .new_allocation(format!("MemTrackingMetrics[{}]", partition)),
             metrics: BaselineMetrics::new(metrics, partition),
         }
     }

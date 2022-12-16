@@ -27,7 +27,9 @@ use std::collections::HashMap;
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::listing_table_factory::ListingTableFactory;
 use crate::datasource::object_store::ObjectStoreRegistry;
-use crate::execution::memory_manager::MemoryManagerConfig;
+use crate::execution::memory_manager::{
+    GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
+};
 use crate::execution::MemoryManager;
 use datafusion_common::DataFusionError;
 use object_store::ObjectStore;
@@ -59,14 +61,17 @@ impl RuntimeEnv {
     /// Create env based on configuration
     pub fn new(config: RuntimeConfig) -> Result<Self> {
         let RuntimeConfig {
-            memory_manager,
+            memory_pool,
             disk_manager,
             object_store_registry,
             table_factories,
         } = config;
 
+        let pool =
+            memory_pool.unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
+
         Ok(Self {
-            memory_manager: MemoryManager::new(memory_manager),
+            memory_manager: Arc::new(MemoryManager::new(pool)),
             disk_manager: DiskManager::try_new(disk_manager)?,
             object_store_registry,
             table_factories,
@@ -121,8 +126,10 @@ impl Default for RuntimeEnv {
 pub struct RuntimeConfig {
     /// DiskManager to manage temporary disk file usage
     pub disk_manager: DiskManagerConfig,
-    /// MemoryManager to limit access to memory
-    pub memory_manager: MemoryManagerConfig,
+    /// [`MemoryPool`] from which to allocate memory
+    ///
+    /// Defaults to using an [`UnboundedMemoryPool`] if `None`
+    pub memory_pool: Option<Arc<dyn MemoryPool>>,
     /// ObjectStoreRegistry to get object store based on url
     pub object_store_registry: Arc<ObjectStoreRegistry>,
     /// Custom table factories for things like deltalake that are not part of core datafusion
@@ -151,9 +158,9 @@ impl RuntimeConfig {
         self
     }
 
-    /// Customize memory manager
-    pub fn with_memory_manager(mut self, memory_manager: MemoryManagerConfig) -> Self {
-        self.memory_manager = memory_manager;
+    /// Customize memory policy
+    pub fn with_memory_policy(mut self, memory_pool: Arc<dyn MemoryPool>) -> Self {
+        self.memory_pool = Some(memory_pool);
         self
     }
 
@@ -178,11 +185,12 @@ impl RuntimeConfig {
     /// Specify the total memory to use while running the DataFusion
     /// plan to `max_memory * memory_fraction` in bytes.
     ///
+    /// This defaults to using [`GreedyMemoryPool`]
+    ///
     /// Note DataFusion does not yet respect this limit in all cases.
     pub fn with_memory_limit(self, max_memory: usize, memory_fraction: f64) -> Self {
-        self.with_memory_manager(
-            MemoryManagerConfig::try_new_limit(max_memory, memory_fraction).unwrap(),
-        )
+        let pool_size = (max_memory as f64 * memory_fraction) as usize;
+        self.with_memory_policy(Arc::new(GreedyMemoryPool::new(pool_size)))
     }
 
     /// Use the specified path to create any needed temporary files

@@ -74,7 +74,7 @@ impl AggregateStream {
 
         let allocation = context
             .memory_manager()
-            .new_tracked_allocation(format!("AggregateStream[{}]", partition));
+            .new_allocation(format!("AggregateStream[{}]", partition));
 
         let inner = AggregateStreamInner {
             schema: Arc::clone(&schema),

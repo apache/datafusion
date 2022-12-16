@@ -125,7 +125,7 @@ impl GroupedHashAggregateStream {
 
         let allocation = context
             .memory_manager()
-            .new_tracked_allocation(format!("GroupedHashAggregateStream[{}]", partition));
+            .new_allocation(format!("GroupedHashAggregateStream[{}]", partition));
 
         let inner = GroupedHashAggregateStreamInner {
             schema: Arc::clone(&schema),

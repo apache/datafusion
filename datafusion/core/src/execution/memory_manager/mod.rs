@@ -17,170 +17,137 @@
 
 //! Manages all available memory during query execution
 
-use crate::error::{DataFusionError, Result};
-use log::debug;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::error::Result;
 use std::sync::Arc;
 
+mod pool;
 pub mod proxy;
 
-#[derive(Debug, Clone)]
-/// Configuration information for memory management
-pub enum MemoryManagerConfig {
-    /// Use the existing [MemoryManager]
-    Existing(Arc<MemoryManager>),
+pub use pool::*;
 
-    /// Create a new [MemoryManager] that will use up to some
-    /// fraction of total system memory.
-    New {
-        /// Max execution memory allowed for DataFusion.  Defaults to
-        /// `usize::MAX`, which will not attempt to limit the memory
-        /// used during plan execution.
-        max_memory: usize,
+/// The pool of memory from which [`MemoryManager`] and [`TrackedAllocation`] allocate
+pub trait MemoryPool: Send + Sync + std::fmt::Debug {
+    /// Records the creation of a new [`TrackedAllocation`] with [`AllocationOptions`]
+    fn allocate(&self, _options: &AllocationOptions) {}
 
-        /// The fraction of `max_memory` that the memory manager will
-        /// use for execution.
-        ///
-        /// The purpose of this config is to set aside memory for
-        /// untracked data structures, and imprecise size estimation
-        /// during memory acquisition.  Defaults to 0.7
-        memory_fraction: f64,
-    },
+    /// Records the destruction of a [`TrackedAllocation`] with [`AllocationOptions`]
+    fn free(&self, _options: &AllocationOptions) {}
+
+    /// Infallibly grow the provided `allocation` by `additional` bytes
+    ///
+    /// This must always succeed
+    fn grow(&self, allocation: &TrackedAllocation, additional: usize);
+
+    /// Infallibly shrink the provided `allocation` by `shrink` bytes
+    fn shrink(&self, allocation: &TrackedAllocation, shrink: usize);
+
+    /// Attempt to grow the provided `allocation` by `additional` bytes
+    ///
+    /// On error the `allocation` will not be increased in size
+    fn try_grow(&self, allocation: &TrackedAllocation, additional: usize) -> Result<()>;
+
+    /// Return the total amount of memory allocated
+    fn allocated(&self) -> usize;
 }
 
-impl Default for MemoryManagerConfig {
-    fn default() -> Self {
-        Self::New {
-            max_memory: usize::MAX,
-            memory_fraction: 0.7,
-        }
-    }
-}
-
-impl MemoryManagerConfig {
-    /// Create a new memory [MemoryManager] with no limit on the
-    /// memory used
-    pub fn new() -> Self {
-        Default::default()
-    }
-
-    /// Create a configuration based on an existing [MemoryManager]
-    pub fn new_existing(existing: Arc<MemoryManager>) -> Self {
-        Self::Existing(existing)
-    }
-
-    /// Create a new [MemoryManager] with a `max_memory` and `fraction`
-    pub fn try_new_limit(max_memory: usize, memory_fraction: f64) -> Result<Self> {
-        if max_memory == 0 {
-            return Err(DataFusionError::Plan(format!(
-                "invalid max_memory. Expected greater than 0, got {}",
-                max_memory
-            )));
-        }
-        if !(memory_fraction > 0f64 && memory_fraction <= 1f64) {
-            return Err(DataFusionError::Plan(format!(
-                "invalid fraction. Expected greater than 0 and less than 1.0, got {}",
-                memory_fraction
-            )));
-        }
-
-        Ok(Self::New {
-            max_memory,
-            memory_fraction,
-        })
-    }
-}
-
-/// The memory manager maintains a fixed size pool of memory
-/// from which portions can be allocated
+/// A cooperative MemoryManager which tracks memory in a cooperative fashion.
+/// `ExecutionPlan` nodes such as `SortExec`, which require large amounts of memory
+/// register their memory requests with the MemoryManager which then tracks the total
+///  memory that has been allocated across all such nodes.
+///
+/// The associated [`MemoryPool`] determines how to respond to memory allocation
+/// requests, and any associated fairness control
 #[derive(Debug)]
 pub struct MemoryManager {
-    state: Arc<MemoryManagerState>,
+    pool: Arc<dyn MemoryPool>,
 }
 
 impl MemoryManager {
     /// Create new memory manager based on the configuration
-    pub fn new(config: MemoryManagerConfig) -> Arc<Self> {
-        match config {
-            MemoryManagerConfig::Existing(manager) => manager,
-            MemoryManagerConfig::New {
-                max_memory,
-                memory_fraction,
-            } => {
-                let pool_size = (max_memory as f64 * memory_fraction) as usize;
-                debug!(
-                    "Creating memory manager with initial size {}",
-                    human_readable_size(pool_size)
-                );
-
-                Arc::new(Self {
-                    state: Arc::new(MemoryManagerState {
-                        pool_size,
-                        used: AtomicUsize::new(0),
-                    }),
-                })
-            }
-        }
-    }
-
-    /// Returns the maximum pool size
-    ///
-    /// Note: this can be less than the amount allocated as a result of [`MemoryManager::allocate`]
-    pub fn pool_size(&self) -> usize {
-        self.state.pool_size
+    pub fn new(pool: Arc<dyn MemoryPool>) -> Self {
+        Self { pool }
     }
 
     /// Returns the number of allocated bytes
     ///
     /// Note: this can exceed the pool size as a result of [`MemoryManager::allocate`]
     pub fn allocated(&self) -> usize {
-        self.state.used.load(Ordering::Relaxed)
+        self.pool.allocated()
     }
 
     /// Returns a new empty allocation identified by `name`
-    pub fn new_tracked_allocation(&self, name: String) -> TrackedAllocation {
-        TrackedAllocation::new_empty(name, Arc::clone(&self.state))
+    pub fn new_allocation(&self, name: String) -> TrackedAllocation {
+        self.new_allocation_with_options(AllocationOptions::new(name))
+    }
+
+    /// Returns a new empty allocation with the provided [`AllocationOptions`]
+    pub fn new_allocation_with_options(
+        &self,
+        options: AllocationOptions,
+    ) -> TrackedAllocation {
+        TrackedAllocation::new_empty(options, Arc::clone(&self.pool))
     }
 }
 
-impl std::fmt::Display for MemoryManager {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "MemoryManager(capacity: {}, allocated: {})",
-            human_readable_size(self.state.pool_size),
-            human_readable_size(self.allocated()),
-        )
-    }
-}
-
+/// Options associated with a [`TrackedAllocation`]
 #[derive(Debug)]
-struct MemoryManagerState {
-    pool_size: usize,
-    used: AtomicUsize,
+pub struct AllocationOptions {
+    name: String,
+    can_spill: bool,
+}
+
+impl AllocationOptions {
+    /// Create a new [`AllocationOptions`]
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            can_spill: false,
+        }
+    }
+
+    /// Set whether this allocation can be spilled to disk
+    pub fn with_can_spill(self, can_spill: bool) -> Self {
+        Self { can_spill, ..self }
+    }
+
+    /// Returns true if this allocation can spill to disk
+    pub fn can_spill(&self) -> bool {
+        self.can_spill
+    }
+
+    /// Returns the name associated with this allocation
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 /// A [`TrackedAllocation`] tracks a reservation of memory in a [`MemoryManager`]
 /// that is freed back to the memory pool on drop
 #[derive(Debug)]
 pub struct TrackedAllocation {
-    name: String,
+    options: AllocationOptions,
     size: usize,
-    state: Arc<MemoryManagerState>,
+    policy: Arc<dyn MemoryPool>,
 }
 
 impl TrackedAllocation {
-    fn new_empty(name: String, state: Arc<MemoryManagerState>) -> Self {
+    fn new_empty(options: AllocationOptions, policy: Arc<dyn MemoryPool>) -> Self {
+        policy.allocate(&options);
         Self {
-            name,
+            options,
             size: 0,
-            state,
+            policy,
         }
     }
 
     /// Returns the size of this [`TrackedAllocation`] in bytes
     pub fn size(&self) -> usize {
         self.size
+    }
+
+    /// Returns this allocations [`AllocationOptions`]
+    pub fn options(&self) -> &AllocationOptions {
+        &self.options
     }
 
     /// Frees all bytes from this allocation returning the number of bytes freed
@@ -199,7 +166,7 @@ impl TrackedAllocation {
     /// Panics if `capacity` exceeds [`Self::size`]
     pub fn shrink(&mut self, capacity: usize) {
         let new_size = self.size.checked_sub(capacity).unwrap();
-        self.state.used.fetch_sub(capacity, Ordering::SeqCst);
+        self.policy.shrink(self, capacity);
         self.size = new_size
     }
 
@@ -215,20 +182,13 @@ impl TrackedAllocation {
 
     /// Increase the size of this by `capacity` bytes
     pub fn grow(&mut self, capacity: usize) {
-        self.state.used.fetch_add(capacity, Ordering::SeqCst);
+        self.policy.grow(self, capacity);
         self.size += capacity;
     }
 
     /// Try to increase the size of this [`TrackedAllocation`] by `capacity` bytes
     pub fn try_grow(&mut self, capacity: usize) -> Result<()> {
-        let pool_size = self.state.pool_size;
-        self.state
-            .used
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |used| {
-                let new_used = used + capacity;
-                (new_used <= pool_size).then_some(new_used)
-            })
-            .map_err(|used| DataFusionError::ResourcesExhausted(format!("Failed to allocate additional {} bytes for {} with {} bytes already allocated - maximum available is {}", capacity, self.name, self.size, used)))?;
+        self.policy.try_grow(self, capacity)?;
         self.size += capacity;
         Ok(())
     }
@@ -237,6 +197,7 @@ impl TrackedAllocation {
 impl Drop for TrackedAllocation {
     fn drop(&mut self) {
         self.free();
+        self.policy.free(&self.options);
     }
 }
 
@@ -269,43 +230,10 @@ mod tests {
     use super::*;
 
     #[test]
-    #[should_panic(expected = "invalid max_memory. Expected greater than 0, got 0")]
-    fn test_try_new_with_limit_0() {
-        MemoryManagerConfig::try_new_limit(0, 1.0).unwrap();
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "invalid fraction. Expected greater than 0 and less than 1.0, got -9.6"
-    )]
-    fn test_try_new_with_limit_neg_fraction() {
-        MemoryManagerConfig::try_new_limit(100, -9.6).unwrap();
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "invalid fraction. Expected greater than 0 and less than 1.0, got 9.6"
-    )]
-    fn test_try_new_with_limit_too_large() {
-        MemoryManagerConfig::try_new_limit(100, 9.6).unwrap();
-    }
-
-    #[test]
-    fn test_try_new_with_limit_pool_size() {
-        let config = MemoryManagerConfig::try_new_limit(100, 0.5).unwrap();
-        let manager = MemoryManager::new(config);
-        assert_eq!(manager.pool_size(), 50);
-
-        let config = MemoryManagerConfig::try_new_limit(100000, 0.1).unwrap();
-        let manager = MemoryManager::new(config);
-        assert_eq!(manager.pool_size(), 10000);
-    }
-
-    #[test]
     fn test_memory_manager_underflow() {
-        let config = MemoryManagerConfig::try_new_limit(100, 0.5).unwrap();
-        let manager = MemoryManager::new(config);
-        let mut a1 = manager.new_tracked_allocation("a1".to_string());
+        let policy = Arc::new(GreedyMemoryPool::new(50));
+        let manager = MemoryManager::new(policy);
+        let mut a1 = manager.new_allocation("a1".to_string());
         assert_eq!(manager.allocated(), 0);
 
         a1.grow(100);
@@ -320,7 +248,7 @@ mod tests {
         a1.try_grow(30).unwrap();
         assert_eq!(manager.allocated(), 30);
 
-        let mut a2 = manager.new_tracked_allocation("a2".to_string());
+        let mut a2 = manager.new_allocation("a2".to_string());
         a2.try_grow(25).unwrap_err();
         assert_eq!(manager.allocated(), 30);
 

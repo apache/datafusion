@@ -139,10 +139,9 @@ impl GroupedHashAggregateStreamV2 {
         let aggr_schema = aggr_state_schema(&aggr_expr)?;
 
         let aggr_layout = Arc::new(RowLayout::new(&aggr_schema, RowType::WordAligned));
-        let allocation = context.memory_manager().new_tracked_allocation(format!(
-            "GroupedHashAggregateStreamV2[{}]",
-            partition
-        ));
+        let allocation = context
+            .memory_manager()
+            .new_allocation(format!("GroupedHashAggregateStreamV2[{}]", partition));
 
         let aggr_state = AggregationState {
             allocation,
