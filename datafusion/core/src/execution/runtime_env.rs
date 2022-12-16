@@ -27,9 +27,7 @@ use std::collections::HashMap;
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::listing_table_factory::ListingTableFactory;
 use crate::datasource::object_store::ObjectStoreRegistry;
-use crate::execution::memory_pool::{
-    GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
-};
+use crate::execution::memory_pool::{GreedyMemoryPool, MemoryPool, UnboundedMemoryPool};
 use datafusion_common::DataFusionError;
 use object_store::ObjectStore;
 use std::fmt::{Debug, Formatter};
