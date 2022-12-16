@@ -208,7 +208,7 @@ mod tests {
         let t3 = table_scan(Some("t3"), &schema, None)?.build()?;
         let plan = LogicalPlanBuilder::from(t3)
             .join(
-                &plan,
+                plan,
                 JoinType::Inner,
                 (
                     vec![
@@ -242,7 +242,7 @@ mod tests {
     ) -> Result<LogicalPlan> {
         LogicalPlanBuilder::from(left_table)
             .join(
-                &right_table,
+                right_table,
                 JoinType::Inner,
                 (
                     vec![Column::from_qualified_name(left_key)],

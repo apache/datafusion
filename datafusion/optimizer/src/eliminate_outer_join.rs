@@ -19,13 +19,12 @@
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::{
-    expr::BinaryExpr,
     logical_plan::{Join, JoinType, LogicalPlan},
     utils::from_plan,
 };
 use datafusion_expr::{Expr, Operator};
 
-use datafusion_expr::expr::Cast;
+use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
 use std::sync::Arc;
 
 #[derive(Default)]
@@ -282,7 +281,7 @@ fn extract_non_nullable_columns(
             )
         }
         Expr::Cast(Cast { expr, data_type: _ })
-        | Expr::TryCast { expr, data_type: _ } => extract_non_nullable_columns(
+        | Expr::TryCast(TryCast { expr, data_type: _ }) => extract_non_nullable_columns(
             expr,
             non_nullable_cols,
             left_schema,
@@ -326,7 +325,7 @@ mod tests {
         // could not eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .join(
-                &t2,
+                t2,
                 JoinType::Left,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -349,7 +348,7 @@ mod tests {
         // eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .join(
-                &t2,
+                t2,
                 JoinType::Left,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -372,7 +371,7 @@ mod tests {
         // eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .join(
-                &t2,
+                t2,
                 JoinType::Right,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -399,7 +398,7 @@ mod tests {
         // eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .join(
-                &t2,
+                t2,
                 JoinType::Full,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -426,7 +425,7 @@ mod tests {
         // eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .join(
-                &t2,
+                t2,
                 JoinType::Full,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,

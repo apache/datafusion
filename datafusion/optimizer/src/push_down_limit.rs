@@ -521,7 +521,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Inner,
                 (vec!["a"], vec!["a"]),
                 None,
@@ -545,7 +545,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Inner,
                 (vec!["a"], vec!["a"]),
                 None,
@@ -628,7 +628,7 @@ mod test {
         let right_keys: Vec<&str> = Vec::new();
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
-                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
                 JoinType::Left,
                 (left_keys.clone(), right_keys.clone()),
                 None,
@@ -647,7 +647,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
-                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
                 JoinType::Right,
                 (left_keys.clone(), right_keys.clone()),
                 None,
@@ -666,7 +666,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
-                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
                 JoinType::Full,
                 (left_keys.clone(), right_keys.clone()),
                 None,
@@ -685,7 +685,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
-                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
                 JoinType::LeftSemi,
                 (left_keys.clone(), right_keys.clone()),
                 None,
@@ -703,7 +703,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
-                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
                 JoinType::LeftAnti,
                 (left_keys.clone(), right_keys.clone()),
                 None,
@@ -721,7 +721,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
-                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
                 JoinType::RightSemi,
                 (left_keys.clone(), right_keys.clone()),
                 None,
@@ -739,7 +739,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::RightAnti,
                 (left_keys, right_keys),
                 None,
@@ -763,7 +763,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Left,
                 (vec!["a"], vec!["a"]),
                 None,
@@ -788,7 +788,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Left,
                 (vec!["a"], vec!["a"]),
                 None,
@@ -813,7 +813,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Right,
                 (vec!["a"], vec!["a"]),
                 None,
@@ -838,7 +838,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Right,
                 (vec!["a"], vec!["a"]),
                 None,
@@ -862,7 +862,7 @@ mod test {
         let table_scan_2 = test_table_scan_with_name("test2")?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
-            .cross_join(&LogicalPlanBuilder::from(table_scan_2).build()?)?
+            .cross_join(LogicalPlanBuilder::from(table_scan_2).build()?)?
             .limit(0, Some(1000))?
             .build()?;
 
@@ -882,7 +882,7 @@ mod test {
         let table_scan_2 = test_table_scan_with_name("test2")?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
-            .cross_join(&LogicalPlanBuilder::from(table_scan_2).build()?)?
+            .cross_join(LogicalPlanBuilder::from(table_scan_2).build()?)?
             .limit(1000, Some(1000))?
             .build()?;
 

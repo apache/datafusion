@@ -191,7 +191,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let left_type = expr.get_type(&self.schema)?;
                 let right_type = pattern.get_type(&self.schema)?;
                 let coerced_type =
-                    coerce_types(&left_type, &Operator::Like, &right_type)?;
+                    coerce_types(&left_type, &Operator::ILike, &right_type)?;
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
                 let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
                 let expr = Expr::ILike(Like::new(negated, expr, pattern, escape_char));

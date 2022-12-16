@@ -194,7 +194,7 @@ fn optimize_where_in(
         false => JoinType::LeftSemi,
     };
     let mut new_plan = LogicalPlanBuilder::from(outer_input.clone()).join(
-        &subqry_plan,
+        subqry_plan,
         join_type,
         join_keys,
         join_filters,
