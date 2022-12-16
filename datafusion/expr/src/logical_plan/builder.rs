@@ -878,8 +878,8 @@ impl LogicalPlanBuilder {
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
         Ok(Self::from(LogicalPlan::Join(Join {
-            left: Arc::new(self.plan.clone()),
-            right: Arc::new(right.clone()),
+            left: Arc::new(self.plan),
+            right: Arc::new(right),
             on: join_key_pairs,
             filter,
             join_type,
