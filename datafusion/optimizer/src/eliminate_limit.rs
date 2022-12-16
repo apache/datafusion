@@ -21,7 +21,6 @@
 //! This rule also removes OFFSET 0 from the [LogicalPlan]
 //! This saves time in planning and executing the query.
 use crate::optimizer::ApplyOrder;
-use crate::optimizer::ApplyOrder::BottomUp;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::{EmptyRelation, LogicalPlan};
@@ -42,7 +41,7 @@ impl OptimizerRule for EliminateLimit {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let limit = match plan {
             LogicalPlan::Limit(limit) => limit,
@@ -63,7 +62,7 @@ impl OptimizerRule for EliminateLimit {
                     let input = limit.input.as_ref();
                     // input also can be Limit, so we should apply again.
                     return Ok(Some(
-                        self.try_optimize(input, _optimizer_config)?
+                        self.try_optimize(input, _config)?
                             .unwrap_or_else(|| input.clone()),
                     ));
                 }
@@ -77,7 +76,7 @@ impl OptimizerRule for EliminateLimit {
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(BottomUp)
+        Some(ApplyOrder::BottomUp)
     }
 }
 
@@ -85,8 +84,8 @@ impl OptimizerRule for EliminateLimit {
 mod tests {
     use super::*;
     use crate::optimizer::Optimizer;
-    use crate::push_down_limit::PushDownLimit;
     use crate::test::*;
+    use crate::OptimizerContext;
     use datafusion_common::Column;
     use datafusion_expr::{
         col,
@@ -95,13 +94,15 @@ mod tests {
     };
     use std::sync::Arc;
 
+    use crate::push_down_limit::PushDownLimit;
+
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateLimit::new())]);
         let optimized_plan = optimizer
             .optimize_recursively(
                 optimizer.rules.get(0).unwrap(),
                 plan,
-                &mut OptimizerConfig::new(),
+                &OptimizerContext::new(),
             )?
             .unwrap_or_else(|| plan.clone());
 
@@ -116,13 +117,13 @@ mod tests {
         expected: &str,
     ) -> Result<()> {
         fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
-        let mut config = OptimizerConfig::new().with_max_passes(1);
+        let config = OptimizerContext::new().with_max_passes(1);
         let optimizer = Optimizer::with_rules(vec![
             Arc::new(PushDownLimit::new()),
             Arc::new(EliminateLimit::new()),
         ]);
         let optimized_plan = optimizer
-            .optimize(plan, &mut config, observe)
+            .optimize(plan, &config, observe)
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -239,7 +240,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .limit(2, Some(1))?
             .join_using(
-                &table_scan_inner,
+                table_scan_inner,
                 JoinType::Inner,
                 vec![Column::from_name("a".to_string())],
             )?

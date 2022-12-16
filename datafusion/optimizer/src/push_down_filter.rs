@@ -506,7 +506,7 @@ impl OptimizerRule for PushDownFilter {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let filter = match plan {
             LogicalPlan::Filter(filter) => filter,
@@ -517,22 +517,12 @@ impl OptimizerRule for PushDownFilter {
                     Some(optimized_plan) => Ok(Some(utils::optimize_children(
                         self,
                         &optimized_plan,
-                        optimizer_config,
+                        config,
                     )?)),
-                    None => Ok(Some(utils::optimize_children(
-                        self,
-                        plan,
-                        optimizer_config,
-                    )?)),
+                    None => Ok(Some(utils::optimize_children(self, plan, config)?)),
                 };
             }
-            _ => {
-                return Ok(Some(utils::optimize_children(
-                    self,
-                    plan,
-                    optimizer_config,
-                )?))
-            }
+            _ => return Ok(Some(utils::optimize_children(self, plan, config)?)),
         };
 
         let child_plan = &**filter.input();
@@ -544,7 +534,7 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     child_filter.input().clone(),
                 )?);
-                return self.try_optimize(&new_plan, optimizer_config);
+                return self.try_optimize(&new_plan, config);
             }
             LogicalPlan::Repartition(_)
             | LogicalPlan::Distinct(_)
@@ -745,11 +735,7 @@ impl OptimizerRule for PushDownFilter {
             _ => plan.clone(),
         };
 
-        Ok(Some(utils::optimize_children(
-            self,
-            &new_plan,
-            optimizer_config,
-        )?))
+        Ok(Some(utils::optimize_children(self, &new_plan, config)?))
     }
 }
 
@@ -786,6 +772,7 @@ fn replace_cols_by_name(e: Expr, replace_map: &HashMap<String, Expr>) -> Result<
 mod tests {
     use super::*;
     use crate::test::*;
+    use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use async_trait::async_trait;
     use datafusion_common::DFSchema;
@@ -798,7 +785,7 @@ mod tests {
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let optimized_plan = PushDownFilter::new()
-            .try_optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
@@ -1134,6 +1121,7 @@ mod tests {
             .alias("test2")?;
 
         let plan = table
+            .clone()
             .union(table.build()?)?
             .filter(col("b").eq(lit(1i64)))?
             .build()?;
@@ -1166,7 +1154,7 @@ mod tests {
             .build()?;
         let filter = and(col("test.a").eq(lit(1)), col("test1.d").gt(lit(2)));
         let plan = LogicalPlanBuilder::from(left)
-            .cross_join(&right)?
+            .cross_join(right)?
             .project(vec![col("test.a"), col("test1.d")])?
             .filter(filter)?
             .build()?;
@@ -1195,7 +1183,7 @@ mod tests {
             .build()?;
         let filter = and(col("test.a").eq(lit(1)), col("test1.a").gt(lit(2)));
         let plan = LogicalPlanBuilder::from(left)
-            .cross_join(&right)?
+            .cross_join(right)?
             .project(vec![col("test.a"), col("test1.a")])?
             .filter(filter)?
             .build()?;
@@ -1309,7 +1297,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -1349,7 +1337,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join_using(
-                &right,
+                right,
                 JoinType::Inner,
                 vec![Column::from_name("a".to_string())],
             )?
@@ -1390,7 +1378,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -1429,7 +1417,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -1470,7 +1458,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join_using(
-                &right,
+                right,
                 JoinType::Left,
                 vec![Column::from_name("a".to_string())],
             )?
@@ -1508,7 +1496,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join_using(
-                &right,
+                right,
                 JoinType::Right,
                 vec![Column::from_name("a".to_string())],
             )?
@@ -1547,7 +1535,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join_using(
-                &right,
+                right,
                 JoinType::Left,
                 vec![Column::from_name("a".to_string())],
             )?
@@ -1586,7 +1574,7 @@ mod tests {
             .build()?;
         let plan = LogicalPlanBuilder::from(left)
             .join_using(
-                &right,
+                right,
                 JoinType::Right,
                 vec![Column::from_name("a".to_string())],
             )?
@@ -1630,7 +1618,7 @@ mod tests {
             .and(col("test2.c").gt(lit(4u32)));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 Some(filter),
@@ -1674,7 +1662,7 @@ mod tests {
             .and(col("test2.c").gt(lit(4u32)));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 Some(filter),
@@ -1716,7 +1704,7 @@ mod tests {
         let filter = col("test.a").gt(lit(1u32));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("a")], vec![Column::from_name("b")]),
                 Some(filter),
@@ -1761,7 +1749,7 @@ mod tests {
             .and(col("test2.c").gt(lit(4u32)));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Left,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 Some(filter),
@@ -1805,7 +1793,7 @@ mod tests {
             .and(col("test2.c").gt(lit(4u32)));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Right,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 Some(filter),
@@ -1849,7 +1837,7 @@ mod tests {
             .and(col("test2.c").gt(lit(4u32)));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Full,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 Some(filter),
@@ -1946,7 +1934,7 @@ mod tests {
             table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
 
         let optimised_plan = PushDownFilter::new()
-            .try_optimize(&plan, &mut OptimizerConfig::new())
+            .try_optimize(&plan, &OptimizerContext::new())
             .expect("failed to optimize plan")
             .unwrap();
 
@@ -2102,7 +2090,7 @@ mod tests {
         let filter = col("c").gt(lit(1u32));
         let plan = LogicalPlanBuilder::from(left)
             .join(
-                &right,
+                right,
                 JoinType::Inner,
                 (vec![Column::from_name("c")], vec![Column::from_name("d")]),
                 Some(filter),
@@ -2281,7 +2269,7 @@ mod tests {
             and(col("b").eq(col("e")), col("c").lt(lit(10u32))),
         );
         let plan = LogicalPlanBuilder::from(left)
-            .cross_join(&right)?
+            .cross_join(right)?
             .filter(filter)?
             .build()?;
 
@@ -2298,7 +2286,7 @@ mod tests {
         // Originally global state which can help to avoid duplicate Filters been generated and pushed down.
         // Now the global state is removed. Need to double confirm that avoid duplicate Filters.
         let optimized_plan = PushDownFilter::new()
-            .try_optimize(&plan, &mut OptimizerConfig::new())
+            .try_optimize(&plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
         assert_optimized_plan_eq(&optimized_plan, expected)

@@ -37,11 +37,10 @@ impl OptimizerRule for PropagateEmptyRelation {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         // optimize child plans first
-        let optimized_children_plan =
-            utils::optimize_children(self, plan, optimizer_config)?;
+        let optimized_children_plan = utils::optimize_children(self, plan, config)?;
         match &optimized_children_plan {
             LogicalPlan::EmptyRelation(_) => Ok(Some(optimized_children_plan)),
             LogicalPlan::Projection(_)
@@ -204,6 +203,7 @@ fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
 mod tests {
     use crate::eliminate_filter::EliminateFilter;
     use crate::test::{test_table_scan, test_table_scan_with_name};
+    use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Column, ScalarValue};
     use datafusion_expr::logical_plan::table_scan;
@@ -217,7 +217,7 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = PropagateEmptyRelation::new();
         let optimized_plan = rule
-            .try_optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
@@ -227,11 +227,11 @@ mod tests {
 
     fn assert_together_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let optimize_one = EliminateFilter::new()
-            .try_optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
         let optimize_two = PropagateEmptyRelation::new()
-            .try_optimize(&optimize_one, &mut OptimizerConfig::new())
+            .try_optimize(&optimize_one, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimize_two);
@@ -265,7 +265,7 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left)
             .join_using(
-                &right,
+                right,
                 JoinType::Inner,
                 vec![Column::from_name("a".to_string())],
             )?
@@ -399,7 +399,7 @@ mod tests {
         let right = LogicalPlanBuilder::empty(false).build()?;
 
         let plan = LogicalPlanBuilder::from(left)
-            .cross_join(&right)?
+            .cross_join(right)?
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
 

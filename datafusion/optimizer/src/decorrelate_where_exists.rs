@@ -48,7 +48,7 @@ impl DecorrelateWhereExists {
     fn extract_subquery_exprs(
         &self,
         predicate: &Expr,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<(Vec<SubqueryInfo>, Vec<Expr>)> {
         let filters = split_conjunction(predicate);
 
@@ -58,7 +58,7 @@ impl DecorrelateWhereExists {
             match it {
                 Expr::Exists { subquery, negated } => {
                     let subquery = self
-                        .try_optimize(&subquery.subquery, optimizer_config)?
+                        .try_optimize(&subquery.subquery, config)?
                         .map(Arc::new)
                         .unwrap_or_else(|| subquery.subquery.clone());
                     let subquery = Subquery { subquery };
@@ -77,7 +77,7 @@ impl OptimizerRule for DecorrelateWhereExists {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
@@ -86,11 +86,11 @@ impl OptimizerRule for DecorrelateWhereExists {
 
                 // Apply optimizer rule to current input
                 let optimized_input = self
-                    .try_optimize(filter_input, optimizer_config)?
+                    .try_optimize(filter_input, config)?
                     .unwrap_or_else(|| filter_input.clone());
 
                 let (subqueries, other_exprs) =
-                    self.extract_subquery_exprs(predicate, optimizer_config)?;
+                    self.extract_subquery_exprs(predicate, config)?;
                 let optimized_plan = LogicalPlan::Filter(Filter::try_new(
                     predicate.clone(),
                     Arc::new(optimized_input),
@@ -114,11 +114,7 @@ impl OptimizerRule for DecorrelateWhereExists {
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                Ok(Some(utils::optimize_children(
-                    self,
-                    plan,
-                    optimizer_config,
-                )?))
+                Ok(Some(utils::optimize_children(self, plan, config)?))
             }
         }
     }
@@ -196,7 +192,7 @@ fn optimize_exists(
         false => JoinType::LeftSemi,
     };
     let mut new_plan = LogicalPlanBuilder::from(outer_input.clone()).join(
-        &subqry_plan,
+        subqry_plan,
         join_type,
         join_keys,
         join_filters,

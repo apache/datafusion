@@ -19,21 +19,24 @@ use arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
 use sqllogictest::TestError;
 use sqlparser::parser::ParserError;
-use std::error;
-use std::fmt::{Display, Formatter};
+use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, DFSqlLogicTestError>;
 
 /// DataFusion sql-logicaltest error
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum DFSqlLogicTestError {
     /// Error from sqllogictest-rs
+    #[error("SqlLogicTest error(from sqllogictest-rs crate): {0}")]
     SqlLogicTest(TestError),
     /// Error from datafusion
+    #[error("DataFusion error: {0}")]
     DataFusion(DataFusionError),
     /// Error returned when SQL is syntactically incorrect.
+    #[error("SQL Parser error: {0}")]
     Sql(ParserError),
     /// Error from arrow-rs
+    #[error("Arrow error: {0}")]
     Arrow(ArrowError),
 }
 
@@ -60,22 +63,3 @@ impl From<ArrowError> for DFSqlLogicTestError {
         DFSqlLogicTestError::Arrow(value)
     }
 }
-
-impl Display for DFSqlLogicTestError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DFSqlLogicTestError::SqlLogicTest(error) => write!(
-                f,
-                "SqlLogicTest error(from sqllogictest-rs crate): {}",
-                error
-            ),
-            DFSqlLogicTestError::DataFusion(error) => {
-                write!(f, "DataFusion error: {}", error)
-            }
-            DFSqlLogicTestError::Sql(error) => write!(f, "SQL Parser error: {}", error),
-            DFSqlLogicTestError::Arrow(error) => write!(f, "Arrow error: {}", error),
-        }
-    }
-}
-
-impl error::Error for DFSqlLogicTestError {}
