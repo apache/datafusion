@@ -42,9 +42,9 @@ and applying it to a logical plan to produce an optimized logical plan.
 // The `datafusion` crate provides a DataFrame API that can create a LogicalPlan
 let logical_plan = ...
 
-let mut config = OptimizerConfig::default();
+let mut config = OptimizerContext::default();
 let optimizer = Optimizer::new(&config);
-let optimized_plan = optimizer.optimize(&logical_plan, &mut config, observe)?;
+let optimized_plan = optimizer.optimize(&logical_plan, &config, observe)?;
 
 fn observe(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
     println!(
@@ -82,7 +82,7 @@ pub trait OptimizerRule {
     fn optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<LogicalPlan>;
 
     /// A human readable name for this optimizer rule

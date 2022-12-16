@@ -21,10 +21,11 @@
 //! can never match.
 
 use crate::{utils, OptimizerConfig, OptimizerRule};
+use std::sync::Arc;
 use datafusion_expr::{
     and, logical_plan::Filter, logical_plan::JoinType, Expr, ExprSchemable, LogicalPlan,
 };
-use std::sync::Arc;
+use datafusion_common::Result;
 
 /// The FilterNullJoinKeys rule will identify inner joins with equi-join conditions
 /// where the join key is nullable on one side and non-nullable on the other side
@@ -33,18 +34,28 @@ use std::sync::Arc;
 #[derive(Default)]
 pub struct FilterNullJoinKeys {}
 
+impl FilterNullJoinKeys {
+    pub const NAME: &'static str = "filter_null_join_keys";
+}
+
 impl OptimizerRule for FilterNullJoinKeys {
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<LogicalPlan> {
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
                 // recurse down first and optimize inputs
                 let mut join = join.clone();
-                join.left = Arc::new(self.optimize(&join.left, optimizer_config)?);
-                join.right = Arc::new(self.optimize(&join.right, optimizer_config)?);
+                join.left = Arc::new(
+                    self.try_optimize(&join.left, config)?
+                        .unwrap_or_else(|| join.left.as_ref().clone()),
+                );
+                join.right = Arc::new(
+                    self.try_optimize(&join.right, config)?
+                        .unwrap_or_else(|| join.right.as_ref().clone()),
+                );
 
                 let left_schema = join.left.schema();
                 let right_schema = join.right.schema();
@@ -76,17 +87,17 @@ impl OptimizerRule for FilterNullJoinKeys {
                         join.right.clone(),
                     )?));
                 }
-                Ok(LogicalPlan::Join(join))
+                Ok(Some(LogicalPlan::Join(join)))
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, optimizer_config)
+                Ok(Some(utils::optimize_children(self, plan, config)?))
             }
         }
     }
 
     fn name(&self) -> &str {
-        "filter_null_join_keys"
+        Self::NAME
     }
 }
 
@@ -104,15 +115,20 @@ fn create_not_null_predicate(filters: Vec<Expr>) -> Expr {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
+
     use datafusion_common::{Column, Result};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{col, lit, logical_plan::JoinType, LogicalPlanBuilder};
 
+    use crate::optimizer::OptimizerContext;
+
+    use super::*;
+
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterNullJoinKeys::default();
-        rule.optimize(plan, &mut OptimizerConfig::new())
+        rule.try_optimize(plan, &OptimizerContext::new())
+            .unwrap()
             .expect("failed to optimize plan")
     }
 
@@ -158,7 +174,7 @@ mod tests {
         let t3 = table_scan(Some("t3"), &schema, None)?.build()?;
         let plan = LogicalPlanBuilder::from(t3)
             .join(
-                &plan,
+                plan,
                 JoinType::Inner,
                 (
                     vec![
@@ -189,7 +205,7 @@ mod tests {
         let (t1, t2) = test_tables()?;
         let plan = LogicalPlanBuilder::from(t1)
             .join_with_expr_keys(
-                &t2,
+                t2,
                 JoinType::Inner,
                 (
                     vec![col("t1.optional_id") + lit(1u32)],
@@ -211,7 +227,7 @@ mod tests {
         let (t1, t2) = test_tables()?;
         let plan = LogicalPlanBuilder::from(t1)
             .join_with_expr_keys(
-                &t2,
+                t2,
                 JoinType::Inner,
                 (
                     vec![col("t1.id") + lit(1u32)],
@@ -233,7 +249,7 @@ mod tests {
         let (t1, t2) = test_tables()?;
         let plan = LogicalPlanBuilder::from(t1)
             .join_with_expr_keys(
-                &t2,
+                t2,
                 JoinType::Inner,
                 (
                     vec![col("t1.optional_id") + lit(1u32)],
@@ -260,7 +276,7 @@ mod tests {
     ) -> Result<LogicalPlan> {
         LogicalPlanBuilder::from(left_table)
             .join(
-                &right_table,
+                right_table,
                 JoinType::Inner,
                 (
                     vec![Column::from_qualified_name(left_key)],

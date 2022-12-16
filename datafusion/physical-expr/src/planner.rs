@@ -29,7 +29,7 @@ use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::Cast;
 use datafusion_expr::{
-    binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator,
+    binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
 };
 use std::sync::Arc;
 
@@ -224,6 +224,26 @@ pub fn create_physical_expr(
                 binary_expr(expr.as_ref().clone(), op, pattern.as_ref().clone());
             create_physical_expr(&bin_expr, input_dfschema, input_schema, execution_props)
         }
+        Expr::ILike(Like {
+            negated,
+            expr,
+            pattern,
+            escape_char,
+        }) => {
+            if escape_char.is_some() {
+                return Err(DataFusionError::Execution(
+                    "ILIKE does not support escape_char".to_string(),
+                ));
+            }
+            let op = if *negated {
+                Operator::NotILike
+            } else {
+                Operator::ILike
+            };
+            let bin_expr =
+                binary_expr(expr.as_ref().clone(), op, pattern.as_ref().clone());
+            create_physical_expr(&bin_expr, input_dfschema, input_schema, execution_props)
+        }
         Expr::Case(case) => {
             let expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = &case.expr {
                 Some(create_physical_expr(
@@ -283,7 +303,7 @@ pub fn create_physical_expr(
             input_schema,
             data_type.clone(),
         ),
-        Expr::TryCast { expr, data_type } => expressions::try_cast(
+        Expr::TryCast(TryCast { expr, data_type }) => expressions::try_cast(
             create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
             input_schema,
             data_type.clone(),

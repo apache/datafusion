@@ -110,8 +110,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Specifies the output partitioning scheme of this plan
     fn output_partitioning(&self) -> Partitioning;
 
-    /// If the output of this operator is sorted, returns `Some(keys)`
-    /// with the description of how it was sorted.
+    /// If the output of this operator within each partition is sorted,
+    /// returns `Some(keys)` with the description of how it was sorted.
     ///
     /// For example, Sort, (obviously) produces sorted output as does
     /// SortPreservingMergeStream. Less obviously `Projection`
@@ -128,8 +128,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
         vec![Distribution::UnspecifiedDistribution; self.children().len()]
     }
 
-    /// Specifies the ordering requirements for all the
-    /// children for this operator.
+    /// Specifies the ordering requirements for all of the children
+    /// For each child, it's the local ordering requirement within each partition rather than the global ordering
     fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
         vec![None; self.children().len()]
     }
@@ -241,6 +241,34 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 
     /// Returns the global output statistics for this `ExecutionPlan` node.
     fn statistics(&self) -> Statistics;
+}
+
+/// Indicate whether a data exchange is needed for the input of `plan`, which will be very helpful
+/// especially for the distributed engine to judge whether need to deal with shuffling.
+/// Currently there are 3 kinds of execution plan which needs data exchange
+///     1. RepartitionExec for changing the partition number between two operators
+///     2. CoalescePartitionsExec for collapsing all of the partitions into one without ordering guarantee
+///     3. SortPreservingMergeExec for collapsing all of the sorted partitions into one with ordering guarantee
+pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
+    if let Some(repart) = plan.as_any().downcast_ref::<RepartitionExec>() {
+        !matches!(
+            repart.output_partitioning(),
+            Partitioning::RoundRobinBatch(_)
+        )
+    } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>()
+    {
+        coalesce.input().output_partitioning().partition_count() > 1
+    } else if let Some(sort_preserving_merge) =
+        plan.as_any().downcast_ref::<SortPreservingMergeExec>()
+    {
+        sort_preserving_merge
+            .input()
+            .output_partitioning()
+            .partition_count()
+            > 1
+    } else {
+        false
+    }
 }
 
 /// Returns a copy of this plan if we change any child according to the pointer comparison.
@@ -406,12 +434,12 @@ pub async fn collect(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<RecordBatch>> {
-    let stream = execute_stream(plan, context).await?;
+    let stream = execute_stream(plan, context)?;
     common::collect(stream).await
 }
 
 /// Execute the [ExecutionPlan] and return a single stream of results
-pub async fn execute_stream(
+pub fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
@@ -433,7 +461,7 @@ pub async fn collect_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
-    let streams = execute_stream_partitioned(plan, context).await?;
+    let streams = execute_stream_partitioned(plan, context)?;
     let mut batches = Vec::with_capacity(streams.len());
     for stream in streams {
         batches.push(common::collect(stream).await?);
@@ -442,7 +470,7 @@ pub async fn collect_partitioned(
 }
 
 /// Execute the [ExecutionPlan] and return a vec with one stream per output partition
-pub async fn execute_stream_partitioned(
+pub fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<SendableRecordBatchStream>> {
@@ -648,12 +676,15 @@ pub mod repartition;
 pub mod rewrite;
 pub mod sorts;
 pub mod stream;
+pub mod streaming;
 pub mod udaf;
 pub mod union;
 pub mod values;
 pub mod windows;
 
 use crate::execution::context::TaskContext;
+use crate::physical_plan::repartition::RepartitionExec;
+use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use datafusion_physical_expr::{
     expressions, functions, hash_utils, type_coercion, udf,
 };

@@ -47,9 +47,12 @@ use arrow::compute::kernels::comparison::{
 use arrow::compute::kernels::comparison::{
     eq_scalar, gt_eq_scalar, gt_scalar, lt_eq_scalar, lt_scalar, neq_scalar,
 };
-use arrow::compute::kernels::comparison::{like_utf8, nlike_utf8, regexp_is_match_utf8};
 use arrow::compute::kernels::comparison::{
-    like_utf8_scalar, nlike_utf8_scalar, regexp_is_match_utf8_scalar,
+    ilike_utf8, like_utf8, nilike_utf8, nlike_utf8, regexp_is_match_utf8,
+};
+use arrow::compute::kernels::comparison::{
+    ilike_utf8_scalar, like_utf8_scalar, nilike_utf8_scalar, nlike_utf8_scalar,
+    regexp_is_match_utf8_scalar,
 };
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
@@ -944,6 +947,12 @@ impl BinaryExpr {
             Operator::NotLike => {
                 binary_string_array_op_scalar!(array, scalar.clone(), nlike, bool_type)
             }
+            Operator::ILike => {
+                binary_string_array_op_scalar!(array, scalar.clone(), ilike, bool_type)
+            }
+            Operator::NotILike => {
+                binary_string_array_op_scalar!(array, scalar.clone(), nilike, bool_type)
+            }
             Operator::Plus => {
                 binary_primitive_array_op_scalar!(array, scalar.clone(), add)
             }
@@ -1046,6 +1055,8 @@ impl BinaryExpr {
         match &self.op {
             Operator::Like => binary_string_array_op!(left, right, like),
             Operator::NotLike => binary_string_array_op!(left, right, nlike),
+            Operator::ILike => binary_string_array_op!(left, right, ilike),
+            Operator::NotILike => binary_string_array_op!(left, right, nilike),
             Operator::Lt => lt_dyn(&left, &right),
             Operator::LtEq => lt_eq_dyn(&left, &right),
             Operator::Gt => gt_dyn(&left, &right),
@@ -1275,7 +1286,12 @@ mod tests {
                 .expect("failed to downcast");
             // verify that the result itself is correct
             for (i, x) in $VEC.iter().enumerate() {
-                assert_eq!(result.value(i), *x);
+                let v = result.value(i);
+                assert_eq!(
+                    v,
+                    *x,
+                    "Unexpected output at position {i}:\n\nActual:\n{v}\n\nExpected:\n{x}"
+                );
             }
         }};
     }
@@ -1341,6 +1357,42 @@ mod tests {
             BooleanArray,
             DataType::Boolean,
             vec![true, false],
+        );
+        test_coercion!(
+            StringArray,
+            DataType::Utf8,
+            vec!["hello world", "world"],
+            StringArray,
+            DataType::Utf8,
+            vec!["%hello%", "%hello%"],
+            Operator::NotLike,
+            BooleanArray,
+            DataType::Boolean,
+            vec![false, true],
+        );
+        test_coercion!(
+            StringArray,
+            DataType::Utf8,
+            vec!["hEllo world", "world"],
+            StringArray,
+            DataType::Utf8,
+            vec!["%helLo%", "%helLo%"],
+            Operator::ILike,
+            BooleanArray,
+            DataType::Boolean,
+            vec![true, false],
+        );
+        test_coercion!(
+            StringArray,
+            DataType::Utf8,
+            vec!["hEllo world", "world"],
+            StringArray,
+            DataType::Utf8,
+            vec!["%helLo%", "%helLo%"],
+            Operator::NotILike,
+            BooleanArray,
+            DataType::Boolean,
+            vec![false, true],
         );
         test_coercion!(
             StringArray,
@@ -3083,7 +3135,7 @@ mod tests {
         min_value: ScalarValue,
         max_value: ScalarValue,
     ) -> (Schema, Statistics) {
-        assert!(min_value.get_datatype() == max_value.get_datatype());
+        assert_eq!(min_value.get_datatype(), max_value.get_datatype());
         let schema = Schema::new(vec![Field::new("a", min_value.get_datatype(), false)]);
         let columns = vec![ColumnStatistics {
             min_value: Some(min_value),

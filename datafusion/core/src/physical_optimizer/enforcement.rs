@@ -31,6 +31,7 @@ use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort::SortOptions;
+use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
@@ -835,6 +836,9 @@ fn new_join_conditions(
     new_join_on
 }
 
+/// Within this function, it checks whether we need to add additional plan operators
+/// of data exchanging and data ordering to satisfy the required distribution and ordering.
+/// And we should avoid to manually add plan operators of data exchanging and data ordering in other places
 fn ensure_distribution_and_ordering(
     plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
     target_partitions: usize,
@@ -842,6 +846,37 @@ fn ensure_distribution_and_ordering(
     if plan.children().is_empty() {
         return Ok(plan);
     }
+    // It's mainly for changing the single node global SortExec to
+    // the SortPreservingMergeExec with multiple local SortExec.
+    // What's more, if limit exists, it can also be pushed down to the local sort
+    let plan = plan
+        .as_any()
+        .downcast_ref::<SortExec>()
+        .and_then(|sort_exec| {
+            // There are three situations that there's no need for this optimization
+            // - There's only one input partition;
+            // - It's already preserving the partitioning so that it can be regarded as a local sort
+            // - There's no limit pushed down to the local sort (It's still controversial)
+            if sort_exec.input().output_partitioning().partition_count() > 1
+                && !sort_exec.preserve_partitioning()
+                && sort_exec.fetch().is_some()
+            {
+                let sort = SortExec::new_with_partitioning(
+                    sort_exec.expr().to_vec(),
+                    sort_exec.input().clone(),
+                    true,
+                    sort_exec.fetch(),
+                );
+                Some(Arc::new(SortPreservingMergeExec::new(
+                    sort_exec.expr().to_vec(),
+                    Arc::new(sort),
+                )))
+            } else {
+                None
+            }
+        })
+        .map_or(plan, |new_plan| new_plan);
+
     let required_input_distributions = plan.required_input_distribution();
     let required_input_orderings = plan.required_input_ordering();
     let children: Vec<Arc<dyn ExecutionPlan>> = plan.children();
@@ -874,7 +909,7 @@ fn ensure_distribution_and_ordering(
             }
         });
 
-    // Add SortExec to guarantee output ordering
+    // Add local SortExec to guarantee output ordering within each partition
     let new_children: Result<Vec<Arc<dyn ExecutionPlan>>> = children
         .zip(required_input_orderings.into_iter())
         .map(|(child_result, required)| {
@@ -885,14 +920,9 @@ fn ensure_distribution_and_ordering(
                 Ok(child)
             } else {
                 let sort_expr = required.unwrap().to_vec();
-                if child.output_partitioning().partition_count() > 1 {
-                    Ok(Arc::new(SortExec::new_with_partitioning(
-                        sort_expr, child, true, None,
-                    )) as Arc<dyn ExecutionPlan>)
-                } else {
-                    Ok(Arc::new(SortExec::try_new(sort_expr, child, None)?)
-                        as Arc<dyn ExecutionPlan>)
-                }
+                Ok(Arc::new(SortExec::new_with_partitioning(
+                    sort_expr, child, true, None,
+                )) as Arc<dyn ExecutionPlan>)
             }
         })
         .collect();

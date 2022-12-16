@@ -734,7 +734,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?);
                 let builder = match join_constraint.into() {
                     JoinConstraint::On => builder.join_with_expr_keys(
-                        &into_logical_plan!(join.right, ctx, extension_codec)?,
+                        into_logical_plan!(join.right, ctx, extension_codec)?,
                         join_type.into(),
                         (left_keys, right_keys),
                         filter,
@@ -746,7 +746,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .map(|key| key.try_into_col())
                             .collect::<Result<Vec<_>, _>>()?;
                         builder.join_using(
-                            &into_logical_plan!(join.right, ctx, extension_codec)?,
+                            into_logical_plan!(join.right, ctx, extension_codec)?,
                             join_type.into(),
                             using_keys,
                         )?
@@ -781,7 +781,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let left = into_logical_plan!(crossjoin.left, ctx, extension_codec)?;
                 let right = into_logical_plan!(crossjoin.right, ctx, extension_codec)?;
 
-                LogicalPlanBuilder::from(left).cross_join(&right)?.build()
+                LogicalPlanBuilder::from(left).cross_join(right)?.build()
             }
             LogicalPlanType::Extension(LogicalExtensionNode { node, inputs }) => {
                 let input_plans: Vec<LogicalPlan> = inputs

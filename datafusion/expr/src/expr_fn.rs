@@ -17,7 +17,7 @@
 
 //! Functions for creating logical expressions
 
-use crate::expr::{BinaryExpr, Cast, GroupingSet};
+use crate::expr::{BinaryExpr, Cast, GroupingSet, TryCast};
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
@@ -25,11 +25,17 @@ use crate::{
     ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::Result;
+use datafusion_common::{Column, Result};
 use std::sync::Arc;
 
 /// Create a column expression based on a qualified or unqualified column name
-pub fn col(ident: &str) -> Expr {
+///
+/// example:
+/// ```
+/// # use datafusion_expr::col;
+/// let c = col("my_column");
+/// ```
+pub fn col(ident: impl Into<Column>) -> Expr {
     Expr::Column(ident.into())
 }
 
@@ -264,10 +270,7 @@ pub fn cast(expr: Expr, data_type: DataType) -> Expr {
 
 /// Create a try cast expression
 pub fn try_cast(expr: Expr, data_type: DataType) -> Expr {
-    Expr::TryCast {
-        expr: Box::new(expr),
-        data_type,
-    }
+    Expr::TryCast(TryCast::new(Box::new(expr), data_type))
 }
 
 /// Create is null expression

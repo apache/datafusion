@@ -138,7 +138,7 @@ where
 }
 
 fn create_ctx() -> SessionContext {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     // register a custom UDF
     ctx.register_udf(create_udf(
