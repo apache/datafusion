@@ -360,7 +360,7 @@ async fn create_partitioned_external_table() -> Result<()> {
             .read(true)
             .write(true)
             .create(true)
-            .open(&file_path0)
+            .open(file_path0)
             .expect("creating temp file")
             .write_all(data0.as_bytes())
             .expect("writing data");
@@ -372,7 +372,7 @@ async fn create_partitioned_external_table() -> Result<()> {
             .read(true)
             .write(true)
             .create(true)
-            .open(&file_path1)
+            .open(file_path1)
             .expect("creating temp file")
             .write_all(data1.as_bytes())
             .expect("writing data");

@@ -29,11 +29,11 @@ pub struct UnboundedMemoryPool {
 
 impl MemoryPool for UnboundedMemoryPool {
     fn grow(&self, _allocation: &TrackedAllocation, additional: usize) {
-        self.used.fetch_add(additional, Ordering::SeqCst);
+        self.used.fetch_add(additional, Ordering::Relaxed);
     }
 
     fn shrink(&self, _allocation: &TrackedAllocation, shrink: usize) {
-        self.used.fetch_sub(shrink, Ordering::SeqCst);
+        self.used.fetch_sub(shrink, Ordering::Relaxed);
     }
 
     fn try_grow(&self, allocation: &TrackedAllocation, additional: usize) -> Result<()> {
