@@ -40,12 +40,12 @@ use std::sync::Arc;
 pub fn optimize_children(
     optimizer: &impl OptimizerRule,
     plan: &LogicalPlan,
-    optimizer_config: &mut OptimizerConfig,
+    config: &dyn OptimizerConfig,
 ) -> Result<LogicalPlan> {
     let new_exprs = plan.expressions();
     let mut new_inputs = Vec::with_capacity(plan.inputs().len());
     for input in plan.inputs() {
-        let new_input = optimizer.try_optimize(input, optimizer_config)?;
+        let new_input = optimizer.try_optimize(input, config)?;
         new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
     }
     from_plan(plan, &new_exprs, &new_inputs)
