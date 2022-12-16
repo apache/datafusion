@@ -73,7 +73,7 @@ impl AggregateExpr for ApproxDistinct {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "hll_registers"),
+            format_state_name(&self.name, "hll_registers"),
             DataType::Binary,
             false,
         )])

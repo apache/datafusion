@@ -690,7 +690,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .any(|x| x.option == ColumnOption::Null);
             fields.push(Field::new(
-                &normalize_ident(column.name),
+                normalize_ident(column.name),
                 data_type,
                 allow_null,
             ));
