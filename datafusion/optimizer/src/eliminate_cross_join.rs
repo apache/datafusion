@@ -19,6 +19,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr::{BinaryExpr, Expr};
 use datafusion_expr::logical_plan::{
@@ -26,7 +27,6 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::utils::{can_hash, check_all_column_from_schema};
 use datafusion_expr::{and, build_join_schema, or, ExprSchemable, Operator};
-use crate::{utils, OptimizerConfig, OptimizerRule};
 
 #[derive(Default)]
 pub struct EliminateCrossJoin;

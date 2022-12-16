@@ -64,8 +64,9 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
-    cast, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable,
-    GetIndexedField, Operator, ScalarUDF, SubqueryAlias, WindowFrame, WindowFrameUnits, wrap_projection_for_join_if_necessary,
+    cast, col, lit, wrap_projection_for_join_if_necessary, AggregateFunction,
+    AggregateUDF, Expr, ExprSchemable, GetIndexedField, Operator, ScalarUDF,
+    SubqueryAlias, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
     window_function::{self, WindowFunction},

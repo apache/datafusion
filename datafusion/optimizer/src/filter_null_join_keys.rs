@@ -21,11 +21,11 @@
 //! can never match.
 
 use crate::{utils, OptimizerConfig, OptimizerRule};
-use std::sync::Arc;
+use datafusion_common::Result;
 use datafusion_expr::{
     and, logical_plan::Filter, logical_plan::JoinType, Expr, ExprSchemable, LogicalPlan,
 };
-use datafusion_common::Result;
+use std::sync::Arc;
 
 /// The FilterNullJoinKeys rule will identify inner joins with equi-join conditions
 /// where the join key is nullable on one side and non-nullable on the other side
