@@ -20,7 +20,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource};
 use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::{OptimizerConfig, OptimizerRule};
+use datafusion_optimizer::{OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
@@ -330,12 +330,12 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // hard code the return value of now()
     let ts = NaiveDateTime::from_timestamp_opt(1666615693, 0).unwrap();
     let now_time = DateTime::<Utc>::from_utc(ts, Utc);
-    let mut config = OptimizerConfig::new()
+    let config = OptimizerContext::new()
         .with_skip_failing_rules(false)
         .with_query_execution_start_time(now_time);
-    let optimizer = Optimizer::new(&config);
+    let optimizer = Optimizer::new();
     // optimize the logical plan
-    optimizer.optimize(&plan, &mut config, &observe)
+    optimizer.optimize(&plan, &config, &observe)
 }
 
 struct MySchemaProvider {}

@@ -68,7 +68,7 @@ use crate::logical_expr::{
     CreateView, DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder,
     SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
-use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
+use crate::optimizer::{OptimizerContext, OptimizerRule};
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
@@ -1557,14 +1557,6 @@ impl SessionState {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
-        let optimizer_config = OptimizerConfig::new().filter_null_keys(
-            config
-                .config_options
-                .read()
-                .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
-                .unwrap_or_default(),
-        );
-
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
             Arc::new(JoinSelection::new()),
@@ -1593,7 +1585,7 @@ impl SessionState {
 
         SessionState {
             session_id,
-            optimizer: Optimizer::new(&optimizer_config),
+            optimizer: Optimizer::new(),
             physical_optimizers,
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
@@ -1741,24 +1733,29 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let mut optimizer_config = OptimizerConfig::new()
-            .with_skip_failing_rules(
-                self.config
-                    .config_options
-                    .read()
-                    .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
-                    .unwrap_or_default(),
-            )
-            .with_max_passes(
-                self.config
-                    .config_options
-                    .read()
-                    .get_u64(OPT_OPTIMIZER_MAX_PASSES)
-                    .unwrap_or_default() as u8,
-            )
-            .with_query_execution_start_time(
-                self.execution_props.query_execution_start_time,
-            );
+        // TODO: Implement OptimizerContext directly on DataFrame (#4631) (#4626)
+        let config = {
+            let config_options = self.config.config_options.read();
+            OptimizerContext::new()
+                .with_skip_failing_rules(
+                    config_options
+                        .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
+                        .unwrap_or_default(),
+                )
+                .with_max_passes(
+                    config_options
+                        .get_u64(OPT_OPTIMIZER_MAX_PASSES)
+                        .unwrap_or_default() as u8,
+                )
+                .with_query_execution_start_time(
+                    self.execution_props.query_execution_start_time,
+                )
+                .filter_null_keys(
+                    config_options
+                        .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
+                        .unwrap_or_default(),
+                )
+        };
 
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
@@ -1766,7 +1763,7 @@ impl SessionState {
             // optimize the child plan, capturing the output of each optimizer
             let plan = self.optimizer.optimize(
                 e.plan.as_ref(),
-                &mut optimizer_config,
+                &config,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
@@ -1781,8 +1778,7 @@ impl SessionState {
                 schema: e.schema.clone(),
             }))
         } else {
-            self.optimizer
-                .optimize(plan, &mut optimizer_config, |_, _| {})
+            self.optimizer.optimize(plan, &config, |_, _| {})
         }
     }
 

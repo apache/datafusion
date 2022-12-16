@@ -17,9 +17,10 @@
 
 //! Optimizer rule for type validation and coercion
 
-use crate::utils::rewrite_preserving_name;
-use crate::{OptimizerConfig, OptimizerRule};
+use std::sync::Arc;
+
 use arrow::datatypes::{DataType, IntervalUnit};
+
 use datafusion_common::{
     parse_interval, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
@@ -39,7 +40,9 @@ use datafusion_expr::{
     WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
-use std::sync::Arc;
+
+use crate::utils::rewrite_preserving_name;
+use crate::{OptimizerConfig, OptimizerRule};
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -58,7 +61,7 @@ impl OptimizerRule for TypeCoercion {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
+        _: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         Ok(Some(optimize_internal(&DFSchema::empty(), plan)?))
     }
@@ -584,9 +587,10 @@ fn coerce_agg_exprs_for_signature(
 
 #[cfg(test)]
 mod test {
-    use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter};
-    use crate::{OptimizerConfig, OptimizerRule};
+    use std::sync::Arc;
+
     use arrow::datatypes::DataType;
+
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
     use datafusion_expr::expr::Like;
     use datafusion_expr::expr_rewriter::ExprRewritable;
@@ -602,12 +606,14 @@ mod test {
         Signature, Volatility,
     };
     use datafusion_physical_expr::expressions::AvgAccumulator;
-    use std::sync::Arc;
+
+    use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter};
+    use crate::{OptimizerContext, OptimizerRule};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let rule = TypeCoercion::new();
-        let mut config = OptimizerConfig::default();
-        let plan = rule.try_optimize(plan, &mut config)?.unwrap();
+        let config = OptimizerContext::default();
+        let plan = rule.try_optimize(plan, &config)?.unwrap();
         assert_eq!(expected, &format!("{:?}", plan));
         Ok(())
     }
