@@ -63,7 +63,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
+    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, TryCast,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::utils::expand_wildcard;
@@ -135,7 +135,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             // CAST does not change the expression name
             create_physical_name(expr, false)
         }
-        Expr::TryCast { expr, .. } => {
+        Expr::TryCast(TryCast { expr, .. }) => {
             // CAST does not change the expression name
             create_physical_name(expr, false)
         }
@@ -1946,6 +1946,12 @@ mod tests {
             col("c2").and(bool_expr),
             // utf8 LIKE u32
             col("c1").like(col("c2")),
+            // utf8 NOT LIKE u32
+            col("c1").not_like(col("c2")),
+            // utf8 ILIKE u32
+            col("c1").ilike(col("c2")),
+            // utf8 NOT ILIKE u32
+            col("c1").not_ilike(col("c2")),
         ];
         for case in cases {
             let logical_plan = test_csv_scan().await?.project(vec![case.clone()]);

@@ -26,7 +26,7 @@ use datafusion_expr::expr::{
     Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
 };
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
-use datafusion_expr::{Expr, LogicalPlan};
+use datafusion_expr::{Expr, LogicalPlan, TryCast};
 use std::collections::HashMap;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
@@ -345,13 +345,13 @@ where
                 Box::new(clone_with_replacement(expr, replacement_fn)?),
                 data_type.clone(),
             ))),
-            Expr::TryCast {
+            Expr::TryCast(TryCast {
                 expr: nested_expr,
                 data_type,
-            } => Ok(Expr::TryCast {
-                expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
-                data_type: data_type.clone(),
-            }),
+            }) => Ok(Expr::TryCast(TryCast::new(
+                Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
+                data_type.clone(),
+            ))),
             Expr::Sort {
                 expr: nested_expr,
                 asc,

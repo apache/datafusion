@@ -19,7 +19,7 @@
 
 use crate::expr::Cast;
 use crate::{
-    expr::{BinaryExpr, GroupingSet},
+    expr::{BinaryExpr, GroupingSet, TryCast},
     Between, Expr, GetIndexedField, Like,
 };
 use datafusion_common::Result;
@@ -110,7 +110,7 @@ impl ExprVisitable for Expr {
             | Expr::IsNull(expr)
             | Expr::Negative(expr)
             | Expr::Cast(Cast { expr, .. })
-            | Expr::TryCast { expr, .. }
+            | Expr::TryCast(TryCast { expr, .. })
             | Expr::Sort { expr, .. }
             | Expr::InSubquery { expr, .. } => expr.accept(visitor),
             Expr::GetIndexedField(GetIndexedField { expr, .. }) => expr.accept(visitor),

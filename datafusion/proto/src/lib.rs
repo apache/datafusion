@@ -1005,6 +1005,8 @@ mod roundtrip_tests {
         test(Operator::RegexMatch);
         test(Operator::Like);
         test(Operator::NotLike);
+        test(Operator::ILike);
+        test(Operator::NotILike);
         test(Operator::BitwiseShiftRight);
         test(Operator::BitwiseShiftLeft);
         test(Operator::BitwiseAnd);

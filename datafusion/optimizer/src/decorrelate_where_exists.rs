@@ -74,16 +74,6 @@ impl DecorrelateWhereExists {
 }
 
 impl OptimizerRule for DecorrelateWhereExists {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -206,7 +196,7 @@ fn optimize_exists(
         false => JoinType::LeftSemi,
     };
     let mut new_plan = LogicalPlanBuilder::from(outer_input.clone()).join(
-        &subqry_plan,
+        subqry_plan,
         join_type,
         join_keys,
         join_filters,

@@ -68,9 +68,10 @@ impl ScalarSubqueryToJoin {
                                 Ok(subquery) => subquery,
                                 _ => return Ok(()),
                             };
-                            let subquery =
-                                self.optimize(&subquery.subquery, optimizer_config)?;
-                            let subquery = Arc::new(subquery);
+                            let subquery = self
+                                .try_optimize(&subquery.subquery, optimizer_config)?
+                                .map(Arc::new)
+                                .unwrap_or_else(|| subquery.subquery.clone());
                             let subquery = Subquery { subquery };
                             let res = SubqueryInfo::new(subquery, expr, *op, lhs);
                             subqueries.push(res);
@@ -89,16 +90,6 @@ impl ScalarSubqueryToJoin {
 }
 
 impl OptimizerRule for ScalarSubqueryToJoin {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -107,7 +98,9 @@ impl OptimizerRule for ScalarSubqueryToJoin {
         match plan {
             LogicalPlan::Filter(filter) => {
                 // Apply optimizer rule to current input
-                let optimized_input = self.optimize(filter.input(), optimizer_config)?;
+                let optimized_input = self
+                    .try_optimize(filter.input(), optimizer_config)?
+                    .unwrap_or_else(|| filter.input().as_ref().clone());
 
                 let (subqueries, other_exprs) =
                     self.extract_subquery_exprs(filter.predicate(), optimizer_config)?;
@@ -321,10 +314,10 @@ fn optimize_scalar(
     let new_plan = LogicalPlanBuilder::from(filter_input.clone());
     let mut new_plan = if join_keys.0.is_empty() {
         // if not correlated, group down to 1 row and cross join on that (preserving row count)
-        new_plan.cross_join(&subqry_plan)?
+        new_plan.cross_join(subqry_plan)?
     } else {
         // inner join if correlated, grouping by the join keys so we don't change row count
-        new_plan.join(&subqry_plan, JoinType::Inner, join_keys, None)?
+        new_plan.join(subqry_plan, JoinType::Inner, join_keys, None)?
     };
 
     // restore where in condition
