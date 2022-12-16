@@ -2054,7 +2054,7 @@ mod tests {
     #[tokio::test]
     async fn shared_memory_and_disk_manager() {
         // Demonstrate the ability to share DiskManager and
-        // MemoryManager between two different executions.
+        // MemoryPool between two different executions.
         let ctx1 = SessionContext::new();
 
         // configure with same memory / disk manager

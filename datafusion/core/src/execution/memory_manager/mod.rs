@@ -25,7 +25,7 @@ pub mod proxy;
 
 pub use pool::*;
 
-/// The pool of memory from which [`MemoryManager`] and [`TrackedAllocation`] allocate
+/// The pool of memory from which [`TrackedAllocation`] allocate
 pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// Records the creation of a new [`TrackedAllocation`] with [`AllocationOptions`]
     fn allocate(&self, _options: &AllocationOptions) {}
@@ -82,8 +82,8 @@ impl AllocationOptions {
     }
 }
 
-/// A [`TrackedAllocation`] tracks a reservation of memory in a [`MemoryManager`]
-/// that is freed back to the memory pool on drop
+/// A [`TrackedAllocation`] tracks a reservation of memory in a [`MemoryPool`]
+/// that is freed back to the pool on drop
 #[derive(Debug)]
 pub struct TrackedAllocation {
     options: AllocationOptions,
