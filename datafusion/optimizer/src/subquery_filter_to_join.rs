@@ -49,16 +49,6 @@ impl SubqueryFilterToJoin {
 }
 
 impl OptimizerRule for SubqueryFilterToJoin {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -67,7 +57,9 @@ impl OptimizerRule for SubqueryFilterToJoin {
         match plan {
             LogicalPlan::Filter(filter) => {
                 // Apply optimizer rule to current input
-                let optimized_input = self.optimize(filter.input(), optimizer_config)?;
+                let optimized_input = self
+                    .try_optimize(filter.input(), optimizer_config)?
+                    .unwrap_or_else(|| filter.input().as_ref().clone());
 
                 // Splitting filter expression into components by AND
                 let filters = utils::split_conjunction(filter.predicate());
@@ -104,10 +96,10 @@ impl OptimizerRule for SubqueryFilterToJoin {
                             subquery,
                             negated,
                         } => {
-                            let right_input = self.optimize(
+                            let right_input = self.try_optimize(
                                 &subquery.subquery,
                                 optimizer_config
-                            )?;
+                            )?.unwrap_or_else(||subquery.subquery.as_ref().clone());
                             let right_schema = right_input.schema();
                             if right_schema.fields().len() != 1 {
                                 return Err(DataFusionError::Plan(
@@ -220,7 +212,8 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SubqueryFilterToJoin::new();
         let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
         assert_eq!(formatted_plan, expected);

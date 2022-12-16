@@ -24,7 +24,7 @@ use arrow::datatypes::{
     DataType, TimeUnit, MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{BinaryExpr, Cast};
+use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::utils::from_plan;
 use datafusion_expr::{
@@ -79,16 +79,6 @@ impl UnwrapCastInComparison {
 }
 
 impl OptimizerRule for UnwrapCastInComparison {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, _optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -162,7 +152,8 @@ impl ExprRewriter for UnwrapCastExprRewriter {
                     match (&left, &right) {
                         (
                             Expr::Literal(left_lit_value),
-                            Expr::TryCast { expr, .. } | Expr::Cast(Cast { expr, .. }),
+                            Expr::TryCast(TryCast { expr, .. })
+                            | Expr::Cast(Cast { expr, .. }),
                         ) => {
                             // if the left_lit_value can be casted to the type of expr
                             // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
@@ -179,7 +170,8 @@ impl ExprRewriter for UnwrapCastExprRewriter {
                             }
                         }
                         (
-                            Expr::TryCast { expr, .. } | Expr::Cast(Cast { expr, .. }),
+                            Expr::TryCast(TryCast { expr, .. })
+                            | Expr::Cast(Cast { expr, .. }),
                             Expr::Literal(right_lit_value),
                         ) => {
                             // if the right_lit_value can be casted to the type of expr
@@ -212,10 +204,10 @@ impl ExprRewriter for UnwrapCastExprRewriter {
                 negated,
             } => {
                 if let Some(
-                    Expr::TryCast {
+                    Expr::TryCast(TryCast {
                         expr: internal_left_expr,
                         ..
-                    }
+                    })
                     | Expr::Cast(Cast {
                         expr: internal_left_expr,
                         ..
@@ -309,25 +301,6 @@ fn is_support_data_type(data_type: &DataType) -> bool {
     )
 }
 
-fn is_decimal_type(dt: &DataType) -> bool {
-    matches!(dt, DataType::Decimal128(_, _))
-}
-
-fn is_unsigned_type(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
-    )
-}
-
-/// Until https://github.com/apache/arrow-rs/issues/1043 is done
-/// (support for unsigned <--> decimal casts) we also don't do that
-/// kind of cast in this optimizer
-fn is_unsupported_cast(dt1: &DataType, dt2: &DataType) -> bool {
-    (is_decimal_type(dt1) && is_unsigned_type(dt2))
-        || (is_decimal_type(dt2) && is_unsigned_type(dt1))
-}
-
 fn try_cast_literal_to_type(
     lit_value: &ScalarValue,
     target_type: &DataType,
@@ -335,9 +308,6 @@ fn try_cast_literal_to_type(
     let lit_data_type = lit_value.get_datatype();
     // the rule just support the signed numeric data type now
     if !is_support_data_type(&lit_data_type) || !is_support_data_type(target_type) {
-        return Ok(None);
-    }
-    if is_unsupported_cast(&lit_data_type, target_type) {
         return Ok(None);
     }
     if lit_value.is_null() {
@@ -810,12 +780,7 @@ mod tests {
 
         for s1 in &scalars {
             for s2 in &scalars {
-                let expected_value =
-                    if is_unsupported_cast(&s1.get_datatype(), &s2.get_datatype()) {
-                        ExpectedCast::NoValue
-                    } else {
-                        ExpectedCast::Value(s2.clone())
-                    };
+                let expected_value = ExpectedCast::Value(s2.clone());
 
                 expect_cast(s1.clone(), s2.get_datatype(), expected_value);
             }
@@ -840,12 +805,7 @@ mod tests {
 
         for s1 in &scalars {
             for s2 in &scalars {
-                let expected_value =
-                    if is_unsupported_cast(&s1.get_datatype(), &s2.get_datatype()) {
-                        ExpectedCast::NoValue
-                    } else {
-                        ExpectedCast::Value(s2.clone())
-                    };
+                let expected_value = ExpectedCast::Value(s2.clone());
 
                 expect_cast(s1.clone(), s2.get_datatype(), expected_value);
             }

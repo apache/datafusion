@@ -98,7 +98,7 @@ impl AggregateExpr for Max {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "max"),
+            format_state_name(&self.name, "max"),
             self.data_type.clone(),
             true,
         )])
@@ -664,7 +664,7 @@ impl AggregateExpr for Min {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "min"),
+            format_state_name(&self.name, "min"),
             self.data_type.clone(),
             true,
         )])

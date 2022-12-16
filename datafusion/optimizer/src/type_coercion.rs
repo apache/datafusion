@@ -55,16 +55,6 @@ impl OptimizerRule for TypeCoercion {
         "type_coercion"
     }
 
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -198,7 +188,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let left_type = expr.get_type(&self.schema)?;
                 let right_type = pattern.get_type(&self.schema)?;
                 let coerced_type =
-                    coerce_types(&left_type, &Operator::Like, &right_type)?;
+                    coerce_types(&left_type, &Operator::ILike, &right_type)?;
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
                 let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
                 let expr = Expr::ILike(Like::new(negated, expr, pattern, escape_char));
@@ -617,7 +607,7 @@ mod test {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let rule = TypeCoercion::new();
         let mut config = OptimizerConfig::default();
-        let plan = rule.optimize(plan, &mut config)?;
+        let plan = rule.try_optimize(plan, &mut config)?.unwrap();
         assert_eq!(expected, &format!("{:?}", plan));
         Ok(())
     }

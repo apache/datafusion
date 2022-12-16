@@ -35,16 +35,6 @@ use std::sync::Arc;
 pub struct FilterNullJoinKeys {}
 
 impl OptimizerRule for FilterNullJoinKeys {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -165,7 +155,8 @@ mod tests {
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterNullJoinKeys::default();
-        rule.optimize(plan, &mut OptimizerConfig::new())
+        rule.try_optimize(plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan")
     }
 
@@ -211,7 +202,7 @@ mod tests {
         let t3 = table_scan(Some("t3"), &schema, None)?.build()?;
         let plan = LogicalPlanBuilder::from(t3)
             .join(
-                &plan,
+                plan,
                 JoinType::Inner,
                 (
                     vec![
@@ -245,7 +236,7 @@ mod tests {
     ) -> Result<LogicalPlan> {
         LogicalPlanBuilder::from(left_table)
             .join(
-                &right_table,
+                right_table,
                 JoinType::Inner,
                 (
                     vec![Column::from_qualified_name(left_key)],

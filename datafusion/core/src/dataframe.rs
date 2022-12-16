@@ -332,7 +332,7 @@ impl DataFrame {
     ) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::from(self.plan)
             .join(
-                &right.plan,
+                right.plan,
                 join_type,
                 (left_cols.to_vec(), right_cols.to_vec()),
                 filter,
