@@ -48,7 +48,7 @@ use std::sync::Arc;
 
 use crate::common::proto_error;
 use crate::convert_required;
-use crate::from_proto::from_proto_binary_op;
+use crate::logical_plan;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::JoinSide;
 use datafusion::physical_plan::sorts::sort::SortOptions;
@@ -83,7 +83,7 @@ pub(crate) fn parse_physical_expr(
                 "left",
                 input_schema,
             )?,
-            from_proto_binary_op(&binary_expr.op)?,
+            logical_plan::from_proto::from_proto_binary_op(&binary_expr.op)?,
             parse_required_physical_box_expr(
                 &binary_expr.r,
                 registry,
@@ -93,7 +93,7 @@ pub(crate) fn parse_physical_expr(
         )),
         ExprType::DateTimeIntervalExpr(expr) => Arc::new(DateTimeIntervalExpr::try_new(
             parse_required_physical_box_expr(&expr.l, registry, "left", input_schema)?,
-            from_proto_binary_op(&expr.op)?,
+            logical_plan::from_proto::from_proto_binary_op(&expr.op)?,
             parse_required_physical_box_expr(&expr.r, registry, "right", input_schema)?,
             input_schema,
         )?),

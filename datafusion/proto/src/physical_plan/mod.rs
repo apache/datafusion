@@ -53,7 +53,7 @@ use prost::Message;
 
 use crate::common::proto_error;
 use crate::common::{csv_delimiter_to_string, str_to_byte};
-use crate::from_proto::parse_expr;
+use crate::logical_plan;
 use crate::physical_plan::from_proto::{
     parse_physical_expr, parse_protobuf_file_scan_config,
 };
@@ -160,7 +160,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 let predicate = scan
                     .pruning_predicate
                     .as_ref()
-                    .map(|expr| parse_expr(expr, registry))
+                    .map(|expr| logical_plan::from_proto::parse_expr(expr, registry))
                     .transpose()?;
                 Ok(Arc::new(ParquetExec::new(
                     parse_protobuf_file_scan_config(
@@ -1165,6 +1165,32 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     ) -> Result<(), DataFusionError>;
 }
 
+#[derive(Debug)]
+pub struct DefaultPhysicalExtensionCodec {}
+
+impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[Arc<dyn ExecutionPlan>],
+        _registry: &dyn FunctionRegistry,
+    ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+        Err(DataFusionError::NotImplemented(
+            "PhysicalExtensionCodec is not provided".to_string(),
+        ))
+    }
+
+    fn try_encode(
+        &self,
+        _node: Arc<dyn ExecutionPlan>,
+        _buf: &mut Vec<u8>,
+    ) -> Result<(), DataFusionError> {
+        Err(DataFusionError::NotImplemented(
+            "PhysicalExtensionCodec is not provided".to_string(),
+        ))
+    }
+}
+
 #[macro_export]
 macro_rules! into_physical_plan {
     ($PB:expr, $REG:expr, $RUNTIME:expr, $CODEC:expr) => {{
@@ -1184,8 +1210,7 @@ mod roundtrip_tests {
     use std::sync::Arc;
 
     use super::super::protobuf;
-    use crate::bytes::DefaultPhysicalExtensionCodec;
-    use crate::physical_plan::AsExecutionPlan;
+    use crate::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
     use datafusion::arrow::array::ArrayRef;
     use datafusion::arrow::datatypes::IntervalUnit;
     use datafusion::config::ConfigOptions;
