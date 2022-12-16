@@ -37,7 +37,7 @@ pub struct Ntile {
 
 impl Ntile {
     pub fn new(name: String, n: i64) -> Self {
-        Self { name: name, n: n }
+        Self { name, n }
     }
 }
 
@@ -75,19 +75,11 @@ impl PartitionEvaluator for NtileEvaluator {
         _values: &[ArrayRef],
         partition: Range<usize>,
     ) -> Result<ArrayRef> {
-        let num_rows = partition.end - partition.start;
-        let num_rep_count = (num_rows as u64) / self.n;
-        let mut num_complete_tile = (num_rows as u64) % self.n;
-
+        let num_rows = (partition.end - partition.start) as u64;
         let mut vec: Vec<u64> = Vec::new();
-        for i in 1..self.n + 1 {
-            (1..num_rep_count + 1).for_each(|_j| {
-                vec.push(i);
-            });
-            if num_complete_tile > 0 {
-                vec.push(i);
-                num_complete_tile -= 1;
-            }
+        for i in 0..num_rows {
+            let res = i * self.n / num_rows;
+            vec.push(res + 1)
         }
         Ok(Arc::new(UInt64Array::from_iter_values(vec)))
     }
