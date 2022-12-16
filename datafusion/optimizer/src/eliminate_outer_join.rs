@@ -336,7 +336,7 @@ mod tests {
         // could not eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .join(
-                &t2,
+                t2,
                 JoinType::Left,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -359,7 +359,7 @@ mod tests {
         // eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .join(
-                &t2,
+                t2,
                 JoinType::Left,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -382,7 +382,7 @@ mod tests {
         // eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .join(
-                &t2,
+                t2,
                 JoinType::Right,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -409,7 +409,7 @@ mod tests {
         // eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .join(
-                &t2,
+                t2,
                 JoinType::Full,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
@@ -436,7 +436,7 @@ mod tests {
         // eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
             .join(
-                &t2,
+                t2,
                 JoinType::Full,
                 (vec![Column::from_name("a")], vec![Column::from_name("a")]),
                 None,
