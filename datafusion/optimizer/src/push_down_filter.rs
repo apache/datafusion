@@ -635,7 +635,7 @@ impl OptimizerRule for PushDownFilter {
                 let group_expr_columns = agg
                     .group_expr
                     .iter()
-                    .map(|e| Ok(Column::from_qualified_name(&(e.display_name()?))))
+                    .map(|e| Ok(Column::from_qualified_name(e.display_name()?)))
                     .collect::<Result<HashSet<_>>>()?;
 
                 let predicates = utils::split_conjunction_owned(utils::cnf_rewrite(
