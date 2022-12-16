@@ -114,6 +114,7 @@ impl FlightService for FlightServiceImpl {
                 let df = ctx.sql(sql).await.map_err(to_tonic_err)?;
 
                 // execute the query
+                let schema = df.schema().clone().into();
                 let results = df.collect().await.map_err(to_tonic_err)?;
                 if results.is_empty() {
                     return Err(Status::internal("There were no results from ticket"));
@@ -121,8 +122,7 @@ impl FlightService for FlightServiceImpl {
 
                 // add an initial FlightData message that sends schema
                 let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
-                let schema_flight_data =
-                    SchemaAsIpc::new(&df.schema().clone().into(), &options).into();
+                let schema_flight_data = SchemaAsIpc::new(&schema, &options).into();
 
                 let mut flights: Vec<Result<FlightData, Status>> =
                     vec![Ok(schema_flight_data)];

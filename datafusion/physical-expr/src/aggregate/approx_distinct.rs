@@ -30,7 +30,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::convert::TryFrom;
 use std::convert::TryInto;
@@ -73,7 +73,7 @@ impl AggregateExpr for ApproxDistinct {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "hll_registers"),
+            format_state_name(&self.name, "hll_registers"),
             DataType::Binary,
             false,
         )])
@@ -231,8 +231,8 @@ macro_rules! default_accumulator_impl {
             Ok(())
         }
 
-        fn state(&self) -> Result<Vec<AggregateState>> {
-            let value = AggregateState::Scalar(ScalarValue::from(&self.hll));
+        fn state(&self) -> Result<Vec<ScalarValue>> {
+            let value = ScalarValue::from(&self.hll);
             Ok(vec![value])
         }
 

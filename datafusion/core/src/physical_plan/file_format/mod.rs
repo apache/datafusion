@@ -523,17 +523,14 @@ impl From<ObjectMeta> for FileMeta {
 pub(crate) fn get_output_ordering(
     base_config: &FileScanConfig,
 ) -> Option<&[PhysicalSortExpr]> {
-    if let Some(output_ordering) = base_config.output_ordering.as_ref() {
-        if base_config.file_groups.iter().any(|group| group.len() > 1) {
+    base_config.output_ordering.as_ref()
+        .map(|output_ordering| if base_config.file_groups.iter().any(|group| group.len() > 1) {
             debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
                    output_ordering, base_config.file_groups);
             None
         } else {
-            Some(output_ordering)
-        }
-    } else {
-        None
-    }
+            Some(output_ordering.as_slice())
+        }).unwrap_or_else(|| None)
 }
 
 #[cfg(test)]

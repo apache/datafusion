@@ -391,7 +391,7 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_has_options(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("OPTIONS"))
+        self.parser.parse_keyword(Keyword::OPTIONS)
     }
 
     //
@@ -417,20 +417,9 @@ impl<'a> DFParser<'a> {
         Ok(options)
     }
 
-    fn consume_token(&mut self, expected: &Token) -> bool {
-        let token = self.parser.peek_token().to_string().to_uppercase();
-        let token = Token::make_keyword(&token);
-        if token == *expected {
-            self.parser.next_token();
-            true
-        } else {
-            false
-        }
-    }
-
     fn parse_has_file_compression_type(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("COMPRESSION"))
-            & self.consume_token(&Token::make_keyword("TYPE"))
+        self.parser
+            .parse_keywords(&[Keyword::COMPRESSION, Keyword::TYPE])
     }
 
     fn parse_csv_has_header(&mut self) -> bool {
@@ -439,7 +428,7 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_has_delimiter(&mut self) -> bool {
-        self.consume_token(&Token::make_keyword("DELIMITER"))
+        self.parser.parse_keyword(Keyword::DELIMITER)
     }
 
     fn parse_delimiter(&mut self) -> Result<char, ParserError> {
@@ -719,11 +708,18 @@ mod tests {
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'";
         expect_parse_error(sql, "sql parser error: Expected LOCATION, found: WITH");
 
-        // Error case: `partitioned` is an invalid syntax
+        // Error case: a single word `partitioned` is invalid
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'";
         expect_parse_error(
             sql,
             "sql parser error: Expected LOCATION, found: PARTITIONED",
+        );
+
+        // Error case: a single word `compression` is invalid
+        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION LOCATION 'abc'";
+        expect_parse_error(
+            sql,
+            "sql parser error: Expected LOCATION, found: COMPRESSION",
         );
 
         Ok(())

@@ -253,7 +253,7 @@ impl SessionContext {
     ///
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
     /// might require the schema to be inferred.
-    pub async fn sql(&self, sql: &str) -> Result<Arc<DataFrame>> {
+    pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
         let plan = self.create_logical_plan(sql)?;
         match plan {
             LogicalPlan::CreateExternalTable(cmd) => {
@@ -266,20 +266,18 @@ impl SessionContext {
                 if_not_exists,
                 or_replace,
             }) => {
+                let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
                 let table = self.table(&name);
 
                 match (if_not_exists, or_replace, table) {
                     (true, false, Ok(_)) => self.return_empty_dataframe(),
                     (false, true, Ok(_)) => {
                         self.deregister_table(&name)?;
-                        let physical =
-                            Arc::new(DataFrame::new(self.state.clone(), &input));
+                        let schema = Arc::new(input.schema().as_ref().into());
+                        let physical = DataFrame::new(self.state.clone(), input);
 
                         let batches: Vec<_> = physical.collect_partitioned().await?;
-                        let table = Arc::new(MemTable::try_new(
-                            Arc::new(input.schema().as_ref().into()),
-                            batches,
-                        )?);
+                        let table = Arc::new(MemTable::try_new(schema, batches)?);
 
                         self.register_table(&name, table)?;
                         self.return_empty_dataframe()
@@ -288,14 +286,11 @@ impl SessionContext {
                         "'IF NOT EXISTS' cannot coexist with 'REPLACE'".to_string(),
                     )),
                     (_, _, Err(_)) => {
-                        let physical =
-                            Arc::new(DataFrame::new(self.state.clone(), &input));
+                        let schema = Arc::new(input.schema().as_ref().into());
+                        let physical = DataFrame::new(self.state.clone(), input);
 
                         let batches: Vec<_> = physical.collect_partitioned().await?;
-                        let table = Arc::new(MemTable::try_new(
-                            Arc::new(input.schema().as_ref().into()),
-                            batches,
-                        )?);
+                        let table = Arc::new(MemTable::try_new(schema, batches)?);
 
                         self.register_table(&name, table)?;
                         self.return_empty_dataframe()
@@ -481,20 +476,20 @@ impl SessionContext {
                 }
             }
 
-            plan => Ok(Arc::new(DataFrame::new(self.state.clone(), &plan))),
+            plan => Ok(DataFrame::new(self.state.clone(), plan)),
         }
     }
 
     // return an empty dataframe
-    fn return_empty_dataframe(&self) -> Result<Arc<DataFrame>> {
+    fn return_empty_dataframe(&self) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::empty(false).build()?;
-        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+        Ok(DataFrame::new(self.state.clone(), plan))
     }
 
     async fn create_external_table(
         &self,
         cmd: &CreateExternalTable,
-    ) -> Result<Arc<DataFrame>> {
+    ) -> Result<DataFrame> {
         let table_provider: Arc<dyn TableProvider> =
             self.create_custom_table(cmd).await?;
 
@@ -572,7 +567,7 @@ impl SessionContext {
 
     /// Registers a variable provider within this context.
     pub fn register_variable(
-        &mut self,
+        &self,
         variable_type: VarType,
         provider: Arc<dyn VarProvider + Send + Sync>,
     ) {
@@ -589,7 +584,7 @@ impl SessionContext {
     ///
     /// `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
     /// `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
-    pub fn register_udf(&mut self, f: ScalarUDF) {
+    pub fn register_udf(&self, f: ScalarUDF) {
         self.state
             .write()
             .scalar_functions
@@ -603,7 +598,7 @@ impl SessionContext {
     ///
     /// `SELECT MY_UDAF(x)...` will look for an aggregate named `"my_udaf"`
     /// `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
-    pub fn register_udaf(&mut self, f: AggregateUDF) {
+    pub fn register_udaf(&self, f: AggregateUDF) {
         self.state
             .write()
             .aggregate_functions
@@ -615,7 +610,7 @@ impl SessionContext {
         &self,
         table_path: impl AsRef<str>,
         options: AvroReadOptions<'_>,
-    ) -> Result<Arc<DataFrame>> {
+    ) -> Result<DataFrame> {
         let table_path = ListingTableUrl::parse(table_path)?;
         let target_partitions = self.copied_config().target_partitions();
 
@@ -639,10 +634,10 @@ impl SessionContext {
 
     /// Creates a [`DataFrame`] for reading an Json data source.
     pub async fn read_json(
-        &mut self,
+        &self,
         table_path: impl AsRef<str>,
         options: NdJsonReadOptions<'_>,
-    ) -> Result<Arc<DataFrame>> {
+    ) -> Result<DataFrame> {
         let table_path = ListingTableUrl::parse(table_path)?;
         let target_partitions = self.copied_config().target_partitions();
 
@@ -665,11 +660,11 @@ impl SessionContext {
     }
 
     /// Creates an empty DataFrame.
-    pub fn read_empty(&self) -> Result<Arc<DataFrame>> {
-        Ok(Arc::new(DataFrame::new(
+    pub fn read_empty(&self) -> Result<DataFrame> {
+        Ok(DataFrame::new(
             self.state.clone(),
-            &LogicalPlanBuilder::empty(true).build()?,
-        )))
+            LogicalPlanBuilder::empty(true).build()?,
+        ))
     }
 
     /// Creates a [`DataFrame`] for reading a CSV data source.
@@ -677,7 +672,7 @@ impl SessionContext {
         &self,
         table_path: impl AsRef<str>,
         options: CsvReadOptions<'_>,
-    ) -> Result<Arc<DataFrame>> {
+    ) -> Result<DataFrame> {
         let table_path = ListingTableUrl::parse(table_path)?;
         let target_partitions = self.copied_config().target_partitions();
         let listing_options = options.to_listing_options(target_partitions);
@@ -702,7 +697,7 @@ impl SessionContext {
         &self,
         table_path: impl AsRef<str>,
         options: ParquetReadOptions<'_>,
-    ) -> Result<Arc<DataFrame>> {
+    ) -> Result<DataFrame> {
         let table_path = ListingTableUrl::parse(table_path)?;
         let listing_options = options.to_listing_options(&self.state.read().config);
 
@@ -720,26 +715,26 @@ impl SessionContext {
     }
 
     /// Creates a [`DataFrame`] for reading a custom [`TableProvider`].
-    pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<Arc<DataFrame>> {
-        Ok(Arc::new(DataFrame::new(
+    pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<DataFrame> {
+        Ok(DataFrame::new(
             self.state.clone(),
-            &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
+            LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
                 .build()?,
-        )))
+        ))
     }
 
     /// Creates a [`DataFrame`] for reading a [`RecordBatch`]
-    pub fn read_batch(&self, batch: RecordBatch) -> Result<Arc<DataFrame>> {
+    pub fn read_batch(&self, batch: RecordBatch) -> Result<DataFrame> {
         let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        Ok(Arc::new(DataFrame::new(
+        Ok(DataFrame::new(
             self.state.clone(),
-            &LogicalPlanBuilder::scan(
+            LogicalPlanBuilder::scan(
                 UNNAMED_TABLE,
                 provider_as_source(Arc::new(provider)),
                 None,
             )?
             .build()?,
-        )))
+        ))
     }
 
     /// Registers a [`ListingTable]` that can assemble multiple files
@@ -943,7 +938,7 @@ impl SessionContext {
     pub fn table<'a>(
         &self,
         table_ref: impl Into<TableReference<'a>>,
-    ) -> Result<Arc<DataFrame>> {
+    ) -> Result<DataFrame> {
         let table_ref = table_ref.into();
         let provider = self.table_provider(table_ref)?;
         let plan = LogicalPlanBuilder::scan(
@@ -952,7 +947,7 @@ impl SessionContext {
             None,
         )?
         .build()?;
-        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+        Ok(DataFrame::new(self.state.clone(), plan))
     }
 
     /// Return a [`TabelProvider`] for the specified table.
@@ -2091,7 +2086,7 @@ mod tests {
     async fn create_variable_expr() -> Result<()> {
         let tmp_dir = TempDir::new()?;
         let partition_count = 4;
-        let mut ctx = create_ctx(&tmp_dir, partition_count).await?;
+        let ctx = create_ctx(&tmp_dir, partition_count).await?;
 
         let variable_provider = test::variable::SystemVar::new();
         ctx.register_variable(VarType::System, Arc::new(variable_provider));
@@ -2149,7 +2144,7 @@ mod tests {
 
     #[tokio::test]
     async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
             .unwrap();
 
@@ -2190,7 +2185,7 @@ mod tests {
 
     #[tokio::test]
     async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
             .unwrap();
 
@@ -2685,28 +2680,28 @@ mod tests {
     // See https://github.com/apache/arrow-datafusion/issues/1154
     #[async_trait]
     trait CallReadTrait {
-        async fn call_read_csv(&self) -> Arc<DataFrame>;
-        async fn call_read_avro(&self) -> Arc<DataFrame>;
-        async fn call_read_parquet(&self) -> Arc<DataFrame>;
+        async fn call_read_csv(&self) -> DataFrame;
+        async fn call_read_avro(&self) -> DataFrame;
+        async fn call_read_parquet(&self) -> DataFrame;
     }
 
     struct CallRead {}
 
     #[async_trait]
     impl CallReadTrait for CallRead {
-        async fn call_read_csv(&self) -> Arc<DataFrame> {
+        async fn call_read_csv(&self) -> DataFrame {
             let ctx = SessionContext::new();
             ctx.read_csv("dummy", CsvReadOptions::new()).await.unwrap()
         }
 
-        async fn call_read_avro(&self) -> Arc<DataFrame> {
+        async fn call_read_avro(&self) -> DataFrame {
             let ctx = SessionContext::new();
             ctx.read_avro("dummy", AvroReadOptions::default())
                 .await
                 .unwrap()
         }
 
-        async fn call_read_parquet(&self) -> Arc<DataFrame> {
+        async fn call_read_parquet(&self) -> DataFrame {
             let ctx = SessionContext::new();
             ctx.read_parquet("dummy", ParquetReadOptions::default())
                 .await

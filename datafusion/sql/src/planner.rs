@@ -42,7 +42,9 @@ use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_common::{OwnedTableReference, TableReference};
-use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
+use datafusion_expr::expr::{
+    Between, BinaryExpr, Case, Cast, GroupingSet, Like, TryCast,
+};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::builder::{
@@ -68,7 +70,8 @@ use datafusion_expr::{
     GetIndexedField, Operator, ScalarUDF, SubqueryAlias, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
-    window_function::WindowFunction, BuiltinScalarFunction, TableSource,
+    window_function::{self, WindowFunction},
+    BuiltinScalarFunction, TableSource,
 };
 
 use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
@@ -687,7 +690,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .any(|x| x.option == ColumnOption::Null);
             fields.push(Field::new(
-                &normalize_ident(column.name),
+                normalize_ident(column.name),
                 data_type,
                 allow_null,
             ));
@@ -700,26 +703,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         mut from: Vec<TableWithJoins>,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         match from.len() {
             0 => Ok(LogicalPlanBuilder::empty(true).build()?),
             1 => {
                 let from = from.remove(0);
-                self.plan_table_with_joins(from, planner_context, outer_query_schema)
+                self.plan_table_with_joins(from, planner_context)
             }
             _ => {
-                let plans = from
+                let mut plans = from
                     .into_iter()
-                    .map(|t| {
-                        self.plan_table_with_joins(t, planner_context, outer_query_schema)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let mut left = plans[0].clone();
-                for right in plans.iter().skip(1) {
-                    left = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+                    .map(|t| self.plan_table_with_joins(t, planner_context));
+
+                let mut left = LogicalPlanBuilder::from(plans.next().unwrap()?);
+
+                for right in plans {
+                    left = left.cross_join(right?)?;
                 }
-                Ok(left)
+                Ok(left.build()?)
             }
         }
     }
@@ -728,7 +729,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         t: TableWithJoins,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         // From clause may exist CTEs, we should separate them from global CTEs.
         // CTEs in from clause are allowed to be duplicated.
@@ -736,8 +736,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // So always use original global CTEs to plan CTEs in from clause.
         // Btw, don't need to add CTEs in from to global CTEs.
         let origin_planner_context = planner_context.clone();
-        let left =
-            self.create_relation(t.relation, planner_context, outer_query_schema)?;
+        let left = self.create_relation(t.relation, planner_context)?;
         match t.joins.len() {
             0 => {
                 *planner_context = origin_planner_context;
@@ -750,16 +749,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     left,
                     joins.next().unwrap(), // length of joins > 0
                     planner_context,
-                    outer_query_schema,
                 )?;
                 for join in joins {
                     *planner_context = origin_planner_context.clone();
-                    left = self.parse_relation_join(
-                        left,
-                        join,
-                        planner_context,
-                        outer_query_schema,
-                    )?;
+                    left = self.parse_relation_join(left, join, planner_context)?;
                 }
                 *planner_context = origin_planner_context;
                 Ok(left)
@@ -772,10 +765,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         left: LogicalPlan,
         join: Join,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
-        let right =
-            self.create_relation(join.relation, planner_context, outer_query_schema)?;
+        let right = self.create_relation(join.relation, planner_context)?;
         match join.join_operator {
             JoinOperator::LeftOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Left, planner_context)
@@ -789,7 +780,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinOperator::FullOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Full, planner_context)
             }
-            JoinOperator::CrossJoin => self.parse_cross_join(left, &right),
+            JoinOperator::CrossJoin => self.parse_cross_join(left, right),
             other => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported JOIN operator {:?}",
                 other
@@ -800,7 +791,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn parse_cross_join(
         &self,
         left: LogicalPlan,
-        right: &LogicalPlan,
+        right: LogicalPlan,
     ) -> Result<LogicalPlan> {
         LogicalPlanBuilder::from(left).cross_join(right)?.build()
     }
@@ -855,11 +846,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if left_keys.is_empty() {
                     // TODO should not use cross join when the join_filter exists
                     // https://github.com/apache/arrow-datafusion/issues/4363
-                    let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
-                    join_filter
-                        .map(|filter| join.filter(filter))
-                        .unwrap_or(Ok(join))?
-                        .build()
+                    let mut join = LogicalPlanBuilder::from(left).cross_join(right)?;
+                    if let Some(filter) = join_filter {
+                        join = join.filter(filter)?;
+                    }
+                    join.build()
                 } else {
                     // Wrap projection for left input if left join keys contain normal expression.
                     let (left_child, left_join_keys, left_projected) =
@@ -870,7 +861,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         wrap_projection_for_join_if_necessary(&right_keys, right)?;
 
                     let join_plan_builder = LogicalPlanBuilder::from(left_child).join(
-                        &right_child,
+                        right_child,
                         join_type,
                         (left_join_keys, right_join_keys),
                         join_filter,
@@ -895,7 +886,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(|x| Column::from_name(normalize_ident(x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
-                    .join_using(&right, join_type, keys)?
+                    .join_using(right, join_type, keys)?
                     .build()
             }
             JoinConstraint::Natural => {
@@ -913,7 +904,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         relation: TableFactor,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         let (plan, alias) = match relation {
             TableFactor::Table { name, alias, .. } => {
@@ -945,11 +935,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table_with_joins,
                 alias,
             } => (
-                self.plan_table_with_joins(
-                    *table_with_joins,
-                    planner_context,
-                    outer_query_schema,
-                )?,
+                self.plan_table_with_joins(*table_with_joins, planner_context)?,
                 alias,
             ),
             // @todo Support TableFactory::TableFunction?
@@ -1094,9 +1080,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         // process `from` clause
-        let plan =
-            self.plan_from_tables(select.from, planner_context, outer_query_schema)?;
-
+        let plan = self.plan_from_tables(select.from, planner_context)?;
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
         // build from schema for unqualifier column ambiguous check
         // we should get only one field for unqualifier column from schema.
@@ -1965,7 +1949,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::MapAccess { column, keys } => {
                 if let SQLExpr::Identifier(id) = *column {
-                    plan_indexed(col(&normalize_ident(id)), keys)
+                    plan_indexed(col(normalize_ident(id)), keys)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {} instead",
@@ -2079,10 +2063,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::TryCast {
                 expr,
                 data_type,
-            } => Ok(Expr::TryCast {
-                expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
-                data_type: self.convert_data_type(&data_type)?,
-            }),
+            } => Ok(Expr::TryCast(TryCast::new(
+                Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
+                self.convert_data_type(&data_type)?,
+            ))),
 
             SQLExpr::TypedString {
                 data_type,
@@ -2356,8 +2340,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     } else {
                         WindowFrame::new(!order_by.is_empty())
                     };
-                    let fun = WindowFunction::from_str(&name)?;
-                    match fun {
+                    let fun = self.find_window_func(&name)?;
+                    let expr = match fun {
                         WindowFunction::AggregateFunction(
                             aggregate_fun,
                         ) => {
@@ -2367,7 +2351,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 schema,
                             )?;
 
-                            return Ok(Expr::WindowFunction {
+                            Expr::WindowFunction {
                                 fun: WindowFunction::AggregateFunction(
                                     aggregate_fun,
                                 ),
@@ -2375,22 +2359,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            });
+                            }
                         }
-                        WindowFunction::BuiltInWindowFunction(
-                            window_fun,
-                        ) => {
-                            return Ok(Expr::WindowFunction {
-                                fun: WindowFunction::BuiltInWindowFunction(
-                                    window_fun,
-                                ),
+                        _ => {
+                            Expr::WindowFunction {
+                                fun,
                                 args: self.function_args_to_expr(function.args, schema)?,
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            });
+                            }
                         }
-                    }
+                    };
+                    return Ok(expr);
                 }
 
                 // next, aggregate built-ins
@@ -2452,6 +2433,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 sql
             ))),
         }
+    }
+
+    fn find_window_func(&self, name: &str) -> Result<WindowFunction> {
+        window_function::find_df_window_func(name)
+            .or_else(|| {
+                self.schema_provider
+                    .get_aggregate_meta(name)
+                    .map(WindowFunction::AggregateUDF)
+            })
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "There is no window function named {}",
+                    name
+                ))
+            })
     }
 
     fn parse_exists_subquery(
@@ -3375,6 +3371,16 @@ mod tests {
             "Projection: CAST(a AS Float32)\
             \n  Projection: Int64(1) AS a\
             \n    EmptyRelation",
+        );
+    }
+
+    #[test]
+    fn try_cast_from_aggregation() {
+        quick_test(
+            "SELECT TRY_CAST(SUM(age) AS FLOAT) FROM person",
+            "Projection: TRY_CAST(SUM(person.age) AS Float32)\
+            \n  Aggregate: groupBy=[[]], aggr=[[SUM(person.age)]]\
+            \n    TableScan: person",
         );
     }
 
@@ -5345,7 +5351,8 @@ mod tests {
         sql: &str,
         dialect: &dyn Dialect,
     ) -> Result<LogicalPlan> {
-        let planner = SqlToRel::new(&MockContextProvider {});
+        let context = MockContextProvider::default();
+        let planner = SqlToRel::new(&context);
         let result = DFParser::parse_sql_with_dialect(sql, dialect);
         let mut ast = result?;
         planner.statement_to_plan(ast.pop_front().unwrap())
@@ -5356,7 +5363,8 @@ mod tests {
         dialect: &dyn Dialect,
         options: ParserOptions,
     ) -> Result<LogicalPlan> {
-        let planner = SqlToRel::new_with_options(&MockContextProvider {}, options);
+        let context = MockContextProvider::default();
+        let planner = SqlToRel::new_with_options(&context, options);
         let result = DFParser::parse_sql_with_dialect(sql, dialect);
         let mut ast = result?;
         planner.statement_to_plan(ast.pop_front().unwrap())
@@ -5405,7 +5413,10 @@ mod tests {
         plan
     }
 
-    struct MockContextProvider {}
+    #[derive(Default)]
+    struct MockContextProvider {
+        udafs: HashMap<String, Arc<AggregateUDF>>,
+    }
 
     impl ContextProvider for MockContextProvider {
         fn get_table_provider(
@@ -5491,8 +5502,8 @@ mod tests {
             unimplemented!()
         }
 
-        fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
-            unimplemented!()
+        fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+            self.udafs.get(name).map(Arc::clone)
         }
 
         fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
