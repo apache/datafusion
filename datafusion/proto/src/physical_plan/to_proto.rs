@@ -44,96 +44,85 @@ use crate::protobuf::{ConfigOption, PhysicalSortExprNode};
 use datafusion::logical_expr::BuiltinScalarFunction;
 use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
 use datafusion::physical_expr::ScalarFunctionExpr;
+use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion_common::DataFusionError;
 
-impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
+impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
     type Error = DataFusionError;
 
-    fn try_into(self) -> Result<protobuf::PhysicalExprNode, Self::Error> {
+    fn try_from(a: Arc<dyn AggregateExpr>) -> Result<Self, Self::Error> {
         use datafusion::physical_plan::expressions;
         use protobuf::AggregateFunction;
 
         let mut distinct = false;
-        let aggr_function = if self.as_any().downcast_ref::<Avg>().is_some() {
+        let aggr_function = if a.as_any().downcast_ref::<Avg>().is_some() {
             Ok(AggregateFunction::Avg.into())
-        } else if self.as_any().downcast_ref::<Sum>().is_some() {
+        } else if a.as_any().downcast_ref::<Sum>().is_some() {
             Ok(AggregateFunction::Sum.into())
-        } else if self.as_any().downcast_ref::<Count>().is_some() {
+        } else if a.as_any().downcast_ref::<Count>().is_some() {
             Ok(AggregateFunction::Count.into())
-        } else if self.as_any().downcast_ref::<DistinctCount>().is_some() {
+        } else if a.as_any().downcast_ref::<DistinctCount>().is_some() {
             distinct = true;
             Ok(AggregateFunction::Count.into())
-        } else if self.as_any().downcast_ref::<Min>().is_some() {
+        } else if a.as_any().downcast_ref::<Min>().is_some() {
             Ok(AggregateFunction::Min.into())
-        } else if self.as_any().downcast_ref::<Max>().is_some() {
+        } else if a.as_any().downcast_ref::<Max>().is_some() {
             Ok(AggregateFunction::Max.into())
-        } else if self
+        } else if a
             .as_any()
             .downcast_ref::<expressions::ApproxDistinct>()
             .is_some()
         {
             Ok(AggregateFunction::ApproxDistinct.into())
-        } else if self
-            .as_any()
-            .downcast_ref::<expressions::ArrayAgg>()
-            .is_some()
-        {
+        } else if a.as_any().downcast_ref::<expressions::ArrayAgg>().is_some() {
             Ok(AggregateFunction::ArrayAgg.into())
-        } else if self
-            .as_any()
-            .downcast_ref::<expressions::Variance>()
-            .is_some()
-        {
+        } else if a.as_any().downcast_ref::<expressions::Variance>().is_some() {
             Ok(AggregateFunction::Variance.into())
-        } else if self
+        } else if a
             .as_any()
             .downcast_ref::<expressions::VariancePop>()
             .is_some()
         {
             Ok(AggregateFunction::VariancePop.into())
-        } else if self
+        } else if a
             .as_any()
             .downcast_ref::<expressions::Covariance>()
             .is_some()
         {
             Ok(AggregateFunction::Covariance.into())
-        } else if self
+        } else if a
             .as_any()
             .downcast_ref::<expressions::CovariancePop>()
             .is_some()
         {
             Ok(AggregateFunction::CovariancePop.into())
-        } else if self
-            .as_any()
-            .downcast_ref::<expressions::Stddev>()
-            .is_some()
-        {
+        } else if a.as_any().downcast_ref::<expressions::Stddev>().is_some() {
             Ok(AggregateFunction::Stddev.into())
-        } else if self
+        } else if a
             .as_any()
             .downcast_ref::<expressions::StddevPop>()
             .is_some()
         {
             Ok(AggregateFunction::StddevPop.into())
-        } else if self
+        } else if a
             .as_any()
             .downcast_ref::<expressions::Correlation>()
             .is_some()
         {
             Ok(AggregateFunction::Correlation.into())
-        } else if self
+        } else if a
             .as_any()
             .downcast_ref::<expressions::ApproxPercentileCont>()
             .is_some()
         {
             Ok(AggregateFunction::ApproxPercentileCont.into())
-        } else if self
+        } else if a
             .as_any()
             .downcast_ref::<expressions::ApproxPercentileContWithWeight>()
             .is_some()
         {
             Ok(AggregateFunction::ApproxPercentileContWithWeight.into())
-        } else if self
+        } else if a
             .as_any()
             .downcast_ref::<expressions::ApproxMedian>()
             .is_some()
@@ -142,10 +131,10 @@ impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
         } else {
             Err(DataFusionError::NotImplemented(format!(
                 "Aggregate function not supported: {:?}",
-                self
+                a
             )))
         }?;
-        let expressions: Vec<protobuf::PhysicalExprNode> = self
+        let expressions: Vec<protobuf::PhysicalExprNode> = a
             .expressions()
             .iter()
             .map(|e| e.clone().try_into())
@@ -494,15 +483,11 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
     }
 }
 
-impl From<datafusion::physical_plan::joins::utils::JoinSide> for protobuf::JoinSide {
-    fn from(t: datafusion::physical_plan::joins::utils::JoinSide) -> Self {
+impl From<JoinSide> for protobuf::JoinSide {
+    fn from(t: JoinSide) -> Self {
         match t {
-            datafusion::physical_plan::joins::utils::JoinSide::Left => {
-                protobuf::JoinSide::LeftSide
-            }
-            datafusion::physical_plan::joins::utils::JoinSide::Right => {
-                protobuf::JoinSide::RightSide
-            }
+            JoinSide::Left => protobuf::JoinSide::LeftSide,
+            JoinSide::Right => protobuf::JoinSide::RightSide,
         }
     }
 }

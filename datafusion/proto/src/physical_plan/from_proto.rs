@@ -50,7 +50,7 @@ use crate::common::proto_error;
 use crate::convert_required;
 use crate::logical_plan;
 use crate::protobuf::physical_expr_node::ExprType;
-use crate::protobuf::JoinSide;
+use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::sorts::sort::SortOptions;
 use parking_lot::RwLock;
 
@@ -450,36 +450,31 @@ impl From<&protobuf::ColumnStats> for ColumnStatistics {
     }
 }
 
-impl TryInto<Statistics> for &protobuf::Statistics {
+impl From<protobuf::JoinSide> for JoinSide {
+    fn from(t: protobuf::JoinSide) -> Self {
+        match t {
+            protobuf::JoinSide::LeftSide => JoinSide::Left,
+            protobuf::JoinSide::RightSide => JoinSide::Right,
+        }
+    }
+}
+
+impl TryFrom<&protobuf::Statistics> for Statistics {
     type Error = DataFusionError;
 
-    fn try_into(self) -> Result<Statistics, Self::Error> {
-        let column_statistics = self
-            .column_stats
-            .iter()
-            .map(|s| s.into())
-            .collect::<Vec<_>>();
+    fn try_from(s: &protobuf::Statistics) -> Result<Self, Self::Error> {
+        let column_statistics =
+            s.column_stats.iter().map(|s| s.into()).collect::<Vec<_>>();
         Ok(Statistics {
-            num_rows: Some(self.num_rows as usize),
-            total_byte_size: Some(self.total_byte_size as usize),
+            num_rows: Some(s.num_rows as usize),
+            total_byte_size: Some(s.total_byte_size as usize),
             // No column statistic (None) is encoded with empty array
             column_statistics: if column_statistics.is_empty() {
                 None
             } else {
                 Some(column_statistics)
             },
-            is_exact: self.is_exact,
+            is_exact: s.is_exact,
         })
-    }
-}
-
-impl From<JoinSide> for datafusion::physical_plan::joins::utils::JoinSide {
-    fn from(t: JoinSide) -> Self {
-        match t {
-            JoinSide::LeftSide => datafusion::physical_plan::joins::utils::JoinSide::Left,
-            JoinSide::RightSide => {
-                datafusion::physical_plan::joins::utils::JoinSide::Right
-            }
-        }
     }
 }
