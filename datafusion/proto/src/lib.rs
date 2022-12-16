@@ -73,7 +73,7 @@ mod roundtrip_tests {
     use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
-        col, lit, Accumulator, AggregateFunction, AggregateState,
+        col, lit, Accumulator, AggregateFunction,
         BuiltinScalarFunction::{Sqrt, Substr},
         Expr, LogicalPlan, Operator, Volatility,
     };
@@ -1005,6 +1005,8 @@ mod roundtrip_tests {
         test(Operator::RegexMatch);
         test(Operator::Like);
         test(Operator::NotLike);
+        test(Operator::ILike);
+        test(Operator::NotILike);
         test(Operator::BitwiseShiftRight);
         test(Operator::BitwiseShiftLeft);
         test(Operator::BitwiseAnd);
@@ -1209,7 +1211,7 @@ mod roundtrip_tests {
         struct Dummy {}
 
         impl Accumulator for Dummy {
-            fn state(&self) -> datafusion::error::Result<Vec<AggregateState>> {
+            fn state(&self) -> datafusion::error::Result<Vec<ScalarValue>> {
                 Ok(vec![])
             }
 
@@ -1256,7 +1258,7 @@ mod roundtrip_tests {
             filter: Some(Box::new(lit(true))),
         };
 
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.register_udaf(dummy_agg);
 
         roundtrip_expr_test(test_expr, ctx);
@@ -1281,7 +1283,7 @@ mod roundtrip_tests {
             args: vec![lit("")],
         };
 
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.register_udf(udf);
 
         roundtrip_expr_test(test_expr, ctx);
@@ -1345,7 +1347,7 @@ mod roundtrip_tests {
             args: vec![],
             partition_by: vec![col("col1")],
             order_by: vec![col("col2")],
-            window_frame: None,
+            window_frame: WindowFrame::new(true),
         };
 
         // 2. with default window_frame
@@ -1356,7 +1358,7 @@ mod roundtrip_tests {
             args: vec![],
             partition_by: vec![col("col1")],
             order_by: vec![col("col2")],
-            window_frame: Some(WindowFrame::default()),
+            window_frame: WindowFrame::new(true),
         };
 
         // 3. with window_frame with row numbers
@@ -1373,7 +1375,7 @@ mod roundtrip_tests {
             args: vec![],
             partition_by: vec![col("col1")],
             order_by: vec![col("col2")],
-            window_frame: Some(range_number_frame),
+            window_frame: range_number_frame,
         };
 
         // 4. test with AggregateFunction
@@ -1388,7 +1390,7 @@ mod roundtrip_tests {
             args: vec![col("col1")],
             partition_by: vec![col("col1")],
             order_by: vec![col("col2")],
-            window_frame: Some(row_number_frame),
+            window_frame: row_number_frame,
         };
 
         roundtrip_expr_test(test_expr1, ctx.clone());

@@ -28,7 +28,7 @@ use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 struct DistinctScalarValues(Vec<ScalarValue>);
@@ -81,7 +81,7 @@ impl AggregateExpr for DistinctCount {
             .iter()
             .map(|state_data_type| {
                 Field::new(
-                    &format_state_name(&self.name, "count distinct"),
+                    format_state_name(&self.name, "count distinct"),
                     DataType::List(Box::new(Field::new(
                         "item",
                         state_data_type.clone(),
@@ -177,7 +177,7 @@ impl Accumulator for DistinctCountAccumulator {
             self.merge(&v)
         })
     }
-    fn state(&self) -> Result<Vec<AggregateState>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         let mut cols_out = self
             .state_data_types
             .iter()
@@ -206,7 +206,7 @@ impl Accumulator for DistinctCountAccumulator {
             )
         });
 
-        Ok(cols_out.into_iter().map(AggregateState::Scalar).collect())
+        Ok(cols_out.into_iter().collect())
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
@@ -220,7 +220,6 @@ impl Accumulator for DistinctCountAccumulator {
     }
 
     fn size(&self) -> usize {
-        // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
         std::mem::size_of_val(self)
             + (std::mem::size_of::<DistinctScalarValues>() * self.values.capacity())
             + self
@@ -231,13 +230,19 @@ impl Accumulator for DistinctCountAccumulator {
                 })
                 .sum::<usize>()
             + (std::mem::size_of::<DataType>() * self.state_data_types.capacity())
+            + self
+                .state_data_types
+                .iter()
+                .map(|dt| dt.size() - std::mem::size_of_val(dt))
+                .sum::<usize>()
+            + self.count_data_type.size()
+            - std::mem::size_of_val(&self.count_data_type)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregate::utils::get_accum_scalar_values;
     use arrow::array::{
         ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
         Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
@@ -356,7 +361,7 @@ mod tests {
         let mut accum = agg.create_accumulator()?;
         accum.update_batch(arrays)?;
 
-        Ok((get_accum_scalar_values(accum.as_ref())?, accum.evaluate()?))
+        Ok((accum.state()?, accum.evaluate()?))
     }
 
     fn run_update(
@@ -387,7 +392,7 @@ mod tests {
 
         accum.update_batch(&arrays)?;
 
-        Ok((get_accum_scalar_values(accum.as_ref())?, accum.evaluate()?))
+        Ok((accum.state()?, accum.evaluate()?))
     }
 
     fn run_merge_batch(arrays: &[ArrayRef]) -> Result<(Vec<ScalarValue>, ScalarValue)> {
@@ -405,7 +410,7 @@ mod tests {
         let mut accum = agg.create_accumulator()?;
         accum.merge_batch(arrays)?;
 
-        Ok((get_accum_scalar_values(accum.as_ref())?, accum.evaluate()?))
+        Ok((accum.state()?, accum.evaluate()?))
     }
 
     // Used trait to create associated constant for f32 and f64

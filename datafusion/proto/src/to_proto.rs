@@ -27,13 +27,13 @@ use crate::protobuf::{
         OptimizedLogicalPlan, OptimizedPhysicalPlan,
     },
     CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList, OptimizedLogicalPlanType,
-    OptimizedPhysicalPlanType, RollupNode,
+    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef, TimeUnit,
     UnionMode,
 };
-use datafusion_common::{Column, DFField, DFSchemaRef, ScalarValue};
+use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
     Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
 };
@@ -61,6 +61,8 @@ pub enum Error {
     InvalidTimeUnit(TimeUnit),
 
     UnsupportedScalarFunction(BuiltinScalarFunction),
+
+    NotImplemented(String),
 }
 
 impl std::error::Error for Error {}
@@ -98,6 +100,9 @@ impl std::fmt::Display for Error {
             }
             Self::UnsupportedScalarFunction(function) => {
                 write!(f, "Unsupported scalar function {:?}", function)
+            }
+            Self::NotImplemented(s) => {
+                write!(f, "Not implemented: {}", s)
             }
         }
     }
@@ -546,6 +551,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             protobuf::BuiltInWindowFunction::from(fun).into(),
                         )
                     }
+                    // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/4584
+                    WindowFunction::AggregateUDF(_) => return Err(Error::NotImplemented("UDAF as window function in proto".to_string()))
                 };
                 let arg_expr: Option<Box<Self>> = if !args.is_empty() {
                     let arg = &args[0];
@@ -562,12 +569,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     .map(|e| e.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let window_frame = match window_frame {
-                    Some(frame) => Some(
-                        protobuf::window_expr_node::WindowFrame::Frame(frame.try_into()?)
-                    ),
-                    None => None
-                };
+                let window_frame: Option<protobuf::WindowFrame> = Some(window_frame.try_into()?);
                 let window_expr = Box::new(protobuf::WindowExprNode {
                     expr: arg_expr,
                     window_function: Some(window_function),
@@ -892,6 +894,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         })
                         .collect::<Result<Vec<_>, Self::Error>>()?,
                 })),
+            },
+            Expr::Placeholder{ id, data_type } => Self {
+                expr_type: Some(ExprType::Placeholder(PlaceholderNode { id: id.clone(), data_type: Some(data_type.try_into()?) })),
             },
 
             Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } =>
@@ -1293,6 +1298,36 @@ impl From<&IntervalUnit> for protobuf::IntervalUnit {
             IntervalUnit::YearMonth => protobuf::IntervalUnit::YearMonth,
             IntervalUnit::DayTime => protobuf::IntervalUnit::DayTime,
             IntervalUnit::MonthDayNano => protobuf::IntervalUnit::MonthDayNano,
+        }
+    }
+}
+
+impl From<OwnedTableReference> for protobuf::OwnedTableReference {
+    fn from(t: OwnedTableReference) -> Self {
+        use protobuf::owned_table_reference::TableReferenceEnum;
+        let table_reference_enum = match t {
+            OwnedTableReference::Bare { table } => {
+                TableReferenceEnum::Bare(protobuf::BareTableReference { table })
+            }
+            OwnedTableReference::Partial { schema, table } => {
+                TableReferenceEnum::Partial(protobuf::PartialTableReference {
+                    schema,
+                    table,
+                })
+            }
+            OwnedTableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => TableReferenceEnum::Full(protobuf::FullTableReference {
+                catalog,
+                schema,
+                table,
+            }),
+        };
+
+        protobuf::OwnedTableReference {
+            table_reference_enum: Some(table_reference_enum),
         }
     }
 }

@@ -66,12 +66,10 @@ async fn search_accounts(
         provider_as_source(Arc::new(db)),
         None,
         vec![],
-    )
-    .unwrap()
-    .build()
-    .unwrap();
+    )?
+    .build()?;
 
-    let mut dataframe = DataFrame::new(ctx.state, &logical_plan)
+    let mut dataframe = DataFrame::new(ctx.state, logical_plan)
         .select_columns(&["id", "bank_account"])?;
 
     if let Some(f) = filter {

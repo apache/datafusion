@@ -223,7 +223,7 @@ impl<'a> ParquetReadOptions<'a> {
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
-            .with_target_partitions(config.target_partitions)
+            .with_target_partitions(config.target_partitions())
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 }

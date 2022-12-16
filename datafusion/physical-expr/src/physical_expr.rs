@@ -76,11 +76,10 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + PartialEq<dyn Any> {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>>;
 
-    #[allow(unused_variables)]
     /// Return the boundaries of this expression. This method (and all the
     /// related APIs) are experimental and subject to change.
-    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
-        None
+    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
+        context
     }
 }
 
@@ -91,6 +90,8 @@ pub struct AnalysisContext {
     /// A list of known column boundaries, ordered by the index
     /// of the column in the current schema.
     pub column_boundaries: Vec<Option<ExprBoundaries>>,
+    // Result of the current analysis.
+    pub boundaries: Option<ExprBoundaries>,
 }
 
 impl AnalysisContext {
@@ -99,7 +100,10 @@ impl AnalysisContext {
         column_boundaries: Vec<Option<ExprBoundaries>>,
     ) -> Self {
         assert_eq!(input_schema.fields().len(), column_boundaries.len());
-        Self { column_boundaries }
+        Self {
+            column_boundaries,
+            boundaries: None,
+        }
     }
 
     /// Create a new analysis context from column statistics.
@@ -115,6 +119,26 @@ impl AnalysisContext {
             None => vec![None; input_schema.fields().len()],
         };
         Self::new(input_schema, column_boundaries)
+    }
+
+    pub fn boundaries(&self) -> Option<&ExprBoundaries> {
+        self.boundaries.as_ref()
+    }
+
+    /// Set the result of the current analysis.
+    pub fn with_boundaries(mut self, result: Option<ExprBoundaries>) -> Self {
+        self.boundaries = result;
+        self
+    }
+
+    /// Update the boundaries of a column.
+    pub fn with_column_update(
+        mut self,
+        column: usize,
+        boundaries: ExprBoundaries,
+    ) -> Self {
+        self.column_boundaries[column] = Some(boundaries);
+        self
     }
 }
 
@@ -265,6 +289,18 @@ fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 
     let data = mutable.freeze();
     Ok(make_array(data))
+}
+
+#[macro_export]
+// If the given expression is None, return the given context
+// without setting the boundaries.
+macro_rules! analysis_expect {
+    ($context: ident, $expr: expr) => {
+        match $expr {
+            Some(expr) => expr,
+            None => return $context.with_boundaries(None),
+        }
+    };
 }
 
 #[cfg(test)]

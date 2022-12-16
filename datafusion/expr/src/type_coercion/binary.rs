@@ -47,6 +47,8 @@ pub fn binary_operator_data_type(
         | Operator::Or
         | Operator::Like
         | Operator::NotLike
+        | Operator::ILike
+        | Operator::NotILike
         | Operator::Lt
         | Operator::Gt
         | Operator::GtEq
@@ -116,7 +118,9 @@ pub fn coerce_types(
         | Operator::GtEq
         | Operator::LtEq => comparison_coercion(lhs_type, rhs_type),
         // "like" operators operate on strings and always return a boolean
-        Operator::Like | Operator::NotLike => like_coercion(lhs_type, rhs_type),
+        Operator::Like | Operator::NotLike | Operator::ILike | Operator::NotILike => {
+            like_coercion(lhs_type, rhs_type)
+        }
         // date +/- interval returns date
         Operator::Plus | Operator::Minus
             if (*lhs_type == DataType::Date32
@@ -561,6 +565,8 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
             false => None,
             true => Some(Time64(unit.clone())),
         },
+        (Timestamp(_, tz), Utf8) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
+        (Utf8, Timestamp(_, tz)) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
                 // can't cast across timezones
@@ -852,6 +858,24 @@ mod tests {
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
+            DataType::Utf8,
+            Operator::NotLike,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Utf8,
+            Operator::ILike,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Utf8,
+            Operator::NotILike,
+            DataType::Utf8
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
             DataType::Date32,
             Operator::Eq,
             DataType::Date32
@@ -885,6 +909,30 @@ mod tests {
             DataType::Time64(TimeUnit::Nanosecond),
             Operator::Eq,
             DataType::Time64(TimeUnit::Nanosecond)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Second, None),
+            Operator::Lt,
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            Operator::Lt,
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            Operator::Lt,
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            Operator::Lt,
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
         );
         test_coercion_binary_rule!(
             DataType::Utf8,

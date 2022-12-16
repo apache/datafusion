@@ -37,30 +37,38 @@ impl EliminateLimit {
 }
 
 impl OptimizerRule for EliminateLimit {
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<Option<LogicalPlan>> {
         if let LogicalPlan::Limit(limit) = plan {
             match limit.fetch {
                 Some(fetch) => {
                     if fetch == 0 {
-                        return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                        return Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
                             schema: limit.input.schema().clone(),
-                        }));
+                        })));
                     }
                 }
                 None => {
                     if limit.skip == 0 {
                         let input = &*limit.input;
-                        return utils::optimize_children(self, input, optimizer_config);
+                        return Ok(Some(utils::optimize_children(
+                            self,
+                            input,
+                            optimizer_config,
+                        )?));
                     }
                 }
             }
         }
-        utils::optimize_children(self, plan, optimizer_config)
+        Ok(Some(utils::optimize_children(
+            self,
+            plan,
+            optimizer_config,
+        )?))
     }
 
     fn name(&self) -> &str {
@@ -71,7 +79,7 @@ impl OptimizerRule for EliminateLimit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::limit_push_down::LimitPushDown;
+    use crate::push_down_limit::PushDownLimit;
     use crate::test::*;
     use datafusion_common::Column;
     use datafusion_expr::{
@@ -82,7 +90,8 @@ mod tests {
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let optimized_plan = EliminateLimit::new()
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -94,11 +103,13 @@ mod tests {
         plan: &LogicalPlan,
         expected: &str,
     ) -> Result<()> {
-        let optimized_plan = LimitPushDown::new()
-            .optimize(plan, &mut OptimizerConfig::new())
+        let optimized_plan = PushDownLimit::new()
+            .try_optimize(plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let optimized_plan = EliminateLimit::new()
-            .optimize(&optimized_plan, &mut OptimizerConfig::new())
+            .try_optimize(&optimized_plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -215,7 +226,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .limit(2, Some(1))?
             .join_using(
-                &table_scan_inner,
+                table_scan_inner,
                 JoinType::Inner,
                 vec![Column::from_name("a".to_string())],
             )?

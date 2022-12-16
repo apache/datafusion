@@ -41,6 +41,13 @@ pub struct WindowShift {
     default_value: Option<ScalarValue>,
 }
 
+impl WindowShift {
+    /// Get shift_offset of window shift expression
+    pub fn get_shift_offset(&self) -> i64 {
+        self.shift_offset
+    }
+}
+
 /// lead() window function
 pub fn lead(
     name: String,

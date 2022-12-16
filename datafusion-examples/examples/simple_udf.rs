@@ -59,7 +59,7 @@ fn create_context() -> Result<SessionContext> {
 /// In this example we will declare a single-type, single return type UDF that exponentiates f64, a^b
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut ctx = create_context()?;
+    let ctx = create_context()?;
 
     // First, declare the actual implementation of the calculation
     let pow = |args: &[ArrayRef]| {

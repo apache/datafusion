@@ -131,25 +131,25 @@ impl ExecutionPlan for CsvExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.base_config.object_store_url)?;
+
         let config = Arc::new(CsvConfig {
             batch_size: context.session_config().batch_size(),
             file_schema: Arc::clone(&self.base_config.file_schema),
             file_projection: self.base_config.file_column_projection_indices(),
             has_header: self.has_header,
             delimiter: self.delimiter,
+            object_store,
         });
 
         let opener = CsvOpener {
             config,
             file_compression_type: self.file_compression_type.to_owned(),
         };
-        let stream = FileStream::new(
-            &self.base_config,
-            partition,
-            context,
-            opener,
-            self.metrics.clone(),
-        )?;
+        let stream =
+            FileStream::new(&self.base_config, partition, opener, self.metrics.clone())?;
         Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
 
@@ -184,6 +184,7 @@ struct CsvConfig {
     file_projection: Option<Vec<usize>>,
     has_header: bool,
     delimiter: u8,
+    object_store: Arc<dyn ObjectStore>,
 }
 
 impl CsvConfig {
@@ -208,15 +209,11 @@ struct CsvOpener {
 }
 
 impl FileOpener for CsvOpener {
-    fn open(
-        &self,
-        store: Arc<dyn ObjectStore>,
-        file_meta: FileMeta,
-    ) -> Result<FileOpenFuture> {
+    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let config = self.config.clone();
         let file_compression_type = self.file_compression_type.to_owned();
         Ok(Box::pin(async move {
-            match store.get(file_meta.location()).await? {
+            match config.object_store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     let decoder = file_compression_type.convert_read(file)?;
                     Ok(futures::stream::iter(config.open(decoder, true)).boxed())
@@ -559,6 +556,40 @@ mod tests {
         Ok(schema)
     }
 
+    async fn test_additional_stores(
+        file_compression_type: FileCompressionType,
+        store: Arc<dyn ObjectStore>,
+    ) {
+        let ctx = SessionContext::new();
+        ctx.runtime_env()
+            .register_object_store("file", "", store.clone());
+
+        let task_ctx = ctx.task_ctx();
+
+        let file_schema = aggr_test_schema();
+        let path = format!("{}/csv", arrow_test_data());
+        let filename = "aggregate_test_100.csv";
+
+        let file_groups = partitioned_file_groups(
+            path.as_str(),
+            filename,
+            1,
+            FileType::CSV,
+            file_compression_type.to_owned(),
+        )
+        .unwrap();
+
+        let config = partitioned_csv_config(file_schema, file_groups).unwrap();
+        let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
+
+        let it = csv.execute(0, task_ctx).unwrap();
+        let batches: Vec<_> = it.try_collect().await.unwrap();
+
+        let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+
+        assert_eq!(total_rows, 100);
+    }
+
     #[rstest(
         file_compression_type,
         case(FileCompressionType::UNCOMPRESSED),
@@ -567,45 +598,18 @@ mod tests {
         case(FileCompressionType::XZ)
     )]
     #[tokio::test]
-    async fn test_chunked(file_compression_type: FileCompressionType) {
-        let ctx = SessionContext::new();
-        let chunk_sizes = [10, 20, 30, 40];
-
-        for chunk_size in chunk_sizes {
-            ctx.runtime_env().register_object_store(
-                "file",
-                "",
-                Arc::new(ChunkedStore::new(
-                    Arc::new(LocalFileSystem::new()),
-                    chunk_size,
-                )),
-            );
-
-            let task_ctx = ctx.task_ctx();
-
-            let file_schema = aggr_test_schema();
-            let path = format!("{}/csv", arrow_test_data());
-            let filename = "aggregate_test_100.csv";
-
-            let file_groups = partitioned_file_groups(
-                path.as_str(),
-                filename,
-                1,
-                FileType::CSV,
-                file_compression_type.to_owned(),
-            )
-            .unwrap();
-
-            let config = partitioned_csv_config(file_schema, file_groups).unwrap();
-            let csv = CsvExec::new(config, true, b',', file_compression_type.to_owned());
-
-            let it = csv.execute(0, task_ctx).unwrap();
-            let batches: Vec<_> = it.try_collect().await.unwrap();
-
-            let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
-
-            assert_eq!(total_rows, 100);
-        }
+    async fn test_chunked_csv(
+        file_compression_type: FileCompressionType,
+        #[values(10, 20, 30, 40)] chunk_size: usize,
+    ) {
+        test_additional_stores(
+            file_compression_type,
+            Arc::new(ChunkedStore::new(
+                Arc::new(LocalFileSystem::new()),
+                chunk_size,
+            )),
+        )
+        .await;
     }
 
     #[tokio::test]

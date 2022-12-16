@@ -31,17 +31,36 @@ use std::fmt::Debug;
 /// * update its state from multiple accumulators' states via `merge_batch`
 /// * compute the final value from its internal state via `evaluate`
 pub trait Accumulator: Send + Sync + Debug {
-    /// Returns the state of the accumulator at the end of the accumulation.
-    /// in the case of an average on which we track `sum` and `n`, this function should return a vector
-    /// of two values, sum and n.
-    fn state(&self) -> Result<Vec<AggregateState>>;
+    /// Returns the partial intermediate state of the accumulator. This
+    /// partial state is serialied as `Arrays` and then combined with
+    /// other partial states from different instances of this
+    /// accumulator (that ran on different partitions, for
+    /// example).
+    ///
+    /// The state can be and often is a different type than the output
+    /// type of the [`Accumulator`].
+    ///
+    /// See [`merge_batch`] for more details on the merging process.
+    ///
+    /// Some accumulators can return multiple values for their
+    /// intermediate states. For example average, tracks `sum` and
+    ///  `n`, and this function should return
+    /// a vector of two values, sum and n.
+    ///
+    /// `ScalarValue::List` can also be used to pass multiple values
+    /// if the number of intermediate values is not known at planning
+    /// time (e.g. median)
+    fn state(&self) -> Result<Vec<ScalarValue>>;
 
     /// Updates the accumulator's state from a vector of arrays.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
 
-    /// Retracts an update (caused by the given inputs) to accumulator's state.
-    /// Inverse operation of the `update_batch` operation. This method must be
-    /// for accumulators that should support bounded OVER aggregates.
+    /// Retracts an update (caused by the given inputs) to
+    /// accumulator's state.
+    ///
+    /// This is the inverse operation of [`update_batch`] and is used
+    /// to incrementally calculate window aggregates where the OVER
+    /// clause defines a bounded window.
     fn retract_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
         // TODO add retract for all accumulators
         Err(DataFusionError::Internal(
@@ -49,49 +68,21 @@ pub trait Accumulator: Send + Sync + Debug {
         ))
     }
 
-    /// updates the accumulator's state from a vector of states.
+    /// Updates the accumulator's state from an `Array` containing one
+    /// or more intermediate values.
+    ///
+    /// The `states` array passed was formed by concatenating the
+    /// results of calling `[state]` on zero or more other accumulator
+    /// instances.
+    ///
+    /// `states`  is an array of the same types as returned by [`state`]
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()>;
 
-    /// returns its value based on its current state.
+    /// Returns the final aggregate value based on its current state.
     fn evaluate(&self) -> Result<ScalarValue>;
 
     /// Allocated size required for this accumulator, in bytes, including `Self`.
     /// Allocated means that for internal containers such as `Vec`, the `capacity` should be used
     /// not the `len`
     fn size(&self) -> usize;
-}
-
-/// Representation of internal accumulator state. Accumulators can potentially have a mix of
-/// scalar and array values. It may be desirable to add custom aggregator states here as well
-/// in the future (perhaps `Custom(Box<dyn Any>)`?).
-#[derive(Debug)]
-pub enum AggregateState {
-    /// Simple scalar value. Note that `ScalarValue::List` can be used to pass multiple
-    /// values around
-    Scalar(ScalarValue),
-    /// Arrays can be used instead of `ScalarValue::List` and could potentially have better
-    /// performance with large data sets, although this has not been verified. It also allows
-    /// for use of arrow kernels with less overhead.
-    Array(ArrayRef),
-}
-
-impl AggregateState {
-    /// Access the aggregate state as a scalar value. An error will occur if the
-    /// state is not a scalar value.
-    pub fn as_scalar(&self) -> Result<&ScalarValue> {
-        match &self {
-            Self::Scalar(v) => Ok(v),
-            _ => Err(DataFusionError::Internal(
-                "AggregateState is not a scalar aggregate".to_string(),
-            )),
-        }
-    }
-
-    /// Access the aggregate state as an array value.
-    pub fn to_array(&self) -> ArrayRef {
-        match &self {
-            Self::Scalar(v) => v.to_array(),
-            Self::Array(array) => array.clone(),
-        }
-    }
 }

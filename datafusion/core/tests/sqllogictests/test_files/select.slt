@@ -1,3 +1,4 @@
+
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,36 +16,43 @@
 # specific language governing permissions and limitations
 # under the License.
 
-statement ok
-CREATE TABLE users AS VALUES(1,2),(2,3);
+##########
+## SELECT Tests
+##########
 
-query II rowsort
-select * from users;
+# all where empty
+query II
+SELECT * FROM aggregate_test_100 WHERE 1=2
 ----
-1 2
-2 3
 
-statement ok
-insert into users values(2, 4);
-
-query II rowsort
-select * from users;
+# Simple values function
+query I
+VALUES (1)
 ----
-1 2
-2 3
-2 4
+1
 
-statement ok
-insert into users values(1 + 10, 20);
-
-query II rowsort
-select * from users;
+# VALUES with a negative values
+query I
+VALUES (-1)
 ----
-1 2
-2 3
-2 4
-11 20
+-1
 
-# Test insert into a undefined table
-statement error
-insert into user values(1, 20);
+# foo bar
+query IIC
+VALUES (2+1,2-1,2>1)
+----
+3    1    true
+
+# multiple rows values
+query I
+VALUES (1),(2)
+----
+1
+2
+
+# multiple rows and columns from VALUES
+query IC
+VALUES (1,'a'),(2,'b')
+----
+1   a
+2   b

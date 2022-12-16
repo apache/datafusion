@@ -57,7 +57,7 @@ unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
 apache-avro = { version = "0.14", optional = true }
-arrow = { version = "28.0.0", features = ["prettyprint"] }
+arrow = { version = "29.0.0", features = ["prettyprint"] }
 async-compression = { version = "0.3.14", features = ["bzip2", "gzip", "xz", "futures-io", "tokio"], optional = true }
 async-trait = "0.1.41"
 bytes = "1.1"
@@ -82,7 +82,7 @@ num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
 object_store = "0.5.0"
 parking_lot = "0.12"
-parquet = { version = "28.0.0", features = ["arrow", "async"] }
+parquet = { version = "29.0.0", features = ["arrow", "async"] }
 paste = "^1.0"
 percent-encoding = "2.2.0"
 pin-project-lite = "^0.2.7"
@@ -90,8 +90,7 @@ pyo3 = { version = "0.17.1", optional = true }
 rand = "0.8"
 rayon = { version = "1.5", optional = true }
 smallvec = { version = "1.6", features = ["union"] }
-sqllogictest = "0.8.0"
-sqlparser = "0.27"
+sqlparser = "0.28"
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-stream = "0.1"
@@ -101,7 +100,7 @@ uuid = { version = "1.0", features = ["v4"] }
 xz2 = { version = "0.1", optional = true }
 
 [dev-dependencies]
-arrow = { version = "28.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
+arrow = { version = "29.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
 async-trait = "0.1.53"
 criterion = "0.4"
 csv = "1.1.6"
@@ -110,8 +109,10 @@ doc-comment = "0.3"
 env_logger = "0.10"
 parquet-test-utils = { path = "../../parquet-test-utils" }
 rstest = "0.16.0"
-sqlparser = "0.27"
+sqllogictest = "0.9.0"
+sqlparser = "0.28"
 test-utils = { path = "../../test-utils" }
+thiserror = "1.0.37"
 
 [[bench]]
 harness = false

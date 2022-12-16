@@ -15,21 +15,31 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# target_partitions defaults to num_cores, so set
+# to a known value that is unlikely to be
+# the real number of cores on a system
+statement ok
+SET datafusion.execution.target_partitions=7
+
 # show all variables
 query R
 SHOW ALL
 ----
+datafusion.catalog.create_default_catalog_and_schema true
+datafusion.catalog.information_schema true
 datafusion.catalog.location NULL
 datafusion.catalog.type NULL
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.coalesce_target_batch_size 4096
+datafusion.execution.collect_statistics false
 datafusion.execution.parquet.enable_page_index false
 datafusion.execution.parquet.metadata_size_hint NULL
 datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
 datafusion.execution.parquet.reorder_filters false
 datafusion.execution.parquet.skip_metadata true
+datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
 datafusion.explain.logical_plan_only false
 datafusion.explain.physical_plan_only false
@@ -37,6 +47,9 @@ datafusion.optimizer.filter_null_join_keys false
 datafusion.optimizer.hash_join_single_partition_threshold 1048576
 datafusion.optimizer.max_passes 3
 datafusion.optimizer.prefer_hash_join true
+datafusion.optimizer.repartition_aggregations true
+datafusion.optimizer.repartition_joins true
+datafusion.optimizer.repartition_windows true
 datafusion.optimizer.skip_failed_rules true
 datafusion.optimizer.top_down_join_key_reordering true
 

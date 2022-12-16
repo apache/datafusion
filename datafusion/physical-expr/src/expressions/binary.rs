@@ -47,9 +47,12 @@ use arrow::compute::kernels::comparison::{
 use arrow::compute::kernels::comparison::{
     eq_scalar, gt_eq_scalar, gt_scalar, lt_eq_scalar, lt_scalar, neq_scalar,
 };
-use arrow::compute::kernels::comparison::{like_utf8, nlike_utf8, regexp_is_match_utf8};
 use arrow::compute::kernels::comparison::{
-    like_utf8_scalar, nlike_utf8_scalar, regexp_is_match_utf8_scalar,
+    ilike_utf8, like_utf8, nilike_utf8, nlike_utf8, regexp_is_match_utf8,
+};
+use arrow::compute::kernels::comparison::{
+    ilike_utf8_scalar, like_utf8_scalar, nilike_utf8_scalar, nlike_utf8_scalar,
+    regexp_is_match_utf8_scalar,
 };
 
 use adapter::{eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn};
@@ -71,8 +74,9 @@ use kernels_arrow::{
 use arrow::datatypes::{DataType, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 
+use super::column::Column;
 use crate::physical_expr::down_cast_any_ref;
-use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
+use crate::{analysis_expect, AnalysisContext, ExprBoundaries, PhysicalExpr};
 use datafusion_common::cast::{as_boolean_array, as_decimal128_array};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
@@ -658,7 +662,7 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     /// Return the boundaries of this binary expression's result.
-    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
+    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
         match &self.op {
             Operator::Eq
             | Operator::Gt
@@ -667,26 +671,42 @@ impl PhysicalExpr for BinaryExpr {
             | Operator::GtEq => {
                 // We currently only support comparison when we know at least one of the sides are
                 // a known value (a scalar). This includes predicates like a > 20 or 5 > a.
-                let left_boundaries = self.left.boundaries(context)?;
-                let right_boundaries = self.right.boundaries(context)?;
-                let (op, left, right) = match right_boundaries.reduce() {
-                    Some(right_value) => {
+                let context = self.left.analyze(context);
+                let left_boundaries =
+                    analysis_expect!(context, context.boundaries()).clone();
+
+                let context = self.right.analyze(context);
+                let right_boundaries =
+                    analysis_expect!(context, context.boundaries.clone());
+
+                match (left_boundaries.reduce(), right_boundaries.reduce()) {
+                    (_, Some(right_value)) => {
                         // We know the right side is a scalar, so we can use the operator as is
-                        (self.op, self.left.clone(), right_value)
-                    }
-                    None => {
-                        // If not, we have to swap the operator and left/right (since this means
-                        // left has to be a scalar).
-                        (
-                            self.op.swap()?,
-                            self.right.clone(),
-                            left_boundaries.reduce()?,
+                        analyze_expr_scalar_comparison(
+                            context,
+                            &self.op,
+                            &self.left,
+                            right_value,
                         )
                     }
-                };
-                analyze_expr_scalar_comparison(&op, context, &left, right)
+                    (Some(left_value), _) => {
+                        // If not, we have to swap the operator and left/right (since this means
+                        // left has to be a scalar).
+                        let swapped_op = analysis_expect!(context, self.op.swap());
+                        analyze_expr_scalar_comparison(
+                            context,
+                            &swapped_op,
+                            &self.right,
+                            left_value,
+                        )
+                    }
+                    _ => {
+                        // Both sides are columns, so we give up.
+                        context.with_boundaries(None)
+                    }
+                }
             }
-            _ => None,
+            _ => context.with_boundaries(None),
         }
     }
 }
@@ -702,14 +722,16 @@ impl PartialEq<dyn Any> for BinaryExpr {
 
 // Analyze the comparison between an expression (on the left) and a scalar value
 // (on the right). The new boundaries will indicate whether it is always true, always
-// false, or unknown (with a probablistic selectivity value attached).
+// false, or unknown (with a probablistic selectivity value attached). This operation
+// will also include the new upper/lower boundaries for the operand on the left if
+// they can be determined.
 fn analyze_expr_scalar_comparison(
+    context: AnalysisContext,
     op: &Operator,
-    context: &AnalysisContext,
     left: &Arc<dyn PhysicalExpr>,
     right: ScalarValue,
-) -> Option<ExprBoundaries> {
-    let left_bounds = left.boundaries(context)?;
+) -> AnalysisContext {
+    let left_bounds = analysis_expect!(context, left.analyze(context.clone()).boundaries);
     let left_min = left_bounds.min_value;
     let left_max = left_bounds.max_value;
 
@@ -737,8 +759,8 @@ fn analyze_expr_scalar_comparison(
     assert!(!(always_selects && never_selects));
 
     let selectivity = match (always_selects, never_selects) {
-        (true, _) => Some(1.0),
-        (_, true) => Some(0.0),
+        (true, _) => 1.0,
+        (_, true) => 0.0,
         (false, false) => {
             // If there is a partial overlap, then we can estimate the selectivity
             // by computing the ratio of the existing overlap to the total range. Since we
@@ -746,19 +768,65 @@ fn analyze_expr_scalar_comparison(
             // assumes a uniform distribution by default.
 
             // Our [min, max] is inclusive, so we need to add 1 to the difference.
-            let total_range = left_max.distance(&left_min)? + 1;
-            let overlap_between_boundaries = match op {
-                Operator::Lt => right.distance(&left_min)?,
-                Operator::Gt => left_max.distance(&right)?,
-                Operator::LtEq => right.distance(&left_min)? + 1,
-                Operator::GtEq => left_max.distance(&right)? + 1,
-                Operator::Eq => 1,
+            let total_range = analysis_expect!(context, left_max.distance(&left_min)) + 1;
+            let overlap_between_boundaries = analysis_expect!(
+                context,
+                match op {
+                    Operator::Lt => right.distance(&left_min),
+                    Operator::Gt => left_max.distance(&right),
+                    Operator::LtEq => right.distance(&left_min).map(|dist| dist + 1),
+                    Operator::GtEq => left_max.distance(&right).map(|dist| dist + 1),
+                    Operator::Eq => Some(1),
+                    _ => None,
+                }
+            );
+
+            overlap_between_boundaries as f64 / total_range as f64
+        }
+    };
+
+    // The context represents all the knowledge we have gathered during the
+    // analysis process, which we can now add more since the expression's upper
+    // and lower boundaries might have changed.
+    let context = match left.as_any().downcast_ref::<Column>() {
+        Some(column_expr) => {
+            let (left_min, left_max) = match op {
+                // TODO: for lt/gt, we technically should shrink the possibility space
+                // by one since a < 5 means that 5 is not a possible value for `a`. However,
+                // it is currently tricky to do so (e.g. for floats, we can get away with 4.999
+                // so we need a smarter logic to find out what is the closest value that is
+                // different from the scalar_value).
+                Operator::Lt | Operator::LtEq => {
+                    // We only want to update the upper bound when we know it will help us (e.g.
+                    // it is actually smaller than what we have right now) and it is a valid
+                    // value (e.g. [0, 100] < -100 would update the boundaries to [0, -100] if
+                    // there weren't the selectivity check).
+                    if right < left_max && selectivity > 0.0 {
+                        (left_min, right)
+                    } else {
+                        (left_min, left_max)
+                    }
+                }
+                Operator::Gt | Operator::GtEq => {
+                    // Same as above, but this time we want to limit the lower bound.
+                    if right > left_min && selectivity > 0.0 {
+                        (right, left_max)
+                    } else {
+                        (left_min, left_max)
+                    }
+                }
+                // For equality, we don't have the range problem so even if the selectivity
+                // is 0.0, we can still update the boundaries.
+                Operator::Eq => (right.clone(), right),
                 _ => unreachable!(),
             };
 
-            Some(overlap_between_boundaries as f64 / total_range as f64)
+            let left_bounds =
+                ExprBoundaries::new(left_min, left_max, left_bounds.distinct_count);
+            context.with_column_update(column_expr.index(), left_bounds)
         }
-    }?;
+        None => context,
+    };
 
     // The selectivity can't be be greater than 1.0.
     assert!(selectivity <= 1.0);
@@ -769,12 +837,13 @@ fn analyze_expr_scalar_comparison(
         _ => (false, true, 2),
     };
 
-    Some(ExprBoundaries::new_with_selectivity(
+    let result_boundaries = Some(ExprBoundaries::new_with_selectivity(
         ScalarValue::Boolean(Some(pred_min)),
         ScalarValue::Boolean(Some(pred_max)),
         Some(pred_distinct),
         Some(selectivity),
-    ))
+    ));
+    context.with_boundaries(result_boundaries)
 }
 
 /// unwrap underlying (non dictionary) value, if any, to pass to a scalar kernel
@@ -878,6 +947,12 @@ impl BinaryExpr {
             Operator::NotLike => {
                 binary_string_array_op_scalar!(array, scalar.clone(), nlike, bool_type)
             }
+            Operator::ILike => {
+                binary_string_array_op_scalar!(array, scalar.clone(), ilike, bool_type)
+            }
+            Operator::NotILike => {
+                binary_string_array_op_scalar!(array, scalar.clone(), nilike, bool_type)
+            }
             Operator::Plus => {
                 binary_primitive_array_op_scalar!(array, scalar.clone(), add)
             }
@@ -980,6 +1055,8 @@ impl BinaryExpr {
         match &self.op {
             Operator::Like => binary_string_array_op!(left, right, like),
             Operator::NotLike => binary_string_array_op!(left, right, nlike),
+            Operator::ILike => binary_string_array_op!(left, right, ilike),
+            Operator::NotILike => binary_string_array_op!(left, right, nilike),
             Operator::Lt => lt_dyn(&left, &right),
             Operator::LtEq => lt_eq_dyn(&left, &right),
             Operator::Gt => gt_dyn(&left, &right),
@@ -1209,7 +1286,12 @@ mod tests {
                 .expect("failed to downcast");
             // verify that the result itself is correct
             for (i, x) in $VEC.iter().enumerate() {
-                assert_eq!(result.value(i), *x);
+                let v = result.value(i);
+                assert_eq!(
+                    v,
+                    *x,
+                    "Unexpected output at position {i}:\n\nActual:\n{v}\n\nExpected:\n{x}"
+                );
             }
         }};
     }
@@ -1275,6 +1357,42 @@ mod tests {
             BooleanArray,
             DataType::Boolean,
             vec![true, false],
+        );
+        test_coercion!(
+            StringArray,
+            DataType::Utf8,
+            vec!["hello world", "world"],
+            StringArray,
+            DataType::Utf8,
+            vec!["%hello%", "%hello%"],
+            Operator::NotLike,
+            BooleanArray,
+            DataType::Boolean,
+            vec![false, true],
+        );
+        test_coercion!(
+            StringArray,
+            DataType::Utf8,
+            vec!["hEllo world", "world"],
+            StringArray,
+            DataType::Utf8,
+            vec!["%helLo%", "%helLo%"],
+            Operator::ILike,
+            BooleanArray,
+            DataType::Boolean,
+            vec![true, false],
+        );
+        test_coercion!(
+            StringArray,
+            DataType::Utf8,
+            vec!["hEllo world", "world"],
+            StringArray,
+            DataType::Utf8,
+            vec!["%helLo%", "%helLo%"],
+            Operator::NotILike,
+            BooleanArray,
+            DataType::Boolean,
+            vec![false, true],
         );
         test_coercion!(
             StringArray,
@@ -3017,7 +3135,7 @@ mod tests {
         min_value: ScalarValue,
         max_value: ScalarValue,
     ) -> (Schema, Statistics) {
-        assert!(min_value.get_datatype() == max_value.get_datatype());
+        assert_eq!(min_value.get_datatype(), max_value.get_datatype());
         let schema = Schema::new(vec![Field::new("a", min_value.get_datatype(), false)]);
         let columns = vec![ColumnStatistics {
             min_value: Some(min_value),
@@ -3109,13 +3227,16 @@ mod tests {
             ((Operator::GtEq, 200), (0.0, 1, 100)),
         ];
 
-        for ((operator, rhs), (exp_selectivity, _, _)) in cases {
+        for ((operator, rhs), (exp_selectivity, exp_min, exp_max)) in cases {
             let context = AnalysisContext::from_statistics(&schema, &statistics);
             let left = col("a", &schema).unwrap();
             let right = ScalarValue::Int64(Some(rhs));
-            let boundaries =
-                analyze_expr_scalar_comparison(&operator, &context, &left, right)
-                    .expect("this case should not return None");
+            let analysis_ctx =
+                analyze_expr_scalar_comparison(context, &operator, &left, right);
+            let boundaries = analysis_ctx
+                .boundaries
+                .as_ref()
+                .expect("Analysis must complete for this test!");
 
             assert_eq!(
                 boundaries
@@ -3137,10 +3258,18 @@ mod tests {
                 assert_eq!(boundaries.min_value, ScalarValue::Boolean(Some(false)));
                 assert_eq!(boundaries.max_value, ScalarValue::Boolean(Some(true)));
             }
+
+            // For getting the updated boundaries, we can simply analyze the LHS
+            // with the existing context.
+            let left_boundaries = left
+                .analyze(analysis_ctx)
+                .boundaries
+                .expect("this case should not return None");
+            assert_eq!(left_boundaries.min_value, ScalarValue::Int64(Some(exp_min)));
+            assert_eq!(left_boundaries.max_value, ScalarValue::Int64(Some(exp_max)));
         }
         Ok(())
     }
-
     #[test]
     fn test_comparison_result_estimate_different_type() -> Result<()> {
         // A table where the column 'a' has a min of 1.3, a max of 50.7.
@@ -3178,13 +3307,16 @@ mod tests {
             ((Operator::GtEq, 50.7), (1.0 / distance, 50.7, 50.7)),
         ];
 
-        for ((operator, rhs), (exp_selectivity, _, _)) in cases {
+        for ((operator, rhs), (exp_selectivity, exp_min, exp_max)) in cases {
             let context = AnalysisContext::from_statistics(&schema, &statistics);
             let left = col("a", &schema).unwrap();
             let right = ScalarValue::from(rhs);
-            let boundaries =
-                analyze_expr_scalar_comparison(&operator, &context, &left, right)
-                    .expect("this case should not return None");
+            let analysis_ctx =
+                analyze_expr_scalar_comparison(context, &operator, &left, right);
+            let boundaries = analysis_ctx
+                .clone()
+                .boundaries
+                .expect("Analysis must complete for this test!");
 
             assert_eq!(
                 boundaries
@@ -3206,6 +3338,19 @@ mod tests {
                 assert_eq!(boundaries.min_value, ScalarValue::from(false));
                 assert_eq!(boundaries.max_value, ScalarValue::from(true));
             }
+
+            let left_boundaries = left
+                .analyze(analysis_ctx)
+                .boundaries
+                .expect("this case should not return None");
+            assert_eq!(
+                left_boundaries.min_value,
+                ScalarValue::Float64(Some(exp_min))
+            );
+            assert_eq!(
+                left_boundaries.max_value,
+                ScalarValue::Float64(Some(exp_max))
+            );
         }
         Ok(())
     }
@@ -3227,7 +3372,8 @@ mod tests {
 
         let context = AnalysisContext::from_statistics(&schema, &statistics);
         let predicate_boundaries = gt
-            .boundaries(&context)
+            .analyze(context)
+            .boundaries
             .expect("boundaries should not be None");
         assert_eq!(predicate_boundaries.selectivity, Some(0.76));
 
@@ -3255,7 +3401,8 @@ mod tests {
 
         let context = AnalysisContext::from_statistics(&schema, &statistics);
         let predicate_boundaries = gt
-            .boundaries(&context)
+            .analyze(context)
+            .boundaries
             .expect("boundaries should not be None");
         assert_eq!(predicate_boundaries.selectivity, Some(0.5));
 

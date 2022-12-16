@@ -25,7 +25,7 @@ use crate::physical_plan::{
         PhysicalSortExpr, RowNumber,
     },
     type_coercion::coerce,
-    PhysicalExpr,
+    udaf, PhysicalExpr,
 };
 use crate::scalar::ScalarValue;
 use arrow::datatypes::Schema;
@@ -51,7 +51,7 @@ pub fn create_window_expr(
     args: &[Arc<dyn PhysicalExpr>],
     partition_by: &[Arc<dyn PhysicalExpr>],
     order_by: &[PhysicalSortExpr],
-    window_frame: Option<Arc<WindowFrame>>,
+    window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
@@ -63,6 +63,12 @@ pub fn create_window_expr(
         )),
         WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr::new(
             create_built_in_window_expr(fun, args, input_schema, name)?,
+            partition_by,
+            order_by,
+            window_frame,
+        )),
+        WindowFunction::AggregateUDF(fun) => Arc::new(AggregateWindowExpr::new(
+            udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?,
             partition_by,
             order_by,
             window_frame,
@@ -172,12 +178,86 @@ mod tests {
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::cast::as_primitive_array;
+    use datafusion_expr::{create_udaf, Accumulator, Volatility};
     use futures::FutureExt;
 
     fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
         let csv = test::scan_partitioned_csv(partitions)?;
         let schema = csv.schema();
         Ok((csv, schema))
+    }
+
+    #[tokio::test]
+    async fn window_function_with_udaf() -> Result<()> {
+        #[derive(Debug)]
+        struct MyCount(i64);
+
+        impl Accumulator for MyCount {
+            fn state(&self) -> Result<Vec<ScalarValue>> {
+                Ok(vec![ScalarValue::Int64(Some(self.0))])
+            }
+
+            fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+                let array = &values[0];
+                self.0 += (array.len() - array.data().null_count()) as i64;
+                Ok(())
+            }
+
+            fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+                let counts: &Int64Array = arrow::array::as_primitive_array(&states[0]);
+                if let Some(c) = &arrow::compute::sum(counts) {
+                    self.0 += *c;
+                }
+                Ok(())
+            }
+
+            fn evaluate(&self) -> Result<ScalarValue> {
+                Ok(ScalarValue::Int64(Some(self.0)))
+            }
+
+            fn size(&self) -> usize {
+                std::mem::size_of_val(self)
+            }
+        }
+
+        let my_count = create_udaf(
+            "my_count",
+            DataType::Int64,
+            Arc::new(DataType::Int64),
+            Volatility::Immutable,
+            Arc::new(|_| Ok(Box::new(MyCount(0)))),
+            Arc::new(vec![DataType::Int64]),
+        );
+
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let (input, schema) = create_test_schema(1)?;
+
+        let window_exec = Arc::new(WindowAggExec::try_new(
+            vec![create_window_expr(
+                &WindowFunction::AggregateUDF(Arc::new(my_count)),
+                "my_count".to_owned(),
+                &[col("c3", &schema)?],
+                &[],
+                &[],
+                Arc::new(WindowFrame::new(false)),
+                schema.as_ref(),
+            )?],
+            input,
+            schema,
+            vec![],
+            None,
+        )?);
+
+        let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
+        assert_eq!(result.len(), 1);
+
+        let columns = result[0].columns();
+
+        let count: &Int64Array = as_primitive_array(&columns[0])?;
+        assert_eq!(count.value(0), 100);
+        assert_eq!(count.value(99), 100);
+        Ok(())
     }
 
     #[tokio::test]
@@ -194,7 +274,7 @@ mod tests {
                     &[col("c3", &schema)?],
                     &[],
                     &[],
-                    Some(Arc::new(WindowFrame::default())),
+                    Arc::new(WindowFrame::new(false)),
                     schema.as_ref(),
                 )?,
                 create_window_expr(
@@ -203,7 +283,7 @@ mod tests {
                     &[col("c3", &schema)?],
                     &[],
                     &[],
-                    Some(Arc::new(WindowFrame::default())),
+                    Arc::new(WindowFrame::new(false)),
                     schema.as_ref(),
                 )?,
                 create_window_expr(
@@ -212,7 +292,7 @@ mod tests {
                     &[col("c3", &schema)?],
                     &[],
                     &[],
-                    Some(Arc::new(WindowFrame::default())),
+                    Arc::new(WindowFrame::new(false)),
                     schema.as_ref(),
                 )?,
             ],
@@ -260,7 +340,7 @@ mod tests {
                 &[col("a", &schema)?],
                 &[],
                 &[],
-                Some(Arc::new(WindowFrame::default())),
+                Arc::new(WindowFrame::new(false)),
                 schema.as_ref(),
             )?],
             blocking_exec,

@@ -22,10 +22,12 @@ use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
-    Limit, Partitioning, Projection, Repartition, Sort, Subquery, SubqueryAlias, Union,
-    Values, Window,
+    Limit, Partitioning, Prepare, Projection, Repartition, Sort, Subquery, SubqueryAlias,
+    Union, Values, Window,
 };
-use crate::{Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use crate::{
+    Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, TableScan, TryCast,
+};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -126,7 +128,8 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
-            | Expr::GetIndexedField { .. } => {}
+            | Expr::GetIndexedField { .. }
+            | Expr::Placeholder { .. } => {}
         }
         Ok(Recursion::Continue(self))
     }
@@ -496,7 +499,7 @@ pub fn from_plan(
         }
         LogicalPlan::CrossJoin(_) => {
             let left = inputs[0].clone();
-            let right = &inputs[1];
+            let right = inputs[1].clone();
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }
         LogicalPlan::Subquery(_) => {
@@ -579,8 +582,21 @@ pub fn from_plan(
 
             Ok(plan.clone())
         }
+        LogicalPlan::Prepare(Prepare {
+            name, data_types, ..
+        }) => Ok(LogicalPlan::Prepare(Prepare {
+            name: name.clone(),
+            data_types: data_types.clone(),
+            input: Arc::new(inputs[0].clone()),
+        })),
+        LogicalPlan::TableScan(ts) => {
+            assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
+            Ok(LogicalPlan::TableScan(TableScan {
+                filters: expr.to_vec(),
+                ..ts.clone()
+            }))
+        }
         LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::TableScan { .. }
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::DropView(_)
@@ -674,12 +690,16 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
     match e {
         Expr::Column(_) => e,
         Expr::Alias(inner_expr, name) => {
-            Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
+            columnize_expr(*inner_expr, input_schema).alias(name)
         }
         Expr::Cast(Cast { expr, data_type }) => Expr::Cast(Cast {
             expr: Box::new(columnize_expr(*expr, input_schema)),
             data_type,
         }),
+        Expr::TryCast(TryCast { expr, data_type }) => Expr::TryCast(TryCast::new(
+            Box::new(columnize_expr(*expr, input_schema)),
+            data_type,
+        )),
         Expr::ScalarSubquery(_) => e.clone(),
         _ => match e.display_name() {
             Ok(name) => match input_schema.field_with_unqualified_name(&name) {
@@ -789,7 +809,7 @@ pub fn check_all_column_from_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{col, AggregateFunction, WindowFunction};
+    use crate::{col, AggregateFunction, WindowFrame, WindowFunction};
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
@@ -806,28 +826,28 @@ mod tests {
             args: vec![col("name")],
             partition_by: vec![],
             order_by: vec![],
-            window_frame: None,
+            window_frame: WindowFrame::new(false),
         };
         let max2 = Expr::WindowFunction {
             fun: WindowFunction::AggregateFunction(AggregateFunction::Max),
             args: vec![col("name")],
             partition_by: vec![],
             order_by: vec![],
-            window_frame: None,
+            window_frame: WindowFrame::new(false),
         };
         let min3 = Expr::WindowFunction {
             fun: WindowFunction::AggregateFunction(AggregateFunction::Min),
             args: vec![col("name")],
             partition_by: vec![],
             order_by: vec![],
-            window_frame: None,
+            window_frame: WindowFrame::new(false),
         };
         let sum4 = Expr::WindowFunction {
             fun: WindowFunction::AggregateFunction(AggregateFunction::Sum),
             args: vec![col("age")],
             partition_by: vec![],
             order_by: vec![],
-            window_frame: None,
+            window_frame: WindowFrame::new(false),
         };
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
         let result = group_window_expr_by_sort_keys(exprs)?;
@@ -860,28 +880,28 @@ mod tests {
             args: vec![col("name")],
             partition_by: vec![],
             order_by: vec![age_asc.clone(), name_desc.clone()],
-            window_frame: None,
+            window_frame: WindowFrame::new(true),
         };
         let max2 = Expr::WindowFunction {
             fun: WindowFunction::AggregateFunction(AggregateFunction::Max),
             args: vec![col("name")],
             partition_by: vec![],
             order_by: vec![],
-            window_frame: None,
+            window_frame: WindowFrame::new(false),
         };
         let min3 = Expr::WindowFunction {
             fun: WindowFunction::AggregateFunction(AggregateFunction::Min),
             args: vec![col("name")],
             partition_by: vec![],
             order_by: vec![age_asc.clone(), name_desc.clone()],
-            window_frame: None,
+            window_frame: WindowFrame::new(true),
         };
         let sum4 = Expr::WindowFunction {
             fun: WindowFunction::AggregateFunction(AggregateFunction::Sum),
             args: vec![col("age")],
             partition_by: vec![],
             order_by: vec![name_desc.clone(), age_asc.clone(), created_at_desc.clone()],
-            window_frame: None,
+            window_frame: WindowFrame::new(true),
         };
         // FIXME use as_ref
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
@@ -919,7 +939,7 @@ mod tests {
                         nulls_first: true,
                     },
                 ],
-                window_frame: None,
+                window_frame: WindowFrame::new(true),
             },
             Expr::WindowFunction {
                 fun: WindowFunction::AggregateFunction(AggregateFunction::Sum),
@@ -942,7 +962,7 @@ mod tests {
                         nulls_first: true,
                     },
                 ],
-                window_frame: None,
+                window_frame: WindowFrame::new(true),
             },
         ];
         let expected = vec![

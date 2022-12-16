@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow::array::Array;
 use arrow::array::*;
 use arrow::compute::eq_dyn;
-use arrow::compute::kernels::boolean::nullif;
+use arrow::compute::nullif::nullif;
 use arrow::datatypes::DataType;
 use datafusion_common::{cast::as_boolean_array, DataFusionError, Result};
 use datafusion_expr::ColumnarValue;

@@ -19,7 +19,7 @@ use crate::protobuf::plan_type::PlanTypeEnum::{
     FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
     OptimizedLogicalPlan, OptimizedPhysicalPlan,
 };
-use crate::protobuf::{self};
+use crate::protobuf::{self, PlaceholderNode};
 use crate::protobuf::{
     CubeNode, GroupingSetNode, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
     RollupNode,
@@ -29,9 +29,10 @@ use arrow::datatypes::{
 };
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, ScalarValue,
+    Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    ScalarValue,
 };
-use datafusion_expr::expr::{BinaryExpr, Cast};
+use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
@@ -198,6 +199,36 @@ impl From<protobuf::WindowFrameUnits> for WindowFrameUnits {
             protobuf::WindowFrameUnits::Rows => Self::Rows,
             protobuf::WindowFrameUnits::Range => Self::Range,
             protobuf::WindowFrameUnits::Groups => Self::Groups,
+        }
+    }
+}
+
+impl TryFrom<protobuf::OwnedTableReference> for OwnedTableReference {
+    type Error = Error;
+
+    fn try_from(value: protobuf::OwnedTableReference) -> Result<Self, Self::Error> {
+        use protobuf::owned_table_reference::TableReferenceEnum;
+        let table_reference_enum = value
+            .table_reference_enum
+            .ok_or_else(|| Error::required("table_reference_enum"))?;
+
+        match table_reference_enum {
+            TableReferenceEnum::Bare(protobuf::BareTableReference { table }) => {
+                Ok(OwnedTableReference::Bare { table })
+            }
+            TableReferenceEnum::Partial(protobuf::PartialTableReference {
+                schema,
+                table,
+            }) => Ok(OwnedTableReference::Partial { schema, table }),
+            TableReferenceEnum::Full(protobuf::FullTableReference {
+                catalog,
+                schema,
+                table,
+            }) => Ok(OwnedTableReference::Full {
+                catalog,
+                schema,
+                table,
+            }),
         }
     }
 }
@@ -773,19 +804,17 @@ pub fn parse_expr(
             let window_frame = expr
                 .window_frame
                 .as_ref()
-                .map::<Result<WindowFrame, _>, _>(|e| match e {
-                    window_expr_node::WindowFrame::Frame(frame) => {
-                        let window_frame: WindowFrame = frame.clone().try_into()?;
-                        if WindowFrameUnits::Range == window_frame.units
-                            && order_by.len() != 1
-                        {
-                            Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
-                        } else {
-                            Ok(window_frame)
-                        }
+                .map::<Result<WindowFrame, _>, _>(|window_frame| {
+                    let window_frame: WindowFrame = window_frame.clone().try_into()?;
+                    if WindowFrameUnits::Range == window_frame.units
+                        && order_by.len() != 1
+                    {
+                        Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
+                    } else {
+                        Ok(window_frame)
                     }
                 })
-                .transpose()?;
+                .transpose()?.ok_or_else(||{DataFusionError::Execution("expects somothing".to_string())})?;
 
             match window_function {
                 window_expr_node::WindowFunction::AggrFunction(i) => {
@@ -925,7 +954,7 @@ pub fn parse_expr(
         ExprType::TryCast(cast) => {
             let expr = Box::new(parse_required_expr(&cast.expr, registry, "expr")?);
             let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            Ok(Expr::TryCast { expr, data_type })
+            Ok(Expr::TryCast(TryCast::new(expr, data_type)))
         }
         ExprType::Sort(sort) => Ok(Expr::Sort {
             expr: Box::new(parse_required_expr(&sort.expr, registry, "expr")?),
@@ -1194,6 +1223,16 @@ pub fn parse_expr(
                     .collect::<Result<Vec<_>, Error>>()?,
             )))
         }
+        ExprType::Placeholder(PlaceholderNode { id, data_type }) => match data_type {
+            None => {
+                let message = format!("Protobuf deserialization error: data type must be provided for the placeholder {}", id);
+                Err(proto_error(message))
+            }
+            Some(data_type) => Ok(Expr::Placeholder {
+                id: id.clone(),
+                data_type: data_type.try_into()?,
+            }),
+        },
     }
 }
 
@@ -1319,6 +1358,8 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "Modulo" => Ok(Operator::Modulo),
         "Like" => Ok(Operator::Like),
         "NotLike" => Ok(Operator::NotLike),
+        "ILike" => Ok(Operator::ILike),
+        "NotILike" => Ok(Operator::NotILike),
         "IsDistinctFrom" => Ok(Operator::IsDistinctFrom),
         "IsNotDistinctFrom" => Ok(Operator::IsNotDistinctFrom),
         "BitwiseAnd" => Ok(Operator::BitwiseAnd),

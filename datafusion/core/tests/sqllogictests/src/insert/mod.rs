@@ -19,29 +19,30 @@ mod util;
 
 use crate::error::Result;
 use crate::insert::util::LogicTestContextProvider;
+use arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchema, DataFusionError};
 use datafusion_expr::Expr as DFExpr;
-use datafusion_sql::planner::SqlToRel;
+use datafusion_sql::planner::{object_name_to_table_reference, PlannerContext, SqlToRel};
+use sqllogictest::DBOutput;
 use sqlparser::ast::{Expr, SetExpr, Statement as SQLStatement};
-use std::collections::HashMap;
+use std::sync::Arc;
 
-pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<String> {
+pub async fn insert(ctx: &SessionContext, insert_stmt: SQLStatement) -> Result<DBOutput> {
     // First, use sqlparser to get table name and insert values
-    let table_name;
+    let table_reference;
     let insert_values: Vec<Vec<Expr>>;
     match insert_stmt {
         SQLStatement::Insert {
-            table_name: name,
-            source,
-            ..
+            table_name, source, ..
         } => {
+            table_reference = object_name_to_table_reference(table_name)?;
+
             // Todo: check columns match table schema
-            table_name = name.to_string();
-            match &*source.body {
+            match *source.body {
                 SetExpr::Values(values) => {
-                    insert_values = values.0.clone();
+                    insert_values = values.rows;
                 }
                 _ => {
                     // Directly panic: make it easy to find the location of the error.
@@ -52,34 +53,39 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<
         _ => unreachable!(),
     }
 
-    // Second, get table by table name
-    // Here we assume table must be in memory table.
-    let table_provider = ctx.table_provider(table_name.as_str())?;
-    let table_batches = table_provider
-        .as_any()
-        .downcast_ref::<MemTable>()
-        .unwrap()
-        .get_batches();
+    // Second, get batches in table and destroy the old table
+    let mut origin_batches = ctx.table(&table_reference)?.collect().await?;
+    let schema = ctx.table_provider(&table_reference)?.schema();
+    ctx.deregister_table(&table_reference)?;
 
     // Third, transfer insert values to `RecordBatch`
     // Attention: schema info can be ignored. (insert values don't contain schema info)
     let sql_to_rel = SqlToRel::new(&LogicTestContextProvider {});
-    let mut insert_batches = Vec::with_capacity(insert_values.len());
+    let num_rows = insert_values.len();
     for row in insert_values.into_iter() {
         let logical_exprs = row
             .into_iter()
             .map(|expr| {
-                sql_to_rel.sql_to_rex(expr, &DFSchema::empty(), &mut HashMap::new())
+                sql_to_rel.sql_to_rex(
+                    expr,
+                    &DFSchema::empty(),
+                    &mut PlannerContext::new(),
+                )
             })
             .collect::<std::result::Result<Vec<DFExpr>, DataFusionError>>()?;
         // Directly use `select` to get `RecordBatch`
         let dataframe = ctx.read_empty()?;
-        insert_batches.push(dataframe.select(logical_exprs)?.collect().await?)
+        origin_batches.extend(dataframe.select(logical_exprs)?.collect().await?)
     }
 
-    // Final, append the `RecordBatch` to memtable's batches
-    let mut table_batches = table_batches.write();
-    table_batches.extend(insert_batches);
+    // Replace new batches schema to old schema
+    for batch in origin_batches.iter_mut() {
+        *batch = RecordBatch::try_new(schema.clone(), batch.columns().to_vec())?;
+    }
 
-    Ok("".to_string())
+    // Final, create new memtable with same schema.
+    let new_provider = MemTable::try_new(schema, vec![origin_batches])?;
+    ctx.register_table(&table_reference, Arc::new(new_provider))?;
+
+    Ok(DBOutput::StatementComplete(num_rows as u64))
 }

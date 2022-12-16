@@ -29,7 +29,7 @@ use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 
 /// Expression for a ARRAY_AGG(DISTINCT) aggregation.
 #[derive(Debug)]
@@ -84,7 +84,7 @@ impl AggregateExpr for DistinctArrayAgg {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "distinct_array_agg"),
+            format_state_name(&self.name, "distinct_array_agg"),
             DataType::List(Box::new(Field::new(
                 "item",
                 self.input_data_type.clone(),
@@ -119,11 +119,11 @@ impl DistinctArrayAggAccumulator {
 }
 
 impl Accumulator for DistinctArrayAggAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![AggregateState::Scalar(ScalarValue::new_list(
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![ScalarValue::new_list(
             Some(self.values.clone().into_iter().collect()),
             self.datatype.clone(),
-        ))])
+        )])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -158,9 +158,10 @@ impl Accumulator for DistinctArrayAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
         std::mem::size_of_val(self) + ScalarValue::size_of_hashset(&self.values)
             - std::mem::size_of_val(&self.values)
+            + self.datatype.size()
+            - std::mem::size_of_val(&self.datatype)
     }
 }
 

@@ -25,7 +25,7 @@ use crate::{
     },
     to_proto,
 };
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::datasource::TableProvider;
 use datafusion::{
     datasource::{
@@ -38,7 +38,8 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
-use datafusion_common::{context, Column, DataFusionError};
+use datafusion_common::{context, Column, DataFusionError, OwnedTableReference};
+use datafusion_expr::logical_plan::{builder::project, Prepare};
 use datafusion_expr::{
     logical_plan::{
         Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
@@ -263,6 +264,20 @@ impl From<JoinConstraint> for protobuf::JoinConstraint {
     }
 }
 
+fn from_owned_table_reference(
+    table_ref: Option<&protobuf::OwnedTableReference>,
+    error_context: &str,
+) -> Result<OwnedTableReference, DataFusionError> {
+    let table_ref = table_ref.ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "Protobuf deserialization error, {} was missing required field name.",
+            error_context
+        ))
+    })?;
+
+    Ok(table_ref.clone().try_into()?)
+}
+
 impl AsLogicalPlan for LogicalPlanNode {
     fn try_decode(buf: &[u8]) -> Result<Self, DataFusionError>
     where
@@ -323,21 +338,23 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Projection(projection) => {
                 let input: LogicalPlan =
                     into_logical_plan!(projection.input, ctx, extension_codec)?;
-                let x: Vec<Expr> = projection
+                let expr: Vec<Expr> = projection
                     .expr
                     .iter()
                     .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
-                LogicalPlanBuilder::from(input)
-                    .project_with_alias(
-                        x,
-                        projection.optional_alias.as_ref().map(|a| match a {
-                            protobuf::projection_node::OptionalAlias::Alias(alias) => {
-                                alias.clone()
-                            }
-                        }),
-                    )?
-                    .build()
+
+                let new_proj = project(input, expr)?;
+                match projection.optional_alias.as_ref() {
+                    Some(a) => match a {
+                        protobuf::projection_node::OptionalAlias::Alias(alias) => {
+                            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                                new_proj, alias,
+                            )?))
+                        }
+                    },
+                    _ => Ok(new_proj),
+                }
             }
             LogicalPlanType::Selection(selection) => {
                 let input: LogicalPlan =
@@ -579,7 +596,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 Ok(LogicalPlan::CreateExternalTable(CreateExternalTable {
                     schema: pb_schema.try_into()?,
-                    name: create_extern_table.name.clone(),
+                    name: from_owned_table_reference(create_extern_table.name.as_ref(), "CreateExternalTable")?,
                     location: create_extern_table.location.clone(),
                     file_type: create_extern_table.file_type.clone(),
                     has_header: create_extern_table.has_header,
@@ -608,7 +625,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 };
 
                 Ok(LogicalPlan::CreateView(CreateView {
-                    name: create_view.name.clone(),
+                    name: from_owned_table_reference(
+                        create_view.name.as_ref(),
+                        "CreateView",
+                    )?,
                     input: Arc::new(plan),
                     or_replace: create_view.or_replace,
                     definition,
@@ -708,13 +728,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?);
                 let builder = match join_constraint.into() {
                     JoinConstraint::On => builder.join(
-                        &into_logical_plan!(join.right, ctx, extension_codec)?,
+                        into_logical_plan!(join.right, ctx, extension_codec)?,
                         join_type.into(),
                         (left_keys, right_keys),
                         filter,
                     )?,
                     JoinConstraint::Using => builder.join_using(
-                        &into_logical_plan!(join.right, ctx, extension_codec)?,
+                        into_logical_plan!(join.right, ctx, extension_codec)?,
                         join_type.into(),
                         left_keys,
                     )?,
@@ -748,7 +768,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let left = into_logical_plan!(crossjoin.left, ctx, extension_codec)?;
                 let right = into_logical_plan!(crossjoin.right, ctx, extension_codec)?;
 
-                LogicalPlanBuilder::from(left).cross_join(&right)?.build()
+                LogicalPlanBuilder::from(left).cross_join(right)?.build()
             }
             LogicalPlanType::Extension(LogicalExtensionNode { node, inputs }) => {
                 let input_plans: Vec<LogicalPlan> = inputs
@@ -795,6 +815,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                     projection,
                 )?
                 .build()
+            }
+            LogicalPlanType::Prepare(prepare) => {
+                let input: LogicalPlan =
+                    into_logical_plan!(prepare.input, ctx, extension_codec)?;
+                let data_types: Vec<DataType> = prepare
+                    .data_types
+                    .iter()
+                    .map(DataType::try_from)
+                    .collect::<Result<_, _>>()?;
+                LogicalPlanBuilder::from(input)
+                    .prepare(prepare.name.clone(), data_types)?
+                    .build()
             }
         }
     }
@@ -1214,7 +1246,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
                     protobuf::CreateExternalTableNode {
-                        name: name.clone(),
+                        name: Some(name.clone().into()),
                         location: location.clone(),
                         file_type: file_type.clone(),
                         has_header: *has_header,
@@ -1236,7 +1268,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
-                        name: name.clone(),
+                        name: Some(name.clone().into()),
                         input: Some(Box::new(LogicalPlanNode::try_from_logical_plan(
                             input,
                             extension_codec,
@@ -1355,6 +1387,28 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Extension(
                         LogicalExtensionNode { node: buf, inputs },
                     )),
+                })
+            }
+            LogicalPlan::Prepare(Prepare {
+                name,
+                data_types,
+                input,
+            }) => {
+                let input = protobuf::LogicalPlanNode::try_from_logical_plan(
+                    input,
+                    extension_codec,
+                )?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Prepare(Box::new(
+                        protobuf::PrepareNode {
+                            name: name.clone(),
+                            data_types: data_types
+                                .iter()
+                                .map(|t| t.try_into())
+                                .collect::<Result<Vec<_>, _>>()?,
+                            input: Some(Box::new(input)),
+                        },
+                    ))),
                 })
             }
             LogicalPlan::CreateMemoryTable(_) => Err(proto_error(
