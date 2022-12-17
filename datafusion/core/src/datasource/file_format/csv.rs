@@ -19,16 +19,17 @@
 
 use std::any::Any;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
 use bytes::Buf;
 
 use datafusion_common::DataFusionError;
 
-use futures::TryFutureExt;
+use futures::{pin_mut, StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
 
 use super::FileFormat;
@@ -36,7 +37,9 @@ use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::error::Result;
 use crate::logical_expr::Expr;
-use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
+use crate::physical_plan::file_format::{
+    newline_delimited_stream, CsvExec, FileScanConfig,
+};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
@@ -120,27 +123,92 @@ impl FileFormat for CsvFormat {
 
         let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
 
-        for object in objects {
-            let data = store
+        'iterating_objects: for object in objects {
+            // stream to only read as many rows as needed into memory
+            let stream = store
                 .get(&object.location)
-                .and_then(|r| r.bytes())
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                .await?
+                .into_stream()
+                .map_err(|e| DataFusionError::External(Box::new(e)));
+            let stream = newline_delimited_stream(stream);
+            pin_mut!(stream);
 
-            let decoder = self.file_compression_type.convert_read(data.reader())?;
-            let (schema, records_read) = arrow::csv::reader::infer_reader_schema(
-                decoder,
-                self.delimiter,
-                Some(records_to_read),
-                self.has_header,
-            )?;
-            schemas.push(schema.clone());
-            if records_read == 0 {
-                continue;
-            }
-            records_to_read -= records_read;
+            // first chunk may have header, initialize names & types vec
+            // as use header names, and types vec is used to record all inferred types across chunks
+            let (column_names, mut column_types): (Vec<_>, Vec<_>) =
+                if let Some(data) = stream.next().await.transpose()? {
+                    let (Schema { fields, .. }, records_read) =
+                        arrow::csv::reader::infer_reader_schema(
+                            self.file_compression_type.convert_read(data.reader())?,
+                            self.delimiter,
+                            Some(records_to_read),
+                            self.has_header,
+                        )?;
+                    records_to_read -= records_read;
+
+                    if records_read > 0 {
+                        // at least 1 data row read, record the inferred datatype
+                        fields
+                            .into_iter()
+                            .map(|field| {
+                                let mut possibilities = HashSet::new();
+                                possibilities.insert(field.data_type().clone());
+                                (field.name().clone(), possibilities)
+                            })
+                            .unzip()
+                    } else {
+                        // no data row read, discard the inferred data type (Utf8)
+                        fields
+                            .into_iter()
+                            .map(|field| (field.name().clone(), HashSet::new()))
+                            .unzip()
+                    }
+                } else {
+                    // if this object has been completely read
+                    continue 'iterating_objects;
+                };
+
             if records_to_read == 0 {
-                break;
+                schemas.push(build_schema_helper(column_names, &column_types));
+                break 'iterating_objects;
+            }
+
+            // subsequent rows after first chunk
+            'reading_object: while let Some(data) = stream.next().await.transpose()? {
+                let (Schema { fields, .. }, records_read) =
+                    arrow::csv::reader::infer_reader_schema(
+                        self.file_compression_type.convert_read(data.reader())?,
+                        self.delimiter,
+                        Some(records_to_read),
+                        false,
+                    )?;
+                records_to_read -= records_read;
+
+                if fields.len() != column_types.len() {
+                    let msg = format!(
+                        "Encountered unequal lengths between records on CSV file whilst inferring schema. \
+                            Expected {} records, found {} records",
+                            column_types.len(),
+                        fields.len()
+                    );
+                    return Err(DataFusionError::Internal(msg));
+                }
+
+                column_types
+                    .iter_mut()
+                    .zip(fields)
+                    .for_each(|(possibilities, field)| {
+                        possibilities.insert(field.data_type().clone());
+                    });
+
+                if records_to_read == 0 {
+                    break 'reading_object;
+                }
+            }
+
+            schemas.push(build_schema_helper(column_names, &column_types));
+            if records_to_read == 0 {
+                break 'iterating_objects;
             }
         }
 
@@ -170,6 +238,38 @@ impl FileFormat for CsvFormat {
         );
         Ok(Arc::new(exec))
     }
+}
+
+fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schema {
+    let fields = names
+        .into_iter()
+        .zip(types)
+        .map(|(field_name, data_type_possibilities)| {
+            // ripped from arrow::csv::reader::infer_reader_schema_with_csv_options
+            // determine data type based on possible types
+            // if there are incompatible types, use DataType::Utf8
+            match data_type_possibilities.len() {
+                1 => Field::new(
+                    field_name,
+                    data_type_possibilities.iter().next().unwrap().clone(),
+                    true,
+                ),
+                2 => {
+                    if data_type_possibilities.contains(&DataType::Int64)
+                        && data_type_possibilities.contains(&DataType::Float64)
+                    {
+                        // we have an integer and double, fall down to double
+                        Field::new(field_name, DataType::Float64, true)
+                    } else {
+                        // default to Utf8 for conflicting datatypes (e.g bool and int)
+                        Field::new(field_name, DataType::Utf8, true)
+                    }
+                }
+                _ => Field::new(field_name, DataType::Utf8, true),
+            }
+        })
+        .collect();
+    Schema::new(fields)
 }
 
 #[cfg(test)]
