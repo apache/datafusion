@@ -191,7 +191,7 @@ impl FileFormat for CsvFormat {
                             column_types.len(),
                         fields.len()
                     );
-                    return Err(DataFusionError::Internal(msg));
+                    return Err(DataFusionError::Execution(msg));
                 }
 
                 column_types
