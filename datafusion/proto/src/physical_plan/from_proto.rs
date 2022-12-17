@@ -362,14 +362,24 @@ impl TryInto<Statistics> for &protobuf::Statistics {
     type Error = DataFusionError;
 
     fn try_into(self) -> Result<Statistics, Self::Error> {
+        // Keep it sync with Statistics::to_proto
+        let none_value = -1_i64;
         let column_statistics = self
             .column_stats
             .iter()
             .map(|s| s.into())
             .collect::<Vec<_>>();
         Ok(Statistics {
-            num_rows: Some(self.num_rows as usize),
-            total_byte_size: Some(self.total_byte_size as usize),
+            num_rows: if self.num_rows == none_value {
+                None
+            } else {
+                Some(self.num_rows as usize)
+            },
+            total_byte_size: if self.total_byte_size == none_value {
+                None
+            } else {
+                Some(self.total_byte_size as usize)
+            },
             // No column statistic (None) is encoded with empty array
             column_statistics: if column_statistics.is_empty() {
                 None
