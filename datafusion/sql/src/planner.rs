@@ -64,9 +64,8 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
-    cast, col, lit, wrap_projection_for_join_if_necessary, AggregateFunction,
-    AggregateUDF, Expr, ExprSchemable, GetIndexedField, Operator, ScalarUDF,
-    SubqueryAlias, WindowFrame, WindowFrameUnits,
+    cast, col, lit, AggregateFunction, AggregateUDF, Expr, ExprSchemable,
+    GetIndexedField, Operator, ScalarUDF, SubqueryAlias, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
     window_function::{self, WindowFunction},
@@ -851,32 +850,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                     join.build()
                 } else {
-                    // Wrap projection for left input if left join keys contain normal expression.
-                    let (left_child, left_join_keys, left_projected) =
-                        wrap_projection_for_join_if_necessary(&left_keys, left)?;
-
-                    // Wrap projection for right input if right join keys contains normal expression.
-                    let (right_child, right_join_keys, right_projected) =
-                        wrap_projection_for_join_if_necessary(&right_keys, right)?;
-
-                    let join_plan_builder = LogicalPlanBuilder::from(left_child).join(
-                        right_child,
-                        join_type,
-                        (left_join_keys, right_join_keys),
-                        join_filter,
-                    )?;
-
-                    // Remove temporary projected columns if necessary.
-                    if left_projected || right_projected {
-                        let final_join_result = join_schema
-                            .fields()
-                            .iter()
-                            .map(|field| Expr::Column(field.qualified_column()))
-                            .collect::<Vec<_>>();
-                        join_plan_builder.project(final_join_result)?.build()
-                    } else {
-                        join_plan_builder.build()
-                    }
+                    LogicalPlanBuilder::from(left)
+                        .join_with_expr_keys(
+                            right,
+                            join_type,
+                            (left_keys, right_keys),
+                            join_filter,
+                        )?
+                        .build()
                 }
             }
             JoinConstraint::Using(idents) => {
