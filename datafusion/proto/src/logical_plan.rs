@@ -38,6 +38,7 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{context, DataFusionError, OwnedTableReference};
 use datafusion_expr::logical_plan::{builder::project, Prepare};
 use datafusion_expr::{
@@ -51,6 +52,7 @@ use datafusion_expr::{
 use prost::bytes::BufMut;
 use prost::Message;
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::Arc;
 
 fn byte_to_string(b: u8) -> Result<String, DataFusionError> {
@@ -607,7 +609,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .table_partition_cols
                         .clone(),
                     if_not_exists: create_extern_table.if_not_exists,
-                    file_compression_type: create_extern_table.file_compression_type.to_string(),
+                    file_compression_type: CompressionTypeVariant::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
                     definition,
                     options: create_extern_table.options.clone(),
                 }))
