@@ -798,7 +798,12 @@ impl LogicalPlanBuilder {
         Ok(self.plan)
     }
 
-    /// Apply a join with expression on constraint.
+    /// Apply a join with the expression on constraint.
+    ///
+    /// join_keys are "equijoin" predicates expressions on the existing and right inputs, respectively.
+    ///
+    /// filter: any other filter expression to apply during the join. join_keys predicates are likely
+    /// to be evaluated more quickly than the filter expressions
     ///
     /// Filter expression expected to contain non-equality predicates that can not be pushed
     /// down to any of join inputs.
