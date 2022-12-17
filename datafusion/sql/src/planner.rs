@@ -42,7 +42,9 @@ use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_common::{OwnedTableReference, TableReference};
-use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
+use datafusion_expr::expr::{
+    Between, BinaryExpr, Case, Cast, GroupingSet, Like, TryCast,
+};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::builder::{
@@ -690,7 +692,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .any(|x| x.option == ColumnOption::Null);
             fields.push(Field::new(
-                &normalize_ident(column.name),
+                normalize_ident(column.name),
                 data_type,
                 allow_null,
             ));
@@ -711,15 +713,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.plan_table_with_joins(from, planner_context)
             }
             _ => {
-                let plans = from
+                let mut plans = from
                     .into_iter()
-                    .map(|t| self.plan_table_with_joins(t, planner_context))
-                    .collect::<Result<Vec<_>>>()?;
-                let mut left = plans[0].clone();
-                for right in plans.iter().skip(1) {
-                    left = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+                    .map(|t| self.plan_table_with_joins(t, planner_context));
+
+                let mut left = LogicalPlanBuilder::from(plans.next().unwrap()?);
+
+                for right in plans {
+                    left = left.cross_join(right?)?;
                 }
-                Ok(left)
+                Ok(left.build()?)
             }
         }
     }
@@ -779,7 +782,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinOperator::FullOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Full, planner_context)
             }
-            JoinOperator::CrossJoin => self.parse_cross_join(left, &right),
+            JoinOperator::CrossJoin => self.parse_cross_join(left, right),
             other => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported JOIN operator {:?}",
                 other
@@ -790,7 +793,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn parse_cross_join(
         &self,
         left: LogicalPlan,
-        right: &LogicalPlan,
+        right: LogicalPlan,
     ) -> Result<LogicalPlan> {
         LogicalPlanBuilder::from(left).cross_join(right)?.build()
     }
@@ -845,11 +848,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if left_keys.is_empty() {
                     // TODO should not use cross join when the join_filter exists
                     // https://github.com/apache/arrow-datafusion/issues/4363
-                    let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
-                    join_filter
-                        .map(|filter| join.filter(filter))
-                        .unwrap_or(Ok(join))?
-                        .build()
+                    let mut join = LogicalPlanBuilder::from(left).cross_join(right)?;
+                    if let Some(filter) = join_filter {
+                        join = join.filter(filter)?;
+                    }
+                    join.build()
                 } else {
                     // Wrap projection for left input if left join keys contain normal expression.
                     let (left_child, left_join_keys, left_projected) =
@@ -860,7 +863,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         wrap_projection_for_join_if_necessary(&right_keys, right)?;
 
                     let join_plan_builder = LogicalPlanBuilder::from(left_child).join(
-                        &right_child,
+                        right_child,
                         join_type,
                         (left_join_keys, right_join_keys),
                         join_filter,
@@ -885,7 +888,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(|x| Column::from_name(normalize_ident(x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
-                    .join_using(&right, join_type, keys)?
+                    .join_using(right, join_type, keys)?
                     .build()
             }
             JoinConstraint::Natural => {
@@ -2062,10 +2065,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::TryCast {
                 expr,
                 data_type,
-            } => Ok(Expr::TryCast {
-                expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
-                data_type: self.convert_data_type(&data_type)?,
-            }),
+            } => Ok(Expr::TryCast(TryCast::new(
+                Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
+                self.convert_data_type(&data_type)?,
+            ))),
 
             SQLExpr::TypedString {
                 data_type,

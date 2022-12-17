@@ -46,20 +46,10 @@ use std::{
 pub struct PushDownProjection {}
 
 impl OptimizerRule for PushDownProjection {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         // set of all columns referred by the plan (and thus considered required by the root)
         let required_columns = plan
@@ -73,7 +63,7 @@ impl OptimizerRule for PushDownProjection {
             plan,
             &required_columns,
             false,
-            optimizer_config,
+            config,
         )?))
     }
 
@@ -95,7 +85,7 @@ fn optimize_plan(
     plan: &LogicalPlan,
     required_columns: &HashSet<Column>, // set of columns required up to this step
     has_projection: bool,
-    _optimizer_config: &OptimizerConfig,
+    _config: &dyn OptimizerConfig,
 ) -> Result<LogicalPlan> {
     let mut new_required_columns = required_columns.clone();
     let new_plan = match plan {
@@ -127,13 +117,8 @@ fn optimize_plan(
                 expr_to_columns(e, &mut new_required_columns)?
             }
 
-            let new_input = optimize_plan(
-                _optimizer,
-                input,
-                &new_required_columns,
-                true,
-                _optimizer_config,
-            )?;
+            let new_input =
+                optimize_plan(_optimizer, input, &new_required_columns, true, _config)?;
 
             let new_required_columns_optimized = new_input
                 .schema()
@@ -184,7 +169,7 @@ fn optimize_plan(
                 left,
                 &new_required_columns,
                 true,
-                _optimizer_config,
+                _config,
             )?);
 
             let optimized_right = Arc::new(optimize_plan(
@@ -192,7 +177,7 @@ fn optimize_plan(
                 right,
                 &new_required_columns,
                 true,
-                _optimizer_config,
+                _config,
             )?);
 
             let schema = build_join_schema(
@@ -239,7 +224,7 @@ fn optimize_plan(
                     input,
                     required_columns,
                     true,
-                    _optimizer_config,
+                    _config,
                 )?)
                 .build();
             };
@@ -255,7 +240,7 @@ fn optimize_plan(
                 input,
                 &new_required_columns,
                 true,
-                _optimizer_config,
+                _config,
             )?)
             .window(new_window_expr)?
             .build()
@@ -296,7 +281,7 @@ fn optimize_plan(
                     input,
                     &new_required_columns,
                     true,
-                    _optimizer_config,
+                    _config,
                 )?),
                 group_expr.clone(),
                 new_aggr_expr,
@@ -326,7 +311,7 @@ fn optimize_plan(
                     &a.input,
                     &required_columns,
                     false,
-                    _optimizer_config,
+                    _config,
                 )?),
                 verbose: a.verbose,
                 schema: a.schema.clone(),
@@ -358,7 +343,7 @@ fn optimize_plan(
                         input_plan,
                         &new_required_columns,
                         has_projection,
-                        _optimizer_config,
+                        _config,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -384,7 +369,7 @@ fn optimize_plan(
                 input,
                 &new_required_columns,
                 has_projection,
-                _optimizer_config,
+                _config,
             )?;
             from_plan(plan, &plan.expressions(), &[child])
         }
@@ -423,7 +408,7 @@ fn optimize_plan(
                         input_plan,
                         &new_required_columns,
                         has_projection,
-                        _optimizer_config,
+                        _config,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -537,6 +522,7 @@ fn push_down_scan(
 mod tests {
     use super::*;
     use crate::test::*;
+    use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Schema};
     use datafusion_expr::expr::Cast;
     use datafusion_expr::{
@@ -676,7 +662,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
+            .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
             .project(vec![col("a"), col("b"), col("c1")])?
             .build()?;
 
@@ -717,7 +703,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
+            .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
             // projecting joined column `a` should push the right side column `c1` projection as
             // well into test2 table even though `c1` is not referenced in projection.
             .project(vec![col("a"), col("b")])?
@@ -760,7 +746,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join_using(&table2_scan, JoinType::Left, vec!["a"])?
+            .join_using(table2_scan, JoinType::Left, vec!["a"])?
             .project(vec![col("a"), col("b")])?
             .build()?;
 
@@ -1029,6 +1015,6 @@ mod tests {
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         let rule = PushDownProjection::new();
-        rule.optimize(plan, &mut OptimizerConfig::new())
+        Ok(rule.try_optimize(plan, &OptimizerContext::new())?.unwrap())
     }
 }

@@ -20,12 +20,14 @@
 //! and then insert an `IsNotNull` filter on the nullable side since null values
 //! can never match.
 
-use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DFField, DFSchemaRef};
+use std::sync::Arc;
+
+use datafusion_common::{Column, DFField, DFSchemaRef, Result};
 use datafusion_expr::{
     and, logical_plan::Filter, logical_plan::JoinType, Expr, LogicalPlan,
 };
-use std::sync::Arc;
+
+use crate::{utils, OptimizerConfig, OptimizerRule};
 
 /// The FilterNullJoinKeys rule will identify inner joins with equi-join conditions
 /// where the join key is nullable on one side and non-nullable on the other side
@@ -34,32 +36,26 @@ use std::sync::Arc;
 #[derive(Default)]
 pub struct FilterNullJoinKeys {}
 
-impl OptimizerRule for FilterNullJoinKeys {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
+impl FilterNullJoinKeys {
+    pub const NAME: &'static str = "filter_null_join_keys";
+}
 
+impl OptimizerRule for FilterNullJoinKeys {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<Option<LogicalPlan>> {
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
                 // recurse down first and optimize inputs
                 let mut join = join.clone();
                 join.left = Arc::new(
-                    self.try_optimize(&join.left, optimizer_config)?
+                    self.try_optimize(&join.left, config)?
                         .unwrap_or_else(|| join.left.as_ref().clone()),
                 );
                 join.right = Arc::new(
-                    self.try_optimize(&join.right, optimizer_config)?
+                    self.try_optimize(&join.right, config)?
                         .unwrap_or_else(|| join.right.as_ref().clone()),
                 );
 
@@ -100,17 +96,13 @@ impl OptimizerRule for FilterNullJoinKeys {
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                Ok(Some(utils::optimize_children(
-                    self,
-                    plan,
-                    optimizer_config,
-                )?))
+                Ok(Some(utils::optimize_children(self, plan, config)?))
             }
         }
     }
 
     fn name(&self) -> &str {
-        "filter_null_join_keys"
+        Self::NAME
     }
 }
 
@@ -157,15 +149,20 @@ fn resolve_fields(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
+
     use datafusion_common::{Column, Result};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{logical_plan::JoinType, LogicalPlanBuilder};
 
+    use crate::optimizer::OptimizerContext;
+
+    use super::*;
+
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterNullJoinKeys::default();
-        rule.optimize(plan, &mut OptimizerConfig::new())
+        rule.try_optimize(plan, &OptimizerContext::new())
+            .unwrap()
             .expect("failed to optimize plan")
     }
 
@@ -211,7 +208,7 @@ mod tests {
         let t3 = table_scan(Some("t3"), &schema, None)?.build()?;
         let plan = LogicalPlanBuilder::from(t3)
             .join(
-                &plan,
+                plan,
                 JoinType::Inner,
                 (
                     vec![
@@ -245,7 +242,7 @@ mod tests {
     ) -> Result<LogicalPlan> {
         LogicalPlanBuilder::from(left_table)
             .join(
-                &right_table,
+                right_table,
                 JoinType::Inner,
                 (
                     vec![Column::from_qualified_name(left_key)],

@@ -35,20 +35,10 @@ impl InlineTableScan {
 }
 
 impl OptimizerRule for InlineTableScan {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, _optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             // Match only on scans without filter / projection / fetch
@@ -62,8 +52,7 @@ impl OptimizerRule for InlineTableScan {
             }) if filters.is_empty() => {
                 if let Some(sub_plan) = source.get_logical_plan() {
                     // Recursively apply optimization
-                    let plan =
-                        utils::optimize_children(self, sub_plan, _optimizer_config)?;
+                    let plan = utils::optimize_children(self, sub_plan, config)?;
                     let plan = LogicalPlanBuilder::from(plan)
                         .project(vec![Expr::Wildcard])?
                         .alias(table_name)?;
@@ -77,11 +66,7 @@ impl OptimizerRule for InlineTableScan {
             // Rest: Recurse
             _ => {
                 // apply the optimization to all inputs of the plan
-                Ok(Some(utils::optimize_children(
-                    self,
-                    plan,
-                    _optimizer_config,
-                )?))
+                Ok(Some(utils::optimize_children(self, plan, config)?))
             }
         }
     }
@@ -98,7 +83,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, TableSource};
 
-    use crate::{inline_table_scan::InlineTableScan, OptimizerConfig, OptimizerRule};
+    use crate::optimizer::OptimizerContext;
+    use crate::{inline_table_scan::InlineTableScan, OptimizerRule};
 
     pub struct RawTableSource {}
 
@@ -168,7 +154,8 @@ mod tests {
         let plan = scan.filter(col("x.a").eq(lit(1))).unwrap().build().unwrap();
 
         let optimized_plan = rule
-            .optimize(&plan, &mut OptimizerConfig::new())
+            .try_optimize(&plan, &OptimizerContext::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         let expected = "Filter: x.a = Int32(1)\

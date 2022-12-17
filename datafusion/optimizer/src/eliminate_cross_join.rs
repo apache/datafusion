@@ -16,7 +16,9 @@
 // under the License.
 
 //! Optimizer rule to eliminate cross join to inner join if join predicates are available in filters.
-use crate::{utils, OptimizerConfig, OptimizerRule};
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr::{BinaryExpr, Expr};
 use datafusion_expr::logical_plan::{
@@ -27,8 +29,8 @@ use datafusion_expr::{
     and, build_join_schema, or, wrap_projection_for_join_if_necessary, ExprSchemable,
     Operator,
 };
-use std::collections::HashSet;
-use std::sync::Arc;
+
+use crate::{utils, OptimizerConfig, OptimizerRule};
 
 #[derive(Default)]
 pub struct EliminateCrossJoin;
@@ -51,20 +53,10 @@ impl EliminateCrossJoin {
 /// This fix helps to improve the performance of TPCH Q19. issue#78
 ///
 impl OptimizerRule for EliminateCrossJoin {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, _optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
@@ -88,11 +80,7 @@ impl OptimizerRule for EliminateCrossJoin {
                         )?;
                     }
                     _ => {
-                        return Ok(Some(utils::optimize_children(
-                            self,
-                            plan,
-                            _optimizer_config,
-                        )?));
+                        return Ok(Some(utils::optimize_children(self, plan, config)?));
                     }
                 }
 
@@ -112,7 +100,7 @@ impl OptimizerRule for EliminateCrossJoin {
                     )?;
                 }
 
-                left = utils::optimize_children(self, &left, _optimizer_config)?;
+                left = utils::optimize_children(self, &left, config)?;
 
                 if plan.schema() != left.schema() {
                     left = LogicalPlan::Projection(Projection::new_from_schema(
@@ -138,11 +126,7 @@ impl OptimizerRule for EliminateCrossJoin {
                 }
             }
 
-            _ => Ok(Some(utils::optimize_children(
-                self,
-                plan,
-                _optimizer_config,
-            )?)),
+            _ => Ok(Some(utils::optimize_children(self, plan, config)?)),
         }
     }
 
@@ -388,18 +372,22 @@ fn remove_join_expressions(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test::*;
     use datafusion_expr::{
         binary_expr, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
         Operator::{And, Or},
     };
 
+    use crate::optimizer::OptimizerContext;
+    use crate::test::*;
+
+    use super::*;
+
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: Vec<&str>) {
         let rule = EliminateCrossJoin::new();
         let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted = optimized_plan.display_indent_schema().to_string();
         let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -420,7 +408,7 @@ mod tests {
 
         // could eliminate to inner join since filter has Join predicates
         let plan = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 col("t1.a").eq(col("t2.a")),
                 And,
@@ -448,7 +436,7 @@ mod tests {
         // could not eliminate to inner join since filter OR expression and there is no common
         // Join predicates in left and right of OR expr.
         let plan = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 col("t1.a").eq(col("t2.a")),
                 Or,
@@ -475,7 +463,7 @@ mod tests {
 
         // could eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 binary_expr(col("t1.a").eq(col("t2.a")), And, col("t2.c").lt(lit(20u32))),
                 And,
@@ -502,7 +490,7 @@ mod tests {
 
         // could eliminate to inner join since Or predicates have common Join predicates
         let plan = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 binary_expr(col("t1.a").eq(col("t2.a")), And, col("t2.c").lt(lit(15u32))),
                 Or,
@@ -532,7 +520,7 @@ mod tests {
 
         // could not eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 binary_expr(col("t1.a").eq(col("t2.a")), And, col("t2.c").lt(lit(15u32))),
                 Or,
@@ -562,7 +550,7 @@ mod tests {
 
         // could not eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 binary_expr(col("t1.a").eq(col("t2.a")), And, col("t2.c").lt(lit(15u32))),
                 Or,
@@ -604,8 +592,8 @@ mod tests {
 
         // could eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
-            .cross_join(&t3)?
+            .cross_join(t2)?
+            .cross_join(t3)?
             .filter(binary_expr(
                 binary_expr(col("t3.a").eq(col("t1.a")), And, col("t3.c").lt(lit(15u32))),
                 And,
@@ -637,7 +625,7 @@ mod tests {
 
         // could eliminate to inner join
         let plan1 = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 binary_expr(col("t1.a").eq(col("t2.a")), And, col("t2.c").lt(lit(15u32))),
                 Or,
@@ -650,7 +638,7 @@ mod tests {
             .build()?;
 
         let plan2 = LogicalPlanBuilder::from(t3)
-            .cross_join(&t4)?
+            .cross_join(t4)?
             .filter(binary_expr(
                 binary_expr(
                     binary_expr(
@@ -675,7 +663,7 @@ mod tests {
             .build()?;
 
         let plan = LogicalPlanBuilder::from(plan1)
-            .cross_join(&plan2)?
+            .cross_join(plan2)?
             .filter(binary_expr(
                 binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").lt(lit(15u32))),
                 Or,
@@ -714,7 +702,7 @@ mod tests {
 
         // could eliminate to inner join
         let plan1 = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 binary_expr(col("t1.a").eq(col("t2.a")), And, col("t2.c").lt(lit(15u32))),
                 Or,
@@ -728,7 +716,7 @@ mod tests {
 
         // could eliminate to inner join
         let plan2 = LogicalPlanBuilder::from(t3)
-            .cross_join(&t4)?
+            .cross_join(t4)?
             .filter(binary_expr(
                 binary_expr(
                     binary_expr(
@@ -754,7 +742,7 @@ mod tests {
 
         // could not eliminate to inner join
         let plan = LogicalPlanBuilder::from(plan1)
-            .cross_join(&plan2)?
+            .cross_join(plan2)?
             .filter(binary_expr(
                 binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").lt(lit(15u32))),
                 Or,
@@ -789,7 +777,7 @@ mod tests {
 
         // could eliminate to inner join
         let plan1 = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 binary_expr(col("t1.a").eq(col("t2.a")), And, col("t2.c").lt(lit(15u32))),
                 Or,
@@ -803,7 +791,7 @@ mod tests {
 
         // could not eliminate to inner join
         let plan2 = LogicalPlanBuilder::from(t3)
-            .cross_join(&t4)?
+            .cross_join(t4)?
             .filter(binary_expr(
                 binary_expr(
                     binary_expr(
@@ -825,7 +813,7 @@ mod tests {
 
         // could eliminate to inner join
         let plan = LogicalPlanBuilder::from(plan1)
-            .cross_join(&plan2)?
+            .cross_join(plan2)?
             .filter(binary_expr(
                 binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").lt(lit(15u32))),
                 Or,
@@ -864,7 +852,7 @@ mod tests {
 
         // could not eliminate to inner join
         let plan1 = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 binary_expr(col("t1.a").eq(col("t2.a")), Or, col("t2.c").lt(lit(15u32))),
                 Or,
@@ -878,7 +866,7 @@ mod tests {
 
         // could eliminate to inner join
         let plan2 = LogicalPlanBuilder::from(t3)
-            .cross_join(&t4)?
+            .cross_join(t4)?
             .filter(binary_expr(
                 binary_expr(
                     binary_expr(
@@ -904,7 +892,7 @@ mod tests {
 
         // could eliminate to inner join
         let plan = LogicalPlanBuilder::from(plan1)
-            .cross_join(&plan2)?
+            .cross_join(plan2)?
             .filter(binary_expr(
                 binary_expr(col("t3.a").eq(col("t1.a")), And, col("t4.c").lt(lit(15u32))),
                 Or,
@@ -943,7 +931,7 @@ mod tests {
 
         // could eliminate to inner join
         let plan1 = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 binary_expr(col("t1.a").eq(col("t2.a")), Or, col("t2.c").lt(lit(15u32))),
                 And,
@@ -956,11 +944,11 @@ mod tests {
             .build()?;
 
         // could eliminate to inner join
-        let plan2 = LogicalPlanBuilder::from(t3).cross_join(&t4)?.build()?;
+        let plan2 = LogicalPlanBuilder::from(t3).cross_join(t4)?.build()?;
 
         // could eliminate to inner join
         let plan = LogicalPlanBuilder::from(plan1)
-            .cross_join(&plan2)?
+            .cross_join(plan2)?
             .filter(binary_expr(
                 binary_expr(
                     binary_expr(
@@ -1025,14 +1013,14 @@ mod tests {
         let t4 = test_table_scan_with_name("t4")?;
 
         // could eliminate to inner join
-        let plan1 = LogicalPlanBuilder::from(t1).cross_join(&t2)?.build()?;
+        let plan1 = LogicalPlanBuilder::from(t1).cross_join(t2)?.build()?;
 
         // could eliminate to inner join
-        let plan2 = LogicalPlanBuilder::from(t3).cross_join(&t4)?.build()?;
+        let plan2 = LogicalPlanBuilder::from(t3).cross_join(t4)?.build()?;
 
         // could eliminate to inner join
         let plan = LogicalPlanBuilder::from(plan1)
-            .cross_join(&plan2)?
+            .cross_join(plan2)?
             .filter(binary_expr(
                 binary_expr(
                     binary_expr(
@@ -1111,7 +1099,7 @@ mod tests {
 
         // could eliminate to inner join since filter has Join predicates
         let plan = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 (col("t1.a") + lit(100u32)).eq(col("t2.a") * lit(2u32)),
                 And,
@@ -1142,7 +1130,7 @@ mod tests {
         // could not eliminate to inner join since filter OR expression and there is no common
         // Join predicates in left and right of OR expr.
         let plan = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 (col("t1.a") + lit(100u32)).eq(col("t2.a") * lit(2u32)),
                 Or,
@@ -1170,7 +1158,7 @@ mod tests {
         // could eliminate to inner join
         let common_join_key = (col("t1.a") + lit(100u32)).eq(col("t2.a") * lit(2u32));
         let plan = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 binary_expr(common_join_key.clone(), And, col("t2.c").lt(lit(20u32))),
                 And,
@@ -1201,7 +1189,7 @@ mod tests {
         // could eliminate to inner join since Or predicates have common Join predicates
         let common_join_key = (col("t1.a") + lit(100u32)).eq(col("t2.a") * lit(2u32));
         let plan = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
+            .cross_join(t2)?
             .filter(binary_expr(
                 binary_expr(common_join_key.clone(), And, col("t2.c").lt(lit(15u32))),
                 Or,
@@ -1232,8 +1220,8 @@ mod tests {
 
         // could eliminate to inner join
         let plan = LogicalPlanBuilder::from(t1)
-            .cross_join(&t2)?
-            .cross_join(&t3)?
+            .cross_join(t2)?
+            .cross_join(t3)?
             .filter(binary_expr(
                 binary_expr(
                     (col("t3.a") + lit(100u32)).eq(col("t1.a") * lit(2u32)),

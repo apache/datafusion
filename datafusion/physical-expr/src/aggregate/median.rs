@@ -75,7 +75,7 @@ impl AggregateExpr for Median {
         let data_type = DataType::List(Box::new(field));
 
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "median"),
+            format_state_name(&self.name, "median"),
             data_type,
             true,
         )])
