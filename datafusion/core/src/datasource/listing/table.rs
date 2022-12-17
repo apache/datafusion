@@ -122,7 +122,7 @@ impl ListingTableConfig {
         let file_compression_type = FileCompressionType::from_str(splitted)
             .unwrap_or(FileCompressionType::UNCOMPRESSED);
 
-        if file_compression_type != FileCompressionType::UNCOMPRESSED {
+        if file_compression_type.is_compressed() {
             splitted = exts.next().unwrap_or("");
         }
 
