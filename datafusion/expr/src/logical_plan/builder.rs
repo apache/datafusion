@@ -18,7 +18,8 @@
 //! This module provides a builder for creating LogicalPlans
 
 use crate::expr_rewriter::{
-    coerce_plan_expr_for_schema, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs,
+    coerce_plan_expr_for_schema, normalize_col, normalize_col_with_schemas,
+    normalize_cols, rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
 use crate::utils::{columnize_expr, exprlist_to_fields, from_plan};
@@ -31,8 +32,8 @@ use crate::{
         Union, Values, Window,
     },
     utils::{
-        can_hash, expand_qualified_wildcard, expand_wildcard,
-        group_window_expr_by_sort_keys,
+        can_hash, check_all_column_from_schema, expand_qualified_wildcard,
+        expand_wildcard, group_window_expr_by_sort_keys,
     },
     Expr, ExprSchemable, TableSource,
 };
@@ -555,7 +556,11 @@ impl LogicalPlanBuilder {
         let left_keys = left_keys.into_iter().collect::<Result<Vec<Column>>>()?;
         let right_keys = right_keys.into_iter().collect::<Result<Vec<Column>>>()?;
 
-        let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
+        let on = left_keys
+            .into_iter()
+            .zip(right_keys.into_iter())
+            .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
+            .collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
 
@@ -591,19 +596,19 @@ impl LogicalPlanBuilder {
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
         let join_schema =
             build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
-        let mut join_on: Vec<(Column, Column)> = vec![];
+        let mut join_on: Vec<(Expr, Expr)> = vec![];
         let mut filters: Option<Expr> = None;
         for (l, r) in &on {
             if self.plan.schema().field_from_column(l).is_ok()
                 && right.schema().field_from_column(r).is_ok()
                 && can_hash(self.plan.schema().field_from_column(l)?.data_type())
             {
-                join_on.push((l.clone(), r.clone()));
+                join_on.push((Expr::Column(l.clone()), Expr::Column(r.clone())));
             } else if self.plan.schema().field_from_column(r).is_ok()
                 && right.schema().field_from_column(l).is_ok()
                 && can_hash(self.plan.schema().field_from_column(r)?.data_type())
             {
-                join_on.push((r.clone(), l.clone()));
+                join_on.push((Expr::Column(r.clone()), Expr::Column(l.clone())));
             } else {
                 let expr = binary_expr(
                     Expr::Column(l.clone()),
@@ -616,6 +621,7 @@ impl LogicalPlanBuilder {
                 }
             }
         }
+
         if join_on.is_empty() {
             let join = Self::from(self.plan).cross_join(right)?;
             join.filter(filters.ok_or_else(|| {
@@ -790,6 +796,98 @@ impl LogicalPlanBuilder {
     /// Build the plan
     pub fn build(self) -> Result<LogicalPlan> {
         Ok(self.plan)
+    }
+
+    /// Apply a join with the expression on constraint.
+    ///
+    /// equi_exprs are "equijoin" predicates expressions on the existing and right inputs, respectively.
+    ///
+    /// filter: any other filter expression to apply during the join. equi_exprs predicates are likely
+    /// to be evaluated more quickly than the filter expressions
+    pub fn join_with_expr_keys(
+        self,
+        right: LogicalPlan,
+        join_type: JoinType,
+        equi_exprs: (Vec<impl Into<Expr>>, Vec<impl Into<Expr>>),
+        filter: Option<Expr>,
+    ) -> Result<Self> {
+        if equi_exprs.0.len() != equi_exprs.1.len() {
+            return Err(DataFusionError::Plan(
+                "left_keys and right_keys were not the same length".to_string(),
+            ));
+        }
+
+        let join_key_pairs = equi_exprs
+            .0
+            .into_iter()
+            .zip(equi_exprs.1.into_iter())
+            .map(|(l, r)| {
+                let left_key = l.into();
+                let right_key = r.into();
+
+                let left_using_columns = left_key.to_columns()?;
+                let normalized_left_key = normalize_col_with_schemas(
+                    left_key,
+                    &[self.plan.schema(), right.schema()],
+                    &[left_using_columns],
+                )?;
+
+                let right_using_columns = right_key.to_columns()?;
+                let normalized_right_key = normalize_col_with_schemas(
+                    right_key,
+                    &[self.plan.schema(), right.schema()],
+                    &[right_using_columns],
+                )?;
+
+                let normalized_left_using_columns = normalized_left_key.to_columns()?;
+                let l_is_left = check_all_column_from_schema(
+                    &normalized_left_using_columns,
+                    self.plan.schema().clone(),
+                )?;
+
+                let normalized_right_using_columns = normalized_right_key.to_columns()?;
+                let r_is_right = check_all_column_from_schema(
+                    &normalized_right_using_columns,
+                    right.schema().clone(),
+                )?;
+
+                let r_is_left_and_l_is_right = || {
+                    let result = check_all_column_from_schema(
+                        &normalized_right_using_columns,
+                        self.plan.schema().clone(),
+                    )? && check_all_column_from_schema(
+                        &normalized_left_using_columns,
+                        right.schema().clone(),
+                    )?;
+                    Result::Ok(result)
+                };
+
+                if l_is_left && r_is_right {
+                    Ok((normalized_left_key, normalized_right_key))
+                } else if r_is_left_and_l_is_right()?{
+                    Ok((normalized_right_key, normalized_left_key))
+                } else {
+                    Err(DataFusionError::Plan(format!(
+                        "can't create join plan, join key should belong to one input, error key: ({},{})",
+                        normalized_left_key, normalized_right_key
+                    )))
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let join_schema =
+            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+
+        Ok(Self::from(LogicalPlan::Join(Join {
+            left: Arc::new(self.plan),
+            right: Arc::new(right),
+            on: join_key_pairs,
+            filter,
+            join_type,
+            join_constraint: JoinConstraint::On,
+            schema: DFSchemaRef::new(join_schema),
+            null_equals_null: false,
+        })))
     }
 }
 

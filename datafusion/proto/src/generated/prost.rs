@@ -364,9 +364,9 @@ pub struct JoinNode {
     #[prost(enumeration = "JoinConstraint", tag = "4")]
     pub join_constraint: i32,
     #[prost(message, repeated, tag = "5")]
-    pub left_join_column: ::prost::alloc::vec::Vec<Column>,
+    pub left_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "6")]
-    pub right_join_column: ::prost::alloc::vec::Vec<Column>,
+    pub right_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(bool, tag = "7")]
     pub null_equals_null: bool,
     #[prost(message, optional, tag = "8")]

@@ -20,14 +20,12 @@
 //! and then insert an `IsNotNull` filter on the nullable side since null values
 //! can never match.
 
-use std::sync::Arc;
-
-use datafusion_common::{Column, DFField, DFSchemaRef, Result};
-use datafusion_expr::{
-    and, logical_plan::Filter, logical_plan::JoinType, Expr, LogicalPlan,
-};
-
 use crate::{utils, OptimizerConfig, OptimizerRule};
+use datafusion_common::Result;
+use datafusion_expr::{
+    and, logical_plan::Filter, logical_plan::JoinType, Expr, ExprSchemable, LogicalPlan,
+};
+use std::sync::Arc;
 
 /// The FilterNullJoinKeys rule will identify inner joins with equi-join conditions
 /// where the join key is nullable on one side and non-nullable on the other side
@@ -66,15 +64,12 @@ impl OptimizerRule for FilterNullJoinKeys {
                 let mut right_filters = vec![];
 
                 for (l, r) in &join.on {
-                    if let Some((left_field, right_field)) =
-                        resolve_join_key_pair(left_schema, right_schema, l, r)
-                    {
-                        if left_field.is_nullable() {
-                            left_filters.push(l.clone());
-                        }
-                        if right_field.is_nullable() {
-                            right_filters.push(r.clone());
-                        }
+                    if l.nullable(left_schema)? {
+                        left_filters.push(l.clone());
+                    }
+
+                    if r.nullable(right_schema)? {
+                        right_filters.push(r.clone());
                     }
                 }
 
@@ -106,10 +101,10 @@ impl OptimizerRule for FilterNullJoinKeys {
     }
 }
 
-fn create_not_null_predicate(columns: Vec<Column>) -> Expr {
-    let not_null_exprs: Vec<Expr> = columns
+fn create_not_null_predicate(filters: Vec<Expr>) -> Expr {
+    let not_null_exprs: Vec<Expr> = filters
         .into_iter()
-        .map(|c| Expr::IsNotNull(Box::new(Expr::Column(c))))
+        .map(|c| Expr::IsNotNull(Box::new(c)))
         .collect();
     // combine the IsNotNull expressions with AND
     not_null_exprs
@@ -118,42 +113,13 @@ fn create_not_null_predicate(columns: Vec<Column>) -> Expr {
         .fold(not_null_exprs[0].clone(), |a, b| and(a, b.clone()))
 }
 
-fn resolve_join_key_pair(
-    left_schema: &DFSchemaRef,
-    right_schema: &DFSchemaRef,
-    c1: &Column,
-    c2: &Column,
-) -> Option<(DFField, DFField)> {
-    resolve_fields(left_schema, right_schema, c1, c2)
-        .or_else(|| resolve_fields(left_schema, right_schema, c2, c1))
-}
-
-fn resolve_fields(
-    left_schema: &DFSchemaRef,
-    right_schema: &DFSchemaRef,
-    c1: &Column,
-    c2: &Column,
-) -> Option<(DFField, DFField)> {
-    match (
-        left_schema.index_of_column(c1),
-        right_schema.index_of_column(c2),
-    ) {
-        (Ok(left_index), Ok(right_index)) => {
-            let left_field = left_schema.field(left_index);
-            let right_field = right_schema.field(right_index);
-            Some((left_field.clone(), right_field.clone()))
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use datafusion_common::{Column, Result};
     use datafusion_expr::logical_plan::table_scan;
-    use datafusion_expr::{logical_plan::JoinType, LogicalPlanBuilder};
+    use datafusion_expr::{col, lit, logical_plan::JoinType, LogicalPlanBuilder};
 
     use crate::optimizer::OptimizerContext;
 
@@ -229,6 +195,74 @@ mod tests {
         \n  Inner Join: t1.optional_id = t2.id\
         \n    Filter: t1.optional_id IS NOT NULL\
         \n      TableScan: t1\
+        \n    TableScan: t2";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn left_nullable_expr_key() -> Result<()> {
+        let (t1, t2) = test_tables()?;
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_with_expr_keys(
+                t2,
+                JoinType::Inner,
+                (
+                    vec![col("t1.optional_id") + lit(1u32)],
+                    vec![col("t2.id") + lit(1u32)],
+                ),
+                None,
+            )?
+            .build()?;
+        let expected = "Inner Join: t1.optional_id + UInt32(1) = t2.id + UInt32(1)\
+        \n  Filter: t1.optional_id + UInt32(1) IS NOT NULL\
+        \n    TableScan: t1\
+        \n  TableScan: t2";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn right_nullable_expr_key() -> Result<()> {
+        let (t1, t2) = test_tables()?;
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_with_expr_keys(
+                t2,
+                JoinType::Inner,
+                (
+                    vec![col("t1.id") + lit(1u32)],
+                    vec![col("t2.optional_id") + lit(1u32)],
+                ),
+                None,
+            )?
+            .build()?;
+        let expected = "Inner Join: t1.id + UInt32(1) = t2.optional_id + UInt32(1)\
+        \n  TableScan: t1\
+        \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
+        \n    TableScan: t2";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn both_side_nullable_expr_key() -> Result<()> {
+        let (t1, t2) = test_tables()?;
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_with_expr_keys(
+                t2,
+                JoinType::Inner,
+                (
+                    vec![col("t1.optional_id") + lit(1u32)],
+                    vec![col("t2.optional_id") + lit(1u32)],
+                ),
+                None,
+            )?
+            .build()?;
+        let expected =
+            "Inner Join: t1.optional_id + UInt32(1) = t2.optional_id + UInt32(1)\
+        \n  Filter: t1.optional_id + UInt32(1) IS NOT NULL\
+        \n    TableScan: t1\
+        \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
         \n    TableScan: t2";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
