@@ -41,6 +41,7 @@ pub(crate) mod median;
 pub(crate) mod min_max;
 pub mod build_in;
 mod hyperloglog;
+pub mod moving_min_max;
 pub mod row_accumulator;
 pub(crate) mod stats;
 pub(crate) mod stddev;

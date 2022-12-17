@@ -38,13 +38,14 @@ use arrow::{
 use datafusion_common::ScalarValue;
 use datafusion_common::{downcast_value, DataFusionError, Result};
 use datafusion_expr::{Accumulator, AggregateState};
-use moving_min_max::MovingMin;
 
 use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
 use datafusion_row::accessor::RowAccessor;
+
+use super::moving_min_max;
 
 // Min/max aggregation can take Dictionary encode input but always produces unpacked
 // (aka non Dictionary) output. We need to adjust the output data type to reflect this.
