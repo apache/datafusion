@@ -748,6 +748,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_table_stats_when_no_stats() -> Result<()> {
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::new(ctx.config_options())))
+            .with_collect_stat(false);
+        let schema = opt.infer_schema(&state, &table_path).await?;
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(schema);
+        let table = ListingTable::try_new(config)?;
+
+        let exec = table.scan(&state, None, &[], None).await?;
+        assert_eq!(exec.statistics().num_rows, None);
+        assert_eq!(exec.statistics().total_byte_size, None);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_try_create_output_ordering() {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
