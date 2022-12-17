@@ -800,31 +800,27 @@ impl LogicalPlanBuilder {
 
     /// Apply a join with the expression on constraint.
     ///
-    /// join_keys are "equijoin" predicates expressions on the existing and right inputs, respectively.
+    /// equi_exprs are "equijoin" predicates expressions on the existing and right inputs, respectively.
     ///
-    /// filter: any other filter expression to apply during the join. join_keys predicates are likely
+    /// filter: any other filter expression to apply during the join. equi_exprs predicates are likely
     /// to be evaluated more quickly than the filter expressions
-    ///
-    /// Filter expression expected to contain non-equality predicates that can not be pushed
-    /// down to any of join inputs.
-    /// In case of outer join, filter applied to only matched rows.
     pub fn join_with_expr_keys(
         self,
         right: LogicalPlan,
         join_type: JoinType,
-        join_keys: (Vec<impl Into<Expr>>, Vec<impl Into<Expr>>),
+        equi_exprs: (Vec<impl Into<Expr>>, Vec<impl Into<Expr>>),
         filter: Option<Expr>,
     ) -> Result<Self> {
-        if join_keys.0.len() != join_keys.1.len() {
+        if equi_exprs.0.len() != equi_exprs.1.len() {
             return Err(DataFusionError::Plan(
                 "left_keys and right_keys were not the same length".to_string(),
             ));
         }
 
-        let join_key_pairs = join_keys
+        let join_key_pairs = equi_exprs
             .0
             .into_iter()
-            .zip(join_keys.1.into_iter())
+            .zip(equi_exprs.1.into_iter())
             .map(|(l, r)| {
                 let left_key = l.into();
                 let right_key = r.into();
