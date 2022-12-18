@@ -184,7 +184,6 @@ impl Options {
                 .skip(1)
                 // ignore command line arguments like `--complete`
                 .filter(|arg| !arg.as_str().starts_with("--"))
-                .map(|arg| arg.to_string())
                 .collect::<Vec<_>>()
         } else {
             vec![]
