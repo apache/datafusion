@@ -22,7 +22,7 @@ use datafusion::{
     physical_plan::{expressions::AvgAccumulator, functions::make_scalar_function},
 };
 use datafusion_common::{cast::as_int32_array, ScalarValue};
-use datafusion_expr::{create_udaf, Accumulator, AggregateState, LogicalPlanBuilder};
+use datafusion_expr::{create_udaf, Accumulator, LogicalPlanBuilder};
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -53,7 +53,7 @@ async fn scalar_udf() -> Result<()> {
         ],
     )?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     ctx.register_batch("t", batch)?;
 
@@ -138,7 +138,7 @@ async fn simple_udaf() -> Result<()> {
         vec![Arc::new(Int32Array::from_slice([4, 5]))],
     )?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
     ctx.register_table("t", Arc::new(provider))?;
@@ -175,7 +175,7 @@ fn udaf_as_window_func() -> Result<()> {
     struct MyAccumulator;
 
     impl Accumulator for MyAccumulator {
-        fn state(&self) -> Result<Vec<AggregateState>> {
+        fn state(&self) -> Result<Vec<ScalarValue>> {
             unimplemented!()
         }
 
@@ -205,7 +205,7 @@ fn udaf_as_window_func() -> Result<()> {
         Arc::new(vec![DataType::Int32]),
     );
 
-    let mut context = SessionContext::new();
+    let context = SessionContext::new();
     context.register_table(
         "my_table",
         Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::new(

@@ -25,7 +25,9 @@ use crate::logical_plan::{
     Limit, Partitioning, Prepare, Projection, Repartition, Sort, Subquery, SubqueryAlias,
     Union, Values, Window,
 };
-use crate::{Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use crate::{
+    Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, TableScan, TryCast,
+};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -497,7 +499,7 @@ pub fn from_plan(
         }
         LogicalPlan::CrossJoin(_) => {
             let left = inputs[0].clone();
-            let right = &inputs[1];
+            let right = inputs[1].clone();
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }
         LogicalPlan::Subquery(_) => {
@@ -587,8 +589,14 @@ pub fn from_plan(
             data_types: data_types.clone(),
             input: Arc::new(inputs[0].clone()),
         })),
+        LogicalPlan::TableScan(ts) => {
+            assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
+            Ok(LogicalPlan::TableScan(TableScan {
+                filters: expr.to_vec(),
+                ..ts.clone()
+            }))
+        }
         LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::TableScan { .. }
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::DropView(_)
@@ -688,10 +696,10 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
             expr: Box::new(columnize_expr(*expr, input_schema)),
             data_type,
         }),
-        Expr::TryCast { expr, data_type } => Expr::TryCast {
-            expr: Box::new(columnize_expr(*expr, input_schema)),
+        Expr::TryCast(TryCast { expr, data_type }) => Expr::TryCast(TryCast::new(
+            Box::new(columnize_expr(*expr, input_schema)),
             data_type,
-        },
+        )),
         Expr::ScalarSubquery(_) => e.clone(),
         _ => match e.display_name() {
             Ok(name) => match input_schema.field_with_unqualified_name(&name) {

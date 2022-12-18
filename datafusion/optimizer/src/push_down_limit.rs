@@ -75,14 +75,20 @@ fn push_down_join(
 
 /// Push down Limit.
 impl OptimizerRule for PushDownLimit {
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<Option<LogicalPlan>> {
         let limit = match plan {
             LogicalPlan::Limit(limit) => limit,
-            _ => return utils::optimize_children(self, plan, optimizer_config),
+            _ => {
+                return Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
+            }
         };
 
         if let LogicalPlan::Limit(child_limit) = &*limit.input {
@@ -112,12 +118,18 @@ impl OptimizerRule for PushDownLimit {
                 fetch: new_fetch,
                 input: Arc::new((*child_limit.input).clone()),
             });
-            return self.optimize(&plan, optimizer_config);
+            return self.try_optimize(&plan, optimizer_config);
         }
 
         let fetch = match limit.fetch {
             Some(fetch) => fetch,
-            None => return utils::optimize_children(self, plan, optimizer_config),
+            None => {
+                return Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
+            }
         };
         let skip = limit.skip;
 
@@ -225,7 +237,11 @@ impl OptimizerRule for PushDownLimit {
             _ => plan.clone(),
         };
 
-        utils::optimize_children(self, &plan, optimizer_config)
+        Ok(Some(utils::optimize_children(
+            self,
+            &plan,
+            optimizer_config,
+        )?))
     }
 
     fn name(&self) -> &str {
@@ -255,7 +271,8 @@ mod test {
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let optimized_plan = PushDownLimit::new()
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
 
         let formatted_plan = format!("{:?}", optimized_plan);
@@ -519,7 +536,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Inner,
                 (vec!["a"], vec!["a"]),
                 None,
@@ -543,7 +560,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Inner,
                 (vec!["a"], vec!["a"]),
                 None,
@@ -626,7 +643,7 @@ mod test {
         let right_keys: Vec<&str> = Vec::new();
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
-                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
                 JoinType::Left,
                 (left_keys.clone(), right_keys.clone()),
                 None,
@@ -645,7 +662,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
-                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
                 JoinType::Right,
                 (left_keys.clone(), right_keys.clone()),
                 None,
@@ -664,7 +681,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
-                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
                 JoinType::Full,
                 (left_keys.clone(), right_keys.clone()),
                 None,
@@ -683,7 +700,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
-                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
                 JoinType::LeftSemi,
                 (left_keys.clone(), right_keys.clone()),
                 None,
@@ -701,7 +718,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
-                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
                 JoinType::LeftAnti,
                 (left_keys.clone(), right_keys.clone()),
                 None,
@@ -719,7 +736,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1.clone())
             .join(
-                &LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
+                LogicalPlanBuilder::from(table_scan_2.clone()).build()?,
                 JoinType::RightSemi,
                 (left_keys.clone(), right_keys.clone()),
                 None,
@@ -737,7 +754,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::RightAnti,
                 (left_keys, right_keys),
                 None,
@@ -761,7 +778,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Left,
                 (vec!["a"], vec!["a"]),
                 None,
@@ -786,7 +803,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Left,
                 (vec!["a"], vec!["a"]),
                 None,
@@ -811,7 +828,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Right,
                 (vec!["a"], vec!["a"]),
                 None,
@@ -836,7 +853,7 @@ mod test {
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
             .join(
-                &LogicalPlanBuilder::from(table_scan_2).build()?,
+                LogicalPlanBuilder::from(table_scan_2).build()?,
                 JoinType::Right,
                 (vec!["a"], vec!["a"]),
                 None,
@@ -860,7 +877,7 @@ mod test {
         let table_scan_2 = test_table_scan_with_name("test2")?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
-            .cross_join(&LogicalPlanBuilder::from(table_scan_2).build()?)?
+            .cross_join(LogicalPlanBuilder::from(table_scan_2).build()?)?
             .limit(0, Some(1000))?
             .build()?;
 
@@ -880,7 +897,7 @@ mod test {
         let table_scan_2 = test_table_scan_with_name("test2")?;
 
         let plan = LogicalPlanBuilder::from(table_scan_1)
-            .cross_join(&LogicalPlanBuilder::from(table_scan_2).build()?)?
+            .cross_join(LogicalPlanBuilder::from(table_scan_2).build()?)?
             .limit(1000, Some(1000))?
             .build()?;
 

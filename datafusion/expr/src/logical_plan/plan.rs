@@ -262,9 +262,9 @@ impl LogicalPlan {
                 .collect(),
             LogicalPlan::Sort(Sort { expr, .. }) => expr.clone(),
             LogicalPlan::Extension(extension) => extension.node.expressions(),
+            LogicalPlan::TableScan(TableScan { filters, .. }) => filters.clone(),
             // plans without expressions
-            LogicalPlan::TableScan(_)
-            | LogicalPlan::EmptyRelation(_)
+            LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)

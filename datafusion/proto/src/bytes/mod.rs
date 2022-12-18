@@ -553,7 +553,7 @@ mod test {
             scalar_fn,
         );
 
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.register_udf(udf);
 
         ctx

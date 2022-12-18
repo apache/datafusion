@@ -23,7 +23,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -75,7 +75,7 @@ impl AggregateExpr for ArrayAgg {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "array_agg"),
+            format_state_name(&self.name, "array_agg"),
             DataType::List(Box::new(Field::new(
                 "item",
                 self.input_data_type.clone(),
@@ -143,8 +143,8 @@ impl Accumulator for ArrayAggAccumulator {
         })
     }
 
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![AggregateState::Scalar(self.evaluate()?)])
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.evaluate()?])
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {

@@ -1558,7 +1558,7 @@ mod roundtrip_tests {
         let project =
             ProjectionExec::try_new(vec![(Arc::new(expr), "a".to_string())], input)?;
 
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
 
         ctx.register_udf(udf);
 
