@@ -43,7 +43,7 @@ use datafusion_common::{
 };
 use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Case, Cast, GroupingSet, Like, TryCast,
+    Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort, TryCast,
 };
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
@@ -1482,13 +1482,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
         Ok({
             let asc = asc.unwrap_or(true);
-            Expr::Sort {
-                expr: Box::new(expr),
+            Expr::Sort(Sort::new(
+                Box::new(expr),
                 asc,
                 // when asc is true, by default nulls last to be consistent with postgres
                 // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
-                nulls_first: nulls_first.unwrap_or(!asc),
-            }
+                nulls_first.unwrap_or(!asc),
+            ))
         })
     }
 

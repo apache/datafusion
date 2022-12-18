@@ -62,7 +62,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, TryCast,
+    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, TryCast,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan;
@@ -583,11 +583,11 @@ impl DefaultPhysicalPlanner {
                         let sort_keys = sort_keys
                             .iter()
                             .map(|e| match e {
-                                Expr::Sort {
+                                Expr::Sort(expr::Sort {
                                     expr,
                                     asc,
                                     nulls_first,
-                                } => create_physical_sort_expr(
+                                }) => create_physical_sort_expr(
                                     expr,
                                     logical_input_schema,
                                     &physical_input_schema,
@@ -820,11 +820,11 @@ impl DefaultPhysicalPlanner {
                     let sort_expr = expr
                         .iter()
                         .map(|e| match e {
-                            Expr::Sort {
+                            Expr::Sort(expr::Sort {
                                 expr,
                                 asc,
                                 nulls_first,
-                            } => create_physical_sort_expr(
+                            }) => create_physical_sort_expr(
                                 expr,
                                 input_dfschema,
                                 &input_schema,
@@ -1534,11 +1534,11 @@ pub fn create_window_expr_with_name(
             let order_by = order_by
                 .iter()
                 .map(|e| match e {
-                    Expr::Sort {
+                    Expr::Sort(expr::Sort {
                         expr,
                         asc,
                         nulls_first,
-                    } => create_physical_sort_expr(
+                    }) => create_physical_sort_expr(
                         expr,
                         logical_input_schema,
                         physical_input_schema,

@@ -70,7 +70,9 @@ mod roundtrip_tests {
     };
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
-    use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
+    use datafusion_expr::expr::{
+        Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort,
+    };
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction,
@@ -1066,11 +1068,7 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_sort_expr() {
-        let test_expr = Expr::Sort {
-            expr: Box::new(lit(1.0_f32)),
-            asc: true,
-            nulls_first: true,
-        };
+        let test_expr = Expr::Sort(Sort::new(Box::new(lit(1.0_f32)), true, true));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);

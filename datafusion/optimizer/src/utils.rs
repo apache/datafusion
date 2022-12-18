@@ -20,7 +20,7 @@
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_common::{plan_err, Column, DFSchemaRef};
-use datafusion_expr::expr::BinaryExpr;
+use datafusion_expr::expr::{BinaryExpr, Sort};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use datafusion_expr::{
@@ -581,7 +581,7 @@ where
 /// `Expr::Sort` as appropriate
 fn name_for_alias(expr: &Expr) -> Result<String> {
     match expr {
-        Expr::Sort { expr, .. } => name_for_alias(expr),
+        Expr::Sort(Sort { expr, .. }) => name_for_alias(expr),
         expr => expr.display_name(),
     }
 }
@@ -596,17 +596,13 @@ fn add_alias_if_changed(original_name: String, expr: Expr) -> Result<Expr> {
     }
 
     Ok(match expr {
-        Expr::Sort {
+        Expr::Sort(Sort {
             expr,
             asc,
             nulls_first,
-        } => {
+        }) => {
             let expr = add_alias_if_changed(original_name, *expr)?;
-            Expr::Sort {
-                expr: Box::new(expr),
-                asc,
-                nulls_first,
-            }
+            Expr::Sort(Sort::new(Box::new(expr), asc, nulls_first))
         }
         expr => expr.alias(original_name),
     })
@@ -779,16 +775,8 @@ mod tests {
 
         // SortExpr a+1 ==> b + 2
         test_rewrite(
-            Expr::Sort {
-                expr: Box::new(col("a").add(lit(1i32))),
-                asc: true,
-                nulls_first: false,
-            },
-            Expr::Sort {
-                expr: Box::new(col("b").add(lit(2i64))),
-                asc: true,
-                nulls_first: false,
-            },
+            Expr::Sort(Sort::new(Box::new(col("a").add(lit(1i32))), true, false)),
+            Expr::Sort(Sort::new(Box::new(col("b").add(lit(2i64))), true, false)),
         );
     }
 
@@ -811,13 +799,13 @@ mod tests {
         let expr = rewrite_preserving_name(expr_from.clone(), &mut rewriter).unwrap();
 
         let original_name = match &expr_from {
-            Expr::Sort { expr, .. } => expr.display_name(),
+            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
             expr => expr.display_name(),
         }
         .unwrap();
 
         let new_name = match &expr {
-            Expr::Sort { expr, .. } => expr.display_name(),
+            Expr::Sort(Sort { expr, .. }) => expr.display_name(),
             expr => expr.display_name(),
         }
         .unwrap();
