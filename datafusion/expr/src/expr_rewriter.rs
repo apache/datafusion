@@ -19,6 +19,7 @@
 
 use crate::expr::{
     Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet, Like, Sort, TryCast,
+    WindowFunction,
 };
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
@@ -224,19 +225,19 @@ impl ExprRewritable for Expr {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
             },
-            Expr::WindowFunction {
+            Expr::WindowFunction(WindowFunction {
                 args,
                 fun,
                 partition_by,
                 order_by,
                 window_frame,
-            } => Expr::WindowFunction {
-                args: rewrite_vec(args, rewriter)?,
+            }) => Expr::WindowFunction(WindowFunction::new(
                 fun,
-                partition_by: rewrite_vec(partition_by, rewriter)?,
-                order_by: rewrite_vec(order_by, rewriter)?,
+                rewrite_vec(args, rewriter)?,
+                rewrite_vec(partition_by, rewriter)?,
+                rewrite_vec(order_by, rewriter)?,
                 window_frame,
-            },
+            )),
             Expr::AggregateFunction {
                 args,
                 fun,

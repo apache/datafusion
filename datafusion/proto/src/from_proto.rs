@@ -32,7 +32,7 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     ScalarValue,
 };
-use datafusion_expr::expr::{BinaryExpr, Cast, Sort, TryCast};
+use datafusion_expr::expr::{BinaryExpr, Cast, Sort, TryCast, WindowFunction};
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
@@ -820,15 +820,15 @@ pub fn parse_expr(
                 window_expr_node::WindowFunction::AggrFunction(i) => {
                     let aggr_function = protobuf::AggregateFunction::try_from(i)?.into();
 
-                    Ok(Expr::WindowFunction {
-                        fun: datafusion_expr::window_function::WindowFunction::AggregateFunction(
+                    Ok(Expr::WindowFunction(WindowFunction::new(
+                        datafusion_expr::window_function::WindowFunction::AggregateFunction(
                             aggr_function,
                         ),
-                        args: vec![parse_required_expr(&expr.expr, registry, "expr")?],
+                        vec![parse_required_expr(&expr.expr, registry, "expr")?],
                         partition_by,
                         order_by,
                         window_frame,
-                    })
+                    )))
                 }
                 window_expr_node::WindowFunction::BuiltInFunction(i) => {
                     let built_in_function = protobuf::BuiltInWindowFunction::from_i32(*i)
@@ -839,15 +839,15 @@ pub fn parse_expr(
                         .map(|e| vec![e])
                         .unwrap_or_else(Vec::new);
 
-                    Ok(Expr::WindowFunction {
-                        fun: datafusion_expr::window_function::WindowFunction::BuiltInWindowFunction(
+                    Ok(Expr::WindowFunction(WindowFunction::new(
+                        datafusion_expr::window_function::WindowFunction::BuiltInWindowFunction(
                             built_in_function,
                         ),
                         args,
                         partition_by,
                         order_by,
                         window_frame,
-                    })
+                    )))
                 }
             }
         }

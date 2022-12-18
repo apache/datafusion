@@ -71,7 +71,7 @@ mod roundtrip_tests {
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
     use datafusion_expr::expr::{
-        Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort,
+        self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort,
     };
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
@@ -1338,26 +1338,26 @@ mod roundtrip_tests {
         let ctx = SessionContext::new();
 
         // 1. without window_frame
-        let test_expr1 = Expr::WindowFunction {
-            fun: WindowFunction::BuiltInWindowFunction(
+        let test_expr1 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::BuiltInWindowFunction(
                 datafusion_expr::window_function::BuiltInWindowFunction::Rank,
             ),
-            args: vec![],
-            partition_by: vec![col("col1")],
-            order_by: vec![col("col2")],
-            window_frame: WindowFrame::new(true),
-        };
+            vec![],
+            vec![col("col1")],
+            vec![col("col2")],
+            WindowFrame::new(true),
+        ));
 
         // 2. with default window_frame
-        let test_expr2 = Expr::WindowFunction {
-            fun: WindowFunction::BuiltInWindowFunction(
+        let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::BuiltInWindowFunction(
                 datafusion_expr::window_function::BuiltInWindowFunction::Rank,
             ),
-            args: vec![],
-            partition_by: vec![col("col1")],
-            order_by: vec![col("col2")],
-            window_frame: WindowFrame::new(true),
-        };
+            vec![],
+            vec![col("col1")],
+            vec![col("col2")],
+            WindowFrame::new(true),
+        ));
 
         // 3. with window_frame with row numbers
         let range_number_frame = WindowFrame {
@@ -1366,15 +1366,15 @@ mod roundtrip_tests {
             end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
         };
 
-        let test_expr3 = Expr::WindowFunction {
-            fun: WindowFunction::BuiltInWindowFunction(
+        let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::BuiltInWindowFunction(
                 datafusion_expr::window_function::BuiltInWindowFunction::Rank,
             ),
-            args: vec![],
-            partition_by: vec![col("col1")],
-            order_by: vec![col("col2")],
-            window_frame: range_number_frame,
-        };
+            vec![],
+            vec![col("col1")],
+            vec![col("col2")],
+            range_number_frame,
+        ));
 
         // 4. test with AggregateFunction
         let row_number_frame = WindowFrame {
@@ -1383,13 +1383,13 @@ mod roundtrip_tests {
             end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
         };
 
-        let test_expr4 = Expr::WindowFunction {
-            fun: WindowFunction::AggregateFunction(AggregateFunction::Max),
-            args: vec![col("col1")],
-            partition_by: vec![col("col1")],
-            order_by: vec![col("col2")],
-            window_frame: row_number_frame,
-        };
+        let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            vec![col("col1")],
+            vec![col("col1")],
+            vec![col("col2")],
+            row_number_frame,
+        ));
 
         roundtrip_expr_test(test_expr1, ctx.clone());
         roundtrip_expr_test(test_expr2, ctx.clone());

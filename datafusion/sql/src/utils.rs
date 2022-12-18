@@ -22,7 +22,7 @@ use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
+    Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like, WindowFunction,
 };
 use datafusion_expr::expr::{Cast, Sort};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
@@ -176,28 +176,27 @@ where
                 distinct: *distinct,
                 filter: filter.clone(),
             }),
-            Expr::WindowFunction {
+            Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
                 partition_by,
                 order_by,
                 window_frame,
-            } => Ok(Expr::WindowFunction {
-                fun: fun.clone(),
-                args: args
+            }) => Ok(Expr::WindowFunction(WindowFunction::new(
+                fun.clone(),
+                args.iter()
+                    .map(|e| clone_with_replacement(e, replacement_fn))
+                    .collect::<Result<Vec<_>>>()?,
+                partition_by
                     .iter()
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<_>>>()?,
-                partition_by: partition_by
+                order_by
                     .iter()
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<_>>>()?,
-                order_by: order_by
-                    .iter()
-                    .map(|e| clone_with_replacement(e, replacement_fn))
-                    .collect::<Result<Vec<_>>>()?,
-                window_frame: window_frame.clone(),
-            }),
+                window_frame.clone(),
+            ))),
             Expr::AggregateUDF { fun, args, filter } => Ok(Expr::AggregateUDF {
                 fun: fun.clone(),
                 args: args
@@ -481,11 +480,13 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
     let all_partition_keys = window_exprs
         .iter()
         .map(|expr| match expr {
-            Expr::WindowFunction { partition_by, .. } => Ok(partition_by),
+            Expr::WindowFunction(WindowFunction { partition_by, .. }) => Ok(partition_by),
             Expr::Alias(expr, _) => {
                 // convert &Box<T> to &T
                 match &**expr {
-                    Expr::WindowFunction { partition_by, .. } => Ok(partition_by),
+                    Expr::WindowFunction(WindowFunction { partition_by, .. }) => {
+                        Ok(partition_by)
+                    }
                     expr => Err(DataFusionError::Execution(format!(
                         "Impossibly got non-window expr {:?}",
                         expr

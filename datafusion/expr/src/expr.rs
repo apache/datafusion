@@ -177,18 +177,7 @@ pub enum Expr {
         filter: Option<Box<Expr>>,
     },
     /// Represents the call of a window function with arguments.
-    WindowFunction {
-        /// Name of the function
-        fun: window_function::WindowFunction,
-        /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
-        /// List of partition by expressions
-        partition_by: Vec<Expr>,
-        /// List of order by expressions
-        order_by: Vec<Expr>,
-        /// Window frame
-        window_frame: window_frame::WindowFrame,
-    },
+    WindowFunction(WindowFunction),
     /// aggregate function
     AggregateUDF {
         /// The function
@@ -468,6 +457,40 @@ impl Sort {
             expr,
             asc,
             nulls_first,
+        }
+    }
+}
+
+/// Window expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct WindowFunction {
+    /// Name of the function
+    pub fun: window_function::WindowFunction,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+    /// List of partition by expressions
+    pub partition_by: Vec<Expr>,
+    /// List of order by expressions
+    pub order_by: Vec<Expr>,
+    /// Window frame
+    pub window_frame: window_frame::WindowFrame,
+}
+
+impl WindowFunction {
+    /// Create a new Window expression
+    pub fn new(
+        fun: window_function::WindowFunction,
+        args: Vec<Expr>,
+        partition_by: Vec<Expr>,
+        order_by: Vec<Expr>,
+        window_frame: window_frame::WindowFrame,
+    ) -> Self {
+        Self {
+            fun,
+            args,
+            partition_by,
+            order_by,
+            window_frame,
         }
     }
 }
@@ -867,13 +890,13 @@ impl fmt::Debug for Expr {
             Expr::ScalarUDF { fun, ref args, .. } => {
                 fmt_function(f, &fun.name, false, args, false)
             }
-            Expr::WindowFunction {
+            Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
                 partition_by,
                 order_by,
                 window_frame,
-            } => {
+            }) => {
                 fmt_function(f, &fun.to_string(), false, args, false)?;
                 if !partition_by.is_empty() {
                     write!(f, " PARTITION BY {:?}", partition_by)?;
@@ -1223,13 +1246,13 @@ fn create_name(e: &Expr) -> Result<String> {
             create_function_name(&fun.to_string(), false, args)
         }
         Expr::ScalarUDF { fun, args, .. } => create_function_name(&fun.name, false, args),
-        Expr::WindowFunction {
+        Expr::WindowFunction(WindowFunction {
             fun,
             args,
             window_frame,
             partition_by,
             order_by,
-        } => {
+        }) => {
             let mut parts: Vec<String> =
                 vec![create_function_name(&fun.to_string(), false, args)?];
             if !partition_by.is_empty() {

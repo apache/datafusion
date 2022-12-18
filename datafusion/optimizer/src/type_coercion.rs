@@ -24,7 +24,7 @@ use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::{
     parse_interval, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{Between, BinaryExpr, Case, Like};
+use datafusion_expr::expr::{Between, BinaryExpr, Case, Like, WindowFunction};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
@@ -409,22 +409,22 @@ impl ExprRewriter for TypeCoercionRewriter {
                 };
                 Ok(expr)
             }
-            Expr::WindowFunction {
+            Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
                 partition_by,
                 order_by,
                 window_frame,
-            } => {
+            }) => {
                 let window_frame =
                     get_coerced_window_frame(window_frame, &self.schema, &order_by)?;
-                let expr = Expr::WindowFunction {
+                let expr = Expr::WindowFunction(WindowFunction::new(
                     fun,
                     args,
                     partition_by,
                     order_by,
                     window_frame,
-                };
+                ));
                 Ok(expr)
             }
             expr => Ok(expr),

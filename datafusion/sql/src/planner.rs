@@ -43,7 +43,7 @@ use datafusion_common::{
 };
 use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort, TryCast,
+    self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort, TryCast,
 };
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
@@ -2334,24 +2334,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 schema,
                             )?;
 
-                            Expr::WindowFunction {
-                                fun: WindowFunction::AggregateFunction(
+                            Expr::WindowFunction(expr::WindowFunction::new(
+                                 WindowFunction::AggregateFunction(
                                     aggregate_fun,
                                 ),
                                 args,
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            }
+                            ))
                         }
                         _ => {
-                            Expr::WindowFunction {
+                            Expr::WindowFunction(expr::WindowFunction::new(
                                 fun,
-                                args: self.function_args_to_expr(function.args, schema)?,
+                                self.function_args_to_expr(function.args, schema)?,
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            }
+                            ))
                         }
                     };
                     return Ok(expr);

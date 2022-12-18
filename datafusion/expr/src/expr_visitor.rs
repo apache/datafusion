@@ -17,7 +17,7 @@
 
 //! Expression visitor
 
-use crate::expr::{Cast, Sort};
+use crate::expr::{Cast, Sort, WindowFunction};
 use crate::{
     expr::{BinaryExpr, GroupingSet, TryCast},
     Between, Expr, GetIndexedField, Like,
@@ -193,12 +193,12 @@ impl ExprVisitable for Expr {
                         .try_fold(visitor, |visitor, arg| arg.accept(visitor))
                 }
             }
-            Expr::WindowFunction {
+            Expr::WindowFunction(WindowFunction {
                 args,
                 partition_by,
                 order_by,
                 ..
-            } => {
+            }) => {
                 let visitor = args
                     .iter()
                     .try_fold(visitor, |visitor, arg| arg.accept(visitor))?;
