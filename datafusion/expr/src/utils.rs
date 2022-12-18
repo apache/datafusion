@@ -228,7 +228,7 @@ pub fn generate_sort_key(
     let mut final_sort_keys = vec![];
     partition_by.iter().for_each(|e| {
         // By default, create sort key with ASC is true and NULLS LAST to be consistent with
-        // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
+        // PostgreSQL's rule: https://www.postgresql.org/docs/current/queries-order.html
         let e = e.clone().sort(true, false);
         if let Some(pos) = normalized_order_by_keys.iter().position(|key| key.eq(&e)) {
             let order_by_key = &order_by[pos];
