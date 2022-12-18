@@ -133,80 +133,63 @@ impl FileFormat for CsvFormat {
             let stream = newline_delimited_stream(stream);
             pin_mut!(stream);
 
-            // first chunk may have header, initialize names & types vec
-            // as use header names, and types vec is used to record all inferred types across chunks
-            let (column_names, mut column_types): (Vec<_>, Vec<_>) =
-                if let Some(data) = stream.next().await.transpose()? {
-                    let (Schema { fields, .. }, records_read) =
-                        arrow::csv::reader::infer_reader_schema(
-                            self.file_compression_type.convert_read(data.reader())?,
-                            self.delimiter,
-                            Some(records_to_read),
-                            self.has_header,
-                        )?;
-                    records_to_read -= records_read;
+            let mut column_names = vec![];
+            let mut column_type_possibilities = vec![];
+            let mut first_chunk = true;
 
-                    if records_read > 0 {
-                        // at least 1 data row read, record the inferred datatype
-                        fields
-                            .into_iter()
-                            .map(|field| {
-                                let mut possibilities = HashSet::new();
-                                possibilities.insert(field.data_type().clone());
-                                (field.name().clone(), possibilities)
-                            })
-                            .unzip()
-                    } else {
-                        // no data row read, discard the inferred data type (Utf8)
-                        fields
-                            .into_iter()
-                            .map(|field| (field.name().clone(), HashSet::new()))
-                            .unzip()
-                    }
-                } else {
-                    // if this object has been completely read
-                    continue 'iterating_objects;
-                };
-
-            if records_to_read == 0 {
-                schemas.push(build_schema_helper(column_names, &column_types));
-                break 'iterating_objects;
-            }
-
-            // subsequent rows after first chunk
             'reading_object: while let Some(data) = stream.next().await.transpose()? {
                 let (Schema { fields, .. }, records_read) =
                     arrow::csv::reader::infer_reader_schema(
                         self.file_compression_type.convert_read(data.reader())?,
                         self.delimiter,
                         Some(records_to_read),
-                        false,
+                        // only consider header for first chunk
+                        self.has_header && first_chunk,
                     )?;
                 records_to_read -= records_read;
 
-                if fields.len() != column_types.len() {
-                    let msg = format!(
-                        "Encountered unequal lengths between records on CSV file whilst inferring schema. \
-                            Expected {} records, found {} records",
-                            column_types.len(),
-                        fields.len()
-                    );
-                    return Err(DataFusionError::Execution(msg));
-                }
+                if first_chunk {
+                    // set up initial structures for recording inferred schema across chunks
+                    (column_names, column_type_possibilities) = fields
+                        .into_iter()
+                        .map(|field| {
+                            let mut possibilities = HashSet::new();
+                            if records_read > 0 {
+                                // at least 1 data row read, record the inferred datatype
+                                possibilities.insert(field.data_type().clone());
+                            }
+                            (field.name().clone(), possibilities)
+                        })
+                        .unzip();
+                    first_chunk = false;
+                } else {
+                    if fields.len() != column_type_possibilities.len() {
+                        return Err(DataFusionError::Execution(
+                            format!(
+                                "Encountered unequal lengths between records on CSV file whilst inferring schema. \
+                                    Expected {} records, found {} records",
+                                    column_type_possibilities.len(),
+                                fields.len()
+                            )
+                        ));
+                    }
 
-                column_types
-                    .iter_mut()
-                    .zip(fields)
-                    .for_each(|(possibilities, field)| {
-                        possibilities.insert(field.data_type().clone());
-                    });
+                    column_type_possibilities.iter_mut().zip(fields).for_each(
+                        |(possibilities, field)| {
+                            possibilities.insert(field.data_type().clone());
+                        },
+                    );
+                }
 
                 if records_to_read == 0 {
                     break 'reading_object;
                 }
             }
 
-            schemas.push(build_schema_helper(column_names, &column_types));
+            schemas.push(build_schema_helper(
+                column_names,
+                &column_type_possibilities,
+            ));
             if records_to_read == 0 {
                 break 'iterating_objects;
             }
