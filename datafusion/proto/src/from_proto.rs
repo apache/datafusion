@@ -32,7 +32,7 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     ScalarValue,
 };
-use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
+use datafusion_expr::expr::{BinaryExpr, Cast, Sort, TryCast};
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
@@ -956,11 +956,11 @@ pub fn parse_expr(
             let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
             Ok(Expr::TryCast(TryCast::new(expr, data_type)))
         }
-        ExprType::Sort(sort) => Ok(Expr::Sort {
-            expr: Box::new(parse_required_expr(&sort.expr, registry, "expr")?),
-            asc: sort.asc,
-            nulls_first: sort.nulls_first,
-        }),
+        ExprType::Sort(sort) => Ok(Expr::Sort(Sort::new(
+            Box::new(parse_required_expr(&sort.expr, registry, "expr")?),
+            sort.asc,
+            sort.nulls_first,
+        ))),
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
             parse_required_expr(&negative.expr, registry, "expr")?,
         ))),
