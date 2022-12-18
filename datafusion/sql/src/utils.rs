@@ -21,10 +21,10 @@ use arrow_schema::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
 use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::Cast;
 use datafusion_expr::expr::{
     Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
 };
+use datafusion_expr::expr::{Cast, Sort};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{Expr, LogicalPlan, TryCast};
 use std::collections::HashMap;
@@ -352,15 +352,15 @@ where
                 Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
                 data_type.clone(),
             ))),
-            Expr::Sort {
+            Expr::Sort(Sort {
                 expr: nested_expr,
                 asc,
                 nulls_first,
-            } => Ok(Expr::Sort {
-                expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
-                asc: *asc,
-                nulls_first: *nulls_first,
-            }),
+            }) => Ok(Expr::Sort(Sort::new(
+                Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
+                *asc,
+                *nulls_first,
+            ))),
             Expr::Column { .. }
             | Expr::Literal(_)
             | Expr::ScalarVariable(_, _)

@@ -29,7 +29,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::JoinType;
-use datafusion_expr::expr::GroupingSet;
+use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::{avg, count, lit, sum};
 use datafusion_expr::{col, Expr};
 
@@ -104,11 +104,7 @@ async fn sort_on_unprojected_columns() -> Result<()> {
         .unwrap()
         .select(vec![col("a")])
         .unwrap()
-        .sort(vec![Expr::Sort {
-            expr: Box::new(col("b")),
-            asc: false,
-            nulls_first: true,
-        }])
+        .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
         .unwrap();
     let results = df.collect().await.unwrap();
 
@@ -216,16 +212,8 @@ async fn test_grouping_sets() -> Result<()> {
     let df = create_test_table()?
         .aggregate(vec![grouping_set_expr], vec![count(col("a"))])?
         .sort(vec![
-            Expr::Sort {
-                expr: Box::new(col("a")),
-                asc: false,
-                nulls_first: true,
-            },
-            Expr::Sort {
-                expr: Box::new(col("b")),
-                asc: false,
-                nulls_first: true,
-            },
+            Expr::Sort(Sort::new(Box::new(col("a")), false, true)),
+            Expr::Sort(Sort::new(Box::new(col("b")), false, true)),
         ])?;
 
     let results = df.collect().await?;
@@ -265,16 +253,8 @@ async fn test_grouping_sets_count() -> Result<()> {
         .await?
         .aggregate(vec![grouping_set_expr], vec![count(lit(1))])?
         .sort(vec![
-            Expr::Sort {
-                expr: Box::new(col("c1")),
-                asc: false,
-                nulls_first: true,
-            },
-            Expr::Sort {
-                expr: Box::new(col("c2")),
-                asc: false,
-                nulls_first: true,
-            },
+            Expr::Sort(Sort::new(Box::new(col("c1")), false, true)),
+            Expr::Sort(Sort::new(Box::new(col("c2")), false, true)),
         ])?;
 
     let results = df.collect().await?;
@@ -320,16 +300,8 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
             ],
         )?
         .sort(vec![
-            Expr::Sort {
-                expr: Box::new(col("c1")),
-                asc: false,
-                nulls_first: true,
-            },
-            Expr::Sort {
-                expr: Box::new(col("c2")),
-                asc: false,
-                nulls_first: true,
-            },
+            Expr::Sort(Sort::new(Box::new(col("c1")), false, true)),
+            Expr::Sort(Sort::new(Box::new(col("c2")), false, true)),
         ])?;
 
     let results = df.collect().await?;

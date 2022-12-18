@@ -1175,7 +1175,7 @@ impl TableSource for LogicalTableSource {
 
 #[cfg(test)]
 mod tests {
-    use crate::expr_fn::exists;
+    use crate::{expr, expr_fn::exists};
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::SchemaError;
 
@@ -1239,16 +1239,8 @@ mod tests {
         let plan =
             table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
                 .sort(vec![
-                    Expr::Sort {
-                        expr: Box::new(col("state")),
-                        asc: true,
-                        nulls_first: true,
-                    },
-                    Expr::Sort {
-                        expr: Box::new(col("salary")),
-                        asc: false,
-                        nulls_first: false,
-                    },
+                    Expr::Sort(expr::Sort::new(Box::new(col("state")), true, true)),
+                    Expr::Sort(expr::Sort::new(Box::new(col("salary")), false, false)),
                 ])?
                 .build()?;
 
