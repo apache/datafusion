@@ -16,16 +16,21 @@
 // under the License.
 
 use crate::expr::BinaryExpr;
+use crate::expr_rewriter::{ExprRewritable, ExprRewriter};
 ///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::utils::{
-    exprlist_to_fields, from_plan, grouping_set_expr_count, grouping_set_to_exprlist,
+    self, exprlist_to_fields, from_plan, grouping_set_expr_count,
+    grouping_set_to_exprlist,
 };
 use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{plan_err, Column, DFSchema, DFSchemaRef, DataFusionError};
+use datafusion_common::{
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    ScalarValue,
+};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -108,6 +113,8 @@ pub enum LogicalPlan {
     Distinct(Distinct),
     /// Set a Variable
     SetVariable(SetVariable),
+    /// Prepare a statement
+    Prepare(Prepare),
 }
 
 impl LogicalPlan {
@@ -134,6 +141,7 @@ impl LogicalPlan {
             LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
                 schema
             }
+            LogicalPlan::Prepare(Prepare { input, .. }) => input.schema(),
             LogicalPlan::Explain(explain) => &explain.schema,
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
@@ -201,8 +209,9 @@ impl LogicalPlan {
             | LogicalPlan::Sort(Sort { input, .. })
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::CreateView(CreateView { input, .. })
-            | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
-            LogicalPlan::Distinct(Distinct { input, .. }) => input.all_schemas(),
+            | LogicalPlan::Filter(Filter { input, .. })
+            | LogicalPlan::Distinct(Distinct { input, .. })
+            | LogicalPlan::Prepare(Prepare { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::SetVariable(_) => vec![],
@@ -253,9 +262,9 @@ impl LogicalPlan {
                 .collect(),
             LogicalPlan::Sort(Sort { expr, .. }) => expr.clone(),
             LogicalPlan::Extension(extension) => extension.node.expressions(),
+            LogicalPlan::TableScan(TableScan { filters, .. }) => filters.clone(),
             // plans without expressions
-            LogicalPlan::TableScan(_)
-            | LogicalPlan::EmptyRelation(_)
+            LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
@@ -271,7 +280,8 @@ impl LogicalPlan {
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
-            | LogicalPlan::Distinct(_) => {
+            | LogicalPlan::Distinct(_)
+            | LogicalPlan::Prepare(_) => {
                 vec![]
             }
         }
@@ -300,7 +310,8 @@ impl LogicalPlan {
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::CreateView(CreateView { input, .. }) => {
+            | LogicalPlan::CreateView(CreateView { input, .. })
+            | LogicalPlan::Prepare(Prepare { input, .. }) => {
                 vec![input]
             }
             // plans without inputs
@@ -355,6 +366,42 @@ impl LogicalPlan {
         inputs: &[LogicalPlan],
     ) -> Result<LogicalPlan, DataFusionError> {
         from_plan(self, &self.expressions(), inputs)
+    }
+
+    /// Convert a prepare logical plan into its inner logical plan with all params replaced with their corresponding values
+    pub fn with_param_values(
+        self,
+        param_values: Vec<ScalarValue>,
+    ) -> Result<LogicalPlan, DataFusionError> {
+        match self {
+            LogicalPlan::Prepare(prepare_lp) => {
+                // Verify if the number of params matches the number of values
+                if prepare_lp.data_types.len() != param_values.len() {
+                    return Err(DataFusionError::Internal(format!(
+                        "Expected {} parameters, got {}",
+                        prepare_lp.data_types.len(),
+                        param_values.len()
+                    )));
+                }
+
+                // Verify if the types of the params matches the types of the values
+                let iter = prepare_lp.data_types.iter().zip(param_values.iter());
+                for (i, (param_type, value)) in iter.enumerate() {
+                    if *param_type != value.get_datatype() {
+                        return Err(DataFusionError::Internal(format!(
+                            "Expected parameter of type {:?}, got {:?} at index {}",
+                            param_type,
+                            value.get_datatype(),
+                            i
+                        )));
+                    }
+                }
+
+                let input_plan = prepare_lp.input;
+                input_plan.replace_params_with_values(&param_values)
+            }
+            _ => Ok(self),
+        }
     }
 }
 
@@ -448,9 +495,8 @@ impl LogicalPlan {
                 input.accept(visitor)?
             }
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::CreateView(CreateView { input, .. }) => {
-                input.accept(visitor)?
-            }
+            | LogicalPlan::CreateView(CreateView { input, .. })
+            | LogicalPlan::Prepare(Prepare { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Extension(extension) => {
                 for input in extension.node.inputs() {
                     if !input.accept(visitor)? {
@@ -526,6 +572,72 @@ impl LogicalPlan {
             }
             _ => {}
         }
+    }
+
+    /// Return a logical plan with all placeholders/params (e.g $1 $2, ...) replaced with corresponding values provided in the prams_values
+    pub fn replace_params_with_values(
+        &self,
+        param_values: &Vec<ScalarValue>,
+    ) -> Result<LogicalPlan, DataFusionError> {
+        let exprs = self.expressions();
+        let mut new_exprs = vec![];
+        for expr in exprs {
+            new_exprs.push(Self::replace_placeholders_with_values(expr, param_values)?);
+        }
+
+        let new_inputs = self.inputs();
+        let mut new_inputs_with_values = vec![];
+        for input in new_inputs {
+            new_inputs_with_values.push(input.replace_params_with_values(param_values)?);
+        }
+
+        let new_plan = utils::from_plan(self, &new_exprs, &new_inputs_with_values)?;
+        Ok(new_plan)
+    }
+
+    /// Return an Expr with all placeholders replaced with their corresponding values provided in the prams_values
+    fn replace_placeholders_with_values(
+        expr: Expr,
+        param_values: &Vec<ScalarValue>,
+    ) -> Result<Expr, DataFusionError> {
+        struct PlaceholderReplacer<'a> {
+            param_values: &'a Vec<ScalarValue>,
+        }
+
+        impl<'a> ExprRewriter for PlaceholderReplacer<'a> {
+            fn mutate(&mut self, expr: Expr) -> Result<Expr, DataFusionError> {
+                if let Expr::Placeholder { id, data_type } = &expr {
+                    // convert id (in format $1, $2, ..) to idx (0, 1, ..)
+                    let idx = id[1..].parse::<usize>().map_err(|e| {
+                        DataFusionError::Internal(format!(
+                            "Failed to parse placeholder id: {}",
+                            e
+                        ))
+                    })? - 1;
+                    // value at the idx-th position in param_values should be the value for the placeholder
+                    let value = self.param_values.get(idx).ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "No value found for placeholder with id {}",
+                            id
+                        ))
+                    })?;
+                    // check if the data type of the value matches the data type of the placeholder
+                    if value.get_datatype() != *data_type {
+                        return Err(DataFusionError::Internal(format!(
+                            "Placeholder value type mismatch: expected {:?}, got {:?}",
+                            data_type,
+                            value.get_datatype()
+                        )));
+                    }
+                    // Replace the placeholder with the value
+                    Ok(Expr::Literal(value.clone()))
+                } else {
+                    Ok(expr)
+                }
+            }
+        }
+
+        expr.rewrite(&mut PlaceholderReplacer { param_values })
     }
 }
 
@@ -961,6 +1073,11 @@ impl LogicalPlan {
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union(_) => write!(f, "Union"),
                     LogicalPlan::Extension(e) => e.node.fmt_for_explain(f),
+                    LogicalPlan::Prepare(Prepare {
+                        name, data_types, ..
+                    }) => {
+                        write!(f, "Prepare: {:?} {:?} ", name, data_types)
+                    }
                 }
             }
         }
@@ -1058,7 +1175,7 @@ pub struct CreateCatalogSchema {
 #[derive(Clone)]
 pub struct DropTable {
     /// The table name
-    pub name: String,
+    pub name: OwnedTableReference,
     /// If the table exists
     pub if_exists: bool,
     /// Dummy schema
@@ -1069,7 +1186,7 @@ pub struct DropTable {
 #[derive(Clone)]
 pub struct DropView {
     /// The view name
-    pub name: String,
+    pub name: OwnedTableReference,
     /// If the view exists
     pub if_exists: bool,
     /// Dummy schema
@@ -1180,6 +1297,23 @@ pub struct SubqueryAlias {
     pub alias: String,
     /// The schema with qualified field names
     pub schema: DFSchemaRef,
+}
+
+impl SubqueryAlias {
+    pub fn try_new(
+        plan: LogicalPlan,
+        alias: impl Into<String>,
+    ) -> datafusion_common::Result<Self> {
+        let alias = alias.into();
+        let schema: Schema = plan.schema().as_ref().clone().into();
+        let schema =
+            DFSchemaRef::new(DFSchema::try_from_qualified_schema(&alias, &schema)?);
+        Ok(SubqueryAlias {
+            input: Arc::new(plan),
+            alias,
+            schema,
+        })
+    }
 }
 
 /// Filters rows from its input that do not match an
@@ -1309,7 +1443,7 @@ pub struct Union {
 #[derive(Clone)]
 pub struct CreateMemoryTable {
     /// The table name
-    pub name: String,
+    pub name: OwnedTableReference,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
@@ -1322,7 +1456,7 @@ pub struct CreateMemoryTable {
 #[derive(Clone)]
 pub struct CreateView {
     /// The table name
-    pub name: String,
+    pub name: OwnedTableReference,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
@@ -1337,7 +1471,7 @@ pub struct CreateExternalTable {
     /// The table schema
     pub schema: DFSchemaRef,
     /// The table name
-    pub name: String,
+    pub name: OwnedTableReference,
     /// The physical location
     pub location: String,
     /// The file type of physical file
@@ -1356,6 +1490,18 @@ pub struct CreateExternalTable {
     pub file_compression_type: String,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
+}
+
+/// Prepare a statement but do not execute it. Prepare statements can have 0 or more
+/// `Expr::Placeholder` expressions that are filled in during execution
+#[derive(Clone)]
+pub struct Prepare {
+    /// The name of the statement
+    pub name: String,
+    /// Data types of the parameters ([`Expr::Placeholder`])
+    pub data_types: Vec<DataType>,
+    /// The logical plan of the statements
+    pub input: Arc<LogicalPlan>,
 }
 
 /// Produces a relation with string representations of

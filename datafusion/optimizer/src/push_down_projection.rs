@@ -43,14 +43,14 @@ use std::{
 /// Optimizer that removes unused projections and aggregations from plans
 /// This reduces both scans and
 #[derive(Default)]
-pub struct ProjectionPushDown {}
+pub struct PushDownProjection {}
 
-impl OptimizerRule for ProjectionPushDown {
-    fn optimize(
+impl OptimizerRule for PushDownProjection {
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+    ) -> Result<Option<LogicalPlan>> {
         // set of all columns referred by the plan (and thus considered required by the root)
         let required_columns = plan
             .schema()
@@ -58,15 +58,21 @@ impl OptimizerRule for ProjectionPushDown {
             .iter()
             .map(|f| f.qualified_column())
             .collect::<HashSet<Column>>();
-        optimize_plan(self, plan, &required_columns, false, optimizer_config)
+        Ok(Some(optimize_plan(
+            self,
+            plan,
+            &required_columns,
+            false,
+            optimizer_config,
+        )?))
     }
 
     fn name(&self) -> &str {
-        "projection_push_down"
+        "push_down_projection"
     }
 }
 
-impl ProjectionPushDown {
+impl PushDownProjection {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
@@ -75,7 +81,7 @@ impl ProjectionPushDown {
 
 /// Recursively transverses the logical plan removing expressions and that are not needed.
 fn optimize_plan(
-    _optimizer: &ProjectionPushDown,
+    _optimizer: &PushDownProjection,
     plan: &LogicalPlan,
     required_columns: &HashSet<Column>, // set of columns required up to this step
     has_projection: bool,
@@ -94,23 +100,22 @@ fn optimize_plan(
 
             let mut new_expr = Vec::new();
             let mut new_fields = Vec::new();
+            // When meet projection, its expr must contain all columns that its child need.
+            // So we need create a empty required_columns instead use original new_required_columns.
+            // Otherwise it cause redundant columns.
+            let mut new_required_columns = HashSet::new();
 
             // Gather all columns needed for expressions in this Projection
-            schema
-                .fields()
-                .iter()
-                .enumerate()
-                .try_for_each(|(i, field)| {
-                    if required_columns.contains(&field.qualified_column()) {
-                        new_expr.push(expr[i].clone());
-                        new_fields.push(field.clone());
+            schema.fields().iter().enumerate().for_each(|(i, field)| {
+                if required_columns.contains(&field.qualified_column()) {
+                    new_expr.push(expr[i].clone());
+                    new_fields.push(field.clone());
+                }
+            });
 
-                        // gather the new set of required columns
-                        expr_to_columns(&expr[i], &mut new_required_columns)
-                    } else {
-                        Ok(())
-                    }
-                })?;
+            for e in new_expr.iter() {
+                expr_to_columns(e, &mut new_required_columns)?
+            }
 
             let new_input = optimize_plan(
                 _optimizer,
@@ -392,7 +397,8 @@ fn optimize_plan(
         | LogicalPlan::SetVariable(_)
         | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Distinct(_)
-        | LogicalPlan::Extension { .. } => {
+        | LogicalPlan::Extension { .. }
+        | LogicalPlan::Prepare(_) => {
             let expr = plan.expressions();
             // collect all required columns by this plan
             exprlist_to_columns(&expr, &mut new_required_columns)?;
@@ -660,7 +666,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
+            .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
             .project(vec![col("a"), col("b"), col("c1")])?
             .build()?;
 
@@ -701,7 +707,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
+            .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
             // projecting joined column `a` should push the right side column `c1` projection as
             // well into test2 table even though `c1` is not referenced in projection.
             .project(vec![col("a"), col("b")])?
@@ -744,7 +750,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join_using(&table2_scan, JoinType::Left, vec!["a"])?
+            .join_using(table2_scan, JoinType::Left, vec!["a"])?
             .project(vec![col("a"), col("b")])?
             .build()?;
 
@@ -1012,7 +1018,9 @@ mod tests {
     }
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let rule = ProjectionPushDown::new();
-        rule.optimize(plan, &mut OptimizerConfig::new())
+        let rule = PushDownProjection::new();
+        Ok(rule
+            .try_optimize(plan, &mut OptimizerConfig::new())?
+            .unwrap())
     }
 }

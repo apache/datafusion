@@ -148,12 +148,7 @@ pub enum Expr {
     Cast(Cast),
     /// Casts the expression to a given type and will return a null value if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
-    TryCast {
-        /// The expression being cast
-        expr: Box<Expr>,
-        /// The `DataType` the expression will yield
-        data_type: DataType,
-    },
+    TryCast(TryCast),
     /// A sort expression, that can be used to sort values.
     Sort {
         /// The expression to sort on
@@ -244,6 +239,14 @@ pub enum Expr {
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
+    /// A place holder for parameters in a prepared statement
+    /// (e.g. `$foo` or `$1`)
+    Placeholder {
+        /// The identifier of the parameter (e.g, $1 or $foo)
+        id: String,
+        /// The type the parameter will be filled in with
+        data_type: DataType,
+    },
 }
 
 /// Binary expression
@@ -269,7 +272,9 @@ impl BinaryExpr {
         match self.op {
             Operator::Or => 5,
             Operator::And => 10,
-            Operator::Like | Operator::NotLike => 19,
+            Operator::Like | Operator::NotLike | Operator::ILike | Operator::NotILike => {
+                19
+            }
             Operator::NotEq
             | Operator::Eq
             | Operator::Lt
@@ -278,7 +283,18 @@ impl BinaryExpr {
             | Operator::GtEq => 20,
             Operator::Plus | Operator::Minus => 30,
             Operator::Multiply | Operator::Divide | Operator::Modulo => 40,
-            _ => 0,
+            Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+            | Operator::RegexMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotIMatch
+            | Operator::BitwiseAnd
+            | Operator::BitwiseOr
+            | Operator::BitwiseShiftLeft
+            | Operator::BitwiseShiftRight
+            | Operator::BitwiseXor
+            | Operator::StringConcat => 0,
         }
     }
 }
@@ -425,6 +441,22 @@ impl Cast {
     }
 }
 
+/// TryCast Expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct TryCast {
+    /// The expression being cast
+    pub expr: Box<Expr>,
+    /// The `DataType` the expression will yield
+    pub data_type: DataType,
+}
+
+impl TryCast {
+    /// Create a new TryCast expression
+    pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
+        Self { expr, data_type }
+    }
+}
+
 /// Grouping sets
 /// See https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS
 /// for Postgres definition.
@@ -528,6 +560,7 @@ impl Expr {
             Expr::Literal(..) => "Literal",
             Expr::Negative(..) => "Negative",
             Expr::Not(..) => "Not",
+            Expr::Placeholder { .. } => "Placeholder",
             Expr::QualifiedWildcard { .. } => "QualifiedWildcard",
             Expr::ScalarFunction { .. } => "ScalarFunction",
             Expr::ScalarSubquery { .. } => "ScalarSubquery",
@@ -600,6 +633,16 @@ impl Expr {
     /// Return `self NOT LIKE other`
     pub fn not_like(self, other: Expr) -> Expr {
         binary_expr(self, Operator::NotLike, other)
+    }
+
+    /// Return `self ILIKE other`
+    pub fn ilike(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::ILike, other)
+    }
+
+    /// Return `self NOT ILIKE other`
+    pub fn not_ilike(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::NotILike, other)
     }
 
     /// Return `self AS name` alias expression
@@ -758,7 +801,7 @@ impl fmt::Debug for Expr {
             Expr::Cast(Cast { expr, data_type }) => {
                 write!(f, "CAST({:?} AS {:?})", expr, data_type)
             }
-            Expr::TryCast { expr, data_type } => {
+            Expr::TryCast(TryCast { expr, data_type }) => {
                 write!(f, "TRY_CAST({:?} AS {:?})", expr, data_type)
             }
             Expr::Not(expr) => write!(f, "NOT {:?}", expr),
@@ -980,6 +1023,7 @@ impl fmt::Debug for Expr {
                     )
                 }
             },
+            Expr::Placeholder { id, .. } => write!(f, "{}", id),
         }
     }
 }
@@ -1109,7 +1153,7 @@ fn create_name(e: &Expr) -> Result<String> {
             // CAST does not change the expression name
             create_name(expr)
         }
-        Expr::TryCast { expr, .. } => {
+        Expr::TryCast(TryCast { expr, .. }) => {
             // CAST does not change the expression name
             create_name(expr)
         }
@@ -1263,6 +1307,7 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
             "Create name does not support qualified wildcard".to_string(),
         )),
+        Expr::Placeholder { id, .. } => Ok((*id).to_string()),
     }
 }
 

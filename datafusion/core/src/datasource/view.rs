@@ -431,7 +431,7 @@ mod tests {
         )
         .await?;
 
-        ctx.register_table("t1", ctx.table("test")?)?;
+        ctx.register_table("t1", Arc::new(ctx.table("test")?))?;
 
         ctx.sql("CREATE VIEW t2 as SELECT * FROM t1").await?;
 
@@ -460,7 +460,7 @@ mod tests {
         )
         .await?;
 
-        ctx.register_table("t1", ctx.table("test")?)?;
+        ctx.register_table("t1", Arc::new(ctx.table("test")?))?;
 
         ctx.sql("CREATE VIEW t2 as SELECT * FROM t1").await?;
 
@@ -502,7 +502,7 @@ mod tests {
         let actual = format!("{}", plan.display_indent());
         let expected = "\
         Explain\
-        \n  CreateView: \"xyz\"\
+        \n  CreateView: Bare { table: \"xyz\" }\
         \n    Projection: abc.column1, abc.column2, abc.column3\
         \n      TableScan: abc projection=[column1, column2, column3]";
         assert_eq!(expected, actual);
@@ -516,7 +516,7 @@ mod tests {
         let actual = format!("{}", plan.display_indent());
         let expected = "\
         Explain\
-        \n  CreateView: \"xyz\"\
+        \n  CreateView: Bare { table: \"xyz\" }\
         \n    Projection: abc.column1, abc.column2, abc.column3\
         \n      Filter: abc.column2 = Int64(5)\
         \n        TableScan: abc projection=[column1, column2, column3]";
@@ -531,7 +531,7 @@ mod tests {
         let actual = format!("{}", plan.display_indent());
         let expected = "\
         Explain\
-        \n  CreateView: \"xyz\"\
+        \n  CreateView: Bare { table: \"xyz\" }\
         \n    Projection: abc.column1, abc.column2\
         \n      Filter: abc.column2 = Int64(5)\
         \n        TableScan: abc projection=[column1, column2]";

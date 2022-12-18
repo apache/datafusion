@@ -37,7 +37,7 @@ use arrow::{
 };
 use datafusion_common::ScalarValue;
 use datafusion_common::{downcast_value, DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 
 use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::expressions::format_state_name;
@@ -98,7 +98,7 @@ impl AggregateExpr for Max {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "max"),
+            format_state_name(&self.name, "max"),
             self.data_type.clone(),
             true,
         )])
@@ -564,8 +564,8 @@ impl Accumulator for MaxAccumulator {
         self.update_batch(states)
     }
 
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![AggregateState::Scalar(self.max.clone())])
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.max.clone()])
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
@@ -664,7 +664,7 @@ impl AggregateExpr for Min {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "min"),
+            format_state_name(&self.name, "min"),
             self.data_type.clone(),
             true,
         )])
@@ -721,8 +721,8 @@ impl MinAccumulator {
 }
 
 impl Accumulator for MinAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![AggregateState::Scalar(self.min.clone())])
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.min.clone()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {

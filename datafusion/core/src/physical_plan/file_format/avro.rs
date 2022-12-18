@@ -105,20 +105,20 @@ impl ExecutionPlan for AvroExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         use super::file_stream::FileStream;
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.base_config.object_store_url)?;
+
         let config = Arc::new(private::AvroConfig {
             schema: Arc::clone(&self.base_config.file_schema),
             batch_size: context.session_config().batch_size(),
             projection: self.base_config.projected_file_column_names(),
+            object_store,
         });
         let opener = private::AvroOpener { config };
 
-        let stream = FileStream::new(
-            &self.base_config,
-            partition,
-            context,
-            opener,
-            self.metrics.clone(),
-        )?;
+        let stream =
+            FileStream::new(&self.base_config, partition, opener, self.metrics.clone())?;
         Ok(Box::pin(stream))
     }
 
@@ -157,6 +157,7 @@ mod private {
         pub schema: SchemaRef,
         pub batch_size: usize,
         pub projection: Option<Vec<String>>,
+        pub object_store: Arc<dyn ObjectStore>,
     }
 
     impl AvroConfig {
@@ -178,14 +179,10 @@ mod private {
     }
 
     impl FileOpener for AvroOpener {
-        fn open(
-            &self,
-            store: Arc<dyn ObjectStore>,
-            file_meta: FileMeta,
-        ) -> Result<FileOpenFuture> {
+        fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
             let config = self.config.clone();
             Ok(Box::pin(async move {
-                match store.get(file_meta.location()).await? {
+                match config.object_store.get(file_meta.location()).await? {
                     GetResult::File(file, _) => {
                         let reader = config.open(file)?;
                         Ok(futures::stream::iter(reader).boxed())
@@ -208,6 +205,7 @@ mod tests {
     use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::physical_plan::file_format::chunked_store::ChunkedStore;
     use crate::physical_plan::file_format::partition_type_wrap;
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
@@ -215,14 +213,35 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::StreamExt;
     use object_store::local::LocalFileSystem;
+    use object_store::ObjectStore;
+    use rstest::*;
 
     use super::*;
 
     #[tokio::test]
     async fn avro_exec_without_partition() -> Result<()> {
+        test_with_stores(Arc::new(LocalFileSystem::new())).await
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_chunked_avro(
+        #[values(10, 20, 30, 40)] chunk_size: usize,
+    ) -> Result<()> {
+        test_with_stores(Arc::new(ChunkedStore::new(
+            Arc::new(LocalFileSystem::new()),
+            chunk_size,
+        )))
+        .await
+    }
+
+    async fn test_with_stores(store: Arc<dyn ObjectStore>) -> Result<()> {
+        let ctx = SessionContext::new();
+        ctx.runtime_env()
+            .register_object_store("file", "", store.clone());
+
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
-        let store = Arc::new(LocalFileSystem::new()) as _;
         let meta = local_unpartitioned_file(filename);
 
         let file_schema = AvroFormat {}.infer_schema(&store, &[meta.clone()]).await?;
@@ -239,8 +258,6 @@ mod tests {
             output_ordering: None,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
-
-        let ctx = SessionContext::new();
         let mut results = avro_exec
             .execute(0, ctx.task_ctx())
             .expect("plan execution failed");

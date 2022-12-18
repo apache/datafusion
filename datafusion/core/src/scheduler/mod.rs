@@ -354,7 +354,7 @@ mod tests {
 
             let query = context.sql(sql).await.unwrap();
 
-            let plan = query.create_physical_plan().await.unwrap();
+            let plan = query.clone().create_physical_plan().await.unwrap();
 
             info!("Plan: {}", displayable(plan.as_ref()).indent());
 

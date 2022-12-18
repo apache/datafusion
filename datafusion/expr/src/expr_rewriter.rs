@@ -17,7 +17,9 @@
 
 //! Expression rewriter
 
-use crate::expr::{Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet, Like};
+use crate::expr::{
+    Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet, Like, TryCast,
+};
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
 use crate::{Expr, ExprSchemable, LogicalPlan};
@@ -206,10 +208,9 @@ impl ExprRewritable for Expr {
             Expr::Cast(Cast { expr, data_type }) => {
                 Expr::Cast(Cast::new(rewrite_boxed(expr, rewriter)?, data_type))
             }
-            Expr::TryCast { expr, data_type } => Expr::TryCast {
-                expr: rewrite_boxed(expr, rewriter)?,
-                data_type,
-            },
+            Expr::TryCast(TryCast { expr, data_type }) => {
+                Expr::TryCast(TryCast::new(rewrite_boxed(expr, rewriter)?, data_type))
+            }
             Expr::Sort {
                 expr,
                 asc,
@@ -291,6 +292,7 @@ impl ExprRewritable for Expr {
                     key,
                 ))
             }
+            Expr::Placeholder { id, data_type } => Expr::Placeholder { id, data_type },
         };
 
         // now rewrite this expression itself

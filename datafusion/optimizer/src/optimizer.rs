@@ -26,10 +26,10 @@ use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::inline_table_scan::InlineTableScan;
-use crate::projection_push_down::ProjectionPushDown;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
+use crate::push_down_projection::PushDownProjection;
 use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
@@ -55,17 +55,7 @@ pub trait OptimizerRule {
         &self,
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        self.optimize(plan, optimizer_config).map(Some)
-    }
-
-    /// Rewrite `plan` to an optimized form. This method will eventually be deprecated and
-    /// replace by `try_optimize`.
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan>;
+    ) -> Result<Option<LogicalPlan>>;
 
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
@@ -194,7 +184,7 @@ impl Optimizer {
         rules.push(Arc::new(SimplifyExpressions::new()));
         rules.push(Arc::new(UnwrapCastInComparison::new()));
         rules.push(Arc::new(CommonSubexprEliminate::new()));
-        rules.push(Arc::new(ProjectionPushDown::new()));
+        rules.push(Arc::new(PushDownProjection::new()));
 
         Self::with_rules(rules)
     }
@@ -407,11 +397,11 @@ mod tests {
     struct BadRule {}
 
     impl OptimizerRule for BadRule {
-        fn optimize(
+        fn try_optimize(
             &self,
             _plan: &LogicalPlan,
             _optimizer_config: &mut OptimizerConfig,
-        ) -> datafusion_common::Result<LogicalPlan> {
+        ) -> datafusion_common::Result<Option<LogicalPlan>> {
             Err(DataFusionError::Plan("rule failed".to_string()))
         }
 
@@ -424,13 +414,13 @@ mod tests {
     struct GetTableScanRule {}
 
     impl OptimizerRule for GetTableScanRule {
-        fn optimize(
+        fn try_optimize(
             &self,
             _plan: &LogicalPlan,
             _optimizer_config: &mut OptimizerConfig,
-        ) -> datafusion_common::Result<LogicalPlan> {
+        ) -> datafusion_common::Result<Option<LogicalPlan>> {
             let table_scan = test_table_scan()?;
-            LogicalPlanBuilder::from(table_scan).build()
+            Ok(Some(LogicalPlanBuilder::from(table_scan).build()?))
         }
 
         fn name(&self) -> &str {

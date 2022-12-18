@@ -35,17 +35,23 @@ use std::sync::Arc;
 pub struct FilterNullJoinKeys {}
 
 impl OptimizerRule for FilterNullJoinKeys {
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<LogicalPlan> {
+    ) -> datafusion_common::Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
                 // recurse down first and optimize inputs
                 let mut join = join.clone();
-                join.left = Arc::new(self.optimize(&join.left, optimizer_config)?);
-                join.right = Arc::new(self.optimize(&join.right, optimizer_config)?);
+                join.left = Arc::new(
+                    self.try_optimize(&join.left, optimizer_config)?
+                        .unwrap_or_else(|| join.left.as_ref().clone()),
+                );
+                join.right = Arc::new(
+                    self.try_optimize(&join.right, optimizer_config)?
+                        .unwrap_or_else(|| join.right.as_ref().clone()),
+                );
 
                 let left_schema = join.left.schema();
                 let right_schema = join.right.schema();
@@ -80,11 +86,15 @@ impl OptimizerRule for FilterNullJoinKeys {
                         join.right.clone(),
                     )?));
                 }
-                Ok(LogicalPlan::Join(join))
+                Ok(Some(LogicalPlan::Join(join)))
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, optimizer_config)
+                Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
             }
         }
     }
@@ -145,7 +155,8 @@ mod tests {
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterNullJoinKeys::default();
-        rule.optimize(plan, &mut OptimizerConfig::new())
+        rule.try_optimize(plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan")
     }
 
@@ -191,7 +202,7 @@ mod tests {
         let t3 = table_scan(Some("t3"), &schema, None)?.build()?;
         let plan = LogicalPlanBuilder::from(t3)
             .join(
-                &plan,
+                plan,
                 JoinType::Inner,
                 (
                     vec![
@@ -225,7 +236,7 @@ mod tests {
     ) -> Result<LogicalPlan> {
         LogicalPlanBuilder::from(left_table)
             .join(
-                &right_table,
+                right_table,
                 JoinType::Inner,
                 (
                     vec![Column::from_qualified_name(left_key)],

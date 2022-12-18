@@ -37,11 +37,11 @@ impl EliminateFilter {
 }
 
 impl OptimizerRule for EliminateFilter {
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+        optimizer_config: &mut OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         let predicate_and_input = match plan {
             LogicalPlan::Filter(filter) => match filter.predicate() {
                 Expr::Literal(ScalarValue::Boolean(Some(v))) => {
@@ -53,14 +53,18 @@ impl OptimizerRule for EliminateFilter {
         };
 
         match predicate_and_input {
-            Some((true, input)) => self.optimize(input, _optimizer_config),
-            Some((false, input)) => Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+            Some((true, input)) => self.try_optimize(input, optimizer_config),
+            Some((false, input)) => Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
                 schema: input.schema().clone(),
-            })),
+            }))),
             None => {
                 // Apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, _optimizer_config)
+                Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
             }
         }
     }
@@ -79,7 +83,8 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = EliminateFilter::new();
         let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &mut OptimizerConfig::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);

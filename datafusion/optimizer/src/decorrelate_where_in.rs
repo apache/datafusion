@@ -59,8 +59,10 @@ impl DecorrelateWhereIn {
                     subquery,
                     negated,
                 } => {
-                    let subquery = self.optimize(&subquery.subquery, optimizer_config)?;
-                    let subquery = Arc::new(subquery);
+                    let subquery = self
+                        .try_optimize(&subquery.subquery, optimizer_config)?
+                        .map(Arc::new)
+                        .unwrap_or_else(|| subquery.subquery.clone());
                     let subquery = Subquery { subquery };
                     let subquery =
                         SubqueryInfo::new(subquery.clone(), (**expr).clone(), *negated);
@@ -76,18 +78,20 @@ impl DecorrelateWhereIn {
 }
 
 impl OptimizerRule for DecorrelateWhereIn {
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
         optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<LogicalPlan> {
+    ) -> datafusion_common::Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
                 let predicate = filter.predicate();
-                let filter_input = filter.input();
+                let filter_input = filter.input().as_ref();
 
                 // Apply optimizer rule to current input
-                let optimized_input = self.optimize(filter_input, optimizer_config)?;
+                let optimized_input = self
+                    .try_optimize(filter_input, optimizer_config)?
+                    .unwrap_or_else(|| filter_input.clone());
 
                 let (subqueries, other_exprs) =
                     self.extract_subquery_exprs(predicate, optimizer_config)?;
@@ -97,11 +101,11 @@ impl OptimizerRule for DecorrelateWhereIn {
                 )?);
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
-                    return Ok(optimized_plan);
+                    return Ok(Some(optimized_plan));
                 }
 
                 // iterate through all exists clauses in predicate, turning each into a join
-                let mut cur_input = (**filter_input).clone();
+                let mut cur_input = filter_input.clone();
                 for subquery in subqueries {
                     cur_input = optimize_where_in(
                         &subquery,
@@ -110,11 +114,15 @@ impl OptimizerRule for DecorrelateWhereIn {
                         optimizer_config,
                     )?;
                 }
-                Ok(cur_input)
+                Ok(Some(cur_input))
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, optimizer_config)
+                Ok(Some(utils::optimize_children(
+                    self,
+                    plan,
+                    optimizer_config,
+                )?))
             }
         }
     }
@@ -194,7 +202,7 @@ fn optimize_where_in(
         false => JoinType::LeftSemi,
     };
     let mut new_plan = LogicalPlanBuilder::from(outer_input.clone()).join(
-        &subqry_plan,
+        subqry_plan,
         join_type,
         join_keys,
         join_filters,

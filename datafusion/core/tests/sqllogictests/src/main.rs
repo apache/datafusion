@@ -16,12 +16,12 @@
 // under the License.
 
 use async_trait::async_trait;
-use datafusion::arrow::csv::WriterBuilder;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_sql::parser::{DFParser, Statement};
 use log::info;
-use normalize::normalize_batch;
+use normalize::convert_batches;
+use sqllogictest::DBOutput;
 use sqlparser::ast::Statement as SQLStatement;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -46,7 +46,7 @@ pub struct DataFusion {
 impl sqllogictest::AsyncDB for DataFusion {
     type Error = DFSqlLogicTestError;
 
-    async fn run(&mut self, sql: &str) -> Result<String> {
+    async fn run(&mut self, sql: &str) -> Result<DBOutput> {
         println!("[{}] Running query: \"{}\"", self.file_name, sql);
         let result = run_query(&self.ctx, sql).await?;
         Ok(result)
@@ -153,7 +153,7 @@ fn check_test_file(filters: &[&str], path: &Path) -> bool {
 /// Create a SessionContext, configured for the specific test
 async fn context_for_test_file(file_name: &str) -> SessionContext {
     match file_name {
-        "aggregate.slt" => {
+        "aggregate.slt" | "select.slt" => {
             info!("Registering aggregate tables");
             let ctx = SessionContext::new();
             setup::register_aggregate_tables(&ctx).await;
@@ -172,30 +172,20 @@ async fn context_for_test_file(file_name: &str) -> SessionContext {
     }
 }
 
-fn format_batches(batches: Vec<RecordBatch>) -> Result<String> {
-    let mut bytes = vec![];
-    {
-        let builder = WriterBuilder::new().has_headers(false).with_delimiter(b' ');
-        let mut writer = builder.build(&mut bytes);
-        for batch in batches {
-            writer.write(&normalize_batch(batch)).unwrap();
-        }
-    }
-    Ok(String::from_utf8(bytes).unwrap())
-}
-
-async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<String> {
+async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DBOutput> {
     let sql = sql.into();
     // Check if the sql is `insert`
-    if let Ok(statements) = DFParser::parse_sql(&sql) {
-        if let Statement::Statement(statement) = &statements[0] {
-            if let SQLStatement::Insert { .. } = &**statement {
+    if let Ok(mut statements) = DFParser::parse_sql(&sql) {
+        let statement0 = statements.pop_front().expect("at least one SQL statement");
+        if let Statement::Statement(statement) = statement0 {
+            let statement = *statement;
+            if matches!(&statement, SQLStatement::Insert { .. }) {
                 return insert(ctx, statement).await;
             }
         }
     }
-    let df = ctx.sql(sql.as_str()).await.unwrap();
-    let results: Vec<RecordBatch> = df.collect().await.unwrap();
-    let formatted_batches = format_batches(results)?;
+    let df = ctx.sql(sql.as_str()).await?;
+    let results: Vec<RecordBatch> = df.collect().await?;
+    let formatted_batches = convert_batches(results)?;
     Ok(formatted_batches)
 }

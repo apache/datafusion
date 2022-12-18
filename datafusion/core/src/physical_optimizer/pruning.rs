@@ -46,7 +46,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::{downcast_value, ScalarValue};
-use datafusion_expr::expr::{BinaryExpr, Cast};
+use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::{binary_expr, cast, try_cast, ExprSchemable};
 use datafusion_physical_expr::create_physical_expr;
@@ -551,7 +551,7 @@ fn rewrite_expr_to_prunable(
             Ok((cast(left, data_type.clone()), op, right))
         }
         // `try_cast(col) op lit()`
-        Expr::TryCast { expr, data_type } => {
+        Expr::TryCast(TryCast { expr, data_type }) => {
             let from_type = expr.get_type(&schema)?;
             verify_support_type_for_prune(&from_type, data_type)?;
             let (left, op, right) =

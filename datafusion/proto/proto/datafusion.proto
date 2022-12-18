@@ -71,6 +71,7 @@ message LogicalPlanNode {
     DistinctNode distinct = 23;
     ViewTableScanNode view_scan = 24;
     CustomTableScanNode custom_scan = 25;
+    PrepareNode prepare = 26;
   }
 }
 
@@ -167,7 +168,8 @@ message EmptyRelationNode {
 }
 
 message CreateExternalTableNode {
-  string name = 1;
+  reserved 1; // was string name
+  OwnedTableReference name = 12;
   string location = 2;
   string file_type = 3;
   bool has_header = 4;
@@ -179,6 +181,12 @@ message CreateExternalTableNode {
   string file_compression_type = 10;
   map<string, string> options = 11;
 }
+
+message PrepareNode {
+  string name = 1;
+  repeated ArrowType data_types = 2;
+  LogicalPlanNode input = 3;
+ }
 
 message CreateCatalogSchemaNode {
   string schema_name = 1;
@@ -193,7 +201,8 @@ message CreateCatalogNode {
 }
 
 message CreateViewNode {
-  string name = 1;
+  reserved 1; // was string name
+  OwnedTableReference name = 5;
   LogicalPlanNode input = 2;
   bool or_replace = 3;
   string definition = 4;
@@ -343,7 +352,14 @@ message LogicalExprNode {
     ILikeNode ilike = 32;
     SimilarToNode similar_to = 33;
 
+    PlaceholderNode placeholder = 34;
+
   }
+}
+
+message PlaceholderNode {
+  string id = 1;
+  ArrowType data_type = 2;
 }
 
 message LogicalExprList {
@@ -913,6 +929,29 @@ message PlanType {
 message StringifiedPlan {
   PlanType plan_type = 1;
   string plan = 2;
+}
+
+message BareTableReference {
+  string table = 1;
+}
+
+message PartialTableReference {
+  string schema = 1;
+  string table = 2;
+}
+
+message FullTableReference {
+  string catalog = 1;
+  string schema = 2;
+  string table = 3;
+}
+
+message OwnedTableReference {
+  oneof table_reference_enum {
+    BareTableReference bare = 1;
+    PartialTableReference partial = 2;
+    FullTableReference full = 3;
+  }
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////

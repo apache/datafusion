@@ -30,7 +30,6 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
 use arrow::array::ArrayRef;
-use arrow::compute::limit;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -448,7 +447,7 @@ impl LimitStream {
             let limited_columns: Vec<ArrayRef> = batch
                 .columns()
                 .iter()
-                .map(|col| limit(col, batch_rows))
+                .map(|col| col.slice(0, col.len().min(batch_rows)))
                 .collect();
             Some(RecordBatch::try_new(batch.schema(), limited_columns).unwrap())
         }
