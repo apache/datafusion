@@ -1592,9 +1592,10 @@ impl SessionState {
         // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
 
-        // `BasicEnforcement` stage conservatively inserts `SortExec`s before `WindowAggExec`s without
-        // a deep analysis of window frames. Such analysis may sometimes reveal that a `SortExec` is
-        // actually unnecessary. The rule below performs this analysis and removes such `SortExec`s.
+        // `BasicEnforcement` stage conservatively inserts `SortExec`s to satisfy ordering requirements.
+        // However, a deeper analysis may sometimes reveal that such a `SortExec` is actually unnecessary.
+        // These cases typically arise when we have reversible `WindowAggExec`s or deep subqueries. The
+        // rule below performs this analysis and removes unnecessary `SortExec`s.
         physical_optimizers.push(Arc::new(RemoveUnnecessarySorts::new()));
 
         SessionState {

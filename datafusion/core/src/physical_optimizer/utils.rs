@@ -51,7 +51,7 @@ pub fn optimize_children(
     }
 }
 
-/// Check the required ordering requirements are satisfied by the provided PhysicalSortExprs.
+/// Checks whether given ordering requirements are satisfied by provided [PhysicalSortExpr]s.
 pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
     provided: Option<&[PhysicalSortExpr]>,
     required: Option<&[PhysicalSortExpr]>,
@@ -61,56 +61,43 @@ pub fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
         (_, None) => true,
         (None, Some(_)) => false,
         (Some(provided), Some(required)) => {
-            ordering_satisfy_inner(provided, required, equal_properties)
+            ordering_satisfy_concrete(provided, required, equal_properties)
         }
     }
 }
 
-pub fn ordering_satisfy_inner<F: FnOnce() -> EquivalenceProperties>(
+pub fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
     provided: &[PhysicalSortExpr],
     required: &[PhysicalSortExpr],
     equal_properties: F,
 ) -> bool {
     if required.len() > provided.len() {
         false
-    } else {
-        let fast_match = required
+    } else if required
+        .iter()
+        .zip(provided.iter())
+        .all(|(order1, order2)| order1.eq(order2))
+    {
+        true
+    } else if let eq_classes @ [_, ..] = equal_properties().classes() {
+        let normalized_required_exprs = required
             .iter()
-            .zip(provided.iter())
-            .all(|(order1, order2)| order1.eq(order2));
-
-        if !fast_match {
-            let eq_properties = equal_properties();
-            let eq_classes = eq_properties.classes();
-            if !eq_classes.is_empty() {
-                let normalized_required_exprs = required
-                    .iter()
-                    .map(|e| {
-                        normalize_sort_expr_with_equivalence_properties(
-                            e.clone(),
-                            eq_classes,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let normalized_provided_exprs = provided
-                    .iter()
-                    .map(|e| {
-                        normalize_sort_expr_with_equivalence_properties(
-                            e.clone(),
-                            eq_classes,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                normalized_required_exprs
-                    .iter()
-                    .zip(normalized_provided_exprs.iter())
-                    .all(|(order1, order2)| order1.eq(order2))
-            } else {
-                fast_match
-            }
-        } else {
-            fast_match
-        }
+            .map(|e| {
+                normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
+            })
+            .collect::<Vec<_>>();
+        let normalized_provided_exprs = provided
+            .iter()
+            .map(|e| {
+                normalize_sort_expr_with_equivalence_properties(e.clone(), eq_classes)
+            })
+            .collect::<Vec<_>>();
+        normalized_required_exprs
+            .iter()
+            .zip(normalized_provided_exprs.iter())
+            .all(|(order1, order2)| order1.eq(order2))
+    } else {
+        false
     }
 }
 

@@ -20,7 +20,7 @@
 //! valid, or invalid physical plans (in terms of Sorting requirement)
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
-    add_sort_above_child, ordering_satisfy, ordering_satisfy_inner,
+    add_sort_above_child, ordering_satisfy, ordering_satisfy_concrete,
 };
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
@@ -89,10 +89,11 @@ fn remove_unnecessary_sorts(
         let physical_ordering = child.output_ordering();
         match (required_ordering, physical_ordering) {
             (Some(required_ordering), Some(physical_ordering)) => {
-                let is_ordering_satisfied =
-                    ordering_satisfy_inner(physical_ordering, required_ordering, || {
-                        child.equivalence_properties()
-                    });
+                let is_ordering_satisfied = ordering_satisfy_concrete(
+                    physical_ordering,
+                    required_ordering,
+                    || child.equivalence_properties(),
+                );
                 if !is_ordering_satisfied {
                     // During sort Removal we have invalidated ordering invariant fix it
                     update_child_to_remove_unnecessary_sort(child, sort_onward)?;

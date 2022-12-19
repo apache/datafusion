@@ -136,23 +136,25 @@ impl WindowAggExec {
         self.input_schema.clone()
     }
 
-    /// Get Partition Columns
+    /// Get partition keys
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
-        // All window exprs have same partition by hance we just use first one
+        let mut result = vec![];
+        // All window exprs have the same partition by, so we just use the first one:
         let partition_by = self.window_expr()[0].partition_by();
-        let mut partition_columns = vec![];
-        for elem in partition_by {
-            if let Some(sort_keys) = &self.sort_keys {
-                for a in sort_keys {
-                    if a.expr.eq(elem) {
-                        partition_columns.push(a.clone());
-                        break;
-                    }
-                }
+        let sort_keys = self
+            .sort_keys
+            .as_ref()
+            .map_or_else(|| &[] as &[PhysicalSortExpr], |v| v.as_slice());
+        for item in partition_by {
+            if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
+                result.push(a.clone());
+            } else {
+                return Err(DataFusionError::Execution(
+                    "Partition key not found in sort keys".to_string(),
+                ));
             }
         }
-        assert_eq!(partition_by.len(), partition_columns.len());
-        Ok(partition_columns)
+        Ok(result)
     }
 }
 
@@ -395,12 +397,16 @@ impl WindowAggStream {
 
         let batch = concat_batches(&self.input.schema(), &self.batches)?;
 
-        // calculate window cols
-        let partition_columns = self.partition_columns(&batch)?;
+        let partition_by_sort_keys = self
+            .partition_by_sort_keys
+            .iter()
+            .map(|elem| elem.evaluate_to_sort_column(&batch))
+            .collect::<Result<Vec<_>>>()?;
         let partition_points =
-            self.evaluate_partition_points(batch.num_rows(), &partition_columns)?;
+            self.evaluate_partition_points(batch.num_rows(), &partition_by_sort_keys)?;
 
         let mut partition_results = vec![];
+        // Calculate window cols
         for partition_point in partition_points {
             let length = partition_point.end - partition_point.start;
             partition_results.push(
@@ -425,31 +431,23 @@ impl WindowAggStream {
         RecordBatch::try_new(self.schema.clone(), columns)
     }
 
-    /// Get Partition Columns
-    pub fn partition_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        self.partition_by_sort_keys
-            .iter()
-            .map(|elem| elem.evaluate_to_sort_column(batch))
-            .collect::<Result<Vec<_>>>()
-    }
-
-    /// evaluate the partition points given the sort columns; if the sort columns are
-    /// empty then the result will be a single element vec of the whole column rows.
+    /// Evaluates the partition points given the sort columns. If the sort columns are
+    /// empty, then the result will be a single element vector spanning the entire batch.
     fn evaluate_partition_points(
         &self,
         num_rows: usize,
         partition_columns: &[SortColumn],
     ) -> Result<Vec<Range<usize>>> {
-        if partition_columns.is_empty() {
-            Ok(vec![Range {
+        Ok(if partition_columns.is_empty() {
+            vec![Range {
                 start: 0,
                 end: num_rows,
-            }])
+            }]
         } else {
-            Ok(lexicographical_partition_ranges(partition_columns)
+            lexicographical_partition_ranges(partition_columns)
                 .map_err(DataFusionError::ArrowError)?
-                .collect::<Vec<_>>())
-        }
+                .collect::<Vec<_>>()
+        })
     }
 }
 
