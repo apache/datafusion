@@ -2919,4 +2919,3 @@ async fn type_coercion_join_with_filter_and_equi_expr() -> Result<()> {
 
     Ok(())
 }
-

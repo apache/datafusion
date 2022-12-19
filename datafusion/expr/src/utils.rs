@@ -479,8 +479,8 @@ pub fn from_plan(
         }) => {
             let schema =
                 build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
-    
-            let equi_expr_count = on.len();   
+
+            let equi_expr_count = on.len();
             // The preceding part of expr is equi-exprs,
             // and the struct of each equi-expr is like `left-expr = right-expr`.
             let new_on:Vec<(Expr,Expr)> = expr.iter().take(equi_expr_count).map(|equi_expr| {
