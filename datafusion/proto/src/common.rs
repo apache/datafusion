@@ -33,6 +33,46 @@ pub fn str_to_byte(s: &String) -> Result<u8, DataFusionError> {
     Ok(s.as_bytes()[0])
 }
 
-pub(crate) fn proto_error<S: Into<String>>(message: S) -> DataFusionError {
+pub fn byte_to_string(b: u8) -> Result<String, DataFusionError> {
+    let b = &[b];
+    let b = std::str::from_utf8(b)
+        .map_err(|_| DataFusionError::Internal("Invalid CSV delimiter".to_owned()))?;
+    Ok(b.to_owned())
+}
+
+#[macro_export]
+macro_rules! convert_required {
+    ($PB:expr) => {{
+        if let Some(field) = $PB.as_ref() {
+            Ok(field.try_into()?)
+        } else {
+            Err(proto_error("Missing required field in protobuf"))
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! into_required {
+    ($PB:expr) => {{
+        if let Some(field) = $PB.as_ref() {
+            Ok(field.into())
+        } else {
+            Err(proto_error("Missing required field in protobuf"))
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! convert_box_required {
+    ($PB:expr) => {{
+        if let Some(field) = $PB.as_ref() {
+            field.as_ref().try_into()
+        } else {
+            Err(proto_error("Missing required field in protobuf"))
+        }
+    }};
+}
+
+pub fn proto_error<S: Into<String>>(message: S) -> DataFusionError {
     DataFusionError::Internal(message.into())
 }
