@@ -581,12 +581,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::WindowExpr(window_expr)),
                 }
             }
-            Expr::AggregateFunction {
+            Expr::AggregateFunction(expr::AggregateFunction {
                 ref fun,
                 ref args,
                 ref distinct,
                 ref filter
-            } => {
+            }) => {
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
                         protobuf::AggregateFunction::ApproxDistinct

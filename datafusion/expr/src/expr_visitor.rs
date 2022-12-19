@@ -17,7 +17,7 @@
 
 //! Expression visitor
 
-use crate::expr::{Cast, Sort, WindowFunction};
+use crate::expr::{AggregateFunction, Cast, Sort, WindowFunction};
 use crate::{
     expr::{BinaryExpr, GroupingSet, TryCast},
     Between, Expr, GetIndexedField, Like,
@@ -180,7 +180,7 @@ impl ExprVisitable for Expr {
             Expr::ScalarFunction { args, .. } | Expr::ScalarUDF { args, .. } => args
                 .iter()
                 .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
-            Expr::AggregateFunction { args, filter, .. }
+            Expr::AggregateFunction(AggregateFunction { args, filter, .. })
             | Expr::AggregateUDF { args, filter, .. } => {
                 if let Some(f) = filter {
                     let mut aggr_exprs = args.clone();

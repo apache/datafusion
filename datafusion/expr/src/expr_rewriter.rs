@@ -18,8 +18,8 @@
 //! Expression rewriter
 
 use crate::expr::{
-    Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet, Like, Sort, TryCast,
-    WindowFunction,
+    AggregateFunction, Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet,
+    Like, Sort, TryCast, WindowFunction,
 };
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
@@ -238,17 +238,17 @@ impl ExprRewritable for Expr {
                 rewrite_vec(order_by, rewriter)?,
                 window_frame,
             )),
-            Expr::AggregateFunction {
+            Expr::AggregateFunction(AggregateFunction {
                 args,
                 fun,
                 distinct,
                 filter,
-            } => Expr::AggregateFunction {
-                args: rewrite_vec(args, rewriter)?,
+            }) => Expr::AggregateFunction(AggregateFunction::new(
                 fun,
+                rewrite_vec(args, rewriter)?,
                 distinct,
                 filter,
-            },
+            )),
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => {
                     Expr::GroupingSet(GroupingSet::Rollup(rewrite_vec(exprs, rewriter)?))

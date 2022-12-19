@@ -32,7 +32,7 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     ScalarValue,
 };
-use datafusion_expr::expr::{BinaryExpr, Cast, Sort, TryCast, WindowFunction};
+use datafusion_expr::expr::{self, BinaryExpr, Cast, Sort, TryCast, WindowFunction};
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
@@ -854,16 +854,15 @@ pub fn parse_expr(
         ExprType::AggregateExpr(expr) => {
             let fun = protobuf::AggregateFunction::try_from(&expr.aggr_function)?.into();
 
-            Ok(Expr::AggregateFunction {
+            Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                 fun,
-                args: expr
-                    .expr
+                expr.expr
                     .iter()
                     .map(|e| parse_expr(e, registry))
                     .collect::<Result<Vec<_>, _>>()?,
-                distinct: expr.distinct,
-                filter: parse_optional_expr(&expr.filter, registry)?.map(Box::new),
-            })
+                expr.distinct,
+                parse_optional_expr(&expr.filter, registry)?.map(Box::new),
+            )))
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(
             Box::new(parse_required_expr(&alias.expr, registry, "expr")?),

@@ -1168,36 +1168,36 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_count() {
-        let test_expr = Expr::AggregateFunction {
-            fun: AggregateFunction::Count,
-            args: vec![col("bananas")],
-            distinct: false,
-            filter: None,
-        };
+        let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            AggregateFunction::Count,
+            vec![col("bananas")],
+            false,
+            None,
+        ));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_count_distinct() {
-        let test_expr = Expr::AggregateFunction {
-            fun: AggregateFunction::Count,
-            args: vec![col("bananas")],
-            distinct: true,
-            filter: None,
-        };
+        let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            AggregateFunction::Count,
+            vec![col("bananas")],
+            true,
+            None,
+        ));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_approx_percentile_cont() {
-        let test_expr = Expr::AggregateFunction {
-            fun: AggregateFunction::ApproxPercentileCont,
-            args: vec![col("bananas"), lit(0.42_f32)],
-            distinct: false,
-            filter: None,
-        };
+        let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            AggregateFunction::ApproxPercentileCont,
+            vec![col("bananas"), lit(0.42_f32)],
+            false,
+            None,
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);

@@ -166,16 +166,7 @@ pub enum Expr {
         args: Vec<Expr>,
     },
     /// Represents the call of an aggregate built-in function with arguments.
-    AggregateFunction {
-        /// Name of the function
-        fun: aggregate_function::AggregateFunction,
-        /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
-        /// Whether this is a DISTINCT aggregation or not
-        distinct: bool,
-        /// Optional filter
-        filter: Option<Box<Expr>>,
-    },
+    AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
     WindowFunction(WindowFunction),
     /// aggregate function
@@ -461,7 +452,36 @@ impl Sort {
     }
 }
 
-/// Window expression
+/// Aggregate function
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct AggregateFunction {
+    /// Name of the function
+    pub fun: aggregate_function::AggregateFunction,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+    /// Whether this is a DISTINCT aggregation or not
+    pub distinct: bool,
+    /// Optional filter
+    pub filter: Option<Box<Expr>>,
+}
+
+impl AggregateFunction {
+    pub fn new(
+        fun: aggregate_function::AggregateFunction,
+        args: Vec<Expr>,
+        distinct: bool,
+        filter: Option<Box<Expr>>,
+    ) -> Self {
+        Self {
+            fun,
+            args,
+            distinct,
+            filter,
+        }
+    }
+}
+
+/// Window function
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct WindowFunction {
     /// Name of the function
@@ -911,13 +931,13 @@ impl fmt::Debug for Expr {
                 )?;
                 Ok(())
             }
-            Expr::AggregateFunction {
+            Expr::AggregateFunction(AggregateFunction {
                 fun,
                 distinct,
                 ref args,
                 filter,
                 ..
-            } => {
+            }) => {
                 fmt_function(f, &fun.to_string(), *distinct, args, true)?;
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {})", fe)?;
@@ -1264,12 +1284,12 @@ fn create_name(e: &Expr) -> Result<String> {
             parts.push(format!("{}", window_frame));
             Ok(parts.join(" "))
         }
-        Expr::AggregateFunction {
+        Expr::AggregateFunction(AggregateFunction {
             fun,
             distinct,
             args,
             filter,
-        } => {
+        }) => {
             let name = create_function_name(&fun.to_string(), *distinct, args)?;
             if let Some(fe) = filter {
                 Ok(format!("{} FILTER (WHERE {})", name, fe))

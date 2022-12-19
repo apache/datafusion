@@ -24,7 +24,7 @@ use arrow::datatypes::{DataType, IntervalUnit};
 use datafusion_common::{
     parse_interval, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{Between, BinaryExpr, Case, Like, WindowFunction};
+use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunction};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
@@ -376,24 +376,21 @@ impl ExprRewriter for TypeCoercionRewriter {
                 };
                 Ok(expr)
             }
-            Expr::AggregateFunction {
+            Expr::AggregateFunction(expr::AggregateFunction {
                 fun,
                 args,
                 distinct,
                 filter,
-            } => {
+            }) => {
                 let new_expr = coerce_agg_exprs_for_signature(
                     &fun,
                     &args,
                     &self.schema,
                     &aggregate_function::signature(&fun),
                 )?;
-                let expr = Expr::AggregateFunction {
-                    fun,
-                    args: new_expr,
-                    distinct,
-                    filter,
-                };
+                let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+                    fun, new_expr, distinct, filter,
+                ));
                 Ok(expr)
             }
             Expr::AggregateUDF { fun, args, filter } => {
@@ -592,7 +589,7 @@ mod test {
     use arrow::datatypes::DataType;
 
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
-    use datafusion_expr::expr::Like;
+    use datafusion_expr::expr::{self, Like};
     use datafusion_expr::expr_rewriter::ExprRewritable;
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true,
@@ -776,24 +773,24 @@ mod test {
     fn agg_function_case() -> Result<()> {
         let empty = empty();
         let fun: AggregateFunction = AggregateFunction::Avg;
-        let agg_expr = Expr::AggregateFunction {
+        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
             fun,
-            args: vec![lit(12i64)],
-            distinct: false,
-            filter: None,
-        };
+            vec![lit(12i64)],
+            false,
+            None,
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
         let expected = "Projection: AVG(Int64(12))\n  EmptyRelation";
         assert_optimized_plan_eq(&plan, expected)?;
 
         let empty = empty_with_type(DataType::Int32);
         let fun: AggregateFunction = AggregateFunction::Avg;
-        let agg_expr = Expr::AggregateFunction {
+        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
             fun,
-            args: vec![col("a")],
-            distinct: false,
-            filter: None,
-        };
+            vec![col("a")],
+            false,
+            None,
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
         let expected = "Projection: AVG(a)\n  EmptyRelation";
         assert_optimized_plan_eq(&plan, expected)?;
@@ -804,12 +801,12 @@ mod test {
     fn agg_function_invalid_input() -> Result<()> {
         let empty = empty();
         let fun: AggregateFunction = AggregateFunction::Avg;
-        let agg_expr = Expr::AggregateFunction {
+        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
             fun,
-            args: vec![lit("1")],
-            distinct: false,
-            filter: None,
-        };
+            vec![lit("1")],
+            false,
+            None,
+        ));
         let err = Projection::try_new(vec![agg_expr], empty).err().unwrap();
         assert_eq!(
             "Plan(\"The function Avg does not support inputs of type Utf8.\")",

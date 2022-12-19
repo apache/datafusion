@@ -62,8 +62,8 @@ use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, TryCast,
-    WindowFunction,
+    self, AggregateFunction, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet,
+    Like, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan;
@@ -194,12 +194,12 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
             create_function_physical_name(&fun.to_string(), false, args)
         }
-        Expr::AggregateFunction {
+        Expr::AggregateFunction(AggregateFunction {
             fun,
             distinct,
             args,
             ..
-        } => create_function_physical_name(&fun.to_string(), *distinct, args),
+        }) => create_function_physical_name(&fun.to_string(), *distinct, args),
         Expr::AggregateUDF { fun, args, filter } => {
             if filter.is_some() {
                 return Err(DataFusionError::Execution(
@@ -1609,12 +1609,12 @@ pub fn create_aggregate_expr_with_name(
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn AggregateExpr>> {
     match e {
-        Expr::AggregateFunction {
+        Expr::AggregateFunction(AggregateFunction {
             fun,
             distinct,
             args,
             ..
-        } => {
+        }) => {
             let args = args
                 .iter()
                 .map(|e| {

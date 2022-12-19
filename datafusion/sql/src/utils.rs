@@ -22,7 +22,8 @@ use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like, WindowFunction,
+    AggregateFunction, Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
+    WindowFunction,
 };
 use datafusion_expr::expr::{Cast, Sort};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
@@ -162,20 +163,19 @@ where
         // No replacement was provided, clone the node and recursively call
         // clone_with_replacement() on any nested expressions.
         None => match expr {
-            Expr::AggregateFunction {
+            Expr::AggregateFunction(AggregateFunction {
                 fun,
                 args,
                 distinct,
                 filter,
-            } => Ok(Expr::AggregateFunction {
-                fun: fun.clone(),
-                args: args
-                    .iter()
+            }) => Ok(Expr::AggregateFunction(AggregateFunction::new(
+                fun.clone(),
+                args.iter()
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<Expr>>>()?,
-                distinct: *distinct,
-                filter: filter.clone(),
-            }),
+                *distinct,
+                filter.clone(),
+            ))),
             Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
