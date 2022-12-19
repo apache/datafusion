@@ -17,13 +17,14 @@
 
 //! Expression utilities
 
+use crate::expr::Sort;
 use crate::expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion};
 use crate::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 use crate::logical_plan::builder::build_join_schema;
 use crate::logical_plan::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, Distinct, Extension, Filter, Join,
-    Limit, Partitioning, Prepare, Projection, Repartition, Sort, Subquery, SubqueryAlias,
-    Union, Values, Window,
+    Limit, Partitioning, Prepare, Projection, Repartition, Sort as SortPlan, Subquery,
+    SubqueryAlias, Union, Values, Window,
 };
 use crate::{
     Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, TableScan, TryCast,
@@ -212,15 +213,9 @@ pub fn generate_sort_key(
     let normalized_order_by_keys = order_by
         .iter()
         .map(|e| match e {
-            Expr::Sort {
-                expr,
-                asc: _,
-                nulls_first: _,
-            } => Ok(Expr::Sort {
-                expr: expr.clone(),
-                asc: true,
-                nulls_first: false,
-            }),
+            Expr::Sort(Sort { expr, .. }) => {
+                Ok(Expr::Sort(Sort::new(expr.clone(), true, false)))
+            }
             _ => Err(DataFusionError::Plan(
                 "Order by only accepts sort expressions".to_string(),
             )),
@@ -259,16 +254,16 @@ pub fn compare_sort_expr(
 ) -> Ordering {
     match (sort_expr_a, sort_expr_b) {
         (
-            Expr::Sort {
+            Expr::Sort(Sort {
                 expr: expr_a,
                 asc: asc_a,
                 nulls_first: nulls_first_a,
-            },
-            Expr::Sort {
+            }),
+            Expr::Sort(Sort {
                 expr: expr_b,
                 asc: asc_b,
                 nulls_first: nulls_first_b,
-            },
+            }),
         ) => {
             let ref_indexes_a = find_column_indexes_referenced_by_expr(expr_a, schema);
             let ref_indexes_b = find_column_indexes_referenced_by_expr(expr_b, schema);
@@ -558,7 +553,7 @@ pub fn from_plan(
             expr[group_expr.len()..].to_vec(),
             schema.clone(),
         )?)),
-        LogicalPlan::Sort(Sort { fetch, .. }) => Ok(LogicalPlan::Sort(Sort {
+        LogicalPlan::Sort(SortPlan { fetch, .. }) => Ok(LogicalPlan::Sort(SortPlan {
             expr: expr.to_vec(),
             input: Arc::new(inputs[0].clone()),
             fetch: *fetch,
@@ -1088,34 +1083,34 @@ mod tests {
         for asc_ in asc_or_desc {
             for nulls_first_ in nulls_first_or_last {
                 let order_by = &[
-                    Expr::Sort {
+                    Expr::Sort(Sort {
                         expr: Box::new(col("age")),
                         asc: asc_,
                         nulls_first: nulls_first_,
-                    },
-                    Expr::Sort {
+                    }),
+                    Expr::Sort(Sort {
                         expr: Box::new(col("name")),
                         asc: asc_,
                         nulls_first: nulls_first_,
-                    },
+                    }),
                 ];
 
                 let expected = vec![
-                    Expr::Sort {
+                    Expr::Sort(Sort {
                         expr: Box::new(col("age")),
                         asc: asc_,
                         nulls_first: nulls_first_,
-                    },
-                    Expr::Sort {
+                    }),
+                    Expr::Sort(Sort {
                         expr: Box::new(col("name")),
                         asc: asc_,
                         nulls_first: nulls_first_,
-                    },
-                    Expr::Sort {
+                    }),
+                    Expr::Sort(Sort {
                         expr: Box::new(col("created_at")),
                         asc: true,
                         nulls_first: false,
-                    },
+                    }),
                 ];
                 let result = generate_sort_key(partition_by, order_by)?;
                 assert_eq!(expected, result);
