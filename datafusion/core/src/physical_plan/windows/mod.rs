@@ -109,15 +109,13 @@ fn create_built_in_window_expr(
         BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name)),
         BuiltInWindowFunction::Ntile => {
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
-            let n = coerced_args[0]
-                .as_any()
-                .downcast_ref::<Literal>()
-                .unwrap()
-                .value();
-            let n: i64 = n
-                .clone()
-                .try_into()
-                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+            let n = get_scalar_value_from_args(&coerced_args, 0)?
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "NTILE requires at least 1 argument".to_string(),
+                    )
+                })?
+                .try_into()?;
             Arc::new(Ntile::new(name, n))
         }
         BuiltInWindowFunction::Lag => {

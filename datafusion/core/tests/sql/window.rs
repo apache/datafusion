@@ -899,21 +899,21 @@ async fn window_frame_ranges_ntile() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
-               NTILE(10) OVER (ORDER BY C12) as ntile1,\
-               NTILE(20) OVER (ORDER BY C12 DESC) as ntile2 \
+               NTILE(8) OVER (ORDER BY C4) as ntile1,\
+               NTILE(12) OVER (ORDER BY C12 DESC) as ntile2 \
                FROM aggregate_test_100 \
-               ORDER BY c9 \
+               ORDER BY c7 \
                LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+--------+--------+",
         "| ntile1 | ntile2 |",
         "+--------+--------+",
-        "| 1      | 20     |",
-        "| 3      | 15     |",
-        "| 1      | 20     |",
-        "| 6      | 9      |",
-        "| 7      | 8      |",
+        "| 8      | 12     |",
+        "| 5      | 11     |",
+        "| 3      | 11     |",
+        "| 2      | 7      |",
+        "| 7      | 12     |",
         "+--------+--------+",
     ];
     assert_batches_eq!(expected, &actual);
