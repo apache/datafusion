@@ -963,7 +963,7 @@ mod tests {
         assert_eq!(c7.value(c7.len() - 1), 254,);
 
         assert_eq!(
-            session_ctx.runtime_env().memory_pool.allocated(),
+            session_ctx.runtime_env().memory_pool.reserved(),
             0,
             "The sort should have returned all memory used back to the memory manager"
         );
@@ -1032,7 +1032,7 @@ mod tests {
         assert_eq!(c7.value(c7.len() - 1), 254,);
 
         assert_eq!(
-            session_ctx.runtime_env().memory_pool.allocated(),
+            session_ctx.runtime_env().memory_pool.reserved(),
             0,
             "The sort should have returned all memory used back to the memory manager"
         );
@@ -1283,7 +1283,7 @@ mod tests {
         assert_strong_count_converges_to_zero(refs).await;
 
         assert_eq!(
-            session_ctx.runtime_env().memory_pool.allocated(),
+            session_ctx.runtime_env().memory_pool.reserved(),
             0,
             "The sort should have returned all memory used back to the memory manager"
         );

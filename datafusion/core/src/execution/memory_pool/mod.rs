@@ -25,12 +25,16 @@ pub mod proxy;
 
 pub use pool::*;
 
-/// The pool of memory on which [`MemoryReservation`] record their memory usage
+/// The pool of memory on which [`MemoryReservation`] record their memory reservations
 pub trait MemoryPool: Send + Sync + std::fmt::Debug {
-    /// Records the creation of a new [`MemoryReservation`] with [`MemoryConsumer`]
+    /// Registers a new [`MemoryConsumer`]
+    ///
+    /// Note: Subsequent calls to [`Self::grow`] must be made to reserve memory
     fn register(&self, _consumer: &MemoryConsumer) {}
 
     /// Records the destruction of a [`MemoryReservation`] with [`MemoryConsumer`]
+    ///
+    /// Note: Prior calls to [`Self::shrink`] must be made to free any reserved memory
     fn unregister(&self, _consumer: &MemoryConsumer) {}
 
     /// Infallibly grow the provided `reservation` by `additional` bytes
@@ -46,8 +50,8 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// On error the `allocation` will not be increased in size
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()>;
 
-    /// Return the total amount of memory allocated
-    fn allocated(&self) -> usize;
+    /// Return the total amount of memory reserved
+    fn reserved(&self) -> usize;
 }
 
 /// A memory consumer that can be tracked by [`MemoryReservation`] in a [`MemoryPool`]
@@ -190,28 +194,28 @@ mod tests {
     fn test_memory_pool_underflow() {
         let pool = Arc::new(GreedyMemoryPool::new(50)) as _;
         let mut a1 = MemoryConsumer::new("a1").register(&pool);
-        assert_eq!(pool.allocated(), 0);
+        assert_eq!(pool.reserved(), 0);
 
         a1.grow(100);
-        assert_eq!(pool.allocated(), 100);
+        assert_eq!(pool.reserved(), 100);
 
         assert_eq!(a1.free(), 100);
-        assert_eq!(pool.allocated(), 0);
+        assert_eq!(pool.reserved(), 0);
 
         a1.try_grow(100).unwrap_err();
-        assert_eq!(pool.allocated(), 0);
+        assert_eq!(pool.reserved(), 0);
 
         a1.try_grow(30).unwrap();
-        assert_eq!(pool.allocated(), 30);
+        assert_eq!(pool.reserved(), 30);
 
         let mut a2 = MemoryConsumer::new("a2").register(&pool);
         a2.try_grow(25).unwrap_err();
-        assert_eq!(pool.allocated(), 30);
+        assert_eq!(pool.reserved(), 30);
 
         drop(a1);
-        assert_eq!(pool.allocated(), 0);
+        assert_eq!(pool.reserved(), 0);
 
         a2.try_grow(25).unwrap();
-        assert_eq!(pool.allocated(), 25);
+        assert_eq!(pool.reserved(), 25);
     }
 }

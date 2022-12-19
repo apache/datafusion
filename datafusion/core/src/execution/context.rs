@@ -2068,13 +2068,13 @@ mod tests {
         let ctx2 =
             SessionContext::with_config_rt(SessionConfig::new(), ctx1.runtime_env());
 
-        assert_eq!(ctx1.runtime_env().memory_pool.allocated(), 100);
-        assert_eq!(ctx2.runtime_env().memory_pool.allocated(), 100);
+        assert_eq!(ctx1.runtime_env().memory_pool.reserved(), 100);
+        assert_eq!(ctx2.runtime_env().memory_pool.reserved(), 100);
 
         drop(reservation);
 
-        assert_eq!(ctx1.runtime_env().memory_pool.allocated(), 0);
-        assert_eq!(ctx2.runtime_env().memory_pool.allocated(), 0);
+        assert_eq!(ctx1.runtime_env().memory_pool.reserved(), 0);
+        assert_eq!(ctx2.runtime_env().memory_pool.reserved(), 0);
 
         assert!(std::ptr::eq(
             Arc::as_ptr(&disk_manager),

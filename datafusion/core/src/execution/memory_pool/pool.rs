@@ -40,7 +40,7 @@ impl MemoryPool for UnboundedMemoryPool {
         Ok(())
     }
 
-    fn allocated(&self) -> usize {
+    fn reserved(&self) -> usize {
         self.used.load(Ordering::Relaxed)
     }
 }
@@ -83,7 +83,7 @@ impl MemoryPool for GreedyMemoryPool {
         Ok(())
     }
 
-    fn allocated(&self) -> usize {
+    fn reserved(&self) -> usize {
         self.used.load(Ordering::Relaxed)
     }
 }
@@ -205,7 +205,7 @@ impl MemoryPool for FairSpillPool {
         Ok(())
     }
 
-    fn allocated(&self) -> usize {
+    fn reserved(&self) -> usize {
         let state = self.state.lock();
         state.spillable + state.unspillable
     }
@@ -231,7 +231,7 @@ mod tests {
         let mut r1 = MemoryConsumer::new("unspillable").register(&pool);
         // Can grow beyond capacity of pool
         r1.grow(2000);
-        assert_eq!(pool.allocated(), 2000);
+        assert_eq!(pool.reserved(), 2000);
 
         let mut r2 = MemoryConsumer::new("s1")
             .with_can_spill(true)
@@ -239,7 +239,7 @@ mod tests {
         // Can grow beyond capacity of pool
         r2.grow(2000);
 
-        assert_eq!(pool.allocated(), 4000);
+        assert_eq!(pool.reserved(), 4000);
 
         let err = r2.try_grow(1).unwrap_err().to_string();
         assert_eq!(err, "Resources exhausted: Failed to allocate additional 1 bytes for s1 with 2000 bytes already allocated - maximum available is 0");
@@ -250,20 +250,20 @@ mod tests {
         r1.shrink(1990);
         r2.shrink(2000);
 
-        assert_eq!(pool.allocated(), 10);
+        assert_eq!(pool.reserved(), 10);
 
         r1.try_grow(10).unwrap();
-        assert_eq!(pool.allocated(), 20);
+        assert_eq!(pool.reserved(), 20);
 
         // Can grow a2 to 80 as only spilling consumer
         r2.try_grow(80).unwrap();
-        assert_eq!(pool.allocated(), 100);
+        assert_eq!(pool.reserved(), 100);
 
         r2.shrink(70);
 
         assert_eq!(r1.size(), 20);
         assert_eq!(r2.size(), 10);
-        assert_eq!(pool.allocated(), 30);
+        assert_eq!(pool.reserved(), 30);
 
         let mut r3 = MemoryConsumer::new("s2")
             .with_can_spill(true)
@@ -279,7 +279,7 @@ mod tests {
 
         // But dropping a2 does
         drop(r2);
-        assert_eq!(pool.allocated(), 20);
+        assert_eq!(pool.reserved(), 20);
         r3.try_grow(80).unwrap();
     }
 }

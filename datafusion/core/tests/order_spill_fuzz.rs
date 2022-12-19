@@ -94,7 +94,7 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
         }
 
         assert_eq!(
-            session_ctx.runtime_env().memory_pool.allocated(),
+            session_ctx.runtime_env().memory_pool.reserved(),
             0,
             "The sort should have returned all memory used back to the memory pool"
         );
