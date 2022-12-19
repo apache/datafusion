@@ -609,39 +609,35 @@ mod tests {
         // Number of lines written to FIFO
         const TEST_DATA_SIZE: u64 = 20_000;
 
-        /// We need to handle broken pipe error until the reader is ready. This is why we put a timout
-        /// to limit the wait duration for the reader. If the error is different than broken pipe,
-        /// we fail immediately.
-        fn write_to_file(
-            mut file: &File,
-            line: &str,
-            execution_start: Instant,
-            broken_pipe_timeout: Duration,
-        ) {
-            match file.write(line.as_bytes()) {
-                Ok(_) => {}
-                Err(e) => {
-                    // Broken Pipe error
-                    if e.raw_os_error().unwrap() == 32 {
-                        if Instant::now().duration_since(execution_start)
-                            > broken_pipe_timeout
-                        {
-                            panic!("Cannot read the FIFO file.")
-                        }
-                        thread::sleep(Duration::from_millis(100));
-                    } else {
-                        panic!("{}", e.to_string())
-                    }
-                }
-            }
-        }
-
         fn create_fifo_file(tmp_dir: &TempDir, file_name: &str) -> Result<PathBuf> {
             let file_path = tmp_dir.path().join(file_name);
             // Simulate an infinite environment via a FIFO file
-            unistd::mkfifo(&file_path, stat::Mode::S_IRWXU)
-                .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-            Ok(file_path)
+            if let Err(e) = unistd::mkfifo(&file_path, stat::Mode::S_IRWXU) {
+                Err(DataFusionError::Execution(e.to_string()))
+            } else {
+                Ok(file_path)
+            }
+        }
+
+        fn write_to_fifo(
+            mut file: &File,
+            line: &str,
+            ref_time: Instant,
+            broken_pipe_timeout: Duration,
+        ) -> Result<usize> {
+            // We need to handle broken pipe error until the reader is ready. This
+            // is why we use a timeout to limit the wait duration for the reader.
+            // If the error is different than broken pipe, we fail immediately.
+            file.write(line.as_bytes()).or_else(|e| {
+                if e.raw_os_error().unwrap() == 32 {
+                    let interval = Instant::now().duration_since(ref_time);
+                    if interval < broken_pipe_timeout {
+                        thread::sleep(Duration::from_millis(100));
+                        return Ok(0);
+                    }
+                }
+                Err(DataFusionError::Execution(e.to_string()))
+            })
         }
 
         async fn create_ctx(
@@ -680,35 +676,34 @@ mod tests {
             .await?;
             Ok(ctx)
         }
-        /// Checks if there is a [Operation::Reading] between [Operation::Writing]s.
-        /// This indicates we did not wait for the file to finish.
-        /// Vector([Operation::Reading], [Operation::Writing], (if a [Operation::Reading] here again)).
-        fn interleave(result: &mut Vec<Operation>) -> bool {
-            let mut interleave = false;
-            let mut reading_found = false;
-            let mut iterator = result.into_iter();
-            while let Some(op) = iterator.next() {
-                if reading_found && op == &Operation::Writing {
-                    interleave = true;
-                    break;
-                }
-                if op == &Operation::Reading {
-                    reading_found = true;
-                }
-            }
-            interleave
-        }
+
         #[derive(Debug, PartialEq)]
         enum Operation {
-            Reading,
-            Writing,
+            Read,
+            Write,
         }
+
+        /// Checks if there is a [Operation::Read] between [Operation::Write]s.
+        /// This indicates we did not wait for the file to finish before processing it.
+        fn interleave(result: &[Operation]) -> bool {
+            let first_read = result.iter().position(|op| op == &Operation::Read);
+            let last_write = result.iter().rev().position(|op| op == &Operation::Write);
+            match (first_read, last_write) {
+                (Some(first_read), Some(last_write)) => {
+                    result.len() - 1 - last_write > first_read
+                }
+                (_, _) => false,
+            }
+        }
+
         // This test provides a relatively realistic end-to-end scenario where
         // we ensure that we swap join sides correctly to accommodate a FIFO source.
         #[rstest]
-        #[timeout(std::time::Duration::from_secs(60))]
+        #[timeout(std::time::Duration::from_secs(30))]
         #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
-        async fn unbounded_file_with_swapped_join(#[values(true, false)] unbounded_file: bool) -> Result<()> {
+        async fn unbounded_file_with_swapped_join(
+            #[values(true, false)] unbounded_file: bool,
+        ) -> Result<()> {
             // To make unbounded deterministic
             let waiting = Arc::new(Mutex::new(unbounded_file));
             let waiting_thread = waiting.clone();
@@ -720,7 +715,7 @@ mod tests {
             // Prevent move
             let fifo_path_thread = fifo_path.clone();
             // Timeout for a long period of BrokenPipe error
-            let broken_pipe_timeout = Duration::from_secs(10);
+            let broken_pipe_timeout = Duration::from_secs(5);
             // The sender endpoint can be copied
             let thread_tx = tx.clone();
             // Spawn a new thread to write to the FIFO file
@@ -738,24 +733,21 @@ mod tests {
                 for cnt in 1..TEST_DATA_SIZE {
                     // Each thread queues a message in the channel
                     if cnt % TEST_BATCH_SIZE == 0 {
-                        thread_tx.send(Operation::Writing).unwrap();
+                        thread_tx.send(Operation::Write).unwrap();
                     }
                     // Choose a random element from the vector
                     let chosen_idx = *chars.choose(&mut rng).unwrap();
                     let line = format!("{},{}\n", chosen_idx, cnt).to_owned();
-                    write_to_file(
+                    write_to_fifo(
                         &first_file,
                         &line,
                         execution_start,
                         broken_pipe_timeout,
-                    );
+                    )
+                    .unwrap();
                 }
-                while let lock = waiting_thread.lock().unwrap() {
-                    if !*lock {
-                        break;
-                    } else {
-                        thread::sleep(Duration::from_millis(200))
-                    }
+                while *waiting_thread.lock().unwrap() {
+                    thread::sleep(Duration::from_millis(200));
                 }
             });
             // Collects operations from both writer and executor.
@@ -772,14 +764,13 @@ mod tests {
             let df = ctx.sql("SELECT t1.a2, t2.c1, t2.c4, t2.c5 FROM left as t1 JOIN right as t2 ON t1.a1 = t2.c1").await?;
             let mut stream = df.execute_stream().await?;
             while (stream.next().await).is_some() {
-                let mut lock = waiting.lock().unwrap();
-                *lock = false;
-                tx.send(Operation::Reading).unwrap();
+                *waiting.lock().unwrap() = false;
+                tx.send(Operation::Read).unwrap();
             }
             fifo_writer.join().unwrap();
             drop(tx);
-            let mut result = result_collector.join().unwrap();
-            assert_eq!(interleave(&mut result), unbounded_file);
+            let result = result_collector.join().unwrap();
+            assert_eq!(interleave(&result), unbounded_file);
             Ok(())
         }
     }
