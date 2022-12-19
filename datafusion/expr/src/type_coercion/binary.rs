@@ -17,7 +17,7 @@
 
 //! Coercion rules for matching argument types for binary operators
 
-use crate::type_coercion::is_numeric;
+use crate::type_coercion::{is_date, is_numeric, is_timestamp};
 use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
@@ -121,14 +121,22 @@ pub fn coerce_types(
         Operator::Like | Operator::NotLike | Operator::ILike | Operator::NotILike => {
             like_coercion(lhs_type, rhs_type)
         }
-        // date +/- interval returns date
         Operator::Plus | Operator::Minus
-            if (*lhs_type == DataType::Date32
-                || *lhs_type == DataType::Date64
-                || matches!(lhs_type, DataType::Timestamp(_, _))) =>
+            if is_date(lhs_type) || is_timestamp(lhs_type) =>
         {
             match rhs_type {
+                // timestamp/date +/- interval returns timestamp/date
                 DataType::Interval(_) => Some(lhs_type.clone()),
+                // providing more helpful error message
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
+                    return Err(DataFusionError::Plan(
+                        format!(
+                            "'{:?} {} {:?}' is an unsupported operation. \
+                                addition/subtraction on dates/timestamps only supported with interval types",
+                            lhs_type, op, rhs_type
+                        ),
+                    ));
+                }
                 _ => None,
             }
         }
@@ -672,6 +680,7 @@ mod tests {
     use super::*;
     use crate::Operator;
     use arrow::datatypes::DataType;
+    use datafusion_common::assert_contains;
     use datafusion_common::DataFusionError;
     use datafusion_common::Result;
 
@@ -846,6 +855,25 @@ mod tests {
             let result = coerce_types(&$A_TYPE, &$OP, &$B_TYPE)?;
             assert_eq!(result, $C_TYPE);
         }};
+    }
+
+    #[test]
+    fn test_date_timestamp_arithmetic_error() -> Result<()> {
+        let err = coerce_types(
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            &Operator::Minus,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )
+        .unwrap_err()
+        .to_string();
+        assert_contains!(&err, "'Timestamp(Nanosecond, None) - Timestamp(Nanosecond, None)' is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types");
+
+        let err = coerce_types(&DataType::Date32, &Operator::Plus, &DataType::Date64)
+            .unwrap_err()
+            .to_string();
+        assert_contains!(&err, "'Date32 + Date64' is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types");
+
+        Ok(())
     }
 
     #[test]
