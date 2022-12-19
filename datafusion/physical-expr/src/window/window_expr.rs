@@ -91,9 +91,20 @@ pub trait WindowExpr: Send + Sync + Debug {
         self.partition_by()
             .iter()
             .map(|expr| {
-                PhysicalSortExpr {
-                    expr: expr.clone(),
-                    options: SortOptions::default(),
+                if let Some(idx) =
+                    self.order_by().iter().position(|key| key.expr.eq(expr))
+                {
+                    self.order_by()[idx].clone()
+                } else {
+                    // When ASC is true, by default NULLS LAST to be consistent with PostgreSQL's rule:
+                    // https://www.postgresql.org/docs/current/queries-order.html
+                    PhysicalSortExpr {
+                        expr: expr.clone(),
+                        options: SortOptions {
+                            descending: false,
+                            nulls_first: false,
+                        },
+                    }
                 }
                 .evaluate_to_sort_column(batch)
             })

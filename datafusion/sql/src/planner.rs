@@ -5153,7 +5153,6 @@ mod tests {
     ///                     ->  Seq Scan on orders  (cost=0.00..20.00 rows=1000 width=8)
     /// ```
     ///
-    /// FIXME: for now we are not detecting prefix of sorting keys in order to save one sort exec phase
     #[test]
     fn over_order_by_sort_keys_sorting_prefix_compacting() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
