@@ -3061,7 +3061,7 @@ mod tests {
         let b = Arc::new(Int32Array::from(vec![2, 4, 8, 16, 32, 0]));
 
         apply_arithmetic::<Int32Type>(
-            schema.clone(),
+            schema,
             vec![a, b],
             Operator::Divide,
             Int32Array::from(vec![Some(4), Some(8), Some(16), Some(32), Some(64), None]),
@@ -3078,7 +3078,7 @@ mod tests {
             Arc::new(create_decimal_array(&[Some(10), Some(0)], 25, 3));
 
         apply_arithmetic::<Decimal128Type>(
-            schema.clone(),
+            schema,
             vec![left_decimal_array, right_decimal_array],
             Operator::Divide,
             create_decimal_array(&[Some(123456700), None], 25, 3),
