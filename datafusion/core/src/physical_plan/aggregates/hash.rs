@@ -39,7 +39,7 @@ use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use crate::scalar::ScalarValue;
 
-use crate::execution::memory_pool::TrackedAllocation;
+use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use arrow::{array::ArrayRef, compute, compute::cast};
 use arrow::{
     array::{Array, UInt32Builder},
@@ -124,10 +124,9 @@ impl GroupedHashAggregateStream {
 
         timer.done();
 
-        let allocation = TrackedAllocation::new(
-            context.memory_pool(),
-            format!("GroupedHashAggregateStream[{}]", partition),
-        );
+        let reservation =
+            MemoryConsumer::new(format!("GroupedHashAggregateStream[{}]", partition))
+                .register(context.memory_pool());
 
         let inner = GroupedHashAggregateStreamInner {
             schema: Arc::clone(&schema),
@@ -138,7 +137,7 @@ impl GroupedHashAggregateStream {
             baseline_metrics,
             aggregate_expressions,
             accumulators: Some(Accumulators {
-                allocation,
+                reservation,
                 map: RawTable::with_capacity(0),
                 group_states: Vec::with_capacity(0),
             }),
@@ -175,7 +174,7 @@ impl GroupedHashAggregateStream {
                         // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
                         // overshooting a bit. Also this means we either store the whole record batch or not.
                         match result.and_then(|allocated| {
-                            accumulators.allocation.try_grow(allocated)
+                            accumulators.reservation.try_grow(allocated)
                         }) {
                             Ok(_) => continue,
                             Err(e) => Err(ArrowError::ExternalError(Box::new(e))),
@@ -439,7 +438,7 @@ struct GroupState {
 
 /// The state of all the groups
 struct Accumulators {
-    allocation: TrackedAllocation,
+    reservation: MemoryReservation,
 
     /// Logically maps group values to an index in `group_states`
     ///

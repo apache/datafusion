@@ -23,17 +23,13 @@ use crate::physical_plan::metrics::{
 use std::sync::Arc;
 use std::task::Poll;
 
-use crate::execution::memory_pool::{MemoryPool, TrackedAllocation};
+use crate::execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use arrow::{error::ArrowError, record_batch::RecordBatch};
 
-/// Simplified version of tracking memory consumer,
-/// see also: [`Tracking`](crate::execution::memory_pool::ConsumerType::Tracking)
-///
-/// You could use this to replace [BaselineMetrics], report the memory,
-/// and get the memory usage bookkeeping in the memory manager easily.
+/// Wraps a [`BaselineMetrics`] and records memory usage on a [`MemoryReservation`]
 #[derive(Debug)]
 pub struct MemTrackingMetrics {
-    allocation: TrackedAllocation,
+    reservation: MemoryReservation,
     metrics: BaselineMetrics,
 }
 
@@ -46,9 +42,12 @@ impl MemTrackingMetrics {
         pool: &Arc<dyn MemoryPool>,
         partition: usize,
     ) -> Self {
-        let name = format!("MemTrackingMetrics[{}]", partition);
+        let reservation =
+            MemoryConsumer::new(format!("MemTrackingMetrics[{}]", partition))
+                .register(pool);
+
         Self {
-            allocation: TrackedAllocation::new(pool, name),
+            reservation,
             metrics: BaselineMetrics::new(metrics, partition),
         }
     }
@@ -66,7 +65,7 @@ impl MemTrackingMetrics {
     /// setup initial memory usage and register it with memory manager
     pub fn init_mem_used(&mut self, size: usize) {
         self.metrics.mem_used().set(size);
-        self.allocation.resize(size)
+        self.reservation.resize(size)
     }
 
     /// return the metric for the total number of output rows produced

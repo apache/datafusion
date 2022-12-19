@@ -37,7 +37,7 @@ use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
-use crate::execution::memory_pool::TrackedAllocation;
+use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use arrow::compute::cast;
 use arrow::datatypes::Schema;
 use arrow::{array::ArrayRef, compute};
@@ -139,13 +139,12 @@ impl GroupedHashAggregateStreamV2 {
         let aggr_schema = aggr_state_schema(&aggr_expr)?;
 
         let aggr_layout = Arc::new(RowLayout::new(&aggr_schema, RowType::WordAligned));
-        let allocation = TrackedAllocation::new(
-            context.memory_pool(),
-            format!("GroupedHashAggregateStreamV2[{}]", partition),
-        );
+        let reservation =
+            MemoryConsumer::new(format!("GroupedHashAggregateStreamV2[{}]", partition))
+                .register(context.memory_pool());
 
         let aggr_state = AggregationState {
-            allocation,
+            reservation,
             map: RawTable::with_capacity(0),
             group_states: Vec::with_capacity(0),
         };
@@ -195,7 +194,7 @@ impl GroupedHashAggregateStreamV2 {
                             // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
                             // overshooting a bit. Also this means we either store the whole record batch or not.
                             match result.and_then(|allocated| {
-                                this.aggr_state.allocation.try_grow(allocated)
+                                this.aggr_state.reservation.try_grow(allocated)
                             }) {
                                 Ok(_) => continue,
                                 Err(e) => Err(ArrowError::ExternalError(Box::new(e))),
@@ -458,7 +457,7 @@ struct RowGroupState {
 
 /// The state of all the groups
 struct AggregationState {
-    allocation: TrackedAllocation,
+    reservation: MemoryReservation,
 
     /// Logically maps group values to an index in `group_states`
     ///

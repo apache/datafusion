@@ -77,7 +77,7 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
         let sort = Arc::new(SortExec::try_new(sort, Arc::new(exec), None).unwrap());
 
         let runtime_config = RuntimeConfig::new()
-            .with_memory_policy(Arc::new(GreedyMemoryPool::new(pool_size)));
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)));
         let runtime = Arc::new(RuntimeEnv::new(runtime_config).unwrap());
         let session_ctx = SessionContext::with_config_rt(SessionConfig::new(), runtime);
 

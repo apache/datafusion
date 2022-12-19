@@ -2032,7 +2032,7 @@ mod tests {
     use super::*;
     use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
-    use crate::execution::memory_pool::TrackedAllocation;
+    use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
@@ -2060,8 +2060,8 @@ mod tests {
         // configure with same memory / disk manager
         let memory_pool = ctx1.runtime_env().memory_pool.clone();
 
-        let mut allocation = TrackedAllocation::new(&memory_pool, "test".to_string());
-        allocation.grow(100);
+        let mut reservation = MemoryConsumer::new("test").register(&memory_pool);
+        reservation.grow(100);
 
         let disk_manager = ctx1.runtime_env().disk_manager.clone();
 
@@ -2071,7 +2071,7 @@ mod tests {
         assert_eq!(ctx1.runtime_env().memory_pool.allocated(), 100);
         assert_eq!(ctx2.runtime_env().memory_pool.allocated(), 100);
 
-        drop(allocation);
+        drop(reservation);
 
         assert_eq!(ctx1.runtime_env().memory_pool.allocated(), 0);
         assert_eq!(ctx2.runtime_env().memory_pool.allocated(), 0);

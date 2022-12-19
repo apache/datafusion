@@ -33,7 +33,7 @@ use futures::stream::BoxStream;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::execution::memory_pool::TrackedAllocation;
+use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
 /// stream struct for aggregation without grouping columns
@@ -54,7 +54,7 @@ struct AggregateStreamInner {
     baseline_metrics: BaselineMetrics,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     accumulators: Vec<AccumulatorItem>,
-    allocation: TrackedAllocation,
+    reservation: MemoryReservation,
     finished: bool,
 }
 
@@ -72,10 +72,8 @@ impl AggregateStream {
         let aggregate_expressions = aggregate_expressions(&aggr_expr, &mode, 0)?;
         let accumulators = create_accumulators(&aggr_expr)?;
 
-        let allocation = TrackedAllocation::new(
-            context.memory_pool(),
-            format!("AggregateStream[{}]", partition),
-        );
+        let reservation = MemoryConsumer::new(format!("AggregateStream[{}]", partition))
+            .register(context.memory_pool());
 
         let inner = AggregateStreamInner {
             schema: Arc::clone(&schema),
@@ -84,7 +82,7 @@ impl AggregateStream {
             baseline_metrics,
             aggregate_expressions,
             accumulators,
-            allocation,
+            reservation,
             finished: false,
         };
         let stream = futures::stream::unfold(inner, |mut this| async move {
@@ -111,7 +109,7 @@ impl AggregateStream {
                         // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
                         // overshooting a bit. Also this means we either store the whole record batch or not.
                         match result
-                            .and_then(|allocated| this.allocation.try_grow(allocated))
+                            .and_then(|allocated| this.reservation.try_grow(allocated))
                         {
                             Ok(_) => continue,
                             Err(e) => Err(ArrowError::ExternalError(Box::new(e))),

@@ -22,7 +22,7 @@
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::{
-    human_readable_size, AllocationOptions, TrackedAllocation,
+    human_readable_size, MemoryConsumer, MemoryReservation,
 };
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::{batch_byte_size, IPCWriter, SizedRecordBatchStream};
@@ -81,7 +81,7 @@ struct ExternalSorter {
     metrics_set: CompositeMetricsSet,
     metrics: BaselineMetrics,
     fetch: Option<usize>,
-    allocation: TrackedAllocation,
+    reservation: MemoryReservation,
     partition_id: usize,
 }
 
@@ -96,11 +96,11 @@ impl ExternalSorter {
         fetch: Option<usize>,
     ) -> Self {
         let metrics = metrics_set.new_intermediate_baseline(partition_id);
-        let options = AllocationOptions::new(format!("ExternalSorter[{}]", partition_id))
-            .with_can_spill(true);
 
-        let allocation =
-            TrackedAllocation::new_with_options(&runtime.memory_pool, options);
+        let reservation =
+            MemoryConsumer::new(format!("ExternalSorter[{}]", partition_id))
+                .with_can_spill(true)
+                .register(&runtime.memory_pool);
 
         Self {
             schema,
@@ -112,7 +112,7 @@ impl ExternalSorter {
             metrics_set,
             metrics,
             fetch,
-            allocation,
+            reservation,
             partition_id,
         }
     }
@@ -124,9 +124,9 @@ impl ExternalSorter {
     ) -> Result<()> {
         if input.num_rows() > 0 {
             let size = batch_byte_size(&input);
-            if self.allocation.try_grow(size).is_err() {
+            if self.reservation.try_grow(size).is_err() {
                 self.spill().await?;
-                self.allocation.try_grow(size)?
+                self.reservation.try_grow(size)?
             }
 
             self.metrics.mem_used().add(size);
@@ -146,12 +146,12 @@ impl ExternalSorter {
                     // operation). But we still have to record it so that other requesters
                     // would know about this unexpected increase in memory consumption.
                     let new_size_delta = new_size - size;
-                    self.allocation.grow(new_size_delta);
+                    self.reservation.grow(new_size_delta);
                     self.metrics.mem_used().add(new_size_delta);
                 }
                 Ordering::Less => {
                     let size_delta = size - new_size;
-                    self.allocation.shrink(size_delta);
+                    self.reservation.shrink(size_delta);
                     self.metrics.mem_used().sub(size_delta);
                 }
                 Ordering::Equal => {}
@@ -161,15 +161,15 @@ impl ExternalSorter {
         Ok(())
     }
 
-    async fn spilled_before(&self) -> bool {
+    fn spilled_before(&self) -> bool {
         !self.spills.is_empty()
     }
 
     /// MergeSort in mem batches as well as spills into total order with `SortPreservingMergeStream`.
-    async fn sort(&mut self) -> Result<SendableRecordBatchStream> {
+    fn sort(&mut self) -> Result<SendableRecordBatchStream> {
         let batch_size = self.session_config.batch_size();
 
-        if self.spilled_before().await {
+        if self.spilled_before() {
             let tracking_metrics = self
                 .metrics_set
                 .new_intermediate_tracking(self.partition_id, &self.runtime.memory_pool);
@@ -183,7 +183,7 @@ impl ExternalSorter {
                     tracking_metrics,
                     self.fetch,
                 )?;
-                let prev_used = self.allocation.free();
+                let prev_used = self.reservation.free();
                 streams.push(SortedStream::new(in_mem_stream, prev_used));
             }
 
@@ -214,7 +214,7 @@ impl ExternalSorter {
                 self.fetch,
             );
             // Report to the memory manager we are no longer using memory
-            self.allocation.free();
+            self.reservation.free();
             result
         } else {
             Ok(Box::pin(EmptyRecordBatchStream::new(self.schema.clone())))
@@ -257,7 +257,7 @@ impl ExternalSorter {
 
         spill_partial_sorted_stream(&mut stream?, spillfile.path(), self.schema.clone())
             .await?;
-        self.allocation.free();
+        self.reservation.free();
         let used = self.metrics.mem_used().set(0);
         self.metrics.record_spill(used);
         self.spills.push(spillfile);
@@ -884,7 +884,7 @@ async fn do_sort(
         let batch = batch?;
         sorter.insert_batch(batch, &tracking_metrics).await?;
     }
-    let result = sorter.sort().await;
+    let result = sorter.sort();
     debug!(
         "End do_sort for partition {} of context session_id {} and task_id {:?}",
         partition_id,

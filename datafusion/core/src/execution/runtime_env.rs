@@ -156,7 +156,7 @@ impl RuntimeConfig {
     }
 
     /// Customize memory policy
-    pub fn with_memory_policy(mut self, memory_pool: Arc<dyn MemoryPool>) -> Self {
+    pub fn with_memory_pool(mut self, memory_pool: Arc<dyn MemoryPool>) -> Self {
         self.memory_pool = Some(memory_pool);
         self
     }
@@ -187,7 +187,7 @@ impl RuntimeConfig {
     /// Note DataFusion does not yet respect this limit in all cases.
     pub fn with_memory_limit(self, max_memory: usize, memory_fraction: f64) -> Self {
         let pool_size = (max_memory as f64 * memory_fraction) as usize;
-        self.with_memory_policy(Arc::new(GreedyMemoryPool::new(pool_size)))
+        self.with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
     }
 
     /// Use the specified path to create any needed temporary files
