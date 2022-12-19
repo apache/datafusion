@@ -107,12 +107,8 @@ impl BuiltInWindowFunctionExpr for WindowShift {
         }))
     }
 
-    fn is_window_fn_reversible(&self) -> bool {
-        true
-    }
-
-    fn reverse_expr(&self) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
-        Ok(Arc::new(Self {
+    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+        Some(Arc::new(Self {
             name: self.name.clone(),
             data_type: self.data_type.clone(),
             shift_offset: -self.shift_offset,

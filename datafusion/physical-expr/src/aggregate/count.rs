@@ -105,12 +105,8 @@ impl AggregateExpr for Count {
         Ok(Box::new(CountRowAccumulator::new(start_index)))
     }
 
-    fn is_window_fn_reversible(&self) -> bool {
-        true
-    }
-
-    fn reverse_expr(&self) -> Result<Arc<dyn AggregateExpr>> {
-        Ok(Arc::new(self.clone()))
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        Some(Arc::new(self.clone()))
     }
 }
 

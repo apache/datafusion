@@ -20,7 +20,7 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -59,17 +59,8 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Create built-in window evaluator with a batch
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
 
-    /// Get whether window function is reversible
-    /// make true if `reverse_expr` is implemented
-    fn is_window_fn_reversible(&self) -> bool {
-        false
-    }
-
     /// Construct Reverse Expression
-    fn reverse_expr(&self) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
-        Err(DataFusionError::NotImplemented(format!(
-            "reverse_expr hasn't been implemented for {:?} yet",
-            self
-        )))
+    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+        None
     }
 }

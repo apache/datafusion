@@ -124,24 +124,13 @@ impl BuiltInWindowFunctionExpr for NthValue {
         Ok(Box::new(NthValueEvaluator { kind: self.kind }))
     }
 
-    fn is_window_fn_reversible(&self) -> bool {
-        match self.kind {
-            NthValueKind::First | NthValueKind::Last => true,
-            NthValueKind::Nth(_) => false,
-        }
-    }
-
-    fn reverse_expr(&self) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
+    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
         let reversed_kind = match self.kind {
             NthValueKind::First => NthValueKind::Last,
             NthValueKind::Last => NthValueKind::First,
-            NthValueKind::Nth(_) => {
-                return Err(DataFusionError::Execution(
-                    "Cannot take reverse of NthValue".to_string(),
-                ))
-            }
+            NthValueKind::Nth(_) => return None,
         };
-        Ok(Arc::new(Self {
+        Some(Arc::new(Self {
             name: self.name.clone(),
             expr: self.expr.clone(),
             data_type: self.data_type.clone(),

@@ -295,32 +295,29 @@ fn analyze_window_sort_removal(
         &sort_exec.input().schema(),
         physical_ordering,
     )?;
-    let all_window_fns_reversible =
-        window_expr.iter().all(|e| e.is_window_fn_reversible());
-    let is_reversal_blocking = should_reverse && !all_window_fns_reversible;
-
-    if can_skip_sorting && !is_reversal_blocking {
-        let window_expr = if should_reverse {
+    if can_skip_sorting {
+        let new_window_expr = if should_reverse {
             window_expr
                 .iter()
                 .map(|e| e.get_reversed_expr())
-                .collect::<Result<Vec<_>>>()?
+                .collect::<Option<Vec<_>>>()
         } else {
-            window_expr.to_vec()
+            Some(window_expr.to_vec())
         };
-        let new_child = remove_corresponding_sort_from_sub_plan(sort_onward)?;
-        let new_schema = new_child.schema();
-        let new_plan = Arc::new(WindowAggExec::try_new(
-            window_expr,
-            new_child,
-            new_schema,
-            window_agg_exec.partition_keys.clone(),
-            Some(physical_ordering.to_vec()),
-        )?);
-        Ok(Some(PlanWithCorrespondingSort::new(new_plan)))
-    } else {
-        Ok(None)
+        if let Some(window_expr) = new_window_expr {
+            let new_child = remove_corresponding_sort_from_sub_plan(sort_onward)?;
+            let new_schema = new_child.schema();
+            let new_plan = Arc::new(WindowAggExec::try_new(
+                window_expr,
+                new_child,
+                new_schema,
+                window_agg_exec.partition_keys.clone(),
+                Some(physical_ordering.to_vec()),
+            )?);
+            return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));
+        }
     }
+    Ok(None)
 }
 
 /// Updates child such that unnecessary sorting below it is removed
