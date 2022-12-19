@@ -38,7 +38,8 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
-use datafusion_common::{context, Column, DataFusionError, OwnedTableReference};
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{context, DataFusionError, OwnedTableReference};
 use datafusion_expr::logical_plan::{builder::project, Prepare};
 use datafusion_expr::{
     logical_plan::{
@@ -51,6 +52,7 @@ use datafusion_expr::{
 use prost::bytes::BufMut;
 use prost::Message;
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::Arc;
 
 fn byte_to_string(b: u8) -> Result<String, DataFusionError> {
@@ -607,7 +609,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .table_partition_cols
                         .clone(),
                     if_not_exists: create_extern_table.if_not_exists,
-                    file_compression_type: create_extern_table.file_compression_type.to_string(),
+                    file_compression_type: CompressionTypeVariant::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
                     definition,
                     options: create_extern_table.options.clone(),
                 }))
@@ -695,10 +697,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                 LogicalPlanBuilder::from(input).limit(skip, fetch)?.build()
             }
             LogicalPlanType::Join(join) => {
-                let left_keys: Vec<Column> =
-                    join.left_join_column.iter().map(|i| i.into()).collect();
-                let right_keys: Vec<Column> =
-                    join.right_join_column.iter().map(|i| i.into()).collect();
+                let left_keys: Vec<Expr> = join
+                    .left_join_key
+                    .iter()
+                    .map(|expr| parse_expr(expr, ctx))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let right_keys: Vec<Expr> = join
+                    .right_join_key
+                    .iter()
+                    .map(|expr| parse_expr(expr, ctx))
+                    .collect::<Result<Vec<_>, _>>()?;
                 let join_type =
                     protobuf::JoinType::from_i32(join.join_type).ok_or_else(|| {
                         proto_error(format!(
@@ -727,17 +735,24 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec
                 )?);
                 let builder = match join_constraint.into() {
-                    JoinConstraint::On => builder.join(
-                        &into_logical_plan!(join.right, ctx, extension_codec)?,
+                    JoinConstraint::On => builder.join_with_expr_keys(
+                        into_logical_plan!(join.right, ctx, extension_codec)?,
                         join_type.into(),
                         (left_keys, right_keys),
                         filter,
                     )?,
-                    JoinConstraint::Using => builder.join_using(
-                        &into_logical_plan!(join.right, ctx, extension_codec)?,
-                        join_type.into(),
-                        left_keys,
-                    )?,
+                    JoinConstraint::Using => {
+                        // The equijoin keys in using-join must be column.
+                        let using_keys = left_keys
+                            .into_iter()
+                            .map(|key| key.try_into_col())
+                            .collect::<Result<Vec<_>, _>>()?;
+                        builder.join_using(
+                            into_logical_plan!(join.right, ctx, extension_codec)?,
+                            join_type.into(),
+                            using_keys,
+                        )?
+                    }
                 };
 
                 builder.build()
@@ -768,7 +783,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let left = into_logical_plan!(crossjoin.left, ctx, extension_codec)?;
                 let right = into_logical_plan!(crossjoin.right, ctx, extension_codec)?;
 
-                LogicalPlanBuilder::from(left).cross_join(&right)?.build()
+                LogicalPlanBuilder::from(left).cross_join(right)?.build()
             }
             LogicalPlanType::Extension(LogicalExtensionNode { node, inputs }) => {
                 let input_plans: Vec<LogicalPlan> = inputs
@@ -1100,8 +1115,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         right.as_ref(),
                         extension_codec,
                     )?;
-                let (left_join_column, right_join_column) =
-                    on.iter().map(|(l, r)| (l.into(), r.into())).unzip();
+                let (left_join_key, right_join_key) = on
+                    .iter()
+                    .map(|(l, r)| Ok((l.try_into()?, r.try_into()?)))
+                    .collect::<Result<Vec<_>, to_proto::Error>>()?
+                    .into_iter()
+                    .unzip();
                 let join_type: protobuf::JoinType = join_type.to_owned().into();
                 let join_constraint: protobuf::JoinConstraint =
                     join_constraint.to_owned().into();
@@ -1116,8 +1135,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             right: Some(Box::new(right)),
                             join_type: join_type.into(),
                             join_constraint: join_constraint.into(),
-                            left_join_column,
-                            right_join_column,
+                            left_join_key,
+                            right_join_key,
                             null_equals_null: *null_equals_null,
                             filter,
                         },

@@ -721,7 +721,7 @@ impl std::hash::Hash for ScalarValue {
 /// dictionary array
 #[inline]
 fn get_dict_value<K: ArrowDictionaryKeyType>(
-    array: &ArrayRef,
+    array: &dyn Array,
     index: usize,
 ) -> (&ArrayRef, Option<usize>) {
     let dict_array = as_dictionary_array::<K>(array).unwrap();
@@ -1963,7 +1963,7 @@ impl ScalarValue {
     }
 
     fn get_decimal_value_from_array(
-        array: &ArrayRef,
+        array: &dyn Array,
         index: usize,
         precision: u8,
         scale: i8,
@@ -1978,7 +1978,7 @@ impl ScalarValue {
     }
 
     /// Converts a value in `array` at `index` into a ScalarValue
-    pub fn try_from_array(array: &ArrayRef, index: usize) -> Result<Self> {
+    pub fn try_from_array(array: &dyn Array, index: usize) -> Result<Self> {
         // handle NULL value
         if !array.is_valid(index) {
             return array.data_type().try_into();

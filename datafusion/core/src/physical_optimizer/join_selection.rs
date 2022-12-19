@@ -258,7 +258,7 @@ impl PhysicalOptimizerRule for JoinSelection {
                 let right = cross_join.right();
                 if should_swap_join_order(&**left, &**right) {
                     let new_join =
-                        CrossJoinExec::try_new(Arc::clone(right), Arc::clone(left))?;
+                        CrossJoinExec::new(Arc::clone(right), Arc::clone(left));
                     // TODO avoid adding ProjectionExec again and again, only adding Final Projection
                     let proj = ProjectionExec::try_new(
                         swap_reverting_projection(&left.schema(), &right.schema()),

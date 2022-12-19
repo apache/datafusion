@@ -52,7 +52,7 @@ SELECT var_pop(c2) FROM aggregate_test_100
 query R
 SELECT var_pop(c6) FROM aggregate_test_100
 ----
-2.615633434202189e37
+26156334342021890000000000000000000000
 
 # csv_query_variance_3
 query R
@@ -79,10 +79,10 @@ SELECT stddev_pop(c2) FROM aggregate_test_100
 1.3665650368716449
 
 # csv_query_stddev_2
-query R 
+query R
 SELECT stddev_pop(c6) FROM aggregate_test_100
 ----
-5.114326382039172e18
+5114326382039172000
 
 # csv_query_stddev_3
 query R
@@ -215,6 +215,70 @@ query T
 SELECT approx_median(a) FROM median_f64_nan
 ----
 NaN
+
+# median_multi
+# test case for https://github.com/apache/arrow-datafusion/issues/3105
+# has an intermediate grouping
+statement ok
+create table cpu (host string, usage float) as select * from (values
+('host0', 90.1),
+('host1', 90.2),
+('host1', 90.4)
+);
+
+query CI rowsort
+select host, median(usage) from cpu group by host;
+----
+host0 90.1
+host1 90.3
+
+query CI
+select median(usage) from cpu;
+----
+90.2
+
+
+statement ok
+drop table cpu;
+
+# median_multi_odd
+
+# data is not sorted and has an odd number of values per group
+statement ok
+create table cpu (host string, usage float) as select * from (values
+  ('host0', 90.2),
+  ('host1', 90.1),
+  ('host1', 90.5),
+  ('host0', 90.5),
+  ('host1', 90.0),
+  ('host1', 90.3),
+  ('host0', 87.9),
+  ('host1', 89.3)
+);
+
+query CI rowsort
+select host, median(usage) from cpu group by host;
+----
+host0 90.2
+host1 90.1
+
+
+statement ok
+drop table cpu;
+
+# median_multi_even
+# data is not sorted and has an odd number of values per group
+statement ok
+create table cpu (host string, usage float) as select * from (values ('host0', 90.2), ('host1', 90.1), ('host1', 90.5), ('host0', 90.5), ('host1', 90.0), ('host1', 90.3), ('host1', 90.2), ('host1', 90.3));
+
+query CI rowsort
+select host, median(usage) from cpu group by host;
+----
+host0 90.35
+host1 90.25
+
+statement ok
+drop table cpu
 
 # csv_query_external_table_count
 query I
@@ -462,96 +526,96 @@ SELECT c1, c2, AVG(c3) FROM aggregate_test_100_by_sql GROUP BY CUBE (c1, c2) ORD
 a 1 -17.6
 a 2 -15.333333333333334
 a 3 -4.5
-a 4 -32.0
-a 5 -32.0
-a   -18.333333333333332
+a 4 -32
+a 5 -32
+a NULL -18.333333333333332
 b 1 31.666666666666668
 b 2 25.5
-b 3 -42.0
+b 3 -42
 b 4 -44.6
 b 5 -0.2
-b   -5.842105263157895
+b NULL -5.842105263157895
 c 1 47.5
 c 2 -55.57142857142857
 c 3 47.5
 c 4 -10.75
-c 5 12.0
-c   -1.3333333333333333
+c 5 12
+c NULL -1.3333333333333333
 d 1 -8.142857142857142
 d 2 109.33333333333333
 d 3 41.333333333333336
-d 4 54.0
+d 4 54
 d 5 -49.5
-d   25.444444444444443
+d NULL 25.444444444444443
 e 1 75.66666666666667
 e 2 37.8
-e 3 48.0
+e 3 48
 e 4 37.285714285714285
-e 5 -11.0
-e   40.333333333333336
-  1 16.681818181818183
-  2 8.363636363636363
-  3 20.789473684210527
-  4 1.2608695652173914
-  5 -13.857142857142858
-    7.81
+e 5 -11
+e NULL 40.333333333333336
+NULL 1 16.681818181818183
+NULL 2 8.363636363636363
+NULL 3 20.789473684210527
+NULL 4 1.2608695652173914
+NULL 5 -13.857142857142858
+NULL NULL 7.81
 
 # csv_query_rollup_avg
 query TIIR
 SELECT c1, c2, c3, AVG(c4) FROM aggregate_test_100_by_sql WHERE c1 IN ('a', 'b', NULL) GROUP BY ROLLUP (c1, c2, c3) ORDER BY c1, c2, c3
 ----
-a 1 -85  -15154.0
-a 1 -56  8692.0
-a 1 -25  15295.0
-a 1 -5   12636.0
-a 1 83   -14704.0
-a 1      1353.0
-a 2 -48  -18025.0
-a 2 -43  13080.0
-a 2 45   15673.0
-a 2      3576.0
-a 3 -72  -11122.0
-a 3 -12  -9168.0
-a 3 13   22338.5
-a 3 14   28162.0
-a 3 17   -22796.0
-a 3      4958.833333333333
-a 4 -101 11640.0
-a 4 -54  -2376.0
-a 4 -38  20744.0
-a 4 65  -28462.0
-a 4      386.5
-a 5 -101 -12484.0
-a 5 -31  -12907.0
-a 5 36   -16974.0
-a 5      -14121.666666666666
-a        306.04761904761904
-b 1 12   7652.0
-b 1 29   -18218.0
-b 1 54   -18410.0
-b 1      -9658.666666666666
-b 2 -60  -21739.0
-b 2 31   23127.0
-b 2 63   21456.0
-b 2 68   15874.0
-b 2      9679.5
-b 3 -101 -13217.0
-b 3 17   14457.0
-b 3      620.0
-b 4 -117 19316.0
-b 4 -111 -1967.0
-b 4 -59  25286.0
-b 4 17   -28070.0
-b 4 47   20690.0
-b 4      7051.0
-b 5 -82  22080.0
-b 5 -44  15788.0
-b 5 -5   24896.0
-b 5 62   16337.0
-b 5 68   21576.0
-b 5      20135.4
-b        7732.315789473684
-         3833.525
+a 1 -85 -15154
+a 1 -56 8692
+a 1 -25 15295
+a 1 -5 12636
+a 1 83 -14704
+a 1 NULL 1353
+a 2 -48 -18025
+a 2 -43 13080
+a 2 45 15673
+a 2 NULL 3576
+a 3 -72 -11122
+a 3 -12 -9168
+a 3 13 22338.5
+a 3 14 28162
+a 3 17 -22796
+a 3 NULL 4958.833333333333
+a 4 -101 11640
+a 4 -54 -2376
+a 4 -38 20744
+a 4 65 -28462
+a 4 NULL 386.5
+a 5 -101 -12484
+a 5 -31 -12907
+a 5 36 -16974
+a 5 NULL -14121.666666666666
+a NULL NULL 306.04761904761904
+b 1 12 7652
+b 1 29 -18218
+b 1 54 -18410
+b 1 NULL -9658.666666666666
+b 2 -60 -21739
+b 2 31 23127
+b 2 63 21456
+b 2 68 15874
+b 2 NULL 9679.5
+b 3 -101 -13217
+b 3 17 14457
+b 3 NULL 620
+b 4 -117 19316
+b 4 -111 -1967
+b 4 -59 25286
+b 4 17 -28070
+b 4 47 20690
+b 4 NULL 7051
+b 5 -82 22080
+b 5 -44 15788
+b 5 -5 24896
+b 5 62 16337
+b 5 68 21576
+b 5 NULL 20135.4
+b NULL NULL 7732.315789473684
+NULL NULL NULL 3833.525
 
 # csv_query_approx_percentile_cont_with_weight
 query TI
@@ -626,155 +690,155 @@ e e 1323
 query TTI
 SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY CUBE (a.c1, b.c1) ORDER BY a.c1, b.c1
 ----
-a a 1260
-a b 1140
-a c 1260
-a d 1080
-a e 1260
-a   6000
-b a 1302
-b b 1178
-b c 1302
-b d 1116
-b e 1302
-b   6200
-c a 1176
-c b 1064
-c c 1176
-c d 1008
-c e 1176
-c   5600
-d a 924
-d b 836
-d c 924
-d d 792
-d e 924
-d   4400
-e a 1323
-e b 1197
-e c 1323
-e d 1134
-e e 1323
-e   6300
-  a 5985
-  b 5415
-  c 5985
-  d 5130
-  e 5985
-    28500
+a    a    1260
+a    b    1140
+a    c    1260
+a    d    1080
+a    e    1260
+a    NULL 6000
+b    a    1302
+b    b    1178
+b    c    1302
+b    d    1116
+b    e    1302
+b    NULL 6200
+c    a    1176
+c    b    1064
+c    c    1176
+c    d    1008
+c    e    1176
+c    NULL 5600
+d    a    924
+d    b    836
+d    c    924
+d    d    792
+d    e    924
+d    NULL 4400
+e    a    1323
+e    b    1197
+e    c    1323
+e    d    1134
+e    e    1323
+e    NULL 6300
+NULL a    5985
+NULL b    5415
+NULL c    5985
+NULL d    5130
+NULL e    5985
+NULL NULL 28500
 
 # csv_query_cube_distinct_count
 query TII
 SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY CUBE (c1,c2) ORDER BY c1,c2
 ----
-a 1 5
-a 2 3
-a 3 5
-a 4 4
-a 5 3
-a   19
-b 1 3
-b 2 4
-b 3 2
-b 4 5
-b 5 5
-b   17
-c 1 4
-c 2 7
-c 3 4
-c 4 4
-c 5 2
-c   21
-d 1 7
-d 2 3
-d 3 3
-d 4 3
-d 5 2
-d   18
-e 1 3
-e 2 4
-e 3 4
-e 4 7
-e 5 2
-e   18
-  1 22
-  2 20
-  3 17
-  4 23
-  5 14
-    80
+a    1    5
+a    2    3
+a    3    5
+a    4    4
+a    5    3
+a    NULL 19
+b    1    3
+b    2    4
+b    3    2
+b    4    5
+b    5    5
+b    NULL 17
+c    1    4
+c    2    7
+c    3    4
+c    4    4
+c    5    2
+c    NULL 21
+d    1    7
+d    2    3
+d    3    3
+d    4    3
+d    5    2
+d    NULL 18
+e    1    3
+e    2    4
+e    3    4
+e    4    7
+e    5    2
+e    NULL 18
+NULL 1    22
+NULL 2    20
+NULL 3    17
+NULL 4    23
+NULL 5    14
+NULL NULL 80
 
 # csv_query_rollup_distinct_count
 query TII
 SELECT c1, c2, COUNT(DISTINCT c3) FROM aggregate_test_100 GROUP BY ROLLUP (c1,c2) ORDER BY c1,c2
 ----
-a 1 5
-a 2 3
-a 3 5
-a 4 4
-a 5 3
-a   19
-b 1 3
-b 2 4
-b 3 2
-b 4 5
-b 5 5
-b   17
-c 1 4
-c 2 7
-c 3 4
-c 4 4
-c 5 2
-c   21
-d 1 7
-d 2 3
-d 3 3
-d 4 3
-d 5 2
-d   18
-e 1 3
-e 2 4
-e 3 4
-e 4 7
-e 5 2
-e  18
-   80
+a    1    5
+a    2    3
+a    3    5
+a    4    4
+a    5    3
+a    NULL 19
+b    1    3
+b    2    4
+b    3    2
+b    4    5
+b    5    5
+b    NULL 17
+c    1    4
+c    2    7
+c    3    4
+c    4    4
+c    5    2
+c    NULL 21
+d    1    7
+d    2    3
+d    3    3
+d    4    3
+d    5    2
+d    NULL 18
+e    1    3
+e    2    4
+e    3    4
+e    4    7
+e    5    2
+e    NULL 18
+NULL NULL 80
 
 # csv_query_rollup_sum_crossjoin
 query TTI
 SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY ROLLUP (a.c1, b.c1) ORDER BY a.c1, b.c1
 ----
-a a 1260
-a b 1140
-a c 1260
-a d 1080
-a e 1260
-a   6000
-b a 1302
-b b 1178
-b c 1302
-b d 1116
-b e 1302
-b   6200
-c a 1176
-c b 1064
-c c 1176
-c d 1008
-c e 1176
-c   5600
-d a 924
-d b 836
-d c 924
-d d 792
-d e 924
-d   4400
-e a 1323
-e b 1197
-e c 1323
-e d 1134
-e e 1323
-e   6300
-    28500
+a    a    1260
+a    b    1140
+a    c    1260
+a    d    1080
+a    e    1260
+a    NULL 6000
+b    a    1302
+b    b    1178
+b    c    1302
+b    d    1116
+b    e    1302
+b    NULL 6200
+c    a    1176
+c    b    1064
+c    c    1176
+c    d    1008
+c    e    1176
+c    NULL 5600
+d    a    924
+d    b    836
+d    c    924
+d    d    792
+d    e    924
+d    NULL 4400
+e    a    1323
+e    b    1197
+e    c    1323
+e    d    1134
+e    e    1323
+e    NULL 6300
+NULL NULL 28500
 
 # query_count_without_from
 query I
@@ -818,45 +882,45 @@ select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count
 # SELECT array_agg(c13 ORDER BY c1) FROM aggregate_test_100;
 
 # csv_query_array_cube_agg_with_overflow
-query TIIRIII 
+query TIIRIII
 select c1, c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by CUBE (c1,c2) order by c1, c2
 ----
-a 1 -88  -17.6               83  -85  5
-a 2 -46  -15.333333333333334 45  -48  3
-a 3 -27  -4.5                17  -72  6
-a 4 -128 -32.0               65  -101 4
-a 5 -96  -32.0               36  -101 3
-a   -385 -18.333333333333332 83  -101 21
-b 1 95   31.666666666666668  54  12   3
-b 2 102  25.5                68  -60  4
-b 3 -84  -42.0               17  -101 2
-b 4 -223 -44.6               47  -117 5
-b 5 -1   -0.2                68  -82  5
-b   -111 -5.842105263157895  68  -117 19
-c 1 190  47.5                103 -24  4
-c 2 -389 -55.57142857142857  29  -117 7
-c 3 190  47.5                97  -2   4
-c 4 -43  -10.75              123 -90  4
-c 5 24   12.0                118 -94  2
-c   -28  -1.3333333333333333 123 -117 21
-d 1 -57  -8.142857142857142  125 -99  7
-d 2 328  109.33333333333333  122 93   3
-d 3 124  41.333333333333336  123 -76  3
-d 4 162  54.0                102 5    3
-d 5 -99  -49.5               -40 -59  2
-d   458  25.444444444444443  125 -99  18
-e 1 227  75.66666666666667   120 36   3
-e 2 189  37.8                97  -61  5
-e 3 192  48.0                112 -95  4
-e 4 261  37.285714285714285  97  -56  7
-e 5 -22  -11.0               64  -86  2
-e   847  40.333333333333336  120 -95  21
-  1 367  16.681818181818183  125 -99  22
-  2 184  8.363636363636363   122 -117 22
-  3 395  20.789473684210527  123 -101 19
-  4 29   1.2608695652173914  123 -117 23
-  5 -194 -13.857142857142858 118 -101 14
-    781  7.81                125 -117 100
+a 1 -88 -17.6 83 -85 5
+a 2 -46 -15.333333333333334 45 -48 3
+a 3 -27 -4.5 17 -72 6
+a 4 -128 -32 65 -101 4
+a 5 -96 -32 36 -101 3
+a NULL -385 -18.333333333333332 83 -101 21
+b 1 95 31.666666666666668 54 12 3
+b 2 102 25.5 68 -60 4
+b 3 -84 -42 17 -101 2
+b 4 -223 -44.6 47 -117 5
+b 5 -1 -0.2 68 -82 5
+b NULL -111 -5.842105263157895 68 -117 19
+c 1 190 47.5 103 -24 4
+c 2 -389 -55.57142857142857 29 -117 7
+c 3 190 47.5 97 -2 4
+c 4 -43 -10.75 123 -90 4
+c 5 24 12 118 -94 2
+c NULL -28 -1.3333333333333333 123 -117 21
+d 1 -57 -8.142857142857142 125 -99 7
+d 2 328 109.33333333333333 122 93 3
+d 3 124 41.333333333333336 123 -76 3
+d 4 162 54 102 5 3
+d 5 -99 -49.5 -40 -59 2
+d NULL 458 25.444444444444443 125 -99 18
+e 1 227 75.66666666666667 120 36 3
+e 2 189 37.8 97 -61 5
+e 3 192 48 112 -95 4
+e 4 261 37.285714285714285 97 -56 7
+e 5 -22 -11 64 -86 2
+e NULL 847 40.333333333333336 120 -95 21
+NULL 1 367 16.681818181818183 125 -99 22
+NULL 2 184 8.363636363636363 122 -117 22
+NULL 3 395 20.789473684210527 123 -101 19
+NULL 4 29 1.2608695652173914 123 -117 23
+NULL 5 -194 -13.857142857142858 118 -101 14
+NULL NULL 781 7.81 125 -117 100
 
 # csv_query_array_agg_distinct
 # query T
@@ -870,7 +934,7 @@ e   847  40.333333333333336  120 -95  21
 # query IIII
 # SELECT count(nanos), count(micros), count(millis), count(secs) FROM t
 # ----
-# 3 3 3 3 
+# 3 3 3 3
 
 # aggregate_timestamps_min
 # query TTTT

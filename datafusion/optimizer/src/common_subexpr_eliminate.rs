@@ -17,8 +17,11 @@
 
 //! Eliminate common sub-expression.
 
-use crate::{utils, OptimizerConfig, OptimizerRule};
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
+
 use arrow::datatypes::DataType;
+
 use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::{
     col,
@@ -27,8 +30,8 @@ use datafusion_expr::{
     logical_plan::{Aggregate, Filter, LogicalPlan, Projection, Sort, Window},
     Expr, ExprSchemable,
 };
-use std::collections::{BTreeSet, HashMap};
-use std::sync::Arc;
+
+use crate::{utils, OptimizerConfig, OptimizerRule};
 
 /// A map from expression's identifier to tuple including
 /// - the expression itself (cloned)
@@ -60,7 +63,7 @@ impl CommonSubexprEliminate {
         arrays_list: &[&[Vec<(usize, String)>]],
         input: &LogicalPlan,
         expr_set: &mut ExprSet,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
         let mut affected_id = BTreeSet::<Identifier>::new();
 
@@ -79,7 +82,9 @@ impl CommonSubexprEliminate {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let mut new_input = self.optimize(input, optimizer_config)?;
+        let mut new_input = self
+            .try_optimize(input, config)?
+            .unwrap_or_else(|| input.clone());
         if !affected_id.is_empty() {
             new_input = build_project_plan(new_input, affected_id, expr_set)?;
         }
@@ -89,11 +94,11 @@ impl CommonSubexprEliminate {
 }
 
 impl OptimizerRule for CommonSubexprEliminate {
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         let mut expr_set = ExprSet::new();
 
         match plan {
@@ -105,19 +110,16 @@ impl OptimizerRule for CommonSubexprEliminate {
                 let input_schema = Arc::clone(input.schema());
                 let arrays = to_arrays(expr, input_schema, &mut expr_set)?;
 
-                let (mut new_expr, new_input) = self.rewrite_expr(
-                    &[expr],
-                    &[&arrays],
-                    input,
-                    &mut expr_set,
-                    optimizer_config,
-                )?;
+                let (mut new_expr, new_input) =
+                    self.rewrite_expr(&[expr], &[&arrays], input, &mut expr_set, config)?;
 
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    pop_expr(&mut new_expr)?,
-                    Arc::new(new_input),
-                    schema.clone(),
-                )?))
+                Ok(Some(LogicalPlan::Projection(
+                    Projection::try_new_with_schema(
+                        pop_expr(&mut new_expr)?,
+                        Arc::new(new_input),
+                        schema.clone(),
+                    )?,
+                )))
             }
             LogicalPlan::Filter(filter) => {
                 let input = filter.input();
@@ -136,14 +138,14 @@ impl OptimizerRule for CommonSubexprEliminate {
                     &[&[id_array]],
                     filter.input(),
                     &mut expr_set,
-                    optimizer_config,
+                    config,
                 )?;
 
                 if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
-                    Ok(LogicalPlan::Filter(Filter::try_new(
+                    Ok(Some(LogicalPlan::Filter(Filter::try_new(
                         predicate,
                         Arc::new(new_input),
-                    )?))
+                    )?)))
                 } else {
                     Err(DataFusionError::Internal(
                         "Failed to pop predicate expr".to_string(),
@@ -163,14 +165,14 @@ impl OptimizerRule for CommonSubexprEliminate {
                     &[&arrays],
                     input,
                     &mut expr_set,
-                    optimizer_config,
+                    config,
                 )?;
 
-                Ok(LogicalPlan::Window(Window {
+                Ok(Some(LogicalPlan::Window(Window {
                     input: Arc::new(new_input),
                     window_expr: pop_expr(&mut new_expr)?,
                     schema: schema.clone(),
-                }))
+                })))
             }
             LogicalPlan::Aggregate(Aggregate {
                 group_expr,
@@ -188,36 +190,33 @@ impl OptimizerRule for CommonSubexprEliminate {
                     &[&group_arrays, &aggr_arrays],
                     input,
                     &mut expr_set,
-                    optimizer_config,
+                    config,
                 )?;
                 // note the reversed pop order.
                 let new_aggr_expr = pop_expr(&mut new_expr)?;
                 let new_group_expr = pop_expr(&mut new_expr)?;
 
-                Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                    Arc::new(new_input),
-                    new_group_expr,
-                    new_aggr_expr,
-                    schema.clone(),
-                )?))
+                Ok(Some(LogicalPlan::Aggregate(
+                    Aggregate::try_new_with_schema(
+                        Arc::new(new_input),
+                        new_group_expr,
+                        new_aggr_expr,
+                        schema.clone(),
+                    )?,
+                )))
             }
             LogicalPlan::Sort(Sort { expr, input, fetch }) => {
                 let input_schema = Arc::clone(input.schema());
                 let arrays = to_arrays(expr, input_schema, &mut expr_set)?;
 
-                let (mut new_expr, new_input) = self.rewrite_expr(
-                    &[expr],
-                    &[&arrays],
-                    input,
-                    &mut expr_set,
-                    optimizer_config,
-                )?;
+                let (mut new_expr, new_input) =
+                    self.rewrite_expr(&[expr], &[&arrays], input, &mut expr_set, config)?;
 
-                Ok(LogicalPlan::Sort(Sort {
+                Ok(Some(LogicalPlan::Sort(Sort {
                     expr: pop_expr(&mut new_expr)?,
                     input: Arc::new(new_input),
                     fetch: *fetch,
-                }))
+                })))
             }
             LogicalPlan::Join(_)
             | LogicalPlan::CrossJoin(_)
@@ -243,7 +242,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::Extension(_)
             | LogicalPlan::Prepare(_) => {
                 // apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, optimizer_config)
+                Ok(Some(utils::optimize_children(self, plan, config)?))
             }
         }
     }
@@ -562,20 +561,26 @@ fn replace_common_expr(
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::test::*;
+    use std::iter;
+
     use arrow::datatypes::{Field, Schema};
+
     use datafusion_expr::logical_plan::{table_scan, JoinType};
     use datafusion_expr::{
         avg, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
         Operator,
     };
-    use std::iter;
+
+    use crate::optimizer::OptimizerContext;
+    use crate::test::*;
+
+    use super::*;
 
     fn assert_optimized_plan_eq(expected: &str, plan: &LogicalPlan) {
         let optimizer = CommonSubexprEliminate {};
         let optimized_plan = optimizer
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(expected, formatted_plan);
@@ -777,7 +782,7 @@ mod test {
         let table_scan_1 = test_table_scan_with_name("test1").unwrap();
         let table_scan_2 = test_table_scan_with_name("test2").unwrap();
         let join = LogicalPlanBuilder::from(table_scan_1)
-            .join(&table_scan_2, JoinType::Inner, (vec!["a"], vec!["a"]), None)
+            .join(table_scan_2, JoinType::Inner, (vec!["a"], vec!["a"]), None)
             .unwrap()
             .build()
             .unwrap();
@@ -819,7 +824,10 @@ mod test {
             .build()
             .unwrap();
         let rule = CommonSubexprEliminate {};
-        let optimized_plan = rule.optimize(&plan, &mut OptimizerConfig::new()).unwrap();
+        let optimized_plan = rule
+            .try_optimize(&plan, &OptimizerContext::new())
+            .unwrap()
+            .unwrap();
 
         let schema = optimized_plan.schema();
         let fields_with_datatypes: Vec<_> = schema

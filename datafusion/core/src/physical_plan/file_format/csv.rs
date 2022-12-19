@@ -131,25 +131,25 @@ impl ExecutionPlan for CsvExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.base_config.object_store_url)?;
+
         let config = Arc::new(CsvConfig {
             batch_size: context.session_config().batch_size(),
             file_schema: Arc::clone(&self.base_config.file_schema),
             file_projection: self.base_config.file_column_projection_indices(),
             has_header: self.has_header,
             delimiter: self.delimiter,
+            object_store,
         });
 
         let opener = CsvOpener {
             config,
             file_compression_type: self.file_compression_type.to_owned(),
         };
-        let stream = FileStream::new(
-            &self.base_config,
-            partition,
-            context,
-            opener,
-            self.metrics.clone(),
-        )?;
+        let stream =
+            FileStream::new(&self.base_config, partition, opener, self.metrics.clone())?;
         Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
 
@@ -184,6 +184,7 @@ struct CsvConfig {
     file_projection: Option<Vec<usize>>,
     has_header: bool,
     delimiter: u8,
+    object_store: Arc<dyn ObjectStore>,
 }
 
 impl CsvConfig {
@@ -208,15 +209,11 @@ struct CsvOpener {
 }
 
 impl FileOpener for CsvOpener {
-    fn open(
-        &self,
-        store: Arc<dyn ObjectStore>,
-        file_meta: FileMeta,
-    ) -> Result<FileOpenFuture> {
+    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let config = self.config.clone();
         let file_compression_type = self.file_compression_type.to_owned();
         Ok(Box::pin(async move {
-            match store.get(file_meta.location()).await? {
+            match config.object_store.get(file_meta.location()).await? {
                 GetResult::File(file, _) => {
                     let decoder = file_compression_type.convert_read(file)?;
                     Ok(futures::stream::iter(config.open(decoder, true)).boxed())

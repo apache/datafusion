@@ -28,7 +28,6 @@ use datafusion::{
     },
     assert_batches_eq,
     error::Result,
-    logical_expr::AggregateState,
     logical_expr::{
         AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction, Signature,
         StateTypeFunction, TypeSignature, Volatility,
@@ -210,12 +209,8 @@ impl FirstSelector {
 }
 
 impl Accumulator for FirstSelector {
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        let state = self
-            .to_state()
-            .into_iter()
-            .map(AggregateState::Scalar)
-            .collect::<Vec<_>>();
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        let state = self.to_state().into_iter().collect::<Vec<_>>();
 
         Ok(state)
     }

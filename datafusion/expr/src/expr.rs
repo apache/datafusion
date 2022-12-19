@@ -148,21 +148,9 @@ pub enum Expr {
     Cast(Cast),
     /// Casts the expression to a given type and will return a null value if the expression cannot be cast.
     /// This expression is guaranteed to have a fixed type.
-    TryCast {
-        /// The expression being cast
-        expr: Box<Expr>,
-        /// The `DataType` the expression will yield
-        data_type: DataType,
-    },
+    TryCast(TryCast),
     /// A sort expression, that can be used to sort values.
-    Sort {
-        /// The expression to sort on
-        expr: Box<Expr>,
-        /// The direction of the sort
-        asc: bool,
-        /// Whether to put Nulls before all other data values
-        nulls_first: bool,
-    },
+    Sort(Sort),
     /// Represents the call of a built-in scalar function with a set of arguments.
     ScalarFunction {
         /// The function
@@ -277,7 +265,9 @@ impl BinaryExpr {
         match self.op {
             Operator::Or => 5,
             Operator::And => 10,
-            Operator::Like | Operator::NotLike => 19,
+            Operator::Like | Operator::NotLike | Operator::ILike | Operator::NotILike => {
+                19
+            }
             Operator::NotEq
             | Operator::Eq
             | Operator::Lt
@@ -286,7 +276,18 @@ impl BinaryExpr {
             | Operator::GtEq => 20,
             Operator::Plus | Operator::Minus => 30,
             Operator::Multiply | Operator::Divide | Operator::Modulo => 40,
-            _ => 0,
+            Operator::IsDistinctFrom
+            | Operator::IsNotDistinctFrom
+            | Operator::RegexMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotIMatch
+            | Operator::BitwiseAnd
+            | Operator::BitwiseOr
+            | Operator::BitwiseShiftLeft
+            | Operator::BitwiseShiftRight
+            | Operator::BitwiseXor
+            | Operator::StringConcat => 0,
         }
     }
 }
@@ -430,6 +431,44 @@ impl Cast {
     /// Create a new Cast expression
     pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
         Self { expr, data_type }
+    }
+}
+
+/// TryCast Expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct TryCast {
+    /// The expression being cast
+    pub expr: Box<Expr>,
+    /// The `DataType` the expression will yield
+    pub data_type: DataType,
+}
+
+impl TryCast {
+    /// Create a new TryCast expression
+    pub fn new(expr: Box<Expr>, data_type: DataType) -> Self {
+        Self { expr, data_type }
+    }
+}
+
+/// SORT expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Sort {
+    /// The expression to sort on
+    pub expr: Box<Expr>,
+    /// The direction of the sort
+    pub asc: bool,
+    /// Whether to put Nulls before all other data values
+    pub nulls_first: bool,
+}
+
+impl Sort {
+    /// Create a new Sort expression
+    pub fn new(expr: Box<Expr>, asc: bool, nulls_first: bool) -> Self {
+        Self {
+            expr,
+            asc,
+            nulls_first,
+        }
     }
 }
 
@@ -611,6 +650,16 @@ impl Expr {
         binary_expr(self, Operator::NotLike, other)
     }
 
+    /// Return `self ILIKE other`
+    pub fn ilike(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::ILike, other)
+    }
+
+    /// Return `self NOT ILIKE other`
+    pub fn not_ilike(self, other: Expr) -> Expr {
+        binary_expr(self, Operator::NotILike, other)
+    }
+
     /// Return `self AS name` alias expression
     pub fn alias(self, name: impl Into<String>) -> Expr {
         Expr::Alias(Box::new(self), name.into())
@@ -653,11 +702,7 @@ impl Expr {
     /// let sort_expr = col("foo").sort(true, true); // SORT ASC NULLS_FIRST
     /// ```
     pub fn sort(self, asc: bool, nulls_first: bool) -> Expr {
-        Expr::Sort {
-            expr: Box::new(self),
-            asc,
-            nulls_first,
-        }
+        Expr::Sort(Sort::new(Box::new(self), asc, nulls_first))
     }
 
     /// Return `IsTrue(Box(self))`
@@ -767,7 +812,7 @@ impl fmt::Debug for Expr {
             Expr::Cast(Cast { expr, data_type }) => {
                 write!(f, "CAST({:?} AS {:?})", expr, data_type)
             }
-            Expr::TryCast { expr, data_type } => {
+            Expr::TryCast(TryCast { expr, data_type }) => {
                 write!(f, "TRY_CAST({:?} AS {:?})", expr, data_type)
             }
             Expr::Not(expr) => write!(f, "NOT {:?}", expr),
@@ -800,11 +845,11 @@ impl fmt::Debug for Expr {
             } => write!(f, "{:?} IN ({:?})", expr, subquery),
             Expr::ScalarSubquery(subquery) => write!(f, "({:?})", subquery),
             Expr::BinaryExpr(expr) => write!(f, "{}", expr),
-            Expr::Sort {
+            Expr::Sort(Sort {
                 expr,
                 asc,
                 nulls_first,
-            } => {
+            }) => {
                 if *asc {
                     write!(f, "{:?} ASC", expr)?;
                 } else {
@@ -1119,7 +1164,7 @@ fn create_name(e: &Expr) -> Result<String> {
             // CAST does not change the expression name
             create_name(expr)
         }
-        Expr::TryCast { expr, .. } => {
+        Expr::TryCast(TryCast { expr, .. }) => {
             // CAST does not change the expression name
             create_name(expr)
         }

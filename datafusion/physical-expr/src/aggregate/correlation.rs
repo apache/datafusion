@@ -25,7 +25,7 @@ use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -72,32 +72,32 @@ impl AggregateExpr for Correlation {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
-                &format_state_name(&self.name, "count"),
+                format_state_name(&self.name, "count"),
                 DataType::UInt64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "mean1"),
+                format_state_name(&self.name, "mean1"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "m2_1"),
+                format_state_name(&self.name, "m2_1"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "mean2"),
+                format_state_name(&self.name, "mean2"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "m2_2"),
+                format_state_name(&self.name, "m2_2"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "algo_const"),
+                format_state_name(&self.name, "algo_const"),
                 DataType::Float64,
                 true,
             ),
@@ -133,14 +133,14 @@ impl CorrelationAccumulator {
 }
 
 impl Accumulator for CorrelationAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
-            AggregateState::Scalar(ScalarValue::from(self.covar.get_count())),
-            AggregateState::Scalar(ScalarValue::from(self.covar.get_mean1())),
-            AggregateState::Scalar(ScalarValue::from(self.stddev1.get_m2())),
-            AggregateState::Scalar(ScalarValue::from(self.covar.get_mean2())),
-            AggregateState::Scalar(ScalarValue::from(self.stddev2.get_m2())),
-            AggregateState::Scalar(ScalarValue::from(self.covar.get_algo_const())),
+            ScalarValue::from(self.covar.get_count()),
+            ScalarValue::from(self.covar.get_mean1()),
+            ScalarValue::from(self.stddev1.get_m2()),
+            ScalarValue::from(self.covar.get_mean2()),
+            ScalarValue::from(self.stddev2.get_m2()),
+            ScalarValue::from(self.covar.get_algo_const()),
         ])
     }
 

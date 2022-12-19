@@ -557,7 +557,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     runtime,
                     extension_codec
                 )?;
-                Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
+                Ok(Arc::new(CrossJoinExec::new(left, right)))
             }
             PhysicalPlanType::Empty(empty) => {
                 let schema = Arc::new(convert_required!(empty.schema)?);
@@ -1558,7 +1558,7 @@ mod roundtrip_tests {
         let project =
             ProjectionExec::try_new(vec![(Arc::new(expr), "a".to_string())], input)?;
 
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
 
         ctx.register_udf(udf);
 

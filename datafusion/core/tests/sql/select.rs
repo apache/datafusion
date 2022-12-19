@@ -20,60 +20,12 @@ use datafusion::{
     datasource::empty::EmptyTable, from_slice::FromSlice,
     physical_plan::collect_partitioned,
 };
+use datafusion_common::ScalarValue;
 use tempfile::TempDir;
-
-#[tokio::test]
-async fn all_where_empty() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT *
-               FROM aggregate_test_100
-               WHERE 1=2";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["++", "++"];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
 
 #[tokio::test]
 async fn select_values_list() -> Result<()> {
     let ctx = SessionContext::new();
-    {
-        let sql = "VALUES (1)";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| 1       |",
-            "+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
-    {
-        let sql = "VALUES (-1)";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| -1      |",
-            "+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
-    {
-        let sql = "VALUES (2+1,2-1,2>1)";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+---------+---------+",
-            "| column1 | column2 | column3 |",
-            "+---------+---------+---------+",
-            "| 3       | 1       | true    |",
-            "+---------+---------+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
     {
         let sql = "VALUES";
         let plan = ctx.create_logical_plan(sql);
@@ -85,35 +37,9 @@ async fn select_values_list() -> Result<()> {
         assert!(plan.is_err());
     }
     {
-        let sql = "VALUES (1),(2)";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| 1       |",
-            "| 2       |",
-            "+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
-    {
         let sql = "VALUES (1),()";
         let plan = ctx.create_logical_plan(sql);
         assert!(plan.is_err());
-    }
-    {
-        let sql = "VALUES (1,'a'),(2,'b')";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+---------+",
-            "| column1 | column2 |",
-            "+---------+---------+",
-            "| 1       | a       |",
-            "| 2       | b       |",
-            "+---------+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
     }
     {
         let sql = "VALUES (1),(1,2)";
@@ -1257,6 +1183,73 @@ async fn csv_join_unaliased_subqueries() -> Result<()> {
     Ok(())
 }
 
+// Test prepare statement from sql to final result
+// This test is equivalent with the test parallel_query_with_filter below but using prepare statement
+#[tokio::test]
+async fn test_prepare_statement() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let partition_count = 4;
+    let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
+
+    // sql to statement then to prepare logical plan with parameters
+    // c1 defined as UINT32, c2 defined as UInt64 but the params are Int32 and Float64
+    let logical_plan =
+        ctx.create_logical_plan("PREPARE my_plan(INT, DOUBLE) AS SELECT c1, c2 FROM test WHERE c1 > $2 AND c1 < $1")?;
+
+    // prepare logical plan to logical plan without parameters
+    let param_values = vec![ScalarValue::Int32(Some(3)), ScalarValue::Float64(Some(0.0))];
+    let logical_plan = logical_plan.with_param_values(param_values)?;
+
+    // logical plan to optimized logical plan
+    let logical_plan = ctx.optimize(&logical_plan)?;
+
+    // optimized logical plan to physical plan
+    let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
+
+    let task_ctx = ctx.task_ctx();
+    let results = collect_partitioned(physical_plan, task_ctx).await?;
+
+    // note that the order of partitions is not deterministic
+    let mut num_rows = 0;
+    for partition in &results {
+        for batch in partition {
+            num_rows += batch.num_rows();
+        }
+    }
+    assert_eq!(20, num_rows);
+
+    let results: Vec<RecordBatch> = results.into_iter().flatten().collect();
+    let expected = vec![
+        "+----+----+",
+        "| c1 | c2 |",
+        "+----+----+",
+        "| 1  | 1  |",
+        "| 1  | 10 |",
+        "| 1  | 2  |",
+        "| 1  | 3  |",
+        "| 1  | 4  |",
+        "| 1  | 5  |",
+        "| 1  | 6  |",
+        "| 1  | 7  |",
+        "| 1  | 8  |",
+        "| 1  | 9  |",
+        "| 2  | 1  |",
+        "| 2  | 10 |",
+        "| 2  | 2  |",
+        "| 2  | 3  |",
+        "| 2  | 4  |",
+        "| 2  | 5  |",
+        "| 2  | 6  |",
+        "| 2  | 7  |",
+        "| 2  | 8  |",
+        "| 2  | 9  |",
+        "+----+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn parallel_query_with_filter() -> Result<()> {
     let tmp_dir = TempDir::new()?;
@@ -1397,7 +1390,7 @@ async fn unprojected_filter() {
         .select(vec![col("i") + col("i")])
         .unwrap();
 
-    let plan = df.to_logical_plan().unwrap();
+    let plan = df.clone().to_logical_plan().unwrap();
     println!("{}", plan.display_indent());
 
     let results = df.collect().await.unwrap();
