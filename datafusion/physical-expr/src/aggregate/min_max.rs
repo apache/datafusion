@@ -569,7 +569,7 @@ impl Accumulator for MaxAccumulator {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        for i in 0..values[0].len() {
+        for _idx in 0..values[0].len() {
             (self.moving_max).pop();
         }
         if let Some(res) = self.moving_max.max() {
@@ -748,7 +748,9 @@ impl Accumulator for MinAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         for idx in 0..values[0].len() {
             let val = ScalarValue::try_from_array(&values[0], idx)?;
-            self.moving_min.push(val);
+            if !val.is_null() {
+                self.moving_min.push(val);
+            }
         }
         if let Some(res) = self.moving_min.min() {
             self.min = res.clone();
@@ -757,8 +759,11 @@ impl Accumulator for MinAccumulator {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        for i in 0..values[0].len() {
-            (self.moving_min).pop();
+        for idx in 0..values[0].len() {
+            let val = ScalarValue::try_from_array(&values[0], idx)?;
+            if !val.is_null() {
+                (self.moving_min).pop();
+            }
         }
         if let Some(res) = self.moving_min.min() {
             self.min = res.clone();
