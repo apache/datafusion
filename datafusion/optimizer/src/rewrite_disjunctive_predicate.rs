@@ -127,7 +127,7 @@ impl OptimizerRule for RewriteDisjunctivePredicate {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
@@ -136,16 +136,12 @@ impl OptimizerRule for RewriteDisjunctivePredicate {
                 let rewritten_expr = normalize_predicate(rewritten_predicate);
                 Ok(Some(LogicalPlan::Filter(Filter::try_new(
                     rewritten_expr,
-                    self.try_optimize(filter.input(), optimizer_config)?
+                    self.try_optimize(filter.input(), config)?
                         .map(Arc::new)
                         .unwrap_or_else(|| filter.input().clone()),
                 )?)))
             }
-            _ => Ok(Some(utils::optimize_children(
-                self,
-                plan,
-                optimizer_config,
-            )?)),
+            _ => Ok(Some(utils::optimize_children(self, plan, config)?)),
         }
     }
 

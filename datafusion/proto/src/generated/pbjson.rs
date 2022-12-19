@@ -8855,10 +8855,10 @@ impl serde::Serialize for JoinNode {
         if self.join_constraint != 0 {
             len += 1;
         }
-        if !self.left_join_column.is_empty() {
+        if !self.left_join_key.is_empty() {
             len += 1;
         }
-        if !self.right_join_column.is_empty() {
+        if !self.right_join_key.is_empty() {
             len += 1;
         }
         if self.null_equals_null {
@@ -8884,11 +8884,11 @@ impl serde::Serialize for JoinNode {
                 .ok_or_else(|| serde::ser::Error::custom(format!("Invalid variant {}", self.join_constraint)))?;
             struct_ser.serialize_field("joinConstraint", &v)?;
         }
-        if !self.left_join_column.is_empty() {
-            struct_ser.serialize_field("leftJoinColumn", &self.left_join_column)?;
+        if !self.left_join_key.is_empty() {
+            struct_ser.serialize_field("leftJoinKey", &self.left_join_key)?;
         }
-        if !self.right_join_column.is_empty() {
-            struct_ser.serialize_field("rightJoinColumn", &self.right_join_column)?;
+        if !self.right_join_key.is_empty() {
+            struct_ser.serialize_field("rightJoinKey", &self.right_join_key)?;
         }
         if self.null_equals_null {
             struct_ser.serialize_field("nullEqualsNull", &self.null_equals_null)?;
@@ -8912,10 +8912,10 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
             "joinType",
             "join_constraint",
             "joinConstraint",
-            "left_join_column",
-            "leftJoinColumn",
-            "right_join_column",
-            "rightJoinColumn",
+            "left_join_key",
+            "leftJoinKey",
+            "right_join_key",
+            "rightJoinKey",
             "null_equals_null",
             "nullEqualsNull",
             "filter",
@@ -8927,8 +8927,8 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
             Right,
             JoinType,
             JoinConstraint,
-            LeftJoinColumn,
-            RightJoinColumn,
+            LeftJoinKey,
+            RightJoinKey,
             NullEqualsNull,
             Filter,
         }
@@ -8956,8 +8956,8 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                             "right" => Ok(GeneratedField::Right),
                             "joinType" | "join_type" => Ok(GeneratedField::JoinType),
                             "joinConstraint" | "join_constraint" => Ok(GeneratedField::JoinConstraint),
-                            "leftJoinColumn" | "left_join_column" => Ok(GeneratedField::LeftJoinColumn),
-                            "rightJoinColumn" | "right_join_column" => Ok(GeneratedField::RightJoinColumn),
+                            "leftJoinKey" | "left_join_key" => Ok(GeneratedField::LeftJoinKey),
+                            "rightJoinKey" | "right_join_key" => Ok(GeneratedField::RightJoinKey),
                             "nullEqualsNull" | "null_equals_null" => Ok(GeneratedField::NullEqualsNull),
                             "filter" => Ok(GeneratedField::Filter),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -8983,8 +8983,8 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                 let mut right__ = None;
                 let mut join_type__ = None;
                 let mut join_constraint__ = None;
-                let mut left_join_column__ = None;
-                let mut right_join_column__ = None;
+                let mut left_join_key__ = None;
+                let mut right_join_key__ = None;
                 let mut null_equals_null__ = None;
                 let mut filter__ = None;
                 while let Some(k) = map.next_key()? {
@@ -9013,17 +9013,17 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                             }
                             join_constraint__ = Some(map.next_value::<JoinConstraint>()? as i32);
                         }
-                        GeneratedField::LeftJoinColumn => {
-                            if left_join_column__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("leftJoinColumn"));
+                        GeneratedField::LeftJoinKey => {
+                            if left_join_key__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("leftJoinKey"));
                             }
-                            left_join_column__ = Some(map.next_value()?);
+                            left_join_key__ = Some(map.next_value()?);
                         }
-                        GeneratedField::RightJoinColumn => {
-                            if right_join_column__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("rightJoinColumn"));
+                        GeneratedField::RightJoinKey => {
+                            if right_join_key__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rightJoinKey"));
                             }
-                            right_join_column__ = Some(map.next_value()?);
+                            right_join_key__ = Some(map.next_value()?);
                         }
                         GeneratedField::NullEqualsNull => {
                             if null_equals_null__.is_some() {
@@ -9044,8 +9044,8 @@ impl<'de> serde::Deserialize<'de> for JoinNode {
                     right: right__,
                     join_type: join_type__.unwrap_or_default(),
                     join_constraint: join_constraint__.unwrap_or_default(),
-                    left_join_column: left_join_column__.unwrap_or_default(),
-                    right_join_column: right_join_column__.unwrap_or_default(),
+                    left_join_key: left_join_key__.unwrap_or_default(),
+                    right_join_key: right_join_key__.unwrap_or_default(),
                     null_equals_null: null_equals_null__.unwrap_or_default(),
                     filter: filter__,
                 })

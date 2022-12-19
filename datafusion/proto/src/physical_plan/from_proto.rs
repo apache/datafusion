@@ -463,11 +463,21 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
     type Error = DataFusionError;
 
     fn try_from(s: &protobuf::Statistics) -> Result<Self, Self::Error> {
+        // Keep it sync with Statistics::to_proto
+        let none_value = -1_i64;
         let column_statistics =
             s.column_stats.iter().map(|s| s.into()).collect::<Vec<_>>();
         Ok(Statistics {
-            num_rows: Some(s.num_rows as usize),
-            total_byte_size: Some(s.total_byte_size as usize),
+            num_rows: if s.num_rows == none_value {
+                None
+            } else {
+                Some(s.num_rows as usize)
+            },
+            total_byte_size: if s.total_byte_size == none_value {
+                None
+            } else {
+                Some(s.total_byte_size as usize)
+            },
             // No column statistic (None) is encoded with empty array
             column_statistics: if column_statistics.is_empty() {
                 None

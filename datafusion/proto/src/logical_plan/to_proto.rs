@@ -35,7 +35,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
+    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -807,11 +807,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Cast(expr)),
                 }
             }
-            Expr::Sort {
+            Expr::Sort(Sort{
                 expr,
                 asc,
                 nulls_first,
-            } => {
+            }) => {
                 let expr = Box::new(protobuf::SortExprNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     asc: *asc,

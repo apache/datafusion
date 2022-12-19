@@ -18,7 +18,6 @@
 //! Physical query planner
 
 use super::analyze::AnalyzeExec;
-use super::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use super::{
     aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
@@ -63,9 +62,11 @@ use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, TryCast,
+    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, TryCast,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
+use datafusion_expr::logical_plan;
+use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
 use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{WindowFrame, WindowFrameBound};
 use datafusion_optimizer::utils::unalias;
@@ -582,11 +583,11 @@ impl DefaultPhysicalPlanner {
                         let sort_keys = sort_keys
                             .iter()
                             .map(|e| match e {
-                                Expr::Sort {
+                                Expr::Sort(expr::Sort {
                                     expr,
                                     asc,
                                     nulls_first,
-                                } => create_physical_sort_expr(
+                                }) => create_physical_sort_expr(
                                     expr,
                                     logical_input_schema,
                                     &physical_input_schema,
@@ -819,11 +820,11 @@ impl DefaultPhysicalPlanner {
                     let sort_expr = expr
                         .iter()
                         .map(|e| match e {
-                            Expr::Sort {
+                            Expr::Sort(expr::Sort {
                                 expr,
                                 asc,
                                 nulls_first,
-                            } => create_physical_sort_expr(
+                            }) => create_physical_sort_expr(
                                 expr,
                                 input_dfschema,
                                 &input_schema,
@@ -838,22 +839,7 @@ impl DefaultPhysicalPlanner {
                             )),
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    // If we have a `LIMIT` can run sort/limts in parallel (similar to TopK)
-                    Ok(if fetch.is_some() && session_state.config.target_partitions() > 1 {
-                        let sort = SortExec::new_with_partitioning(
-                            sort_expr,
-                            physical_input,
-                            true,
-                            *fetch,
-                        );
-                        let merge = SortPreservingMergeExec::new(
-                            sort.expr().to_vec(),
-                            Arc::new(sort),
-                        );
-                        Arc::new(merge)
-                    } else {
-                        Arc::new(SortExec::try_new(sort_expr, physical_input, *fetch)?)
-                    })
+                    Ok(Arc::new(SortExec::try_new(sort_expr, physical_input, *fetch)?))
                 }
                 LogicalPlan::Join(Join {
                     left,
@@ -862,8 +848,78 @@ impl DefaultPhysicalPlanner {
                     filter,
                     join_type,
                     null_equals_null,
+                    schema: join_schema,
                     ..
                 }) => {
+                    // If join has expression equijoin keys, add physical projecton.
+                    let has_expr_join_key = keys.iter().any(|(l, r)| {
+                        !(matches!(l, Expr::Column(_))
+                            && matches!(r, Expr::Column(_)))
+                    });
+                    if has_expr_join_key {
+                        let left_keys = keys
+                            .iter()
+                            .map(|(l, _r)| l)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let right_keys = keys
+                            .iter()
+                            .map(|(_l, r)| r)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let (left, right, column_on, added_project) = {
+                            let (left, left_col_keys, left_projected) =
+                                wrap_projection_for_join_if_necessary(
+                                    left_keys.as_slice(),
+                                    left.as_ref().clone(),
+                                )?;
+                            let (right, right_col_keys, right_projected) =
+                                wrap_projection_for_join_if_necessary(
+                                    &right_keys,
+                                    right.as_ref().clone(),
+                                )?;
+                            (
+                                left,
+                                right,
+                                (left_col_keys, right_col_keys),
+                                left_projected || right_projected,
+                            )
+                        };
+
+                        let join_plan =
+                            LogicalPlan::Join(Join::try_new_with_project_input(
+                                logical_plan,
+                                Arc::new(left),
+                                Arc::new(right),
+                                column_on,
+                            )?);
+
+                        // Remove temporary projected columns
+                        let join_plan = if added_project {
+                            let final_join_result = join_schema
+                                .fields()
+                                .iter()
+                                .map(|field| {
+                                    Expr::Column(field.qualified_column())
+                                })
+                                .collect::<Vec<_>>();
+                            let projection =
+                                logical_plan::Projection::try_new_with_schema(
+                                    final_join_result,
+                                    Arc::new(join_plan),
+                                    join_schema.clone(),
+                                )?;
+                            LogicalPlan::Projection(projection)
+                        } else {
+                            join_plan
+                        };
+
+                        return self
+                            .create_initial_plan(&join_plan, session_state)
+                            .await;
+                    }
+
+                    // All equi-join keys are columns now, create physical join plan
                     let left_df_schema = left.schema();
                     let physical_left = self.create_initial_plan(left, session_state).await?;
                     let right_df_schema = right.schema();
@@ -871,9 +927,11 @@ impl DefaultPhysicalPlanner {
                     let join_on = keys
                         .iter()
                         .map(|(l, r)| {
+                            let l = l.try_into_col()?;
+                            let r = r.try_into_col()?;
                             Ok((
-                                Column::new(&l.name, left_df_schema.index_of_column(l)?),
-                                Column::new(&r.name, right_df_schema.index_of_column(r)?),
+                                Column::new(&l.name, left_df_schema.index_of_column(&l)?),
+                                Column::new(&r.name, right_df_schema.index_of_column(&r)?),
                             ))
                         })
                         .collect::<Result<join_utils::JoinOn>>()?;
@@ -1476,11 +1534,11 @@ pub fn create_window_expr_with_name(
             let order_by = order_by
                 .iter()
                 .map(|e| match e {
-                    Expr::Sort {
+                    Expr::Sort(expr::Sort {
                         expr,
                         asc,
                         nulls_first,
-                    } => create_physical_sort_expr(
+                    }) => create_physical_sort_expr(
                         expr,
                         logical_input_schema,
                         physical_input_schema,

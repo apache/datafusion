@@ -38,7 +38,9 @@ use datafusion::{
     datasource::{provider_as_source, source_as_provider},
     prelude::SessionContext,
 };
-use datafusion_common::{context, Column, DataFusionError, OwnedTableReference};
+use datafusion_common::{
+    context, parsers::CompressionTypeVariant, DataFusionError, OwnedTableReference,
+};
 use datafusion_expr::{
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
@@ -51,6 +53,7 @@ use datafusion_expr::{
 use prost::bytes::BufMut;
 use prost::Message;
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::Arc;
 
 pub mod from_proto;
@@ -520,7 +523,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .table_partition_cols
                         .clone(),
                     if_not_exists: create_extern_table.if_not_exists,
-                    file_compression_type: create_extern_table.file_compression_type.to_string(),
+                    file_compression_type: CompressionTypeVariant::from_str(&create_extern_table.file_compression_type).map_err(|_| DataFusionError::NotImplemented(format!("Unsupported file compression type {}", create_extern_table.file_compression_type)))?,
                     definition,
                     options: create_extern_table.options.clone(),
                 }))
@@ -608,10 +611,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                 LogicalPlanBuilder::from(input).limit(skip, fetch)?.build()
             }
             LogicalPlanType::Join(join) => {
-                let left_keys: Vec<Column> =
-                    join.left_join_column.iter().map(|i| i.into()).collect();
-                let right_keys: Vec<Column> =
-                    join.right_join_column.iter().map(|i| i.into()).collect();
+                let left_keys: Vec<Expr> = join
+                    .left_join_key
+                    .iter()
+                    .map(|expr| from_proto::parse_expr(expr, ctx))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let right_keys: Vec<Expr> = join
+                    .right_join_key
+                    .iter()
+                    .map(|expr| from_proto::parse_expr(expr, ctx))
+                    .collect::<Result<Vec<_>, _>>()?;
                 let join_type =
                     protobuf::JoinType::from_i32(join.join_type).ok_or_else(|| {
                         proto_error(format!(
@@ -640,17 +649,24 @@ impl AsLogicalPlan for LogicalPlanNode {
                     extension_codec
                 )?);
                 let builder = match join_constraint.into() {
-                    JoinConstraint::On => builder.join(
+                    JoinConstraint::On => builder.join_with_expr_keys(
                         into_logical_plan!(join.right, ctx, extension_codec)?,
                         join_type.into(),
                         (left_keys, right_keys),
                         filter,
                     )?,
-                    JoinConstraint::Using => builder.join_using(
-                        into_logical_plan!(join.right, ctx, extension_codec)?,
-                        join_type.into(),
-                        left_keys,
-                    )?,
+                    JoinConstraint::Using => {
+                        // The equijoin keys in using-join must be column.
+                        let using_keys = left_keys
+                            .into_iter()
+                            .map(|key| key.try_into_col())
+                            .collect::<Result<Vec<_>, _>>()?;
+                        builder.join_using(
+                            into_logical_plan!(join.right, ctx, extension_codec)?,
+                            join_type.into(),
+                            using_keys,
+                        )?
+                    }
                 };
 
                 builder.build()
@@ -1013,8 +1029,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                         right.as_ref(),
                         extension_codec,
                     )?;
-                let (left_join_column, right_join_column) =
-                    on.iter().map(|(l, r)| (l.into(), r.into())).unzip();
+                let (left_join_key, right_join_key) = on
+                    .iter()
+                    .map(|(l, r)| Ok((l.try_into()?, r.try_into()?)))
+                    .collect::<Result<Vec<_>, to_proto::Error>>()?
+                    .into_iter()
+                    .unzip();
                 let join_type: protobuf::JoinType = join_type.to_owned().into();
                 let join_constraint: protobuf::JoinConstraint =
                     join_constraint.to_owned().into();
@@ -1029,8 +1049,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             right: Some(Box::new(right)),
                             join_type: join_type.into(),
                             join_constraint: join_constraint.into(),
-                            left_join_column,
-                            right_join_column,
+                            left_join_key,
+                            right_join_key,
                             null_equals_null: *null_equals_null,
                             filter,
                         },
@@ -1366,7 +1386,9 @@ mod roundtrip_tests {
     };
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
-    use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
+    use datafusion_expr::expr::{
+        Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort,
+    };
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
         col, lit, Accumulator, AggregateFunction,
@@ -2362,11 +2384,7 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_sort_expr() {
-        let test_expr = Expr::Sort {
-            expr: Box::new(lit(1.0_f32)),
-            asc: true,
-            nulls_first: true,
-        };
+        let test_expr = Expr::Sort(Sort::new(Box::new(lit(1.0_f32)), true, true));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);

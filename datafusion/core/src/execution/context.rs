@@ -68,7 +68,7 @@ use crate::logical_expr::{
     CreateView, DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder,
     SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
-use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
+use crate::optimizer::{OptimizerContext, OptimizerRule};
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
@@ -273,7 +273,7 @@ impl SessionContext {
                     (false, true, Ok(_)) => {
                         self.deregister_table(&name)?;
                         let schema = Arc::new(input.schema().as_ref().into());
-                        let physical = DataFrame::new(self.state.clone(), input);
+                        let physical = DataFrame::new(self.state(), input);
 
                         let batches: Vec<_> = physical.collect_partitioned().await?;
                         let table = Arc::new(MemTable::try_new(schema, batches)?);
@@ -286,7 +286,7 @@ impl SessionContext {
                     )),
                     (_, _, Err(_)) => {
                         let schema = Arc::new(input.schema().as_ref().into());
-                        let physical = DataFrame::new(self.state.clone(), input);
+                        let physical = DataFrame::new(self.state(), input);
 
                         let batches: Vec<_> = physical.collect_partitioned().await?;
                         let table = Arc::new(MemTable::try_new(schema, batches)?);
@@ -363,7 +363,8 @@ impl SessionContext {
             LogicalPlan::SetVariable(SetVariable {
                 variable, value, ..
             }) => {
-                let config_options = &self.state.write().config.config_options;
+                let state = self.state.write();
+                let config_options = &state.config.config_options;
 
                 let old_value =
                     config_options.read().get(&variable).ok_or_else(|| {
@@ -410,6 +411,8 @@ impl SessionContext {
                         ))
                     }
                 }
+                drop(state);
+
                 self.return_empty_dataframe()
             }
 
@@ -475,14 +478,14 @@ impl SessionContext {
                 }
             }
 
-            plan => Ok(DataFrame::new(self.state.clone(), plan)),
+            plan => Ok(DataFrame::new(self.state(), plan)),
         }
     }
 
     // return an empty dataframe
     fn return_empty_dataframe(&self) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::empty(false).build()?;
-        Ok(DataFrame::new(self.state.clone(), plan))
+        Ok(DataFrame::new(self.state(), plan))
     }
 
     async fn create_external_table(
@@ -661,7 +664,7 @@ impl SessionContext {
     /// Creates an empty DataFrame.
     pub fn read_empty(&self) -> Result<DataFrame> {
         Ok(DataFrame::new(
-            self.state.clone(),
+            self.state(),
             LogicalPlanBuilder::empty(true).build()?,
         ))
     }
@@ -716,7 +719,7 @@ impl SessionContext {
     /// Creates a [`DataFrame`] for reading a custom [`TableProvider`].
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<DataFrame> {
         Ok(DataFrame::new(
-            self.state.clone(),
+            self.state(),
             LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
                 .build()?,
         ))
@@ -726,7 +729,7 @@ impl SessionContext {
     pub fn read_batch(&self, batch: RecordBatch) -> Result<DataFrame> {
         let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
         Ok(DataFrame::new(
-            self.state.clone(),
+            self.state(),
             LogicalPlanBuilder::scan(
                 UNNAMED_TABLE,
                 provider_as_source(Arc::new(provider)),
@@ -946,7 +949,7 @@ impl SessionContext {
             None,
         )?
         .build()?;
-        Ok(DataFrame::new(self.state.clone(), plan))
+        Ok(DataFrame::new(self.state(), plan))
     }
 
     /// Return a [`TabelProvider`] for the specified table.
@@ -1557,14 +1560,6 @@ impl SessionState {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
-        let optimizer_config = OptimizerConfig::new().filter_null_keys(
-            config
-                .config_options
-                .read()
-                .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
-                .unwrap_or_default(),
-        );
-
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
             Arc::new(JoinSelection::new()),
@@ -1593,7 +1588,7 @@ impl SessionState {
 
         SessionState {
             session_id,
-            optimizer: Optimizer::new(&optimizer_config),
+            optimizer: Optimizer::new(),
             physical_optimizers,
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
@@ -1741,24 +1736,29 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let mut optimizer_config = OptimizerConfig::new()
-            .with_skip_failing_rules(
-                self.config
-                    .config_options
-                    .read()
-                    .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
-                    .unwrap_or_default(),
-            )
-            .with_max_passes(
-                self.config
-                    .config_options
-                    .read()
-                    .get_u64(OPT_OPTIMIZER_MAX_PASSES)
-                    .unwrap_or_default() as u8,
-            )
-            .with_query_execution_start_time(
-                self.execution_props.query_execution_start_time,
-            );
+        // TODO: Implement OptimizerContext directly on DataFrame (#4631) (#4626)
+        let config = {
+            let config_options = self.config.config_options.read();
+            OptimizerContext::new()
+                .with_skip_failing_rules(
+                    config_options
+                        .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
+                        .unwrap_or_default(),
+                )
+                .with_max_passes(
+                    config_options
+                        .get_u64(OPT_OPTIMIZER_MAX_PASSES)
+                        .unwrap_or_default() as u8,
+                )
+                .with_query_execution_start_time(
+                    self.execution_props.query_execution_start_time,
+                )
+                .filter_null_keys(
+                    config_options
+                        .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
+                        .unwrap_or_default(),
+                )
+        };
 
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
@@ -1766,7 +1766,7 @@ impl SessionState {
             // optimize the child plan, capturing the output of each optimizer
             let plan = self.optimizer.optimize(
                 e.plan.as_ref(),
-                &mut optimizer_config,
+                &config,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
@@ -1781,8 +1781,7 @@ impl SessionState {
                 schema: e.schema.clone(),
             }))
         } else {
-            self.optimizer
-                .optimize(plan, &mut optimizer_config, |_, _| {})
+            self.optimizer.optimize(plan, &config, |_, _| {})
         }
     }
 

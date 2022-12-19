@@ -35,7 +35,9 @@ use datafusion_common::{
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
-    date_part, date_trunc, digest, exp, floor, from_unixtime, left, ln, log10, log2,
+    date_part, date_trunc, digest, exp,
+    expr::Sort,
+    floor, from_unixtime, left, ln, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, now, nullif, octet_length, power, random, regexp_match,
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
@@ -1058,11 +1060,11 @@ pub fn parse_expr(
             let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
             Ok(Expr::TryCast(TryCast::new(expr, data_type)))
         }
-        ExprType::Sort(sort) => Ok(Expr::Sort {
-            expr: Box::new(parse_required_expr(&sort.expr, registry, "expr")?),
-            asc: sort.asc,
-            nulls_first: sort.nulls_first,
-        }),
+        ExprType::Sort(sort) => Ok(Expr::Sort(Sort::new(
+            Box::new(parse_required_expr(&sort.expr, registry, "expr")?),
+            sort.asc,
+            sort.nulls_first,
+        ))),
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
             parse_required_expr(&negative.expr, registry, "expr")?,
         ))),
