@@ -158,6 +158,7 @@ impl MemoryReservation {
 
 impl Drop for MemoryReservation {
     fn drop(&mut self) {
+        self.free();
         self.policy.unregister(&self.consumer);
     }
 }
