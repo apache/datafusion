@@ -36,18 +36,18 @@ use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::ast::{TimezoneInfo, WildcardAdditionalOptions};
 use sqlparser::parser::ParserError::ParserError;
 
-use datafusion_common::parsers::parse_interval;
+use datafusion_common::parsers::{parse_interval, CompressionTypeVariant};
 use datafusion_common::ToDFSchema;
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_common::{OwnedTableReference, TableReference};
-use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
+use datafusion_expr::expr::{
+    Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort, TryCast,
+};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::builder::{
-    project, wrap_projection_for_join_if_necessary,
-};
+use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::Join as HashJoin;
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
@@ -620,7 +620,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))?;
         }
 
-        if file_type != "CSV" && file_type != "JSON" && !file_compression_type.is_empty()
+        if file_type != "CSV"
+            && file_type != "JSON"
+            && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
         {
             Err(DataFusionError::Plan(
                 "File compression type can be specified for CSV/JSON files.".into(),
@@ -688,7 +690,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .any(|x| x.option == ColumnOption::Null);
             fields.push(Field::new(
-                &normalize_ident(column.name),
+                normalize_ident(column.name),
                 data_type,
                 allow_null,
             ));
@@ -709,15 +711,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.plan_table_with_joins(from, planner_context)
             }
             _ => {
-                let plans = from
+                let mut plans = from
                     .into_iter()
-                    .map(|t| self.plan_table_with_joins(t, planner_context))
-                    .collect::<Result<Vec<_>>>()?;
-                let mut left = plans[0].clone();
-                for right in plans.iter().skip(1) {
-                    left = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+                    .map(|t| self.plan_table_with_joins(t, planner_context));
+
+                let mut left = LogicalPlanBuilder::from(plans.next().unwrap()?);
+
+                for right in plans {
+                    left = left.cross_join(right?)?;
                 }
-                Ok(left)
+                Ok(left.build()?)
             }
         }
     }
@@ -777,7 +780,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinOperator::FullOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Full, planner_context)
             }
-            JoinOperator::CrossJoin => self.parse_cross_join(left, &right),
+            JoinOperator::CrossJoin => self.parse_cross_join(left, right),
             other => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported JOIN operator {:?}",
                 other
@@ -788,7 +791,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn parse_cross_join(
         &self,
         left: LogicalPlan,
-        right: &LogicalPlan,
+        right: LogicalPlan,
     ) -> Result<LogicalPlan> {
         LogicalPlanBuilder::from(left).cross_join(right)?.build()
     }
@@ -843,38 +846,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if left_keys.is_empty() {
                     // TODO should not use cross join when the join_filter exists
                     // https://github.com/apache/arrow-datafusion/issues/4363
-                    let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
-                    join_filter
-                        .map(|filter| join.filter(filter))
-                        .unwrap_or(Ok(join))?
-                        .build()
-                } else {
-                    // Wrap projection for left input if left join keys contain normal expression.
-                    let (left_child, left_join_keys, left_projected) =
-                        wrap_projection_for_join_if_necessary(&left_keys, left)?;
-
-                    // Wrap projection for right input if right join keys contains normal expression.
-                    let (right_child, right_join_keys, right_projected) =
-                        wrap_projection_for_join_if_necessary(&right_keys, right)?;
-
-                    let join_plan_builder = LogicalPlanBuilder::from(left_child).join(
-                        &right_child,
-                        join_type,
-                        (left_join_keys, right_join_keys),
-                        join_filter,
-                    )?;
-
-                    // Remove temporary projected columns if necessary.
-                    if left_projected || right_projected {
-                        let final_join_result = join_schema
-                            .fields()
-                            .iter()
-                            .map(|field| Expr::Column(field.qualified_column()))
-                            .collect::<Vec<_>>();
-                        join_plan_builder.project(final_join_result)?.build()
-                    } else {
-                        join_plan_builder.build()
+                    let mut join = LogicalPlanBuilder::from(left).cross_join(right)?;
+                    if let Some(filter) = join_filter {
+                        join = join.filter(filter)?;
                     }
+                    join.build()
+                } else {
+                    LogicalPlanBuilder::from(left)
+                        .join_with_expr_keys(
+                            right,
+                            join_type,
+                            (left_keys, right_keys),
+                            join_filter,
+                        )?
+                        .build()
                 }
             }
             JoinConstraint::Using(idents) => {
@@ -883,7 +868,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(|x| Column::from_name(normalize_ident(x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
-                    .join_using(&right, join_type, keys)?
+                    .join_using(right, join_type, keys)?
                     .build()
             }
             JoinConstraint::Natural => {
@@ -1042,8 +1027,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         {
             // For query: select id from t1 join t2 using(id), this is legal.
             // We should dedup the fields for cols in using clause.
-            for join_cols in on.iter() {
-                let left_field = left.schema().field_from_column(&join_cols.0)?;
+            for join_keys in on.iter() {
+                let join_col = &join_keys.0.try_into_col()?;
+                let left_field = left.schema().field_from_column(join_col)?;
                 fields.retain(|field| {
                     field.unqualified_column().name
                         != left_field.unqualified_column().name
@@ -1496,13 +1482,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
         Ok({
             let asc = asc.unwrap_or(true);
-            Expr::Sort {
-                expr: Box::new(expr),
+            Expr::Sort(Sort::new(
+                Box::new(expr),
                 asc,
                 // when asc is true, by default nulls last to be consistent with postgres
                 // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
-                nulls_first: nulls_first.unwrap_or(!asc),
-            }
+                nulls_first.unwrap_or(!asc),
+            ))
         })
     }
 
@@ -2060,10 +2046,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::TryCast {
                 expr,
                 data_type,
-            } => Ok(Expr::TryCast {
-                expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
-                data_type: self.convert_data_type(&data_type)?,
-            }),
+            } => Ok(Expr::TryCast(TryCast::new(
+                Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
+                self.convert_data_type(&data_type)?,
+            ))),
 
             SQLExpr::TypedString {
                 data_type,
@@ -6002,12 +5988,10 @@ mod tests {
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+
         quick_test(sql, expected);
     }
 
@@ -6019,12 +6003,9 @@ mod tests {
             ON person.id + 10 = orders.customer_id * 2";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6036,12 +6017,9 @@ mod tests {
             ON person.id + person.age + 10 = orders.customer_id * 2 - orders.price";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + person.age + Int64(10) = orders.customer_id * Int64(2) - orders.price\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + person.age + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + person.age + Int64(10) = orders.customer_id * Int64(2) - orders.price\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6053,11 +6031,9 @@ mod tests {
             ON person.id + person.age + 10 = orders.customer_id";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + person.age + Int64(10) = orders.customer_id\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + person.age + Int64(10)\
-        \n        TableScan: person\
-        \n      TableScan: orders";
+        \n  Inner Join: person.id + person.age + Int64(10) = orders.customer_id\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6069,11 +6045,9 @@ mod tests {
             ON person.id = orders.customer_id * 2 - orders.price";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id = orders.customer_id * Int64(2) - orders.price\
-        \n      TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
-        \n        TableScan: orders";
+       \n  Inner Join: person.id = orders.customer_id * Int64(2) - orders.price\
+       \n    TableScan: person\
+       \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6102,12 +6076,9 @@ mod tests {
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6119,12 +6090,9 @@ mod tests {
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: orders.customer_id * Int64(2), person.id + Int64(10)\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6152,12 +6120,9 @@ mod tests {
             ON person.id * 2 = orders.customer_id + 10 and person.id * 2 = orders.order_id";
 
         let expected = "Projection: person.id, person.age\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id * Int64(2) = orders.order_id\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id * Int64(2)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id + Int64(10)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id * Int64(2) = orders.order_id\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6170,11 +6135,9 @@ mod tests {
             ON person.id * 2 = orders.customer_id + 10 and person.id =  orders.customer_id + 10";
 
         let expected = "Projection: person.id, person.age\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\n    Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id = orders.customer_id + Int64(10)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id * Int64(2)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id + Int64(10)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id = orders.customer_id + Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6592,12 +6555,9 @@ mod tests {
             ON cast(person.id as Int) = cast(orders.customer_id as Int)";
 
         let expected = "Projection: person.id, person.age\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, CAST(person.id AS Int32) AS CAST(person.id AS Int32)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, CAST(orders.customer_id AS Int32) AS CAST(orders.customer_id AS Int32)\
-        \n        TableScan: orders";
+        \n  Inner Join: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 

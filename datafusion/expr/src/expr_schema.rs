@@ -16,7 +16,7 @@
 // under the License.
 
 use super::{Between, Expr, Like};
-use crate::expr::{BinaryExpr, Cast, GetIndexedField};
+use crate::expr::{BinaryExpr, Cast, GetIndexedField, Sort, TryCast};
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::binary_operator_data_type;
 use crate::{aggregate_function, function, window_function};
@@ -54,16 +54,15 @@ impl ExprSchemable for Expr {
     /// (e.g. `[utf8] + [bool]`).
     fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType> {
         match self {
-            Expr::Alias(expr, _) | Expr::Sort { expr, .. } | Expr::Negative(expr) => {
-                expr.get_type(schema)
-            }
+            Expr::Alias(expr, _)
+            | Expr::Sort(Sort { expr, .. })
+            | Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.get_datatype()),
             Expr::Case(case) => case.when_then_expr[0].1.get_type(schema),
-            Expr::Cast(Cast { data_type, .. }) | Expr::TryCast { data_type, .. } => {
-                Ok(data_type.clone())
-            }
+            Expr::Cast(Cast { data_type, .. })
+            | Expr::TryCast(TryCast { data_type, .. }) => Ok(data_type.clone()),
             Expr::ScalarUDF { fun, args } => {
                 let data_types = args
                     .iter()
@@ -161,7 +160,7 @@ impl ExprSchemable for Expr {
             Expr::Alias(expr, _)
             | Expr::Not(expr)
             | Expr::Negative(expr)
-            | Expr::Sort { expr, .. }
+            | Expr::Sort(Sort { expr, .. })
             | Expr::InList { expr, .. } => expr.nullable(input_schema),
             Expr::Between(Between { expr, .. }) => expr.nullable(input_schema),
             Expr::Column(c) => input_schema.nullable(c),

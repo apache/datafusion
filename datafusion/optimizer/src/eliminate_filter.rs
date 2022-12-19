@@ -18,12 +18,13 @@
 //! Optimizer rule to replace `where false` on a plan with an empty relation.
 //! This saves time in planning and executing the query.
 //! Note that this rule should be applied after simplify expressions optimizer rule.
-use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     logical_plan::{EmptyRelation, LogicalPlan},
     Expr,
 };
+
+use crate::{utils, OptimizerConfig, OptimizerRule};
 
 /// Optimization rule that elimanate the scalar value (true/false) filter with an [LogicalPlan::EmptyRelation]
 #[derive(Default)]
@@ -37,20 +38,10 @@ impl EliminateFilter {
 }
 
 impl OptimizerRule for EliminateFilter {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, _optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let predicate_and_input = match plan {
             LogicalPlan::Filter(filter) => match filter.predicate() {
@@ -63,18 +54,14 @@ impl OptimizerRule for EliminateFilter {
         };
 
         match predicate_and_input {
-            Some((true, input)) => self.try_optimize(input, _optimizer_config),
+            Some((true, input)) => self.try_optimize(input, config),
             Some((false, input)) => Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
                 schema: input.schema().clone(),
             }))),
             None => {
                 // Apply the optimization to all inputs of the plan
-                Ok(Some(utils::optimize_children(
-                    self,
-                    plan,
-                    _optimizer_config,
-                )?))
+                Ok(Some(utils::optimize_children(self, plan, config)?))
             }
         }
     }
@@ -86,14 +73,18 @@ impl OptimizerRule for EliminateFilter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test::*;
     use datafusion_expr::{col, lit, logical_plan::builder::LogicalPlanBuilder, sum};
+
+    use crate::optimizer::OptimizerContext;
+    use crate::test::*;
+
+    use super::*;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = EliminateFilter::new();
         let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);

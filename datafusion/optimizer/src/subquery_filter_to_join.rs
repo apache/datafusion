@@ -49,25 +49,17 @@ impl SubqueryFilterToJoin {
 }
 
 impl OptimizerRule for SubqueryFilterToJoin {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
                 // Apply optimizer rule to current input
-                let optimized_input = self.optimize(filter.input(), optimizer_config)?;
+                let optimized_input = self
+                    .try_optimize(filter.input(), config)?
+                    .unwrap_or_else(|| filter.input().as_ref().clone());
 
                 // Splitting filter expression into components by AND
                 let filters = utils::split_conjunction(filter.predicate());
@@ -104,10 +96,10 @@ impl OptimizerRule for SubqueryFilterToJoin {
                             subquery,
                             negated,
                         } => {
-                            let right_input = self.optimize(
+                            let right_input = self.try_optimize(
                                 &subquery.subquery,
-                                optimizer_config
-                            )?;
+                                config
+                            )?.unwrap_or_else(||subquery.subquery.as_ref().clone());
                             let right_schema = right_input.schema();
                             if right_schema.fields().len() != 1 {
                                 return Err(DataFusionError::Plan(
@@ -140,7 +132,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                             Ok(LogicalPlan::Join(Join {
                                 left: Arc::new(input),
                                 right: Arc::new(right_input),
-                                on: vec![(left_key, right_key)],
+                                on: vec![(Expr::Column(left_key), Expr::Column(right_key))],
                                 filter: None,
                                 join_type,
                                 join_constraint: JoinConstraint::On,
@@ -176,11 +168,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
-                Ok(Some(utils::optimize_children(
-                    self,
-                    plan,
-                    optimizer_config,
-                )?))
+                Ok(Some(utils::optimize_children(self, plan, config)?))
             }
         }
     }
@@ -212,6 +200,7 @@ fn extract_subquery_filters(expression: &Expr, extracted: &mut Vec<Expr>) -> Res
 mod tests {
     use super::*;
     use crate::test::*;
+    use crate::OptimizerContext;
     use datafusion_expr::{
         and, binary_expr, col, in_subquery, lit, logical_plan::LogicalPlanBuilder,
         not_in_subquery, or, Operator,
@@ -220,7 +209,8 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SubqueryFilterToJoin::new();
         let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
+            .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
         assert_eq!(formatted_plan, expected);

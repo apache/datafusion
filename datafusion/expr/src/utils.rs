@@ -25,7 +25,9 @@ use crate::logical_plan::{
     Limit, Partitioning, Prepare, Projection, Repartition, Sort, Subquery, SubqueryAlias,
     Union, Values, Window,
 };
-use crate::{Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, TableScan};
+use crate::{
+    Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, TableScan, TryCast,
+};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
@@ -591,7 +593,7 @@ pub fn from_plan(
         }
         LogicalPlan::CrossJoin(_) => {
             let left = inputs[0].clone();
-            let right = &inputs[1];
+            let right = inputs[1].clone();
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }
         LogicalPlan::Subquery(_) => {
@@ -788,10 +790,10 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
             expr: Box::new(columnize_expr(*expr, input_schema)),
             data_type,
         }),
-        Expr::TryCast { expr, data_type } => Expr::TryCast {
-            expr: Box::new(columnize_expr(*expr, input_schema)),
+        Expr::TryCast(TryCast { expr, data_type }) => Expr::TryCast(TryCast::new(
+            Box::new(columnize_expr(*expr, input_schema)),
             data_type,
-        },
+        )),
         Expr::ScalarSubquery(_) => e.clone(),
         _ => match e.display_name() {
             Ok(name) => match input_schema.field_with_unqualified_name(&name) {
@@ -943,7 +945,7 @@ pub fn check_all_column_from_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{col, AggregateFunction, WindowFrame, WindowFunction};
+    use crate::{col, expr, AggregateFunction, WindowFrame, WindowFunction};
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
@@ -994,21 +996,10 @@ mod tests {
 
     #[test]
     fn test_group_window_expr_by_sort_keys() -> Result<()> {
-        let age_asc = Expr::Sort {
-            expr: Box::new(col("age")),
-            asc: true,
-            nulls_first: true,
-        };
-        let name_desc = Expr::Sort {
-            expr: Box::new(col("name")),
-            asc: false,
-            nulls_first: true,
-        };
-        let created_at_desc = Expr::Sort {
-            expr: Box::new(col("created_at")),
-            asc: false,
-            nulls_first: true,
-        };
+        let age_asc = Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true));
+        let name_desc = Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true));
+        let created_at_desc =
+            Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true));
         let max1 = Expr::WindowFunction {
             fun: WindowFunction::AggregateFunction(AggregateFunction::Max),
             args: vec![col("name")],
@@ -1062,16 +1053,8 @@ mod tests {
                 args: vec![col("name")],
                 partition_by: vec![],
                 order_by: vec![
-                    Expr::Sort {
-                        expr: Box::new(col("age")),
-                        asc: true,
-                        nulls_first: true,
-                    },
-                    Expr::Sort {
-                        expr: Box::new(col("name")),
-                        asc: false,
-                        nulls_first: true,
-                    },
+                    Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
+                    Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
                 ],
                 window_frame: WindowFrame::new(true),
             },
@@ -1080,41 +1063,17 @@ mod tests {
                 args: vec![col("age")],
                 partition_by: vec![],
                 order_by: vec![
-                    Expr::Sort {
-                        expr: Box::new(col("name")),
-                        asc: false,
-                        nulls_first: true,
-                    },
-                    Expr::Sort {
-                        expr: Box::new(col("age")),
-                        asc: true,
-                        nulls_first: true,
-                    },
-                    Expr::Sort {
-                        expr: Box::new(col("created_at")),
-                        asc: false,
-                        nulls_first: true,
-                    },
+                    Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
+                    Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
+                    Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true)),
                 ],
                 window_frame: WindowFrame::new(true),
             },
         ];
         let expected = vec![
-            Expr::Sort {
-                expr: Box::new(col("age")),
-                asc: true,
-                nulls_first: true,
-            },
-            Expr::Sort {
-                expr: Box::new(col("name")),
-                asc: false,
-                nulls_first: true,
-            },
-            Expr::Sort {
-                expr: Box::new(col("created_at")),
-                asc: false,
-                nulls_first: true,
-            },
+            Expr::Sort(expr::Sort::new(Box::new(col("age")), true, true)),
+            Expr::Sort(expr::Sort::new(Box::new(col("name")), false, true)),
+            Expr::Sort(expr::Sort::new(Box::new(col("created_at")), false, true)),
         ];
         let result = find_sort_exprs(exprs);
         assert_eq!(expected, result);

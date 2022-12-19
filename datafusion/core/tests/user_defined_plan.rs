@@ -282,11 +282,11 @@ impl QueryPlanner for TopKQueryPlanner {
 struct TopKOptimizerRule {}
 impl OptimizerRule for TopKOptimizerRule {
     // Example rewrite pass to insert a user defined LogicalPlanNode
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many
         // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
@@ -304,20 +304,22 @@ impl OptimizerRule for TopKOptimizerRule {
             {
                 if expr.len() == 1 {
                     // we found a sort with a single sort expr, replace with a a TopK
-                    return Ok(LogicalPlan::Extension(Extension {
+                    return Ok(Some(LogicalPlan::Extension(Extension {
                         node: Arc::new(TopKPlanNode {
                             k: *fetch,
-                            input: self.optimize(input.as_ref(), optimizer_config)?,
+                            input: self
+                                .try_optimize(input.as_ref(), config)?
+                                .unwrap_or_else(|| input.as_ref().clone()),
                             expr: expr[0].clone(),
                         }),
-                    }));
+                    })));
                 }
             }
         }
 
         // If we didn't find the Limit/Sort combination, recurse as
         // normal and build the result.
-        optimize_children(self, plan, optimizer_config)
+        Ok(Some(optimize_children(self, plan, config)?))
     }
 
     fn name(&self) -> &str {

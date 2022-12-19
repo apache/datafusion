@@ -83,20 +83,10 @@ fn contains_grouping_set(expr: &[Expr]) -> bool {
 }
 
 impl OptimizerRule for SingleDistinctToGroupBy {
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        Ok(self
-            .try_optimize(plan, optimizer_config)?
-            .unwrap_or_else(|| plan.clone()))
-    }
-
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Aggregate(Aggregate {
@@ -166,7 +156,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         Vec::new(),
                     )?);
                     let inner_agg =
-                        utils::optimize_children(self, &grouped_aggr, _optimizer_config)?;
+                        utils::optimize_children(self, &grouped_aggr, config)?;
 
                     let outer_aggr_schema = Arc::new(DFSchema::new_with_metadata(
                         outer_group_exprs
@@ -184,7 +174,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     let mut alias_expr: Vec<Expr> = Vec::new();
                     for (alias, original_field) in group_expr_alias {
                         alias_expr
-                            .push(col(&alias).alias(original_field.qualified_name()));
+                            .push(col(alias).alias(original_field.qualified_name()));
                     }
                     for (i, expr) in new_aggr_exprs.iter().enumerate() {
                         alias_expr.push(columnize_expr(
@@ -210,18 +200,10 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         )?,
                     )))
                 } else {
-                    Ok(Some(utils::optimize_children(
-                        self,
-                        plan,
-                        _optimizer_config,
-                    )?))
+                    Ok(Some(utils::optimize_children(self, plan, config)?))
                 }
             }
-            _ => Ok(Some(utils::optimize_children(
-                self,
-                plan,
-                _optimizer_config,
-            )?)),
+            _ => Ok(Some(utils::optimize_children(self, plan, config)?)),
         }
     }
     fn name(&self) -> &str {
@@ -233,6 +215,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 mod tests {
     use super::*;
     use crate::test::*;
+    use crate::OptimizerContext;
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::{
         col, count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max,
@@ -242,7 +225,8 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SingleDistinctToGroupBy::new();
         let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
+            .unwrap()
             .expect("failed to optimize plan");
 
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
