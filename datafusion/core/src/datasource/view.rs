@@ -493,12 +493,10 @@ mod tests {
         let view_sql = "CREATE VIEW xyz AS SELECT * FROM abc";
         session_ctx.sql(view_sql).await?.collect().await?;
 
-        let plan = session_ctx
+        let dataframe = session_ctx
             .sql("EXPLAIN CREATE VIEW xyz AS SELECT * FROM abc")
-            .await?
-            .to_logical_plan()
-            .unwrap();
-        let plan = session_ctx.optimize(&plan).unwrap();
+            .await?;
+        let plan = dataframe.to_optimized_plan()?;
         let actual = format!("{}", plan.display_indent());
         let expected = "\
         Explain\
@@ -507,12 +505,10 @@ mod tests {
         \n      TableScan: abc projection=[column1, column2, column3]";
         assert_eq!(expected, actual);
 
-        let plan = session_ctx
+        let dataframe = session_ctx
             .sql("EXPLAIN CREATE VIEW xyz AS SELECT * FROM abc WHERE column2 = 5")
-            .await?
-            .to_logical_plan()
-            .unwrap();
-        let plan = session_ctx.optimize(&plan).unwrap();
+            .await?;
+        let plan = dataframe.to_optimized_plan()?;
         let actual = format!("{}", plan.display_indent());
         let expected = "\
         Explain\
@@ -522,12 +518,10 @@ mod tests {
         \n        TableScan: abc projection=[column1, column2, column3]";
         assert_eq!(expected, actual);
 
-        let plan = session_ctx
+        let dataframe = session_ctx
             .sql("EXPLAIN CREATE VIEW xyz AS SELECT column1, column2 FROM abc WHERE column2 = 5")
-            .await?
-            .to_logical_plan()
-            .unwrap();
-        let plan = session_ctx.optimize(&plan).unwrap();
+            .await?;
+        let plan = dataframe.to_optimized_plan()?;
         let actual = format!("{}", plan.display_indent());
         let expected = "\
         Explain\

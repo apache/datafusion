@@ -643,7 +643,7 @@ mod tests {
         let sql = get_query_sql(query)?;
         for sql in &sql {
             let df = ctx.sql(sql.as_str()).await?;
-            let plan = df.to_logical_plan()?;
+            let plan = df.to_optimized_plan()?;
             if !actual.is_empty() {
                 actual += "\n";
             }

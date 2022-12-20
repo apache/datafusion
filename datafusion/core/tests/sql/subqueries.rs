@@ -45,10 +45,10 @@ where c_acctbal < (
 ) order by c_custkey;"#;
 
     // assert plan
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    debug!("input:\n{}", plan.display_indent());
+    let dataframe = ctx.sql(sql).await.unwrap();
+    debug!("input:\n{}", dataframe.logical_plan().display_indent());
 
-    let plan = ctx.optimize(&plan).unwrap();
+    let plan = dataframe.to_optimized_plan().unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = "Sort: customer.c_custkey ASC NULLS LAST\
     \n  Projection: customer.c_custkey\
@@ -91,8 +91,8 @@ where o_orderstatus in (
 );"#;
 
     // assert plan
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let plan = dataframe.to_optimized_plan().unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = "Projection: orders.o_orderkey\
     \n  LeftSemi Join: orders.o_orderstatus = __sq_1.l_linestatus, orders.o_orderkey = __sq_1.l_orderkey\
@@ -137,8 +137,8 @@ where p_partkey = ps_partkey and s_suppkey = ps_suppkey and p_size = 15 and p_ty
 order by s_acctbal desc, n_name, s_name, p_partkey;"#;
 
     // assert plan
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let plan = dataframe.to_optimized_plan().unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = "Sort: supplier.s_acctbal DESC NULLS FIRST, nation.n_name ASC NULLS LAST, supplier.s_name ASC NULLS LAST, part.p_partkey ASC NULLS LAST\
     \n  Projection: supplier.s_acctbal, supplier.s_name, nation.n_name, part.p_partkey, part.p_mfgr, supplier.s_address, supplier.s_phone, supplier.s_comment\
@@ -201,8 +201,8 @@ async fn tpch_q4_correlated() -> Result<()> {
         "#;
 
     // assert plan
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let plan = dataframe.to_optimized_plan().unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Sort: orders.o_orderpriority ASC NULLS LAST
   Projection: orders.o_orderpriority, COUNT(UInt8(1)) AS order_count
@@ -252,15 +252,8 @@ async fn tpch_q17_correlated() -> Result<()> {
         );"#;
 
     // assert plan
-    let plan = ctx
-        .create_logical_plan(sql)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
-    println!("before:\n{}", plan.display_indent());
-    let plan = ctx
-        .optimize(&plan)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let plan = dataframe.to_optimized_plan().unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = r#"Projection: CAST(SUM(lineitem.l_extendedprice) AS Decimal128(38, 33)) / CAST(Float64(7) AS Decimal128(38, 33)) AS avg_yearly
   Aggregate: groupBy=[[]], aggr=[[SUM(lineitem.l_extendedprice)]]
@@ -313,14 +306,8 @@ order by s_name;
 "#;
 
     // assert plan
-    let plan = ctx
-        .create_logical_plan(sql)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
-    let plan = ctx
-        .optimize(&plan)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let plan = dataframe.to_optimized_plan().unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = "Sort: supplier.s_name ASC NULLS LAST\
     \n  Projection: supplier.s_name, supplier.s_address\
@@ -374,14 +361,8 @@ group by cntrycode
 order by cntrycode;"#;
 
     // assert plan
-    let plan = ctx
-        .create_logical_plan(sql)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
-    let plan = ctx
-        .optimize(&plan)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let plan = dataframe.to_optimized_plan().unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected = "Sort: custsale.cntrycode ASC NULLS LAST\
     \n  Projection: custsale.cntrycode, COUNT(UInt8(1)) AS numcust, SUM(custsale.c_acctbal) AS totacctbal\
@@ -436,14 +417,8 @@ order by value desc;
 "#;
 
     // assert plan
-    let plan = ctx
-        .create_logical_plan(sql)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
-    let plan = ctx
-        .optimize(&plan)
-        .map_err(|e| format!("{:?} at {}", e, "error"))
-        .unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let plan = dataframe.to_optimized_plan().unwrap();
     let actual = format!("{}", plan.display_indent());
     let expected =  "Sort: value DESC NULLS FIRST\
     \n  Projection: partsupp.ps_partkey, SUM(partsupp.ps_supplycost * partsupp.ps_availqty) AS value\

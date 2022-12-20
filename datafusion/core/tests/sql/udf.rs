@@ -77,7 +77,7 @@ async fn scalar_udf() -> Result<()> {
 
     let t = ctx.table("t")?;
 
-    let plan = LogicalPlanBuilder::from(t.to_logical_plan()?)
+    let plan = LogicalPlanBuilder::from(t.to_optimized_plan()?)
         .project(vec![
             col("a"),
             col("b"),
@@ -169,8 +169,8 @@ async fn simple_udaf() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn udaf_as_window_func() -> Result<()> {
+#[tokio::test]
+async fn udaf_as_window_func() -> Result<()> {
     #[derive(Debug)]
     struct MyAccumulator;
 
@@ -222,7 +222,7 @@ fn udaf_as_window_func() -> Result<()> {
   WindowAggr: windowExpr=[[AggregateUDF { name: "my_acc", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" }(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
     TableScan: my_table"#;
 
-    let plan = context.create_logical_plan(sql)?;
+    let plan = context.sql(sql).await.unwrap();
     assert_eq!(format!("{:?}", plan), expected);
     Ok(())
 }

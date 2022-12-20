@@ -581,9 +581,8 @@ async fn multiple_or_predicates() -> Result<()> {
             and p_size between 1 and 15
         )";
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let plan = dataframe.to_optimized_plan().unwrap();
     // Note that we expect `part.p_partkey = lineitem.l_partkey` to have been
     // factored out and appear only once in the following plan
     let expected = vec![
@@ -644,10 +643,8 @@ where
         group by p_partkey
         ;"#;
 
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let plan = dataframe.to_optimized_plan().unwrap();
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     let expected =vec![

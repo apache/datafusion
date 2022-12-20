@@ -208,7 +208,7 @@ async fn custom_source_dataframe() -> Result<()> {
     let ctx = SessionContext::new();
 
     let table = ctx.read_table(Arc::new(CustomTableProvider))?;
-    let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan()?)
+    let logical_plan = LogicalPlanBuilder::from(table.to_optimized_plan()?)
         .project(vec![col("c2")])?
         .build()?;
 
@@ -262,7 +262,7 @@ async fn optimizers_catch_all_statistics() {
         .unwrap();
 
     let physical_plan = ctx
-        .create_physical_plan(&df.to_logical_plan().unwrap())
+        .create_physical_plan(&df.to_optimized_plan().unwrap())
         .await
         .unwrap();
 
