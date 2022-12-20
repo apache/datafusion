@@ -211,9 +211,7 @@ pub fn signature_for_built_in(fun: &BuiltInWindowFunction) -> Signature {
         BuiltInWindowFunction::FirstValue | BuiltInWindowFunction::LastValue => {
             Signature::any(1, Volatility::Immutable)
         }
-        BuiltInWindowFunction::Ntile => {
-            Signature::exact(vec![DataType::Int64], Volatility::Immutable)
-        }
+        BuiltInWindowFunction::Ntile => Signature::any(1, Volatility::Immutable),
         BuiltInWindowFunction::NthValue => Signature::any(2, Volatility::Immutable),
     }
 }

@@ -32,11 +32,11 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Ntile {
     name: String,
-    n: i64,
+    n: u64,
 }
 
 impl Ntile {
-    pub fn new(name: String, n: i64) -> Self {
+    pub fn new(name: String, n: u64) -> Self {
         Self { name, n }
     }
 }
@@ -61,7 +61,7 @@ impl BuiltInWindowFunctionExpr for Ntile {
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        Ok(Box::new(NtileEvaluator { n: self.n as u64 }))
+        Ok(Box::new(NtileEvaluator { n: self.n }))
     }
 }
 
