@@ -2279,9 +2279,7 @@ async fn right_semi_join() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "Test ignored, will be enabled after fixing cross join bug"]
-// https://github.com/apache/arrow-datafusion/issues/4363
-async fn error_cross_join() -> Result<()> {
+async fn left_join_with_nonequal_condition() -> Result<()> {
     let test_repartition_joins = vec![true, false];
     for repartition_joins in test_repartition_joins {
         let ctx = create_join_context("t1_id", "t2_id", repartition_joins).unwrap();
