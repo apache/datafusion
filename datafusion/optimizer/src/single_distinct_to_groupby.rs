@@ -21,6 +21,7 @@ use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::{
     col,
+    expr::AggregateFunction,
     logical_plan::{Aggregate, LogicalPlan, Projection},
     utils::columnize_expr,
     Expr, ExprSchemable,
@@ -61,7 +62,10 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
             let mut fields_set = HashSet::new();
             let mut distinct_count = 0;
             for expr in aggr_expr {
-                if let Expr::AggregateFunction { distinct, args, .. } = expr {
+                if let Expr::AggregateFunction(AggregateFunction {
+                    distinct, args, ..
+                }) = expr
+                {
                     if *distinct {
                         distinct_count += 1;
                     }
@@ -121,21 +125,24 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     let new_aggr_exprs = aggr_expr
                         .iter()
                         .map(|aggr_expr| match aggr_expr {
-                            Expr::AggregateFunction {
-                                fun, args, filter, ..
-                            } => {
+                            Expr::AggregateFunction(AggregateFunction {
+                                fun,
+                                args,
+                                filter,
+                                ..
+                            }) => {
                                 // is_single_distinct_agg ensure args.len=1
                                 if group_fields_set.insert(args[0].display_name()?) {
                                     inner_group_exprs.push(
                                         args[0].clone().alias(SINGLE_DISTINCT_ALIAS),
                                     );
                                 }
-                                Ok(Expr::AggregateFunction {
-                                    fun: fun.clone(),
-                                    args: vec![col(SINGLE_DISTINCT_ALIAS)],
-                                    distinct: false, // intentional to remove distinct here
-                                    filter: filter.clone(),
-                                })
+                                Ok(Expr::AggregateFunction(AggregateFunction::new(
+                                    fun.clone(),
+                                    vec![col(SINGLE_DISTINCT_ALIAS)],
+                                    false, // intentional to remove distinct here
+                                    filter.clone(),
+                                )))
                             }
                             _ => Ok(aggr_expr.clone()),
                         })
@@ -216,6 +223,7 @@ mod tests {
     use super::*;
     use crate::test::*;
     use crate::OptimizerContext;
+    use datafusion_expr::expr;
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::{
         col, count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max,
@@ -392,12 +400,12 @@ mod tests {
                 vec![col("a")],
                 vec![
                     count_distinct(col("b")),
-                    Expr::AggregateFunction {
-                        fun: AggregateFunction::Max,
-                        distinct: true,
-                        args: vec![col("b")],
-                        filter: None,
-                    },
+                    Expr::AggregateFunction(expr::AggregateFunction::new(
+                        AggregateFunction::Max,
+                        vec![col("b")],
+                        true,
+                        None,
+                    )),
                 ],
             )?
             .build()?;

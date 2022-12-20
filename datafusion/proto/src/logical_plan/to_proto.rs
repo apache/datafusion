@@ -35,7 +35,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, Sort,
+    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -533,13 +533,13 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::SimilarTo(pb)),
                 }
             }
-            Expr::WindowFunction {
+            Expr::WindowFunction(expr::WindowFunction {
                 ref fun,
                 ref args,
                 ref partition_by,
                 ref order_by,
                 ref window_frame,
-            } => {
+            }) => {
                 let window_function = match fun {
                     WindowFunction::AggregateFunction(fun) => {
                         protobuf::window_expr_node::WindowFunction::AggrFunction(
@@ -581,12 +581,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::WindowExpr(window_expr)),
                 }
             }
-            Expr::AggregateFunction {
+            Expr::AggregateFunction(expr::AggregateFunction {
                 ref fun,
                 ref args,
                 ref distinct,
                 ref filter
-            } => {
+            }) => {
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
                         protobuf::AggregateFunction::ApproxDistinct
