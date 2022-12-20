@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// The implementation is taken from https://github.com/spebern/moving_min_max/blob/master/src/lib.rs.
+
 //! Keep track of the minimum or maximum value in a sliding window.
 //!
 //! `moving min max` provides one data structure for keeping track of the
