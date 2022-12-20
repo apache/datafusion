@@ -30,7 +30,7 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
-use crate::physical_plan::sorts::sort::SortOptions;
+use crate::physical_plan::sorts::sort::{SortExec, SortOptions};
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;

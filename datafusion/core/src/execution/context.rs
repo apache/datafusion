@@ -99,8 +99,8 @@ use url::Url;
 
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
-use crate::physical_optimizer::remove_unnecessary_sorts::RemoveUnnecessarySorts;
 use crate::execution::memory_pool::MemoryPool;
+use crate::physical_optimizer::remove_unnecessary_sorts::RemoveUnnecessarySorts;
 use uuid::Uuid;
 
 use super::options::{
