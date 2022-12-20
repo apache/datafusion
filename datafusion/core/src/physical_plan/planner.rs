@@ -62,7 +62,8 @@ use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, TryCast,
+    self, AggregateFunction, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet,
+    Like, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan;
@@ -190,15 +191,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::ScalarUDF { fun, args, .. } => {
             create_function_physical_name(&fun.name, false, args)
         }
-        Expr::WindowFunction { fun, args, .. } => {
+        Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
             create_function_physical_name(&fun.to_string(), false, args)
         }
-        Expr::AggregateFunction {
+        Expr::AggregateFunction(AggregateFunction {
             fun,
             distinct,
             args,
             ..
-        } => create_function_physical_name(&fun.to_string(), *distinct, args),
+        }) => create_function_physical_name(&fun.to_string(), *distinct, args),
         Expr::AggregateUDF { fun, args, filter } => {
             if filter.is_some() {
                 return Err(DataFusionError::Execution(
@@ -547,18 +548,18 @@ impl DefaultPhysicalPlanner {
                     };
 
                     let get_sort_keys = |expr: &Expr| match expr {
-                        Expr::WindowFunction {
+                        Expr::WindowFunction(WindowFunction{
                             ref partition_by,
                             ref order_by,
                             ..
-                        } => generate_sort_key(partition_by, order_by),
+                        }) => generate_sort_key(partition_by, order_by),
                         Expr::Alias(expr, _) => {
                             // Convert &Box<T> to &T
                             match &**expr {
-                                Expr::WindowFunction {
+                                Expr::WindowFunction(WindowFunction{
                                     ref partition_by,
                                     ref order_by,
-                                    ..} => generate_sort_key(partition_by, order_by),
+                                    ..}) => generate_sort_key(partition_by, order_by),
                                 _ => unreachable!(),
                             }
                         }
@@ -1502,13 +1503,13 @@ pub fn create_window_expr_with_name(
 ) -> Result<Arc<dyn WindowExpr>> {
     let name = name.into();
     match e {
-        Expr::WindowFunction {
+        Expr::WindowFunction(WindowFunction {
             fun,
             args,
             partition_by,
             order_by,
             window_frame,
-        } => {
+        }) => {
             let args = args
                 .iter()
                 .map(|e| {
@@ -1608,12 +1609,12 @@ pub fn create_aggregate_expr_with_name(
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn AggregateExpr>> {
     match e {
-        Expr::AggregateFunction {
+        Expr::AggregateFunction(AggregateFunction {
             fun,
             distinct,
             args,
             ..
-        } => {
+        }) => {
             let args = args
                 .iter()
                 .map(|e| {

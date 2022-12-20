@@ -43,7 +43,7 @@ use datafusion_common::{
 };
 use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort, TryCast,
+    self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort, TryCast,
 };
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
@@ -2260,9 +2260,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::AggregateExpressionWithFilter { expr, filter } => {
                 match self.sql_expr_to_logical_expr(*expr, schema, planner_context)? {
-                    Expr::AggregateFunction {
+                    Expr::AggregateFunction(expr::AggregateFunction {
                         fun, args, distinct, ..
-                    } => Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, planner_context)?)) }),
+                    }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new( fun, args, distinct, Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, planner_context)?)) ))),
                     _ => Err(DataFusionError::Internal("AggregateExpressionWithFilter expression was not an AggregateFunction".to_string()))
                 }
             }
@@ -2334,24 +2334,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 schema,
                             )?;
 
-                            Expr::WindowFunction {
-                                fun: WindowFunction::AggregateFunction(
+                            Expr::WindowFunction(expr::WindowFunction::new(
+                                 WindowFunction::AggregateFunction(
                                     aggregate_fun,
                                 ),
                                 args,
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            }
+                            ))
                         }
                         _ => {
-                            Expr::WindowFunction {
+                            Expr::WindowFunction(expr::WindowFunction::new(
                                 fun,
-                                args: self.function_args_to_expr(function.args, schema)?,
+                                self.function_args_to_expr(function.args, schema)?,
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            }
+                            ))
                         }
                     };
                     return Ok(expr);
@@ -2361,12 +2361,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if let Ok(fun) = AggregateFunction::from_str(&name) {
                     let distinct = function.distinct;
                     let (fun, args) = self.aggregate_fn_to_expr(fun, function.args, schema)?;
-                    return Ok(Expr::AggregateFunction {
+                    return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                         fun,
-                        distinct,
                         args,
-                        filter: None,
-                    });
+                        distinct,
+                        None,
+                    )));
                 };
 
                 // finally, user-defined functions (UDF) and UDAF
@@ -2528,12 +2528,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // next, aggregate built-ins
         let fun = AggregateFunction::ArrayAgg;
 
-        Ok(Expr::AggregateFunction {
-            fun,
-            distinct,
-            args,
-            filter: None,
-        })
+        Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
+            fun, args, distinct, None,
+        )))
     }
 
     fn function_args_to_expr(
