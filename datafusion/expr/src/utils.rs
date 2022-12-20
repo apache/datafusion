@@ -481,6 +481,8 @@ pub fn from_plan(
                 build_join_schema(inputs[0].schema(), inputs[1].schema(), join_type)?;
 
             let equi_expr_count = on.len();
+            assert!(expr.len() >= equi_expr_count);
+
             // The preceding part of expr is equi-exprs,
             // and the struct of each equi-expr is like `left-expr = right-expr`.
             let new_on:Vec<(Expr,Expr)> = expr.iter().take(equi_expr_count).map(|equi_expr| {
@@ -498,7 +500,7 @@ pub fn from_plan(
             // Assume that the last expr, if any,
             // is the filter_expr (non equality predicate from ON clause)
             let filter_expr =
-                (expr.len() > on.len()).then(|| expr[expr.len() - 1].clone());
+                (expr.len() > equi_expr_count).then(|| expr[expr.len() - 1].clone());
 
             Ok(LogicalPlan::Join(Join {
                 left: Arc::new(inputs[0].clone()),
