@@ -582,7 +582,7 @@ impl DefaultPhysicalPlanner {
                         let physical_input_schema = input_exec.schema();
                         let sort_keys = sort_keys
                             .iter()
-                            .map(|e| match e {
+                            .map(|(e, _)| match e {
                                 Expr::Sort(expr::Sort {
                                     expr,
                                     asc,
