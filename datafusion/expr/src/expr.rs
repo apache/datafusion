@@ -150,14 +150,7 @@ pub enum Expr {
     /// This expression is guaranteed to have a fixed type.
     TryCast(TryCast),
     /// A sort expression, that can be used to sort values.
-    Sort {
-        /// The expression to sort on
-        expr: Box<Expr>,
-        /// The direction of the sort
-        asc: bool,
-        /// Whether to put Nulls before all other data values
-        nulls_first: bool,
-    },
+    Sort(Sort),
     /// Represents the call of a built-in scalar function with a set of arguments.
     ScalarFunction {
         /// The function
@@ -457,6 +450,28 @@ impl TryCast {
     }
 }
 
+/// SORT expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Sort {
+    /// The expression to sort on
+    pub expr: Box<Expr>,
+    /// The direction of the sort
+    pub asc: bool,
+    /// Whether to put Nulls before all other data values
+    pub nulls_first: bool,
+}
+
+impl Sort {
+    /// Create a new Sort expression
+    pub fn new(expr: Box<Expr>, asc: bool, nulls_first: bool) -> Self {
+        Self {
+            expr,
+            asc,
+            nulls_first,
+        }
+    }
+}
+
 /// Grouping sets
 /// See https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS
 /// for Postgres definition.
@@ -687,11 +702,7 @@ impl Expr {
     /// let sort_expr = col("foo").sort(true, true); // SORT ASC NULLS_FIRST
     /// ```
     pub fn sort(self, asc: bool, nulls_first: bool) -> Expr {
-        Expr::Sort {
-            expr: Box::new(self),
-            asc,
-            nulls_first,
-        }
+        Expr::Sort(Sort::new(Box::new(self), asc, nulls_first))
     }
 
     /// Return `IsTrue(Box(self))`
@@ -834,11 +845,11 @@ impl fmt::Debug for Expr {
             } => write!(f, "{:?} IN ({:?})", expr, subquery),
             Expr::ScalarSubquery(subquery) => write!(f, "({:?})", subquery),
             Expr::BinaryExpr(expr) => write!(f, "{}", expr),
-            Expr::Sort {
+            Expr::Sort(Sort {
                 expr,
                 asc,
                 nulls_first,
-            } => {
+            }) => {
                 if *asc {
                     write!(f, "{:?} ASC", expr)?;
                 } else {

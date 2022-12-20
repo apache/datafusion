@@ -46,11 +46,10 @@ impl OptimizerRule for SimplifyExpressions {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let mut execution_props = ExecutionProps::new();
-        execution_props.query_execution_start_time =
-            optimizer_config.query_execution_start_time();
+        execution_props.query_execution_start_time = config.query_execution_start_time();
         Ok(Some(Self::optimize_internal(plan, &execution_props)?))
     }
 }
@@ -128,6 +127,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::{or, Between, BinaryExpr, Cast, Operator};
 
+    use crate::OptimizerContext;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr,
@@ -172,7 +172,7 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let rule = SimplifyExpressions::new();
         let optimized_plan = rule
-            .try_optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
@@ -380,12 +380,11 @@ mod tests {
 
     // expect optimizing will result in an error, returning the error string
     fn get_optimized_plan_err(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
-        let mut config =
-            OptimizerConfig::new().with_query_execution_start_time(*date_time);
+        let config = OptimizerContext::new().with_query_execution_start_time(*date_time);
         let rule = SimplifyExpressions::new();
 
         let err = rule
-            .try_optimize(plan, &mut config)
+            .try_optimize(plan, &config)
             .expect_err("expected optimization to fail");
 
         err.to_string()
@@ -395,12 +394,11 @@ mod tests {
         plan: &LogicalPlan,
         date_time: &DateTime<Utc>,
     ) -> String {
-        let mut config =
-            OptimizerConfig::new().with_query_execution_start_time(*date_time);
+        let config = OptimizerContext::new().with_query_execution_start_time(*date_time);
         let rule = SimplifyExpressions::new();
 
         let optimized_plan = rule
-            .try_optimize(plan, &mut config)
+            .try_optimize(plan, &config)
             .unwrap()
             .expect("failed to optimize plan");
         format!("{:?}", optimized_plan)

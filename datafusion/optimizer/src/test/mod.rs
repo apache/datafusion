@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{OptimizerConfig, OptimizerRule};
+use crate::{OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
 use datafusion_expr::{col, logical_plan::table_scan, LogicalPlan, LogicalPlanBuilder};
@@ -107,7 +107,7 @@ pub fn assert_optimized_plan_eq(
     expected: &str,
 ) {
     let optimized_plan = rule
-        .try_optimize(plan, &mut OptimizerConfig::new())
+        .try_optimize(plan, &OptimizerContext::new())
         .unwrap()
         .expect("failed to optimize plan");
     let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
@@ -119,7 +119,7 @@ pub fn assert_optimizer_err(
     plan: &LogicalPlan,
     expected: &str,
 ) {
-    let res = rule.try_optimize(plan, &mut OptimizerConfig::new());
+    let res = rule.try_optimize(plan, &OptimizerContext::new());
     match res {
         Ok(plan) => assert_eq!(format!("{}", plan.unwrap().display_indent()), "An error"),
         Err(ref e) => {
@@ -133,7 +133,7 @@ pub fn assert_optimizer_err(
 
 pub fn assert_optimization_skipped(rule: &dyn OptimizerRule, plan: &LogicalPlan) {
     let new_plan = rule
-        .try_optimize(plan, &mut OptimizerConfig::new())
+        .try_optimize(plan, &OptimizerContext::new())
         .unwrap()
         .unwrap();
     assert_eq!(

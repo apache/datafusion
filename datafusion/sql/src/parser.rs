@@ -19,6 +19,7 @@
 //!
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
+use datafusion_common::parsers::CompressionTypeVariant;
 use sqlparser::{
     ast::{
         ColumnDef, ColumnOptionDef, ObjectName, Statement as SQLStatement,
@@ -28,7 +29,7 @@ use sqlparser::{
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 use std::{collections::VecDeque, fmt};
 
 // Use `Parser::expected` instead, if possible
@@ -39,10 +40,6 @@ macro_rules! parser_err {
 }
 
 fn parse_file_type(s: &str) -> Result<String, ParserError> {
-    Ok(s.to_uppercase())
-}
-
-fn parse_file_compression_type(s: &str) -> Result<String, ParserError> {
     Ok(s.to_uppercase())
 }
 
@@ -66,7 +63,7 @@ pub struct CreateExternalTable {
     /// Option to not error if table already exists
     pub if_not_exists: bool,
     /// File compression type (GZIP, BZIP2, XZ)
-    pub file_compression_type: String,
+    pub file_compression_type: CompressionTypeVariant,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
 }
@@ -341,7 +338,7 @@ impl<'a> DFParser<'a> {
         let file_compression_type = if self.parse_has_file_compression_type() {
             self.parse_file_compression_type()?
         } else {
-            "".to_string()
+            CompressionTypeVariant::UNCOMPRESSED
         };
 
         let table_partition_cols = if self.parse_has_partition() {
@@ -383,9 +380,11 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parses the set of
-    fn parse_file_compression_type(&mut self) -> Result<String, ParserError> {
+    fn parse_file_compression_type(
+        &mut self,
+    ) -> Result<CompressionTypeVariant, ParserError> {
         match self.parser.next_token() {
-            Token::Word(w) => parse_file_compression_type(&w.value),
+            Token::Word(w) => CompressionTypeVariant::from_str(&w.value),
             unexpected => self.expected("one of GZIP, BZIP2, XZ", unexpected),
         }
     }
@@ -451,6 +450,7 @@ impl<'a> DFParser<'a> {
 mod tests {
     use super::*;
     use sqlparser::ast::{DataType, Ident};
+    use CompressionTypeVariant::UNCOMPRESSED;
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
         let statements = DFParser::parse_sql(sql)?;
@@ -510,7 +510,7 @@ mod tests {
             location: "foo.csv".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -527,7 +527,7 @@ mod tests {
             location: "foo.csv".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -544,7 +544,7 @@ mod tests {
             location: "foo.csv".into(),
             table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -564,7 +564,7 @@ mod tests {
                 location: "foo.csv".into(),
                 table_partition_cols: vec![],
                 if_not_exists: false,
-                file_compression_type: "".to_string(),
+                file_compression_type: UNCOMPRESSED,
                 options: HashMap::new(),
             });
             expect_parse_ok(sql, expected)?;
@@ -586,7 +586,9 @@ mod tests {
                 location: "foo.csv".into(),
                 table_partition_cols: vec![],
                 if_not_exists: false,
-                file_compression_type: file_compression_type.to_owned(),
+                file_compression_type: CompressionTypeVariant::from_str(
+                    file_compression_type,
+                )?,
                 options: HashMap::new(),
             });
             expect_parse_ok(sql, expected)?;
@@ -603,7 +605,7 @@ mod tests {
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -619,7 +621,7 @@ mod tests {
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -635,7 +637,7 @@ mod tests {
             location: "foo.avro".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -652,7 +654,7 @@ mod tests {
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
             if_not_exists: true,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::new(),
         });
         expect_parse_ok(sql, expected)?;
@@ -674,7 +676,7 @@ mod tests {
             location: "blahblah".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::from([("k1".into(), "v1".into())]),
         });
         expect_parse_ok(sql, expected)?;
@@ -691,7 +693,7 @@ mod tests {
             location: "blahblah".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
-            file_compression_type: "".to_string(),
+            file_compression_type: UNCOMPRESSED,
             options: HashMap::from([
                 ("k1".into(), "v1".into()),
                 ("k2".into(), "v2".into()),
@@ -723,5 +725,14 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn invalid_compression_type() {
+        let sql = "CREATE EXTERNAL TABLE t STORED AS CSV COMPRESSION TYPE ZZZ LOCATION 'blahblah'";
+        expect_parse_error(
+            sql,
+            "sql parser error: Unsupported file compression type ZZZ",
+        )
     }
 }
