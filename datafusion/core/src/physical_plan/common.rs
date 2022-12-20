@@ -51,7 +51,7 @@ impl SizedRecordBatchStream {
     pub fn new(
         schema: SchemaRef,
         batches: Vec<Arc<RecordBatch>>,
-        metrics: MemTrackingMetrics,
+        mut metrics: MemTrackingMetrics,
     ) -> Self {
         let size = batches.iter().map(|b| batch_byte_size(b)).sum::<usize>();
         metrics.init_mem_used(size);

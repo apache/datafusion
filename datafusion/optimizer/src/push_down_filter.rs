@@ -457,8 +457,18 @@ fn push_down_join(
                     Err(e) => return Some(Err(e)),
                 };
 
+                // Only allow both side key is column.
+                let join_col_keys = join
+                    .on
+                    .iter()
+                    .flat_map(|(l, r)| match (l.try_into_col(), r.try_into_col()) {
+                        (Ok(l_col), Ok(r_col)) => Some((l_col, r_col)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+
                 for col in columns.iter() {
-                    for (l, r) in join.on.iter() {
+                    for (l, r) in join_col_keys.iter() {
                         if col == l {
                             join_cols_to_replace.insert(col, r);
                             break;
@@ -506,7 +516,7 @@ impl OptimizerRule for PushDownFilter {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let filter = match plan {
             LogicalPlan::Filter(filter) => filter,
@@ -517,22 +527,12 @@ impl OptimizerRule for PushDownFilter {
                     Some(optimized_plan) => Ok(Some(utils::optimize_children(
                         self,
                         &optimized_plan,
-                        optimizer_config,
+                        config,
                     )?)),
-                    None => Ok(Some(utils::optimize_children(
-                        self,
-                        plan,
-                        optimizer_config,
-                    )?)),
+                    None => Ok(Some(utils::optimize_children(self, plan, config)?)),
                 };
             }
-            _ => {
-                return Ok(Some(utils::optimize_children(
-                    self,
-                    plan,
-                    optimizer_config,
-                )?))
-            }
+            _ => return Ok(Some(utils::optimize_children(self, plan, config)?)),
         };
 
         let child_plan = &**filter.input();
@@ -544,7 +544,7 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     child_filter.input().clone(),
                 )?);
-                return self.try_optimize(&new_plan, optimizer_config);
+                return self.try_optimize(&new_plan, config);
             }
             LogicalPlan::Repartition(_)
             | LogicalPlan::Distinct(_)
@@ -745,11 +745,7 @@ impl OptimizerRule for PushDownFilter {
             _ => plan.clone(),
         };
 
-        Ok(Some(utils::optimize_children(
-            self,
-            &new_plan,
-            optimizer_config,
-        )?))
+        Ok(Some(utils::optimize_children(self, &new_plan, config)?))
     }
 }
 
@@ -786,6 +782,7 @@ fn replace_cols_by_name(e: Expr, replace_map: &HashMap<String, Expr>) -> Result<
 mod tests {
     use super::*;
     use crate::test::*;
+    use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use async_trait::async_trait;
     use datafusion_common::DFSchema;
@@ -798,7 +795,7 @@ mod tests {
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let optimized_plan = PushDownFilter::new()
-            .try_optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
@@ -1947,7 +1944,7 @@ mod tests {
             table_scan_with_pushdown_provider(TableProviderFilterPushDown::Inexact)?;
 
         let optimised_plan = PushDownFilter::new()
-            .try_optimize(&plan, &mut OptimizerConfig::new())
+            .try_optimize(&plan, &OptimizerContext::new())
             .expect("failed to optimize plan")
             .unwrap();
 
@@ -2299,7 +2296,7 @@ mod tests {
         // Originally global state which can help to avoid duplicate Filters been generated and pushed down.
         // Now the global state is removed. Need to double confirm that avoid duplicate Filters.
         let optimized_plan = PushDownFilter::new()
-            .try_optimize(&plan, &mut OptimizerConfig::new())
+            .try_optimize(&plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
         assert_optimized_plan_eq(&optimized_plan, expected)
