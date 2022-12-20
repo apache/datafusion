@@ -150,14 +150,7 @@ pub enum Expr {
     /// This expression is guaranteed to have a fixed type.
     TryCast(TryCast),
     /// A sort expression, that can be used to sort values.
-    Sort {
-        /// The expression to sort on
-        expr: Box<Expr>,
-        /// The direction of the sort
-        asc: bool,
-        /// Whether to put Nulls before all other data values
-        nulls_first: bool,
-    },
+    Sort(Sort),
     /// Represents the call of a built-in scalar function with a set of arguments.
     ScalarFunction {
         /// The function
@@ -173,29 +166,9 @@ pub enum Expr {
         args: Vec<Expr>,
     },
     /// Represents the call of an aggregate built-in function with arguments.
-    AggregateFunction {
-        /// Name of the function
-        fun: aggregate_function::AggregateFunction,
-        /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
-        /// Whether this is a DISTINCT aggregation or not
-        distinct: bool,
-        /// Optional filter
-        filter: Option<Box<Expr>>,
-    },
+    AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
-    WindowFunction {
-        /// Name of the function
-        fun: window_function::WindowFunction,
-        /// List of expressions to feed to the functions as arguments
-        args: Vec<Expr>,
-        /// List of partition by expressions
-        partition_by: Vec<Expr>,
-        /// List of order by expressions
-        order_by: Vec<Expr>,
-        /// Window frame
-        window_frame: window_frame::WindowFrame,
-    },
+    WindowFunction(WindowFunction),
     /// aggregate function
     AggregateUDF {
         /// The function
@@ -457,6 +430,91 @@ impl TryCast {
     }
 }
 
+/// SORT expression
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Sort {
+    /// The expression to sort on
+    pub expr: Box<Expr>,
+    /// The direction of the sort
+    pub asc: bool,
+    /// Whether to put Nulls before all other data values
+    pub nulls_first: bool,
+}
+
+impl Sort {
+    /// Create a new Sort expression
+    pub fn new(expr: Box<Expr>, asc: bool, nulls_first: bool) -> Self {
+        Self {
+            expr,
+            asc,
+            nulls_first,
+        }
+    }
+}
+
+/// Aggregate function
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct AggregateFunction {
+    /// Name of the function
+    pub fun: aggregate_function::AggregateFunction,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+    /// Whether this is a DISTINCT aggregation or not
+    pub distinct: bool,
+    /// Optional filter
+    pub filter: Option<Box<Expr>>,
+}
+
+impl AggregateFunction {
+    pub fn new(
+        fun: aggregate_function::AggregateFunction,
+        args: Vec<Expr>,
+        distinct: bool,
+        filter: Option<Box<Expr>>,
+    ) -> Self {
+        Self {
+            fun,
+            args,
+            distinct,
+            filter,
+        }
+    }
+}
+
+/// Window function
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct WindowFunction {
+    /// Name of the function
+    pub fun: window_function::WindowFunction,
+    /// List of expressions to feed to the functions as arguments
+    pub args: Vec<Expr>,
+    /// List of partition by expressions
+    pub partition_by: Vec<Expr>,
+    /// List of order by expressions
+    pub order_by: Vec<Expr>,
+    /// Window frame
+    pub window_frame: window_frame::WindowFrame,
+}
+
+impl WindowFunction {
+    /// Create a new Window expression
+    pub fn new(
+        fun: window_function::WindowFunction,
+        args: Vec<Expr>,
+        partition_by: Vec<Expr>,
+        order_by: Vec<Expr>,
+        window_frame: window_frame::WindowFrame,
+    ) -> Self {
+        Self {
+            fun,
+            args,
+            partition_by,
+            order_by,
+            window_frame,
+        }
+    }
+}
+
 /// Grouping sets
 /// See https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS
 /// for Postgres definition.
@@ -687,11 +745,7 @@ impl Expr {
     /// let sort_expr = col("foo").sort(true, true); // SORT ASC NULLS_FIRST
     /// ```
     pub fn sort(self, asc: bool, nulls_first: bool) -> Expr {
-        Expr::Sort {
-            expr: Box::new(self),
-            asc,
-            nulls_first,
-        }
+        Expr::Sort(Sort::new(Box::new(self), asc, nulls_first))
     }
 
     /// Return `IsTrue(Box(self))`
@@ -834,11 +888,11 @@ impl fmt::Debug for Expr {
             } => write!(f, "{:?} IN ({:?})", expr, subquery),
             Expr::ScalarSubquery(subquery) => write!(f, "({:?})", subquery),
             Expr::BinaryExpr(expr) => write!(f, "{}", expr),
-            Expr::Sort {
+            Expr::Sort(Sort {
                 expr,
                 asc,
                 nulls_first,
-            } => {
+            }) => {
                 if *asc {
                     write!(f, "{:?} ASC", expr)?;
                 } else {
@@ -856,13 +910,13 @@ impl fmt::Debug for Expr {
             Expr::ScalarUDF { fun, ref args, .. } => {
                 fmt_function(f, &fun.name, false, args, false)
             }
-            Expr::WindowFunction {
+            Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
                 partition_by,
                 order_by,
                 window_frame,
-            } => {
+            }) => {
                 fmt_function(f, &fun.to_string(), false, args, false)?;
                 if !partition_by.is_empty() {
                     write!(f, " PARTITION BY {:?}", partition_by)?;
@@ -877,13 +931,13 @@ impl fmt::Debug for Expr {
                 )?;
                 Ok(())
             }
-            Expr::AggregateFunction {
+            Expr::AggregateFunction(AggregateFunction {
                 fun,
                 distinct,
                 ref args,
                 filter,
                 ..
-            } => {
+            }) => {
                 fmt_function(f, &fun.to_string(), *distinct, args, true)?;
                 if let Some(fe) = filter {
                     write!(f, " FILTER (WHERE {})", fe)?;
@@ -1212,13 +1266,13 @@ fn create_name(e: &Expr) -> Result<String> {
             create_function_name(&fun.to_string(), false, args)
         }
         Expr::ScalarUDF { fun, args, .. } => create_function_name(&fun.name, false, args),
-        Expr::WindowFunction {
+        Expr::WindowFunction(WindowFunction {
             fun,
             args,
             window_frame,
             partition_by,
             order_by,
-        } => {
+        }) => {
             let mut parts: Vec<String> =
                 vec![create_function_name(&fun.to_string(), false, args)?];
             if !partition_by.is_empty() {
@@ -1230,12 +1284,12 @@ fn create_name(e: &Expr) -> Result<String> {
             parts.push(format!("{}", window_frame));
             Ok(parts.join(" "))
         }
-        Expr::AggregateFunction {
+        Expr::AggregateFunction(AggregateFunction {
             fun,
             distinct,
             args,
             filter,
-        } => {
+        }) => {
             let name = create_function_name(&fun.to_string(), *distinct, args)?;
             if let Some(fe) = filter {
                 Ok(format!("{} FILTER (WHERE {})", name, fe))

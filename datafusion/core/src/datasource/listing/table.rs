@@ -24,6 +24,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use dashmap::DashMap;
+use datafusion_expr::expr::Sort;
 use datafusion_physical_expr::PhysicalSortExpr;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
@@ -502,7 +503,7 @@ impl ListingTable {
         let sort_exprs = file_sort_order
             .iter()
             .map(|expr| {
-                if let Expr::Sort { expr, asc, nulls_first } = expr {
+                if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
                     if let Expr::Column(col) = expr.as_ref() {
                         let expr = physical_plan::expressions::col(&col.name, self.table_schema.as_ref())?;
                         Ok(PhysicalSortExpr {

@@ -99,6 +99,7 @@ use url::Url;
 
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
+use crate::execution::memory_pool::MemoryPool;
 use uuid::Uuid;
 
 use super::options::{
@@ -1960,6 +1961,11 @@ impl TaskContext {
         self.task_id.clone()
     }
 
+    /// Return the [`MemoryPool`] associated with this [TaskContext]
+    pub fn memory_pool(&self) -> &Arc<dyn MemoryPool> {
+        &self.runtime.memory_pool
+    }
+
     /// Return the [RuntimeEnv] associated with this [TaskContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.runtime.clone()
@@ -2025,6 +2031,7 @@ mod tests {
     use super::*;
     use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
+    use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
@@ -2046,24 +2053,27 @@ mod tests {
     #[tokio::test]
     async fn shared_memory_and_disk_manager() {
         // Demonstrate the ability to share DiskManager and
-        // MemoryManager between two different executions.
+        // MemoryPool between two different executions.
         let ctx1 = SessionContext::new();
 
         // configure with same memory / disk manager
-        let memory_manager = ctx1.runtime_env().memory_manager.clone();
+        let memory_pool = ctx1.runtime_env().memory_pool.clone();
+
+        let mut reservation = MemoryConsumer::new("test").register(&memory_pool);
+        reservation.grow(100);
+
         let disk_manager = ctx1.runtime_env().disk_manager.clone();
 
         let ctx2 =
             SessionContext::with_config_rt(SessionConfig::new(), ctx1.runtime_env());
 
-        assert!(std::ptr::eq(
-            Arc::as_ptr(&memory_manager),
-            Arc::as_ptr(&ctx1.runtime_env().memory_manager)
-        ));
-        assert!(std::ptr::eq(
-            Arc::as_ptr(&memory_manager),
-            Arc::as_ptr(&ctx2.runtime_env().memory_manager)
-        ));
+        assert_eq!(ctx1.runtime_env().memory_pool.reserved(), 100);
+        assert_eq!(ctx2.runtime_env().memory_pool.reserved(), 100);
+
+        drop(reservation);
+
+        assert_eq!(ctx1.runtime_env().memory_pool.reserved(), 0);
+        assert_eq!(ctx2.runtime_env().memory_pool.reserved(), 0);
 
         assert!(std::ptr::eq(
             Arc::as_ptr(&disk_manager),

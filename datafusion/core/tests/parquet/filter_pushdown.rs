@@ -57,7 +57,7 @@ async fn single_file() {
 
     let tempdir = TempDir::new().unwrap();
 
-    let generator = AccessLogGenerator::new().with_row_limit(Some(NUM_ROWS));
+    let generator = AccessLogGenerator::new().with_row_limit(NUM_ROWS);
 
     // default properties
     let props = WriterProperties::builder().build();
@@ -236,7 +236,7 @@ async fn single_file() {
 async fn single_file_small_data_pages() {
     let tempdir = TempDir::new().unwrap();
 
-    let generator = AccessLogGenerator::new().with_row_limit(Some(NUM_ROWS));
+    let generator = AccessLogGenerator::new().with_row_limit(NUM_ROWS);
 
     // set the max page rows with arbitrary sizes 8311 to increase
     // effectiveness of page filtering

@@ -1152,7 +1152,9 @@ mod tests {
     use super::*;
     use crate::expressions::try_cast;
     use crate::expressions::{col, lit};
-    use arrow::datatypes::{ArrowNumericType, Field, Int32Type, SchemaRef};
+    use arrow::datatypes::{
+        ArrowNumericType, Decimal128Type, Field, Int32Type, SchemaRef,
+    };
     use datafusion_common::{ColumnStatistics, Result, Statistics};
     use datafusion_expr::type_coercion::binary::coerce_types;
 
@@ -3049,6 +3051,43 @@ mod tests {
     }
 
     #[test]
+    fn arithmetic_divide_zero() -> Result<()> {
+        // other data type
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let a = Arc::new(Int32Array::from(vec![8, 32, 128, 512, 2048, 100]));
+        let b = Arc::new(Int32Array::from(vec![2, 4, 8, 16, 32, 0]));
+
+        apply_arithmetic::<Int32Type>(
+            schema,
+            vec![a, b],
+            Operator::Divide,
+            Int32Array::from(vec![Some(4), Some(8), Some(16), Some(32), Some(64), None]),
+        )?;
+
+        // decimal
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Decimal128(25, 3), true),
+            Field::new("b", DataType::Decimal128(25, 3), true),
+        ]));
+        let left_decimal_array =
+            Arc::new(create_decimal_array(&[Some(1234567), Some(1234567)], 25, 3));
+        let right_decimal_array =
+            Arc::new(create_decimal_array(&[Some(10), Some(0)], 25, 3));
+
+        apply_arithmetic::<Decimal128Type>(
+            schema,
+            vec![left_decimal_array, right_decimal_array],
+            Operator::Divide,
+            create_decimal_array(&[Some(123456700), None], 25, 3),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
     fn bitwise_array_test() -> Result<()> {
         let left = Arc::new(Int32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right =
@@ -3270,6 +3309,7 @@ mod tests {
         }
         Ok(())
     }
+
     #[test]
     fn test_comparison_result_estimate_different_type() -> Result<()> {
         // A table where the column 'a' has a min of 1.3, a max of 50.7.
