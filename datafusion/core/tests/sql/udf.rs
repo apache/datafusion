@@ -222,7 +222,7 @@ async fn udaf_as_window_func() -> Result<()> {
   WindowAggr: windowExpr=[[AggregateUDF { name: "my_acc", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" }(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
     TableScan: my_table"#;
 
-    let plan = context.sql(sql).await.unwrap();
-    assert_eq!(format!("{:?}", plan), expected);
+    let dataframe = context.sql(sql).await.unwrap();
+    assert_eq!(format!("{:?}", dataframe.logical_plan()), expected);
     Ok(())
 }

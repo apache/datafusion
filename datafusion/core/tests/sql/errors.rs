@@ -23,8 +23,7 @@ async fn csv_query_error() -> Result<()> {
     let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT sin(c1) FROM aggregate_test_100";
-    let err = ctx.sql(sql).await.unwrap_err().to_string();
-    assert_eq!(err, "sdlfksdlfks");
+    ctx.sql(sql).await.unwrap_err();
     Ok(())
 }
 
@@ -136,33 +135,37 @@ async fn invalid_qualified_table_references() -> Result<()> {
 }
 
 #[tokio::test]
+#[allow(deprecated)] // TODO: Remove this test once create_logical_plan removed
 async fn unsupported_sql_returns_error() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     // create view
     let sql = "create view test_view as select * from aggregate_test_100";
-    let dataframe = ctx.sql(sql).await.unwrap();
-    let err = dataframe.create_physical_plan().await.unwrap_err();
+    let plan = ctx.create_logical_plan(sql);
+    let physical_plan = ctx.create_physical_plan(&plan.unwrap()).await;
+    assert!(physical_plan.is_err());
     assert_eq!(
-        err.to_string(),
+        format!("{}", physical_plan.unwrap_err()),
         "Internal error: Unsupported logical plan: CreateView. \
         This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
     );
     // // drop view
     let sql = "drop view test_view";
-    let dataframe = ctx.sql(sql).await.unwrap();
-    let err = dataframe.create_physical_plan().await.unwrap_err();
+    let plan = ctx.create_logical_plan(sql);
+    let physical_plan = ctx.create_physical_plan(&plan.unwrap()).await;
+    assert!(physical_plan.is_err());
     assert_eq!(
-        err.to_string(),
+        format!("{}", physical_plan.unwrap_err()),
         "Internal error: Unsupported logical plan: DropView. \
         This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
     );
     // // drop table
     let sql = "drop table aggregate_test_100";
-    let dataframe = ctx.sql(sql).await.unwrap();
-    let err = dataframe.create_physical_plan().await.unwrap_err();
+    let plan = ctx.create_logical_plan(sql);
+    let physical_plan = ctx.create_physical_plan(&plan.unwrap()).await;
+    assert!(physical_plan.is_err());
     assert_eq!(
-        err.to_string(),
+        format!("{}", physical_plan.unwrap_err()),
         "Internal error: Unsupported logical plan: DropTable. \
         This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
     );

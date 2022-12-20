@@ -1988,7 +1988,7 @@ async fn left_semi_join() -> Result<()> {
 
         let sql = "SELECT t1_id, t1_name FROM t1 WHERE t1_id IN (SELECT t2_id FROM t2) ORDER BY t1_id";
         let msg = format!("Creating logical plan for '{}'", sql);
-        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
             vec![
@@ -2444,7 +2444,7 @@ async fn both_side_expr_key_inner_join() -> Result<()> {
                          ON t1.t1_id + cast(12 as INT UNSIGNED)  = t2.t2_id + cast(1 as INT UNSIGNED)";
 
         let msg = format!("Creating logical plan for '{}'", sql);
-        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
 
         let expected = if repartition_joins {
@@ -2516,7 +2516,7 @@ async fn left_side_expr_key_inner_join() -> Result<()> {
                          ON t1.t1_id + cast(11 as INT UNSIGNED)  = t2.t2_id";
 
         let msg = format!("Creating logical plan for '{}'", sql);
-        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
 
         let expected = if repartition_joins {
