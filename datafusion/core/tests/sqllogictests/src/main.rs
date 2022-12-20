@@ -153,7 +153,7 @@ fn check_test_file(filters: &[&str], path: &Path) -> bool {
 /// Create a SessionContext, configured for the specific test
 async fn context_for_test_file(file_name: &str) -> SessionContext {
     match file_name {
-        "aggregate.slt" => {
+        "aggregate.slt" | "select.slt" => {
             info!("Registering aggregate tables");
             let ctx = SessionContext::new();
             setup::register_aggregate_tables(&ctx).await;

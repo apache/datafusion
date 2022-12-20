@@ -320,7 +320,6 @@ impl ExecutionPlan for ParquetExec {
         let stream = FileStream::new(
             &self.base_config,
             partition_index,
-            ctx,
             opener,
             self.metrics.clone(),
         )?;
@@ -406,11 +405,7 @@ struct ParquetOpener {
 }
 
 impl FileOpener for ParquetOpener {
-    fn open(
-        &self,
-        _: Arc<dyn ObjectStore>,
-        file_meta: FileMeta,
-    ) -> Result<FileOpenFuture> {
+    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let file_range = file_meta.range.clone();
 
         let file_metrics = ParquetFileMetrics::new(

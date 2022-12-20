@@ -226,17 +226,17 @@ impl WindowExpr for BuiltInWindowExpr {
         &self.window_frame
     }
 
-    fn is_window_fn_reversible(&self) -> bool {
-        self.expr.as_ref().is_window_fn_reversible()
-    }
-
-    fn get_reversed_expr(&self) -> Result<Arc<dyn WindowExpr>> {
-        Ok(Arc::new(BuiltInWindowExpr::new(
-            self.expr.reverse_expr()?,
-            &self.partition_by.clone(),
-            &reverse_order_bys(&self.order_by),
-            Arc::new(self.window_frame.reverse()),
-        )))
+    fn get_reversed_expr(&self) -> Option<Arc<dyn WindowExpr>> {
+        if let Some(reverse_expr) = self.expr.reverse_expr() {
+            Some(Arc::new(BuiltInWindowExpr::new(
+                reverse_expr,
+                &self.partition_by.clone(),
+                &reverse_order_bys(&self.order_by),
+                Arc::new(self.window_frame.reverse()),
+            )))
+        } else {
+            None
+        }
     }
 
     fn can_run_bounded(&self) -> bool {

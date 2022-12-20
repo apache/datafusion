@@ -37,14 +37,20 @@ pub trait Accumulator: Send + Sync + Debug {
     /// accumulator (that ran on different partitions, for
     /// example).
     ///
-    /// The state can be a different type than the output of the
-    /// [`Accumulator`]
+    /// The state can be and often is a different type than the output
+    /// type of the [`Accumulator`].
     ///
     /// See [`merge_batch`] for more details on the merging process.
     ///
-    /// For example, in the case of an average, for which we track `sum` and `n`,
-    /// this function should return a vector of two values, sum and n.
-    fn state(&self) -> Result<Vec<AggregateState>>;
+    /// Some accumulators can return multiple values for their
+    /// intermediate states. For example average, tracks `sum` and
+    ///  `n`, and this function should return
+    /// a vector of two values, sum and n.
+    ///
+    /// `ScalarValue::List` can also be used to pass multiple values
+    /// if the number of intermediate values is not known at planning
+    /// time (e.g. median)
+    fn state(&self) -> Result<Vec<ScalarValue>>;
 
     /// Updates the accumulator's state from a vector of arrays.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;

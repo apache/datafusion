@@ -34,7 +34,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::assert_batches_eq;
 use datafusion_expr::{approx_median, cast};
 
-fn create_test_table() -> Result<Arc<DataFrame>> {
+fn create_test_table() -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),

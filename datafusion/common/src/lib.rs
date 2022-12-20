@@ -65,7 +65,7 @@ macro_rules! downcast_value {
     }};
 }
 
-/// Compute the "reverse" of given `SortOptions`.
+/// Computes the "reverse" of given `SortOptions`.
 // TODO: If/when arrow supports `!` for `SortOptions`, we can remove this.
 pub fn reverse_sort_options(options: SortOptions) -> SortOptions {
     SortOptions {
@@ -74,14 +74,18 @@ pub fn reverse_sort_options(options: SortOptions) -> SortOptions {
     }
 }
 
-/// Transposes 2d vector
+/// Transposes the given vector of vectors.
 pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
-    assert!(!original.is_empty());
-    let mut transposed = (0..original[0].len()).map(|_| vec![]).collect::<Vec<_>>();
-    for original_row in original {
-        for (item, transposed_row) in original_row.into_iter().zip(&mut transposed) {
-            transposed_row.push(item);
+    match original.as_slice() {
+        [] => vec![],
+        [first, ..] => {
+            let mut result = (0..first.len()).map(|_| vec![]).collect::<Vec<_>>();
+            for row in original {
+                for (item, transposed_row) in row.into_iter().zip(&mut result) {
+                    transposed_row.push(item);
+                }
+            }
+            result
         }
     }
-    transposed
 }

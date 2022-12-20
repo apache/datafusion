@@ -27,37 +27,25 @@ use std::env;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-/// Configuration option "datafusion.execution.target_partitions"
-pub const OPT_TARGET_PARTITIONS: &str = "datafusion.execution.target_partitions";
-
+/*-************************************
+*  Catalog related
+**************************************/
 /// Configuration option "datafusion.catalog.create_default_catalog_and_schema"
 pub const OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA: &str =
     "datafusion.catalog.create_default_catalog_and_schema";
+
 /// Configuration option "datafusion.catalog.information_schema"
 pub const OPT_INFORMATION_SCHEMA: &str = "datafusion.catalog.information_schema";
 
-/// Configuration option "datafusion.optimizer.repartition_joins"
-pub const OPT_REPARTITION_JOINS: &str = "datafusion.optimizer.repartition_joins";
+/// Location scanned to load tables for `default` schema
+pub const OPT_CATALOG_LOCATION: &str = "datafusion.catalog.location";
 
-/// Configuration option "datafusion.optimizer.repartition_aggregations"
-pub const OPT_REPARTITION_AGGREGATIONS: &str =
-    "datafusion.optimizer.repartition_aggregations";
+/// Type of `TableProvider` to use when loading `default` schema
+pub const OPT_CATALOG_TYPE: &str = "datafusion.catalog.type";
 
-/// Configuration option "datafusion.optimizer.repartition_windows"
-pub const OPT_REPARTITION_WINDOWS: &str = "datafusion.optimizer.repartition_windows";
-
-/// Configuration option "datafusion.execuction_collect_statistics"
-pub const OPT_COLLECT_STATISTICS: &str = "datafusion.execuction_collect_statistics";
-
-/// Configuration option "datafusion.optimizer.filter_null_join_keys"
-pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filter_null_join_keys";
-
-/// Configuration option "datafusion.explain.logical_plan_only"
-pub const OPT_EXPLAIN_LOGICAL_PLAN_ONLY: &str = "datafusion.explain.logical_plan_only";
-
-/// Configuration option "datafusion.explain.physical_plan_only"
-pub const OPT_EXPLAIN_PHYSICAL_PLAN_ONLY: &str = "datafusion.explain.physical_plan_only";
-
+/*-************************************
+*  Execution related
+**************************************/
 /// Configuration option "datafusion.execution.batch_size"
 pub const OPT_BATCH_SIZE: &str = "datafusion.execution.batch_size";
 
@@ -68,8 +56,24 @@ pub const OPT_COALESCE_BATCHES: &str = "datafusion.execution.coalesce_batches";
 pub const OPT_COALESCE_TARGET_BATCH_SIZE: &str =
     "datafusion.execution.coalesce_target_batch_size";
 
+/// Configuration option "datafusion.execution.collect_statistics"
+pub const OPT_COLLECT_STATISTICS: &str = "datafusion.execution.collect_statistics";
+
+/// Configuration option "datafusion.execution.target_partitions"
+pub const OPT_TARGET_PARTITIONS: &str = "datafusion.execution.target_partitions";
+
 /// Configuration option "datafusion.execution.time_zone"
 pub const OPT_TIME_ZONE: &str = "datafusion.execution.time_zone";
+
+/*-************************************
+*  Execution parquet related
+**************************************/
+/// Configuration option "datafusion.execution.parquet.enable_page_index"
+pub const OPT_PARQUET_ENABLE_PAGE_INDEX: &str =
+    "datafusion.execution.parquet.enable_page_index";
+
+/// Configuration option "datafusion.execution.parquet.pruning"
+pub const OPT_PARQUET_ENABLE_PRUNING: &str = "datafusion.execution.parquet.pruning";
 
 /// Configuration option "datafusion.execution.parquet.pushdown_filters"
 pub const OPT_PARQUET_PUSHDOWN_FILTERS: &str =
@@ -79,13 +83,6 @@ pub const OPT_PARQUET_PUSHDOWN_FILTERS: &str =
 pub const OPT_PARQUET_REORDER_FILTERS: &str =
     "datafusion.execution.parquet.reorder_filters";
 
-/// Configuration option "datafusion.execution.parquet.enable_page_index"
-pub const OPT_PARQUET_ENABLE_PAGE_INDEX: &str =
-    "datafusion.execution.parquet.enable_page_index";
-
-/// Configuration option "datafusion.execution.parquet.pruning"
-pub const OPT_PARQUET_ENABLE_PRUNING: &str = "datafusion.execution.parquet.pruning";
-
 /// Configuration option "datafusion.execution.parquet.skip_metadata"
 pub const OPT_PARQUET_SKIP_METADATA: &str = "datafusion.execution.parquet.skip_metadata";
 
@@ -93,18 +90,37 @@ pub const OPT_PARQUET_SKIP_METADATA: &str = "datafusion.execution.parquet.skip_m
 pub const OPT_PARQUET_METADATA_SIZE_HINT: &str =
     "datafusion.execution.parquet.metadata_size_hint";
 
+/*-************************************
+*  Explain related
+**************************************/
+/// Configuration option "datafusion.explain.logical_plan_only"
+pub const OPT_EXPLAIN_LOGICAL_PLAN_ONLY: &str = "datafusion.explain.logical_plan_only";
+
+/// Configuration option "datafusion.explain.physical_plan_only"
+pub const OPT_EXPLAIN_PHYSICAL_PLAN_ONLY: &str = "datafusion.explain.physical_plan_only";
+
+/*-************************************
+*  Optimizer related
+**************************************/
+/// Configuration option "datafusion.optimizer.filter_null_join_keys"
+pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filter_null_join_keys";
+
+/// Configuration option "datafusion.optimizer.repartition_aggregations"
+pub const OPT_REPARTITION_AGGREGATIONS: &str =
+    "datafusion.optimizer.repartition_aggregations";
+
+/// Configuration option "datafusion.optimizer.repartition_joins"
+pub const OPT_REPARTITION_JOINS: &str = "datafusion.optimizer.repartition_joins";
+
+/// Configuration option "datafusion.optimizer.repartition_windows"
+pub const OPT_REPARTITION_WINDOWS: &str = "datafusion.optimizer.repartition_windows";
+
 /// Configuration option "datafusion.optimizer.skip_failed_rules"
 pub const OPT_OPTIMIZER_SKIP_FAILED_RULES: &str =
     "datafusion.optimizer.skip_failed_rules";
 
 /// Configuration option "datafusion.optimizer.max_passes"
 pub const OPT_OPTIMIZER_MAX_PASSES: &str = "datafusion.optimizer.max_passes";
-
-/// Location scanned to load tables for `default` schema
-pub const OPT_CATALOG_LOCATION: &str = "datafusion.catalog.location";
-
-/// Type of `TableProvider` to use when loading `default` schema
-pub const OPT_CATALOG_TYPE: &str = "datafusion.catalog.type";
 
 /// Configuration option "datafusion.optimizer.top_down_join_key_reordering"
 pub const OPT_TOP_DOWN_JOIN_KEY_REORDERING: &str =
@@ -257,14 +273,14 @@ impl BuiltInConfigs {
 
             ConfigDefinition::new_bool(
                 OPT_REPARTITION_WINDOWS,
-                "Should DataFusion collect statistics after listing files",
+                "Should DataFusion repartition data using the partitions keys to execute window \
+                 functions in parallel using the provided `target_partitions` level",
                 true
             ),
 
             ConfigDefinition::new_bool(
                 OPT_COLLECT_STATISTICS,
-                "Should DataFusion repartition data using the partitions keys to execute window \
-                 functions in parallel using the provided `target_partitions` level",
+                "Should DataFusion collect statistics after listing files",
                 false
             ),
 

@@ -24,57 +24,8 @@ use datafusion_common::ScalarValue;
 use tempfile::TempDir;
 
 #[tokio::test]
-async fn all_where_empty() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT *
-               FROM aggregate_test_100
-               WHERE 1=2";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["++", "++"];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn select_values_list() -> Result<()> {
     let ctx = SessionContext::new();
-    {
-        let sql = "VALUES (1)";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| 1       |",
-            "+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
-    {
-        let sql = "VALUES (-1)";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| -1      |",
-            "+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
-    {
-        let sql = "VALUES (2+1,2-1,2>1)";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+---------+---------+",
-            "| column1 | column2 | column3 |",
-            "+---------+---------+---------+",
-            "| 3       | 1       | true    |",
-            "+---------+---------+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
     {
         let sql = "VALUES";
         let plan = ctx.create_logical_plan(sql);
@@ -86,35 +37,9 @@ async fn select_values_list() -> Result<()> {
         assert!(plan.is_err());
     }
     {
-        let sql = "VALUES (1),(2)";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+",
-            "| column1 |",
-            "+---------+",
-            "| 1       |",
-            "| 2       |",
-            "+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
-    }
-    {
         let sql = "VALUES (1),()";
         let plan = ctx.create_logical_plan(sql);
         assert!(plan.is_err());
-    }
-    {
-        let sql = "VALUES (1,'a'),(2,'b')";
-        let actual = execute_to_batches(&ctx, sql).await;
-        let expected = vec![
-            "+---------+---------+",
-            "| column1 | column2 |",
-            "+---------+---------+",
-            "| 1       | a       |",
-            "| 2       | b       |",
-            "+---------+---------+",
-        ];
-        assert_batches_eq!(expected, &actual);
     }
     {
         let sql = "VALUES (1),(1,2)";
@@ -911,6 +836,88 @@ async fn query_on_string_dictionary() -> Result<()> {
 }
 
 #[tokio::test]
+async fn sort_on_window_null_string() -> Result<()> {
+    let d1: DictionaryArray<Int32Type> =
+        vec![Some("one"), None, Some("three")].into_iter().collect();
+    let d2: StringArray = vec![Some("ONE"), None, Some("THREE")].into_iter().collect();
+    let d3: LargeStringArray =
+        vec![Some("One"), None, Some("Three")].into_iter().collect();
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("d1", Arc::new(d1) as ArrayRef),
+        ("d2", Arc::new(d2) as ArrayRef),
+        ("d3", Arc::new(d3) as ArrayRef),
+    ])
+    .unwrap();
+
+    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(2));
+    ctx.register_batch("test", batch)?;
+
+    let sql =
+        "SELECT d1, row_number() OVER (partition by d1) as rn1 FROM test order by d1 asc";
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    // NULLS LAST
+    let expected = vec![
+        "+-------+-----+",
+        "| d1    | rn1 |",
+        "+-------+-----+",
+        "| one   | 1   |",
+        "| three | 1   |",
+        "|       | 1   |",
+        "+-------+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT d2, row_number() OVER (partition by d2) as rn1 FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    // NULLS LAST
+    let expected = vec![
+        "+-------+-----+",
+        "| d2    | rn1 |",
+        "+-------+-----+",
+        "| ONE   | 1   |",
+        "| THREE | 1   |",
+        "|       | 1   |",
+        "+-------+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql =
+        "SELECT d2, row_number() OVER (partition by d2 order by d2 desc) as rn1 FROM test";
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    // NULLS FIRST
+    let expected = vec![
+        "+-------+-----+",
+        "| d2    | rn1 |",
+        "+-------+-----+",
+        "|       | 1   |",
+        "| THREE | 1   |",
+        "| ONE   | 1   |",
+        "+-------+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // FIXME sort on LargeUtf8 String has bug.
+    // let sql =
+    //     "SELECT d3, row_number() OVER (partition by d3) as rn1 FROM test";
+    // let actual = execute_to_batches(&ctx, sql).await;
+    // let expected = vec![
+    //     "+-------+-----+",
+    //     "| d3    | rn1 |",
+    //     "+-------+-----+",
+    //     "|       | 1   |",
+    //     "| One   | 1   |",
+    //     "| Three | 1   |",
+    //     "+-------+-----+",
+    // ];
+    // assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn filter_with_time32second() -> Result<()> {
     let ctx = SessionContext::new();
     let schema = Arc::new(Schema::new(vec![
@@ -1465,7 +1472,7 @@ async fn unprojected_filter() {
         .select(vec![col("i") + col("i")])
         .unwrap();
 
-    let plan = df.to_logical_plan().unwrap();
+    let plan = df.clone().to_logical_plan().unwrap();
     println!("{}", plan.display_indent());
 
     let results = df.collect().await.unwrap();

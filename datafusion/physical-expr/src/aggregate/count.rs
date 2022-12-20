@@ -29,7 +29,7 @@ use arrow::datatypes::DataType;
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
 
 use crate::expressions::format_state_name;
@@ -76,7 +76,7 @@ impl AggregateExpr for Count {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "count"),
+            format_state_name(&self.name, "count"),
             self.data_type.clone(),
             true,
         )])
@@ -109,12 +109,8 @@ impl AggregateExpr for Count {
         Ok(Box::new(CountRowAccumulator::new(start_index)))
     }
 
-    fn is_window_fn_reversible(&self) -> bool {
-        true
-    }
-
-    fn reverse_expr(&self) -> Result<Arc<dyn AggregateExpr>> {
-        Ok(Arc::new(self.clone()))
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        Some(Arc::new(self.clone()))
     }
 }
 
@@ -131,10 +127,8 @@ impl CountAccumulator {
 }
 
 impl Accumulator for CountAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![AggregateState::Scalar(ScalarValue::Int64(Some(
-            self.count,
-        )))])
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![ScalarValue::Int64(Some(self.count))])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {

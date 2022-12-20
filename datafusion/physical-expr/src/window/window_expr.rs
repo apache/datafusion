@@ -131,14 +131,11 @@ pub trait WindowExpr: Send + Sync + Debug {
     // Get window frame of this WindowExpr
     fn get_window_frame(&self) -> &Arc<WindowFrame>;
 
-    /// Get whether window function can be reversed
-    fn is_window_fn_reversible(&self) -> bool;
-
-    /// get reversed expression
-    fn get_reversed_expr(&self) -> Result<Arc<dyn WindowExpr>>;
-
     /// get whether can run with bounded executor
     fn can_run_bounded(&self) -> bool;
+
+    /// get reversed expression
+    fn get_reversed_expr(&self) -> Option<Arc<dyn WindowExpr>>;
 }
 
 /// Reverses the ORDER BY expression, which is useful during equivalent window

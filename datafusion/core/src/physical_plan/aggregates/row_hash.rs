@@ -27,10 +27,7 @@ use futures::stream::{Stream, StreamExt};
 
 use crate::error::Result;
 use crate::execution::context::TaskContext;
-use crate::execution::memory_manager::proxy::{
-    MemoryConsumerProxy, RawTableAllocExt, VecAllocExt,
-};
-use crate::execution::MemoryConsumerId;
+use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, group_schema, AccumulatorItemV2, AggregateMode,
     PhysicalGroupBy,
@@ -40,6 +37,7 @@ use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
+use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use arrow::compute::cast;
 use arrow::datatypes::Schema;
 use arrow::{array::ArrayRef, compute};
@@ -141,13 +139,12 @@ impl GroupedHashAggregateStreamV2 {
         let aggr_schema = aggr_state_schema(&aggr_expr)?;
 
         let aggr_layout = Arc::new(RowLayout::new(&aggr_schema, RowType::WordAligned));
+        let reservation =
+            MemoryConsumer::new(format!("GroupedHashAggregateStreamV2[{}]", partition))
+                .register(context.memory_pool());
 
         let aggr_state = AggregationState {
-            memory_consumer: MemoryConsumerProxy::new(
-                "GroupBy Hash (Row) AggregationState",
-                MemoryConsumerId::new(partition),
-                Arc::clone(&context.runtime_env().memory_manager),
-            ),
+            reservation,
             map: RawTable::with_capacity(0),
             group_states: Vec::with_capacity(0),
         };
@@ -196,15 +193,10 @@ impl GroupedHashAggregateStreamV2 {
                             // allocate memory
                             // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
                             // overshooting a bit. Also this means we either store the whole record batch or not.
-                            let result = match result {
-                                Ok(allocated) => {
-                                    this.aggr_state.memory_consumer.alloc(allocated).await
-                                }
-                                Err(e) => Err(e),
-                            };
-
-                            match result {
-                                Ok(()) => continue,
+                            match result.and_then(|allocated| {
+                                this.aggr_state.reservation.try_grow(allocated)
+                            }) {
+                                Ok(_) => continue,
                                 Err(e) => Err(ArrowError::ExternalError(Box::new(e))),
                             }
                         }
@@ -465,7 +457,7 @@ struct RowGroupState {
 
 /// The state of all the groups
 struct AggregationState {
-    memory_consumer: MemoryConsumerProxy,
+    reservation: MemoryReservation,
 
     /// Logically maps group values to an index in `group_states`
     ///

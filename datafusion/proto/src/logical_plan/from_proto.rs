@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::protobuf::plan_type::PlanTypeEnum::{
-    FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
-    OptimizedLogicalPlan, OptimizedPhysicalPlan,
-};
-use crate::protobuf::{self, PlaceholderNode};
 use crate::protobuf::{
+    self,
+    plan_type::PlanTypeEnum::{
+        FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
+        OptimizedLogicalPlan, OptimizedPhysicalPlan,
+    },
     CubeNode, GroupingSetNode, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
-    RollupNode,
+    PlaceholderNode, RollupNode,
 };
 use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNanoType, IntervalUnit, Schema, TimeUnit, UnionMode,
@@ -32,21 +32,23 @@ use datafusion_common::{
     Column, DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     ScalarValue,
 };
-use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
-    date_part, date_trunc, digest, exp, floor, from_unixtime, left, ln, log10, log2,
+    date_part, date_trunc, digest, exp,
+    expr::Sort,
+    floor, from_unixtime, left, ln, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, now, nullif, octet_length, power, random, regexp_match,
     regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
     sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr,
     substring, tan, to_hex, to_timestamp_micros, to_timestamp_millis,
     to_timestamp_seconds, translate, trim, trunc, upper, uuid, AggregateFunction,
-    Between, BuiltInWindowFunction, BuiltinScalarFunction, Case, Expr, GetIndexedField,
-    GroupingSet,
+    Between, BinaryExpr, BuiltInWindowFunction, BuiltinScalarFunction, Case, Cast, Expr,
+    GetIndexedField, GroupingSet,
     GroupingSet::GroupingSets,
-    Like, Operator, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
+    WindowFrameUnits,
 };
 use std::sync::Arc;
 
@@ -274,27 +276,27 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
             arrow_type::ArrowTypeEnum::Date32(_) => DataType::Date32,
             arrow_type::ArrowTypeEnum::Date64(_) => DataType::Date64,
             arrow_type::ArrowTypeEnum::Duration(time_unit) => {
-                DataType::Duration(protobuf::TimeUnit::try_from(time_unit)?.into())
+                DataType::Duration(parse_i32_to_time_unit(time_unit)?)
             }
             arrow_type::ArrowTypeEnum::Timestamp(protobuf::Timestamp {
                 time_unit,
                 timezone,
             }) => DataType::Timestamp(
-                protobuf::TimeUnit::try_from(time_unit)?.into(),
+                parse_i32_to_time_unit(time_unit)?,
                 match timezone.len() {
                     0 => None,
                     _ => Some(timezone.to_owned()),
                 },
             ),
             arrow_type::ArrowTypeEnum::Time32(time_unit) => {
-                DataType::Time32(protobuf::TimeUnit::try_from(time_unit)?.into())
+                DataType::Time32(parse_i32_to_time_unit(time_unit)?)
             }
             arrow_type::ArrowTypeEnum::Time64(time_unit) => {
-                DataType::Time64(protobuf::TimeUnit::try_from(time_unit)?.into())
+                DataType::Time64(parse_i32_to_time_unit(time_unit)?)
             }
-            arrow_type::ArrowTypeEnum::Interval(interval_unit) => DataType::Interval(
-                protobuf::IntervalUnit::try_from(interval_unit)?.into(),
-            ),
+            arrow_type::ArrowTypeEnum::Interval(interval_unit) => {
+                DataType::Interval(parse_i32_to_interval_unit(interval_unit)?)
+            }
             arrow_type::ArrowTypeEnum::Decimal(protobuf::Decimal {
                 precision,
                 scale,
@@ -523,15 +525,6 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     }
 }
 
-impl TryFrom<&i32> for protobuf::AggregateFunction {
-    type Error = Error;
-
-    fn try_from(value: &i32) -> Result<Self, Self::Error> {
-        protobuf::AggregateFunction::from_i32(*value)
-            .ok_or_else(|| Error::unknown("AggregateFunction", *value))
-    }
-}
-
 impl TryFrom<&protobuf::Schema> for Schema {
     type Error = Error;
 
@@ -715,6 +708,117 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
     }
 }
 
+impl TryFrom<protobuf::WindowFrame> for WindowFrame {
+    type Error = Error;
+
+    fn try_from(window: protobuf::WindowFrame) -> Result<Self, Self::Error> {
+        let units = protobuf::WindowFrameUnits::from_i32(window.window_frame_units)
+            .ok_or_else(|| Error::unknown("WindowFrameUnits", window.window_frame_units))?
+            .into();
+        let start_bound = window.start_bound.required("start_bound")?;
+        let end_bound = window
+            .end_bound
+            .map(|end_bound| match end_bound {
+                protobuf::window_frame::EndBound::Bound(end_bound) => {
+                    end_bound.try_into()
+                }
+            })
+            .transpose()?
+            .unwrap_or(WindowFrameBound::CurrentRow);
+        Ok(Self {
+            units,
+            start_bound,
+            end_bound,
+        })
+    }
+}
+
+impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
+    type Error = Error;
+
+    fn try_from(bound: protobuf::WindowFrameBound) -> Result<Self, Self::Error> {
+        let bound_type =
+            protobuf::WindowFrameBoundType::from_i32(bound.window_frame_bound_type)
+                .ok_or_else(|| {
+                    Error::unknown("WindowFrameBoundType", bound.window_frame_bound_type)
+                })?;
+        match bound_type {
+            protobuf::WindowFrameBoundType::CurrentRow => Ok(Self::CurrentRow),
+            protobuf::WindowFrameBoundType::Preceding => match bound.bound_value {
+                Some(x) => Ok(Self::Preceding(ScalarValue::try_from(&x)?)),
+                None => Ok(Self::Preceding(ScalarValue::UInt64(None))),
+            },
+            protobuf::WindowFrameBoundType::Following => match bound.bound_value {
+                Some(x) => Ok(Self::Following(ScalarValue::try_from(&x)?)),
+                None => Ok(Self::Following(ScalarValue::UInt64(None))),
+            },
+        }
+    }
+}
+
+impl From<protobuf::TimeUnit> for TimeUnit {
+    fn from(time_unit: protobuf::TimeUnit) -> Self {
+        match time_unit {
+            protobuf::TimeUnit::Second => TimeUnit::Second,
+            protobuf::TimeUnit::Millisecond => TimeUnit::Millisecond,
+            protobuf::TimeUnit::Microsecond => TimeUnit::Microsecond,
+            protobuf::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
+        }
+    }
+}
+
+impl From<protobuf::IntervalUnit> for IntervalUnit {
+    fn from(interval_unit: protobuf::IntervalUnit) -> Self {
+        match interval_unit {
+            protobuf::IntervalUnit::YearMonth => IntervalUnit::YearMonth,
+            protobuf::IntervalUnit::DayTime => IntervalUnit::DayTime,
+            protobuf::IntervalUnit::MonthDayNano => IntervalUnit::MonthDayNano,
+        }
+    }
+}
+
+impl From<protobuf::JoinType> for JoinType {
+    fn from(t: protobuf::JoinType) -> Self {
+        match t {
+            protobuf::JoinType::Inner => JoinType::Inner,
+            protobuf::JoinType::Left => JoinType::Left,
+            protobuf::JoinType::Right => JoinType::Right,
+            protobuf::JoinType::Full => JoinType::Full,
+            protobuf::JoinType::Leftsemi => JoinType::LeftSemi,
+            protobuf::JoinType::Rightsemi => JoinType::RightSemi,
+            protobuf::JoinType::Leftanti => JoinType::LeftAnti,
+            protobuf::JoinType::Rightanti => JoinType::RightAnti,
+        }
+    }
+}
+
+impl From<protobuf::JoinConstraint> for JoinConstraint {
+    fn from(t: protobuf::JoinConstraint) -> Self {
+        match t {
+            protobuf::JoinConstraint::On => JoinConstraint::On,
+            protobuf::JoinConstraint::Using => JoinConstraint::Using,
+        }
+    }
+}
+
+pub fn parse_i32_to_time_unit(value: &i32) -> Result<TimeUnit, Error> {
+    protobuf::TimeUnit::from_i32(*value)
+        .map(|t| t.into())
+        .ok_or_else(|| Error::unknown("TimeUnit", *value))
+}
+
+pub fn parse_i32_to_interval_unit(value: &i32) -> Result<IntervalUnit, Error> {
+    protobuf::IntervalUnit::from_i32(*value)
+        .map(|t| t.into())
+        .ok_or_else(|| Error::unknown("IntervalUnit", *value))
+}
+
+pub fn parse_i32_to_aggregate_function(value: &i32) -> Result<AggregateFunction, Error> {
+    protobuf::AggregateFunction::from_i32(*value)
+        .map(|a| a.into())
+        .ok_or_else(|| Error::unknown("AggregateFunction", *value))
+}
+
 /// Ensures that all `values` are of type DataType::List and have the
 /// same type as field
 fn validate_list_values(field: &Field, values: &[ScalarValue]) -> Result<(), Error> {
@@ -818,7 +922,7 @@ pub fn parse_expr(
 
             match window_function {
                 window_expr_node::WindowFunction::AggrFunction(i) => {
-                    let aggr_function = protobuf::AggregateFunction::try_from(i)?.into();
+                    let aggr_function = parse_i32_to_aggregate_function(i)?;
 
                     Ok(Expr::WindowFunction {
                         fun: datafusion_expr::window_function::WindowFunction::AggregateFunction(
@@ -852,7 +956,7 @@ pub fn parse_expr(
             }
         }
         ExprType::AggregateExpr(expr) => {
-            let fun = protobuf::AggregateFunction::try_from(&expr.aggr_function)?.into();
+            let fun = parse_i32_to_aggregate_function(&expr.aggr_function)?;
 
             Ok(Expr::AggregateFunction {
                 fun,
@@ -954,13 +1058,13 @@ pub fn parse_expr(
         ExprType::TryCast(cast) => {
             let expr = Box::new(parse_required_expr(&cast.expr, registry, "expr")?);
             let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-            Ok(Expr::TryCast { expr, data_type })
+            Ok(Expr::TryCast(TryCast::new(expr, data_type)))
         }
-        ExprType::Sort(sort) => Ok(Expr::Sort {
-            expr: Box::new(parse_required_expr(&sort.expr, registry, "expr")?),
-            asc: sort.asc,
-            nulls_first: sort.nulls_first,
-        }),
+        ExprType::Sort(sort) => Ok(Expr::Sort(Sort::new(
+            Box::new(parse_required_expr(&sort.expr, registry, "expr")?),
+            sort.asc,
+            sort.nulls_first,
+        ))),
         ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
             parse_required_expr(&negative.expr, registry, "expr")?,
         ))),
@@ -1247,93 +1351,6 @@ fn parse_escape_char(s: &str) -> Result<Option<char>, DataFusionError> {
     }
 }
 
-impl TryFrom<protobuf::WindowFrame> for WindowFrame {
-    type Error = Error;
-
-    fn try_from(window: protobuf::WindowFrame) -> Result<Self, Self::Error> {
-        let units = protobuf::WindowFrameUnits::from_i32(window.window_frame_units)
-            .ok_or_else(|| Error::unknown("WindowFrameUnits", window.window_frame_units))?
-            .into();
-        let start_bound = window.start_bound.required("start_bound")?;
-        let end_bound = window
-            .end_bound
-            .map(|end_bound| match end_bound {
-                protobuf::window_frame::EndBound::Bound(end_bound) => {
-                    end_bound.try_into()
-                }
-            })
-            .transpose()?
-            .unwrap_or(WindowFrameBound::CurrentRow);
-        Ok(Self {
-            units,
-            start_bound,
-            end_bound,
-        })
-    }
-}
-
-impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
-    type Error = Error;
-
-    fn try_from(bound: protobuf::WindowFrameBound) -> Result<Self, Self::Error> {
-        let bound_type =
-            protobuf::WindowFrameBoundType::from_i32(bound.window_frame_bound_type)
-                .ok_or_else(|| {
-                    Error::unknown("WindowFrameBoundType", bound.window_frame_bound_type)
-                })?;
-        match bound_type {
-            protobuf::WindowFrameBoundType::CurrentRow => Ok(Self::CurrentRow),
-            protobuf::WindowFrameBoundType::Preceding => match bound.bound_value {
-                Some(x) => Ok(Self::Preceding(ScalarValue::try_from(&x)?)),
-                None => Ok(Self::Preceding(ScalarValue::UInt64(None))),
-            },
-            protobuf::WindowFrameBoundType::Following => match bound.bound_value {
-                Some(x) => Ok(Self::Following(ScalarValue::try_from(&x)?)),
-                None => Ok(Self::Following(ScalarValue::UInt64(None))),
-            },
-        }
-    }
-}
-
-impl TryFrom<&i32> for protobuf::TimeUnit {
-    type Error = Error;
-
-    fn try_from(value: &i32) -> Result<Self, Self::Error> {
-        protobuf::TimeUnit::from_i32(*value)
-            .ok_or_else(|| Error::unknown("TimeUnit", *value))
-    }
-}
-
-impl From<protobuf::TimeUnit> for TimeUnit {
-    fn from(time_unit: protobuf::TimeUnit) -> Self {
-        match time_unit {
-            protobuf::TimeUnit::Second => TimeUnit::Second,
-            protobuf::TimeUnit::Millisecond => TimeUnit::Millisecond,
-            protobuf::TimeUnit::Microsecond => TimeUnit::Microsecond,
-            protobuf::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
-        }
-    }
-}
-
-impl TryFrom<&i32> for protobuf::IntervalUnit {
-    type Error = Error;
-
-    fn try_from(value: &i32) -> Result<Self, Self::Error> {
-        protobuf::IntervalUnit::from_i32(*value)
-            .ok_or_else(|| Error::unknown("IntervalUnit", *value))
-    }
-}
-
-impl From<protobuf::IntervalUnit> for IntervalUnit {
-    fn from(interval_unit: protobuf::IntervalUnit) -> Self {
-        match interval_unit {
-            protobuf::IntervalUnit::YearMonth => IntervalUnit::YearMonth,
-            protobuf::IntervalUnit::DayTime => IntervalUnit::DayTime,
-            protobuf::IntervalUnit::MonthDayNano => IntervalUnit::MonthDayNano,
-        }
-    }
-}
-
 // panic here because no better way to convert from Vec to Array
 fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
     v.try_into().unwrap_or_else(|v: Vec<T>| {
@@ -1358,6 +1375,8 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "Modulo" => Ok(Operator::Modulo),
         "Like" => Ok(Operator::Like),
         "NotLike" => Ok(Operator::NotLike),
+        "ILike" => Ok(Operator::ILike),
+        "NotILike" => Ok(Operator::NotILike),
         "IsDistinctFrom" => Ok(Operator::IsDistinctFrom),
         "IsNotDistinctFrom" => Ok(Operator::IsNotDistinctFrom),
         "BitwiseAnd" => Ok(Operator::BitwiseAnd),
