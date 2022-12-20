@@ -2843,10 +2843,9 @@ async fn join_only_with_filter() -> Result<()> {
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: t1.t1_id, t1.t1_name, t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
-        "    Filter: CAST(t1.t1_id AS Int64) * Int64(4) < CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
-        "      CrossJoin: [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
-        "        TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
-        "        TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+        "    Inner Join:  Filter: CAST(t1.t1_id AS Int64) * Int64(4) < CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
     ];
 
     let formatted = plan.display_indent_schema().to_string();
