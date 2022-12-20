@@ -18,7 +18,7 @@
 //! Expression rewriter
 
 use crate::expr::{
-    Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet, Like, TryCast,
+    Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet, Like, Sort, TryCast,
 };
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
@@ -211,15 +211,11 @@ impl ExprRewritable for Expr {
             Expr::TryCast(TryCast { expr, data_type }) => {
                 Expr::TryCast(TryCast::new(rewrite_boxed(expr, rewriter)?, data_type))
             }
-            Expr::Sort {
+            Expr::Sort(Sort {
                 expr,
                 asc,
                 nulls_first,
-            } => Expr::Sort {
-                expr: rewrite_boxed(expr, rewriter)?,
-                asc,
-                nulls_first,
-            },
+            }) => Expr::Sort(Sort::new(rewrite_boxed(expr, rewriter)?, asc, nulls_first)),
             Expr::ScalarFunction { args, fun } => Expr::ScalarFunction {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
@@ -347,16 +343,16 @@ pub fn rewrite_sort_cols_by_aggs(
         .map(|e| {
             let expr = e.into();
             match expr {
-                Expr::Sort {
+                Expr::Sort(Sort {
                     expr,
                     asc,
                     nulls_first,
-                } => {
-                    let sort = Expr::Sort {
-                        expr: Box::new(rewrite_sort_col_by_aggs(*expr, plan)?),
+                }) => {
+                    let sort = Expr::Sort(Sort::new(
+                        Box::new(rewrite_sort_col_by_aggs(*expr, plan)?),
                         asc,
                         nulls_first,
-                    };
+                    ));
                     Ok(sort)
                 }
                 expr => Ok(expr),
