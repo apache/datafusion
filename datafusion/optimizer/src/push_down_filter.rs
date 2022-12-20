@@ -28,6 +28,7 @@ use datafusion_expr::{
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
 use std::sync::Arc;
+use crate::optimizer::ApplyOrder;
 
 /// Push Down Filter optimizer rule pushes filter clauses down the plan
 /// # Introduction
@@ -513,6 +514,10 @@ impl OptimizerRule for PushDownFilter {
         "push_down_filter"
     }
 
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
+    }
+
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -523,16 +528,9 @@ impl OptimizerRule for PushDownFilter {
             // we also need to pushdown filter in Join.
             LogicalPlan::Join(join) => {
                 let optimized_plan = push_down_join(plan, join, None)?;
-                return match optimized_plan {
-                    Some(optimized_plan) => Ok(Some(utils::optimize_children(
-                        self,
-                        &optimized_plan,
-                        config,
-                    )?)),
-                    None => Ok(Some(utils::optimize_children(self, plan, config)?)),
-                };
+                return Ok(optimized_plan)
             }
-            _ => return Ok(Some(utils::optimize_children(self, plan, config)?)),
+            _ => return Ok(None),
         };
 
         let child_plan = &**filter.input();
@@ -745,7 +743,7 @@ impl OptimizerRule for PushDownFilter {
             _ => plan.clone(),
         };
 
-        Ok(Some(utils::optimize_children(self, &new_plan, config)?))
+        Ok(Some(new_plan))
     }
 }
 
@@ -793,15 +791,8 @@ mod tests {
     };
     use std::sync::Arc;
 
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        let optimized_plan = PushDownFilter::new()
-            .try_optimize(plan, &OptimizerContext::new())
-            .unwrap()
-            .expect("failed to optimize plan");
-        let formatted_plan = format!("{:?}", optimized_plan);
-        assert_eq!(plan.schema(), optimized_plan.schema());
-        assert_eq!(expected, formatted_plan);
-        Ok(())
+    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+        assert_optimized_plan_eq(Arc::new(PushDownFilter::new()), plan, expected)
     }
 
     #[test]
@@ -816,7 +807,7 @@ mod tests {
             Projection: test.a, test.b\
             \n  Filter: test.a = Int64(1)\
             \n    TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -833,7 +824,7 @@ mod tests {
             \n  Limit: skip=0, fetch=10\
             \n    Projection: test.a, test.b\
             \n      TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -845,7 +836,7 @@ mod tests {
         let expected = "\
             Filter: Int64(0) = Int64(1)\
             \n  TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -862,7 +853,7 @@ mod tests {
             \n  Projection: test.a, test.b, test.c\
             \n    Filter: test.a = Int64(1)\
             \n      TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -877,7 +868,7 @@ mod tests {
             Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b) AS total_salary]]\
             \n  Filter: test.a > Int64(10)\
             \n    TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -890,7 +881,7 @@ mod tests {
         let expected = "Filter: test.b > Int64(10)\
         \n  Aggregate: groupBy=[[test.b + test.a]], aggr=[[SUM(test.a), test.b]]\
         \n    TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -903,7 +894,7 @@ mod tests {
             "Aggregate: groupBy=[[test.b + test.a]], aggr=[[SUM(test.a), test.b]]\
         \n  Filter: test.b + test.a > Int64(10)\
         \n    TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -918,7 +909,7 @@ mod tests {
             Filter: b > Int64(10)\
             \n  Aggregate: groupBy=[[test.a]], aggr=[[SUM(test.b) AS b]]\
             \n    TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// verifies that a filter is pushed to before a projection, the filter expression is correctly re-written
@@ -934,7 +925,7 @@ mod tests {
             Projection: test.a AS b, test.c\
             \n  Filter: test.a = Int64(1)\
             \n    TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     fn add(left: Expr, right: Expr) -> Expr {
@@ -979,7 +970,7 @@ mod tests {
             Projection: test.a * Int32(2) + test.c AS b, test.c\
             \n  Filter: test.a * Int32(2) + test.c = Int64(1)\
             \n    TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// verifies that when a filter is pushed to after 2 projections, the filter expression is correctly re-written
@@ -1012,7 +1003,7 @@ mod tests {
         \n  Projection: test.a * Int32(2) + test.c AS b, test.c\
         \n    Filter: (test.a * Int32(2) + test.c) * Int32(3) = Int64(1)\
         \n      TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// verifies that when two filters apply after an aggregation that only allows one to be pushed, one is pushed
@@ -1046,7 +1037,7 @@ mod tests {
         \n    Projection: test.a AS b, test.c\
         \n      Filter: test.a > Int64(10)\
         \n        TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// verifies that when a filter with two predicates is applied after an aggregation that only allows one to be pushed, one is pushed
@@ -1081,7 +1072,7 @@ mod tests {
         \n    Projection: test.a AS b, test.c\
         \n      Filter: test.a > Int64(10)\
         \n        TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// verifies that when two limits are in place, we jump neither
@@ -1103,7 +1094,7 @@ mod tests {
             \n      Limit: skip=0, fetch=20\
             \n        Projection: test.a, test.b\
             \n          TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -1120,7 +1111,7 @@ mod tests {
         \n    TableScan: test\
         \n  Filter: test2.a = Int64(1)\
         \n    TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -1145,7 +1136,7 @@ mod tests {
         \n    Projection: test.a AS b\
         \n      Filter: test.a = Int64(1)\
         \n        TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -1178,7 +1169,7 @@ mod tests {
         \n      Filter: test1.d > Int32(2)\
         \n        TableScan: test1";
 
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -1206,7 +1197,7 @@ mod tests {
         \n    Projection: test1.a, test1.b, test1.c\
         \n      Filter: test1.a > Int32(2)\
         \n        TableScan: test1";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// verifies that filters with the same columns are correctly placed
@@ -1241,7 +1232,7 @@ mod tests {
         \n        Filter: test.a <= Int64(1)\
         \n          TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// verifies that filters to be placed on the same depth are ANDed
@@ -1271,7 +1262,7 @@ mod tests {
         \n    Limit: skip=0, fetch=1\
         \n      TableScan: test";
 
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// verifies that filters on a plan with user nodes are not lost
@@ -1293,7 +1284,7 @@ mod tests {
         // not part of the test
         assert_eq!(format!("{:?}", plan), expected);
 
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// post-on-join predicates on a column common to both sides is pushed to both sides
@@ -1333,7 +1324,7 @@ mod tests {
         \n  Projection: test2.a\
         \n    Filter: test2.a <= Int64(1)\
         \n      TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// post-using-join predicates on a column common to both sides is pushed to both sides
@@ -1372,7 +1363,7 @@ mod tests {
         \n  Projection: test2.a\
         \n    Filter: test2.a <= Int64(1)\
         \n      TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// post-join predicates with columns from both sides are not pushed
@@ -1410,7 +1401,7 @@ mod tests {
 
         // expected is equal: no push-down
         let expected = &format!("{:?}", plan);
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// post-join predicates with columns from one side of a join are pushed only to that side
@@ -1453,7 +1444,7 @@ mod tests {
         \n      TableScan: test\
         \n  Projection: test2.a, test2.c\
         \n    TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// post-join predicates on the right side of a left join are not duplicated
@@ -1492,7 +1483,7 @@ mod tests {
         \n    TableScan: test\
         \n    Projection: test2.a\
         \n      TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// post-join predicates on the left side of a right join are not duplicated
@@ -1530,7 +1521,7 @@ mod tests {
         \n    TableScan: test\
         \n    Projection: test2.a\
         \n      TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// post-left-join predicate on a column common to both sides is only pushed to the left side
@@ -1569,7 +1560,7 @@ mod tests {
         \n    TableScan: test\
         \n  Projection: test2.a\
         \n    TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// post-right-join predicate on a column common to both sides is only pushed to the right side
@@ -1608,7 +1599,7 @@ mod tests {
         \n  Projection: test2.a\
         \n    Filter: test2.a <= Int64(1)\
         \n      TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// single table predicate parts of ON condition should be pushed to both inputs
@@ -1653,7 +1644,7 @@ mod tests {
         \n  Projection: test2.a, test2.b, test2.c\
         \n    Filter: test2.c > UInt32(4)\
         \n      TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// join filter should be completely removed after pushdown
@@ -1697,7 +1688,7 @@ mod tests {
         \n  Projection: test2.a, test2.b, test2.c\
         \n    Filter: test2.c > UInt32(4)\
         \n      TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// predicate on join key in filter expression should be pushed down to both inputs
@@ -1739,7 +1730,7 @@ mod tests {
         \n  Projection: test2.b\
         \n    Filter: test2.b > UInt32(1)\
         \n      TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// single table predicate parts of ON condition should be pushed to right input
@@ -1783,7 +1774,7 @@ mod tests {
         \n  Projection: test2.a, test2.b, test2.c\
         \n    Filter: test2.c > UInt32(4)\
         \n      TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// single table predicate parts of ON condition should be pushed to left input
@@ -1827,7 +1818,7 @@ mod tests {
         \n      TableScan: test\
         \n  Projection: test2.a, test2.b, test2.c\
         \n    TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// single table predicate parts of ON condition should not be pushed
@@ -1865,7 +1856,7 @@ mod tests {
         );
 
         let expected = &format!("{:?}", plan);
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     struct PushDownProvider {
@@ -1924,7 +1915,7 @@ mod tests {
 
         let expected = "\
         TableScan: test, full_filters=[a = Int64(1)]";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -1935,7 +1926,7 @@ mod tests {
         let expected = "\
         Filter: a = Int64(1)\
         \n  TableScan: test, partial_filters=[a = Int64(1)]";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -1954,7 +1945,7 @@ mod tests {
 
         // Optimizing the same plan multiple times should produce the same plan
         // each time.
-        assert_optimized_plan_eq(&optimised_plan, expected)
+        assert_optimized_plan_equal(&optimised_plan, expected)
     }
 
     #[test]
@@ -1965,7 +1956,7 @@ mod tests {
         let expected = "\
         Filter: a = Int64(1)\
         \n  TableScan: test";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -1994,7 +1985,7 @@ mod tests {
             \n  Filter: a = Int64(10) AND b > Int64(11)\
             \n    TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]";
 
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -2023,7 +2014,7 @@ mod tests {
             \n    TableScan: test\
             ";
 
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -2056,7 +2047,7 @@ mod tests {
             \n      TableScan: test\
             ";
 
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -2083,7 +2074,7 @@ mod tests {
             \n    TableScan: test\
             ";
 
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// predicate on join key in filter expression should be pushed down to both inputs
@@ -2125,7 +2116,7 @@ mod tests {
         \n  Projection: test2.b AS d\
         \n    Filter: test2.b > UInt32(1)\
         \n      TableScan: test2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -2156,7 +2147,7 @@ mod tests {
             \n    TableScan: test\
             ";
 
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -2190,7 +2181,7 @@ mod tests {
             \n      TableScan: test\
             ";
 
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -2227,7 +2218,7 @@ mod tests {
         \n      Projection: sq.c\
         \n        TableScan: sq\
         \n    TableScan: test";
-        assert_optimized_plan_eq(&plan, expected_after)
+        assert_optimized_plan_equal(&plan, expected_after)
     }
 
     #[test]
@@ -2260,7 +2251,7 @@ mod tests {
         \n        Projection: Int64(0) AS a\
         \n          Filter: Int64(0) = Int64(1)\
         \n            EmptyRelation";
-        assert_optimized_plan_eq(&plan, expected_after)
+        assert_optimized_plan_equal(&plan, expected_after)
     }
 
     #[test]
@@ -2291,7 +2282,7 @@ mod tests {
         \n        TableScan: test\
         \n    Projection: test1.a AS d, test1.a AS e\
         \n      TableScan: test1";
-        assert_optimized_plan_eq(&plan, expected)?;
+        assert_optimized_plan_equal(&plan, expected)?;
 
         // Originally global state which can help to avoid duplicate Filters been generated and pushed down.
         // Now the global state is removed. Need to double confirm that avoid duplicate Filters.
@@ -2299,6 +2290,6 @@ mod tests {
             .try_optimize(&plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
-        assert_optimized_plan_eq(&optimized_plan, expected)
+        assert_optimized_plan_equal(&optimized_plan, expected)
     }
 }
