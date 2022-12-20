@@ -226,7 +226,6 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 mod tests {
     use super::*;
     use crate::test::*;
-    use crate::OptimizerContext;
     use datafusion_expr::expr;
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::{
