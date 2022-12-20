@@ -140,18 +140,18 @@ fn optimize_where_in(
     let mut other_subqry_exprs = vec![];
     if let LogicalPlan::Filter(subqry_filter) = (*subqry_input).clone() {
         // split into filters
-        let subqry_filter_exprs = split_conjunction(subqry_filter.predicate());
+        let subqry_filter_exprs = split_conjunction(&subqry_filter.predicate);
         verify_not_disjunction(&subqry_filter_exprs)?;
 
         // Grab column names to join on
         let (col_exprs, other_exprs) =
-            find_join_exprs(subqry_filter_exprs, subqry_filter.input().schema())
+            find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema())
                 .map_err(|e| context!("column correlation not found", e))?;
         if !col_exprs.is_empty() {
             // it's correlated
-            subqry_input = subqry_filter.input().clone();
+            subqry_input = subqry_filter.input.clone();
             (outer_cols, subqry_cols, join_filters) =
-                exprs_to_join_cols(&col_exprs, subqry_filter.input().schema(), false)
+                exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)
                     .map_err(|e| context!("column correlation not found", e))?;
             other_subqry_exprs = other_exprs;
         }

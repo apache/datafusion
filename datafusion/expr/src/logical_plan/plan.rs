@@ -1382,16 +1382,6 @@ impl Filter {
             _ => plan_err!("Could not coerce into Filter!"),
         }
     }
-
-    /// Access the filter predicate expression
-    pub fn predicate(&self) -> &Expr {
-        &self.predicate
-    }
-
-    /// Access the filter input plan
-    pub fn input(&self) -> &Arc<LogicalPlan> {
-        &self.input
-    }
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
