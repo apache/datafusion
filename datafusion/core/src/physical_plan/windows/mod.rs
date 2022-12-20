@@ -244,7 +244,7 @@ mod tests {
                 schema.as_ref(),
             )?],
             input,
-            schema,
+            schema.clone(),
             vec![],
             None,
         )?);
@@ -252,9 +252,10 @@ mod tests {
         let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
         assert_eq!(result.len(), 1);
 
+        let n_schema_fields = schema.fields().len();
         let columns = result[0].columns();
 
-        let count: &Int64Array = as_primitive_array(&columns[0])?;
+        let count: &Int64Array = as_primitive_array(&columns[n_schema_fields])?;
         assert_eq!(count.value(0), 100);
         assert_eq!(count.value(99), 100);
         Ok(())
@@ -305,19 +306,20 @@ mod tests {
         let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
         assert_eq!(result.len(), 1);
 
+        let n_schema_fields = schema.fields().len();
         let columns = result[0].columns();
 
         // c3 is small int
 
-        let count: &Int64Array = as_primitive_array(&columns[0])?;
+        let count: &Int64Array = as_primitive_array(&columns[n_schema_fields])?;
         assert_eq!(count.value(0), 100);
         assert_eq!(count.value(99), 100);
 
-        let max: &Int8Array = as_primitive_array(&columns[1])?;
+        let max: &Int8Array = as_primitive_array(&columns[n_schema_fields + 1])?;
         assert_eq!(max.value(0), 125);
         assert_eq!(max.value(99), 125);
 
-        let min: &Int8Array = as_primitive_array(&columns[2])?;
+        let min: &Int8Array = as_primitive_array(&columns[n_schema_fields + 2])?;
         assert_eq!(min.value(0), -117);
         assert_eq!(min.value(99), -117);
 
