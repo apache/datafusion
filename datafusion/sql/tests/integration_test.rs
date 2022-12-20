@@ -3131,13 +3131,16 @@ fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
 }
 
 #[test]
-#[should_panic(
-    expected = "value: Internal(\"Placehoder $2 does not exist in the parameter list: [Int32]\")"
-)]
-fn test_prepare_statement_to_plan_panic_no_data_types() {
+fn test_prepare_statement_should_infer_types() {
     // only provide 1 data type while using 2 params
     let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1 + $2";
-    logical_plan(sql).unwrap();
+    let plan = logical_plan(sql).unwrap();
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([
+        ("$1".to_string(), Some(DataType::Int32)),
+        ("$2".to_string(), Some(DataType::Int64)),
+    ]);
+    assert_eq!(actual_types, expected_types);
 }
 
 #[test]
@@ -3282,6 +3285,71 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         ScalarValue::Float64(Some(10.0)),
     ];
     let expected_plan = "Projection: Int64(1) + Int32(10) + Float64(10)\n  EmptyRelation";
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
+fn test_prepare_statement_infer_types_from_join() {
+    let sql =
+        "SELECT id, order_id FROM person JOIN orders ON id = customer_id and age = $1";
+
+    let expected_plan = r#"
+Projection: person.id, orders.order_id
+  Inner Join:  Filter: person.id = orders.customer_id AND person.age = $1
+    TableScan: person
+    TableScan: orders
+    "#
+    .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let expected_plan = r#"
+Projection: person.id, orders.order_id
+  Inner Join:  Filter: person.id = orders.customer_id AND person.age = Int32(10)
+    TableScan: person
+    TableScan: orders
+    "#
+    .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
+fn test_prepare_statement_infer_types_from_predicate() {
+    let sql = "SELECT id, age FROM person WHERE age = $1";
+
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age = $1
+    TableScan: person
+        "#
+    .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([("$1".to_string(), Some(DataType::Int32))]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![ScalarValue::Int32(Some(10))];
+    let expected_plan = r#"
+Projection: person.id, person.age
+  Filter: person.age = Int32(10)
+    TableScan: person
+        "#
+    .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
 
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
 }

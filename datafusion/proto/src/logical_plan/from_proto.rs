@@ -1325,13 +1325,13 @@ pub fn parse_expr(
             )))
         }
         ExprType::Placeholder(PlaceholderNode { id, data_type }) => match data_type {
-            None => {
-                let message = format!("Protobuf deserialization error: data type must be provided for the placeholder {id}");
-                Err(proto_error(message))
-            }
+            None => Ok(Expr::Placeholder {
+                id: id.clone(),
+                data_type: None,
+            }),
             Some(data_type) => Ok(Expr::Placeholder {
                 id: id.clone(),
-                data_type: data_type.try_into()?,
+                data_type: Some(data_type.try_into()?),
             }),
         },
     }

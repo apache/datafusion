@@ -128,7 +128,9 @@ impl ExprSchemable for Expr {
             Expr::Like { .. } | Expr::ILike { .. } | Expr::SimilarTo { .. } => {
                 Ok(DataType::Boolean)
             }
-            Expr::Placeholder { data_type, .. } => Ok(data_type.clone()),
+            Expr::Placeholder { data_type, .. } => data_type.clone().ok_or_else(|| {
+                DataFusionError::Plan("Placeholder type could not be resolved".to_owned())
+            }),
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
