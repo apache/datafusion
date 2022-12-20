@@ -21,12 +21,8 @@
 use crate::physical_plan::windows::BoundedWindowAggExec;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::{
-    error::Result,
-    physical_optimizer::PhysicalOptimizerRule,
-    physical_plan::{
-        coalesce_batches::CoalesceBatchesExec, filter::FilterExec, joins::HashJoinExec,
-        repartition::RepartitionExec, rewrite::TreeNodeRewritable,
-    },
+    error::Result, physical_optimizer::PhysicalOptimizerRule,
+    physical_plan::rewrite::TreeNodeRewritable,
 };
 use datafusion_expr::WindowFrameUnits;
 use datafusion_physical_expr::window::WindowExpr;
@@ -51,19 +47,15 @@ impl PhysicalOptimizerRule for ReplaceWindowWithBoundedImpl {
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
         plan.transform_up(&|plan| {
             if let Some(window_agg_exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
-                // println!("do analysis for bounded impl");
                 let is_contains_groups = window_agg_exec
                     .window_expr()
                     .iter()
-                    .any(|elem| is_window_frame_groups(elem));
+                    .any(is_window_frame_groups);
                 let can_run_bounded = window_agg_exec
                     .window_expr()
                     .iter()
                     .all(|elem| elem.can_run_bounded());
-                // println!("is_contains_groups: {:?}", is_contains_groups);
-                // println!("can_run_bounded: {:?}", can_run_bounded);
                 if !is_contains_groups && can_run_bounded {
-                    // println!("changing with bounded");
                     return Ok(Some(Arc::new(BoundedWindowAggExec::try_new(
                         window_agg_exec.window_expr().to_vec(),
                         window_agg_exec.input().clone(),
@@ -88,8 +80,8 @@ impl PhysicalOptimizerRule for ReplaceWindowWithBoundedImpl {
 
 /// Checks window expression whether it is GROUPS mode
 fn is_window_frame_groups(window_expr: &Arc<dyn WindowExpr>) -> bool {
-    match window_expr.get_window_frame().units {
-        WindowFrameUnits::Groups => true,
-        _ => false,
-    }
+    matches!(
+        window_expr.get_window_frame().units,
+        WindowFrameUnits::Groups
+    )
 }

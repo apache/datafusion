@@ -92,38 +92,3 @@ pub trait Accumulator: Send + Sync + Debug {
         ))
     }
 }
-
-/// Representation of internal accumulator state. Accumulators can potentially have a mix of
-/// scalar and array values. It may be desirable to add custom aggregator states here as well
-/// in the future (perhaps `Custom(Box<dyn Any>)`?).
-#[derive(Debug, Clone)]
-pub enum AggregateState {
-    /// Simple scalar value. Note that `ScalarValue::List` can be used to pass multiple
-    /// values around
-    Scalar(ScalarValue),
-    /// Arrays can be used instead of `ScalarValue::List` and could potentially have better
-    /// performance with large data sets, although this has not been verified. It also allows
-    /// for use of arrow kernels with less overhead.
-    Array(ArrayRef),
-}
-
-impl AggregateState {
-    /// Access the aggregate state as a scalar value. An error will occur if the
-    /// state is not a scalar value.
-    pub fn as_scalar(&self) -> Result<&ScalarValue> {
-        match &self {
-            Self::Scalar(v) => Ok(v),
-            _ => Err(DataFusionError::Internal(
-                "AggregateState is not a scalar aggregate".to_string(),
-            )),
-        }
-    }
-
-    /// Access the aggregate state as an array value.
-    pub fn to_array(&self) -> ArrayRef {
-        match &self {
-            Self::Scalar(v) => v.to_array(),
-            Self::Array(array) => array.clone(),
-        }
-    }
-}

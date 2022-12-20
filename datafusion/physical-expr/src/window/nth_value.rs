@@ -128,7 +128,6 @@ impl BuiltInWindowFunctionExpr for NthValue {
         }))
     }
 
-
     fn bounded_exec_supported(&self) -> bool {
         true
     }
@@ -145,6 +144,10 @@ impl BuiltInWindowFunctionExpr for NthValue {
             data_type: self.data_type.clone(),
             kind: reversed_kind,
         }))
+    }
+
+    fn uses_window_frame(&self) -> bool {
+        true
     }
 }
 
@@ -181,10 +184,6 @@ impl PartitionEvaluator for NthValueEvaluator {
         self.state.range = state.current_range_of_sliding_window.clone();
         Ok(())
     }
-
-    // fn uses_window_frame(&self) -> bool {
-    //     true
-    // }
 
     fn evaluate_bounded(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
         self.evaluate_inside_range(values, self.state.range.clone())

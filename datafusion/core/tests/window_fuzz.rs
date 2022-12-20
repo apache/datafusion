@@ -25,11 +25,11 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::runtime::Builder;
 
+use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::windows::{
     create_window_expr, BoundedWindowAggExec, WindowAggExec,
 };
-use datafusion::physical_plan::{collect, common};
 use datafusion_expr::{
     AggregateFunction, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
 };

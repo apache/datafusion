@@ -353,13 +353,6 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
     }
 
     fn update_partition_batch(&mut self, record_batch: RecordBatch) -> Result<()> {
-        // all window expressions have same other than window frame boundaries hence we can use any one of the window expressions
-        let window_expr = self.window_expr.first().ok_or_else(|| {
-            DataFusionError::Execution(
-                "window expr cannot be empty to support streaming".to_string(),
-            )
-        })?;
-
         let partition_columns = self.partition_columns(&record_batch)?;
         let num_rows = record_batch.num_rows();
         if num_rows > 0 {

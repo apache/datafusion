@@ -23,7 +23,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use arrow_schema::DataType;
 use datafusion_common::{reverse_sort_options, DataFusionError, Result, ScalarValue};
-use datafusion_expr::{Accumulator, AggregateState, WindowFrame};
+use datafusion_expr::{Accumulator, WindowFrame};
 use indexmap::IndexMap;
 use std::any::Any;
 use std::fmt;
@@ -220,9 +220,9 @@ pub enum BuiltinWindowState {
 #[derive(Debug, Clone)]
 pub enum WindowFunctionState {
     /// Different Aggregate functions may have different state definitions
-    /// In [Accumulator] trait, [fn state(&self) -> Result<Vec<AggregateState>>] implementation
+    /// In [Accumulator] trait, [fn state(&self) -> Result<Vec<ScalarValue>>] implementation
     /// dictates that.
-    AggregateState(Vec<AggregateState>),
+    AggregateState(Vec<ScalarValue>),
     /// BuiltinWindowState
     BuiltinWindowState(BuiltinWindowState),
 }

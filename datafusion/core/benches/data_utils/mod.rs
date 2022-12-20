@@ -17,7 +17,6 @@
 
 //! This module provides the in-memory table for more realistic benchmarking.
 
-use arrow::array::Int32Array;
 use arrow::{
     array::Float32Array,
     array::Float64Array,
@@ -32,7 +31,6 @@ use datafusion::from_slice::FromSlice;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// create an in-memory table given the partition len, array len, and batch size,

@@ -67,7 +67,7 @@ pub trait PartitionEvaluator: Debug + Send + Sync {
     /// evaluate the partition evaluator against the partition
     fn evaluate(&self, _values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
         Err(DataFusionError::NotImplemented(
-            "evaluate_partition is not implemented by default".into(),
+            "evaluate is not implemented by default".into(),
         ))
     }
 
