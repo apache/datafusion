@@ -106,6 +106,7 @@ impl OptimizerRule for CommonSubexprEliminate {
                 expr,
                 input,
                 schema,
+                ..
             }) => {
                 let input_schema = Arc::clone(input.schema());
                 let arrays = to_arrays(expr, input_schema, &mut expr_set)?;
@@ -179,6 +180,7 @@ impl OptimizerRule for CommonSubexprEliminate {
                 aggr_expr,
                 input,
                 schema,
+                ..
             }) => {
                 let input_schema = Arc::clone(input.schema());
                 let group_arrays =

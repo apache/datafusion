@@ -58,7 +58,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
         match plan {
             LogicalPlan::Filter(filter) => {
                 // Apply optimizer rule to current input
-                let input = filter.input().as_ref().clone();
+                let input = filter.input.as_ref().clone();
 
                 // Splitting filter expression into components by AND
                 let filters = utils::split_conjunction(&filter.predicate);
@@ -80,7 +80,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
 
                 if !subqueries_in_regular.is_empty() {
                     return Ok(Some(LogicalPlan::Filter(Filter::try_new(
-                        filter.predicate().clone(),
+                        filter.predicate.clone(),
                         Arc::new(input),
                     )?)));
                 };

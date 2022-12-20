@@ -83,14 +83,14 @@ impl OptimizerRule for DecorrelateWhereExists {
         match plan {
             LogicalPlan::Filter(filter) => {
                 let (subqueries, other_exprs) =
-                    self.extract_subquery_exprs(filter.predicate(), config)?;
+                    self.extract_subquery_exprs(&filter.predicate, config)?;
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
                     return Ok(None);
                 }
 
                 // iterate through all exists clauses in predicate, turning each into a join
-                let mut cur_input = filter.input().as_ref().clone();
+                let mut cur_input = filter.input.as_ref().clone();
                 for subquery in subqueries {
                     if let Some(x) = optimize_exists(&subquery, &cur_input, &other_exprs)?
                     {
