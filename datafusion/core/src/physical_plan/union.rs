@@ -123,7 +123,7 @@ impl ExecutionPlan for UnionExec {
         self.schema.clone()
     }
 
-    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children.iter().any(|x| *x))
     }
 

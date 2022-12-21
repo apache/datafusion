@@ -40,6 +40,8 @@ impl PipelineChecker {
         Self {}
     }
 }
+type PhysicalOptimizerSubrule =
+    dyn Fn(&UnboundedStatePropagator) -> Option<Result<UnboundedStatePropagator>>;
 impl PhysicalOptimizerRule for PipelineChecker {
     fn optimize(
         &self,
@@ -47,17 +49,13 @@ impl PhysicalOptimizerRule for PipelineChecker {
         _config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let pipeline = UnboundedStatePropagator::new(plan);
-        let mut plan_mutators: Vec<
-            Box<
-                dyn Fn(
-                    &UnboundedStatePropagator,
-                ) -> Option<Result<UnboundedStatePropagator>>,
-            >,
-        > = Vec::new();
-        plan_mutators.push(Box::new(hash_join_swap_sub_rule));
-
+        let physical_optimizer_subrules: Vec<Box<PhysicalOptimizerSubrule>> =
+            vec![Box::new(hash_join_swap_subrule)];
         let state = pipeline.transform_up(&|p| {
-            check_finiteness_requirements_stateful(p, &plan_mutators)
+            apply_subrules_and_check_finiteness_requirements(
+                p,
+                &physical_optimizer_subrules,
+            )
         })?;
         Ok(state.plan)
     }
@@ -109,8 +107,49 @@ fn executable_after_swap(join_type: JoinType) -> bool {
         JoinType::Inner | JoinType::Right | JoinType::RightSemi | JoinType::RightAnti
     )
 }
-
-fn hash_join_swap_sub_rule(
+/// It will reorder the build and probe sides of a hash
+/// join depending on whether its inputs may produce an infinite stream of records.
+/// The rule ensure that the left (build) side of the join always operates on an
+/// input stream that will produce a finite set of records.
+/// If the left side can not be chosen to be "finite", the order stays the same as
+/// the original query.
+/// ```text
+/// For example, this rule makes the following transformation:
+///
+///
+///
+///           +--------------+              +--------------+
+///           |              |  unbounded   |              |
+///    Left   | Infinite     |    true      | Hash         |\true
+///           | Data source  |--------------| Repartition  | \   +--------------+       +--------------+
+///           |              |              |              |  \  |              |       |              |
+///           +--------------+              +--------------+   - |  Hash Join   |-------| Projection   |
+///                                                            - |              |       |              |
+///           +--------------+              +--------------+  /  +--------------+       +--------------+
+///           |              |  unbounded   |              | /
+///    Right  | Finite       |    false     | Hash         |/false
+///           | Data Source  |--------------| Repartition  |
+///           |              |              |              |
+///           +--------------+              +--------------+
+///
+///
+///
+///           +--------------+              +--------------+
+///           |              |  unbounded   |              |
+///    Left   | Finite       |    false     | Hash         |\false
+///           | Data source  |--------------| Repartition  | \   +--------------+       +--------------+
+///           |              |              |              |  \  |              | true  |              | true
+///           +--------------+              +--------------+   - |  Hash Join   |-------| Projection   |-----
+///                                                            - |              |       |              |
+///           +--------------+              +--------------+  /  +--------------+       +--------------+
+///           |              |  unbounded   |              | /
+///    Right  | Infinite     |    true      | Hash         |/true
+///           | Data Source  |--------------| Repartition  |
+///           |              |              |              |
+///           +--------------+              +--------------+
+///
+/// ```
+fn hash_join_swap_subrule(
     input: &UnboundedStatePropagator,
 ) -> Option<Result<UnboundedStatePropagator>> {
     let plan = input.plan.clone();
@@ -201,15 +240,11 @@ impl TreeNodeRewritable for UnboundedStatePropagator {
     }
 }
 
-fn check_finiteness_requirements_stateful(
+fn apply_subrules_and_check_finiteness_requirements(
     mut input: UnboundedStatePropagator,
-    mutators: &Vec<
-        Box<
-            dyn Fn(&UnboundedStatePropagator) -> Option<Result<UnboundedStatePropagator>>,
-        >,
-    >,
+    physical_optimizer_subrules: &Vec<Box<PhysicalOptimizerSubrule>>,
 ) -> Result<Option<UnboundedStatePropagator>> {
-    for sub_rule in mutators {
+    for sub_rule in physical_optimizer_subrules {
         match sub_rule(&input) {
             Some(Ok(value)) => {
                 input = value;
@@ -483,51 +518,54 @@ mod hash_join_tests {
 
     #[tokio::test]
     async fn test_join_with_swap_full() -> Result<()> {
-        let mut cases = vec![];
         // NOTE: Currently, some initial conditions are not viable after join order selection.
         //       For example, full join always comes in partitioned mode. See the warning in
         //       function "swap". If this changes in the future, we should update these tests.
-        cases.push(TestCase {
-            case: "Bounded - Unbounded 1".to_string(),
-            initial_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
-            initial_join_type: JoinType::Full,
-            initial_mode: PartitionMode::Partitioned,
-            expected_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
-            expected_join_type: JoinType::Full,
-            expected_mode: PartitionMode::Partitioned,
-            expecting_swap: false,
-        });
-        cases.push(TestCase {
-            case: "Unbounded - Bounded 2".to_string(),
-            initial_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
-            initial_join_type: JoinType::Full,
-            initial_mode: PartitionMode::Partitioned,
-            expected_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
-            expected_join_type: JoinType::Full,
-            expected_mode: PartitionMode::Partitioned,
-            expecting_swap: false,
-        });
-
-        cases.push(TestCase {
-            case: "Bounded - Bounded 3".to_string(),
-            initial_sources_unbounded: (SourceType::Bounded, SourceType::Bounded),
-            initial_join_type: JoinType::Full,
-            initial_mode: PartitionMode::Partitioned,
-            expected_sources_unbounded: (SourceType::Bounded, SourceType::Bounded),
-            expected_join_type: JoinType::Full,
-            expected_mode: PartitionMode::Partitioned,
-            expecting_swap: false,
-        });
-        cases.push(TestCase {
-            case: "Unbounded - Unbounded 4".to_string(),
-            initial_sources_unbounded: (SourceType::Unbounded, SourceType::Unbounded),
-            initial_join_type: JoinType::Full,
-            initial_mode: PartitionMode::Partitioned,
-            expected_sources_unbounded: (SourceType::Unbounded, SourceType::Unbounded),
-            expected_join_type: JoinType::Full,
-            expected_mode: PartitionMode::Partitioned,
-            expecting_swap: false,
-        });
+        let cases = vec![
+            TestCase {
+                case: "Bounded - Unbounded 1".to_string(),
+                initial_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
+                initial_join_type: JoinType::Full,
+                initial_mode: PartitionMode::Partitioned,
+                expected_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
+                expected_join_type: JoinType::Full,
+                expected_mode: PartitionMode::Partitioned,
+                expecting_swap: false,
+            },
+            TestCase {
+                case: "Unbounded - Bounded 2".to_string(),
+                initial_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
+                initial_join_type: JoinType::Full,
+                initial_mode: PartitionMode::Partitioned,
+                expected_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
+                expected_join_type: JoinType::Full,
+                expected_mode: PartitionMode::Partitioned,
+                expecting_swap: false,
+            },
+            TestCase {
+                case: "Bounded - Bounded 3".to_string(),
+                initial_sources_unbounded: (SourceType::Bounded, SourceType::Bounded),
+                initial_join_type: JoinType::Full,
+                initial_mode: PartitionMode::Partitioned,
+                expected_sources_unbounded: (SourceType::Bounded, SourceType::Bounded),
+                expected_join_type: JoinType::Full,
+                expected_mode: PartitionMode::Partitioned,
+                expecting_swap: false,
+            },
+            TestCase {
+                case: "Unbounded - Unbounded 4".to_string(),
+                initial_sources_unbounded: (SourceType::Unbounded, SourceType::Unbounded),
+                initial_join_type: JoinType::Full,
+                initial_mode: PartitionMode::Partitioned,
+                expected_sources_unbounded: (
+                    SourceType::Unbounded,
+                    SourceType::Unbounded,
+                ),
+                expected_join_type: JoinType::Full,
+                expected_mode: PartitionMode::Partitioned,
+                expecting_swap: false,
+            },
+        ];
         for case in cases.into_iter() {
             test_join_with_maybe_swap_unbounded_case(case).await?
         }
@@ -829,7 +867,7 @@ mod hash_join_tests {
             children_unbounded: vec![left_unbounded, right_unbounded],
         };
         let optimized_hash_join =
-            hash_join_swap_sub_rule(&initial_hash_join_state).unwrap()?;
+            hash_join_swap_subrule(&initial_hash_join_state).unwrap()?;
         let optimized_join_plan = optimized_hash_join.plan;
 
         // If swap did happen
@@ -854,19 +892,19 @@ mod hash_join_tests {
             ..
         }) = plan.as_any().downcast_ref::<HashJoinExec>()
         {
-            let left_changed = Arc::ptr_eq(&left, &right_exec);
-            let right_changed = Arc::ptr_eq(&right, &left_exec);
+            let left_changed = Arc::ptr_eq(left, &right_exec);
+            let right_changed = Arc::ptr_eq(right, &left_exec);
             // If this is not equal, we have a bigger problem.
             assert_eq!(left_changed, right_changed);
             assert_eq!(
                 (
                     t.case.as_str(),
-                    if left.unbounded_output(&vec![])? {
+                    if left.unbounded_output(&[])? {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded
                     },
-                    if right.unbounded_output(&vec![])? {
+                    if right.unbounded_output(&[])? {
                         SourceType::Unbounded
                     } else {
                         SourceType::Bounded
@@ -903,6 +941,7 @@ mod hash_join_tests {
         use rstest::*;
         use std::fs::{File, OpenOptions};
         use std::io::Write;
+        use std::path::Path;
         use std::path::PathBuf;
         use std::sync::mpsc;
         use std::sync::mpsc::{Receiver, Sender};
@@ -952,11 +991,11 @@ mod hash_join_tests {
         }
 
         async fn create_ctx(
-            fifo_path: &PathBuf,
+            fifo_path: &Path,
             with_unbounded_execution: bool,
         ) -> Result<SessionContext> {
             let config = SessionConfig::new()
-                .with_batch_size(TEST_BATCH_SIZE as usize)
+                .with_batch_size(TEST_BATCH_SIZE)
                 .set_u64(
                     "datafusion.execution.coalesce_target_batch_size",
                     TEST_BATCH_SIZE as u64,
@@ -1042,16 +1081,17 @@ mod hash_join_tests {
                 let joinable_lines_length =
                     (TEST_DATA_SIZE as f64 * TEST_JOIN_RATIO).round() as usize;
                 // The row including "a" is joinable with aggregate_test_100.c1
-                let joinable_iterator = (0..joinable_lines_length).map(|_| format!("a"));
+                let joinable_iterator =
+                    (0..joinable_lines_length).map(|_| "a".to_string());
                 let second_joinable_iterator =
-                    (0..joinable_lines_length).map(|_| format!("a"));
+                    (0..joinable_lines_length).map(|_| "a".to_string());
                 // The row including "zzz" is not joinable with aggregate_test_100.c1
-                let non_joinable_iterator =
-                    (0..(TEST_DATA_SIZE - joinable_lines_length)).map(|_| format!("zzz"));
+                let non_joinable_iterator = (0..(TEST_DATA_SIZE - joinable_lines_length))
+                    .map(|_| "zzz".to_string());
                 let string_array = joinable_iterator
                     .chain(non_joinable_iterator)
                     .chain(second_joinable_iterator);
-                for (cnt, string_col) in enumerate(string_array.into_iter()) {
+                for (cnt, string_col) in enumerate(string_array) {
                     // Wait a reading sign for unbounded execution
                     // For unbounded execution:
                     //  After joinable_lines_length FIFO reading, we MUST get a Operation::Read.

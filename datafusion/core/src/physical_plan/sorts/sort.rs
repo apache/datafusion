@@ -704,7 +704,7 @@ impl ExecutionPlan for SortExec {
         }
     }
 
-    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
             Err(DataFusionError::Plan(
                 "Sort Error: Can not sort unbounded inputs.".to_string(),

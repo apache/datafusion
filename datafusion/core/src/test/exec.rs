@@ -536,7 +536,7 @@ impl ExecutionPlan for UnboundedExec {
         Partitioning::UnknownPartitioning(2)
     }
 
-    fn unbounded_output(&self, _children: &Vec<bool>) -> Result<bool> {
+    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
         Ok(self.unbounded)
     }
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {

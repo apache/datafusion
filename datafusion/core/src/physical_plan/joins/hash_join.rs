@@ -309,7 +309,7 @@ impl ExecutionPlan for HashJoinExec {
         }
     }
 
-    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         let (left, right) = (children[0], children[1]);
         // If left is unbounded, or right is unbounded with JoinType::Right,
         // JoinType::Full, JoinType::RightAnti types.

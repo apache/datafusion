@@ -367,7 +367,7 @@ impl ExecutionPlan for AggregateExec {
         }
     }
 
-    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
             Err(DataFusionError::Plan(
                 "Aggregate Error: `GROUP BY` clause (including the more general GROUPING SET) is not supported for unbounded inputs.".to_string(),

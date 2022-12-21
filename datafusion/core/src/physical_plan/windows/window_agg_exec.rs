@@ -180,7 +180,7 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
-    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] {
             Err(DataFusionError::Plan(
                 "Window Error: Windowing is not currently support for unbounded inputs."

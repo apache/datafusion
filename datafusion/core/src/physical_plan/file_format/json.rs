@@ -87,7 +87,7 @@ impl ExecutionPlan for NdJsonExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
-    fn unbounded_output(&self, _: &Vec<bool>) -> Result<bool> {
+    fn unbounded_output(&self, _: &[bool]) -> Result<bool> {
         Ok(self.base_config.infinite_source)
     }
 

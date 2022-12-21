@@ -144,7 +144,7 @@ impl ExecutionPlan for CrossJoinExec {
         vec![self.left.clone(), self.right.clone()]
     }
 
-    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         if children[0] || children[1] {
             Err(DataFusionError::Plan(
                 "Cross Join Error: Cross join is not supported for the unbounded inputs."

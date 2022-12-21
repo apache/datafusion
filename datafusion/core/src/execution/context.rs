@@ -1580,6 +1580,7 @@ impl SessionState {
         // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
         physical_optimizers.push(Arc::new(PipelineChecker::new()));
+        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
 
         SessionState {
             session_id,

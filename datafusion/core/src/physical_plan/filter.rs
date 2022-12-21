@@ -108,7 +108,7 @@ impl ExecutionPlan for FilterExec {
         self.input.output_partitioning()
     }
 
-    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children[0])
     }
 
