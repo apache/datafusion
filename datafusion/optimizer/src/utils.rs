@@ -583,7 +583,6 @@ where
 fn name_for_alias(expr: &Expr) -> Result<String> {
     match expr {
         Expr::Sort { expr, .. } => name_for_alias(expr),
-        Expr::Wildcard => Ok("*".to_string()),
         expr => expr.display_name(),
     }
 }

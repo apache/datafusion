@@ -1253,9 +1253,7 @@ fn create_name(e: &Expr) -> Result<String> {
         Expr::Sort { .. } => Err(DataFusionError::Internal(
             "Create name does not support sort expression".to_string(),
         )),
-        Expr::Wildcard => Err(DataFusionError::Internal(
-            "Create name does not support wildcard".to_string(),
-        )),
+        Expr::Wildcard => Ok("*".to_string()),
         Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
             "Create name does not support qualified wildcard".to_string(),
         )),
