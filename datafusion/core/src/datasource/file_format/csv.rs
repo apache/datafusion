@@ -35,6 +35,7 @@ use super::FileFormat;
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::error::Result;
+use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
@@ -113,6 +114,7 @@ impl FileFormat for CsvFormat {
 
     async fn infer_schema(
         &self,
+        _ctx: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -150,6 +152,7 @@ impl FileFormat for CsvFormat {
 
     async fn infer_stats(
         &self,
+        _ctx: &SessionState,
         _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
         _object: &ObjectMeta,
@@ -159,6 +162,7 @@ impl FileFormat for CsvFormat {
 
     async fn create_physical_plan(
         &self,
+        _ctx: &SessionState,
         conf: FileScanConfig,
         _filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -184,11 +188,12 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::with_config(config);
+        let ctx = session_ctx.state();
+        let task_ctx = ctx.task_ctx();
         // skip column 9 that overflows the automaticly discovered column type of i64 (u64 would work)
         let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]);
-        let exec = get_exec("aggregate_test_100.csv", projection, None).await?;
-        let task_ctx = ctx.task_ctx();
+        let exec = get_exec(&ctx, "aggregate_test_100.csv", projection, None).await?;
         let stream = exec.execute(0, task_ctx)?;
 
         let tt_batches: i32 = stream
@@ -212,9 +217,10 @@ mod tests {
     #[tokio::test]
     async fn read_limit() -> Result<()> {
         let session_ctx = SessionContext::new();
+        let ctx = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![0, 1, 2, 3]);
-        let exec = get_exec("aggregate_test_100.csv", projection, Some(1)).await?;
+        let exec = get_exec(&ctx, "aggregate_test_100.csv", projection, Some(1)).await?;
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(4, batches[0].num_columns());
@@ -225,8 +231,11 @@ mod tests {
 
     #[tokio::test]
     async fn infer_schema() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let ctx = session_ctx.state();
+
         let projection = None;
-        let exec = get_exec("aggregate_test_100.csv", projection, None).await?;
+        let exec = get_exec(&ctx, "aggregate_test_100.csv", projection, None).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -259,9 +268,10 @@ mod tests {
     #[tokio::test]
     async fn read_char_column() -> Result<()> {
         let session_ctx = SessionContext::new();
+        let ctx = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![0]);
-        let exec = get_exec("aggregate_test_100.csv", projection, None).await?;
+        let exec = get_exec(&ctx, "aggregate_test_100.csv", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await.expect("Collect batches");
 
@@ -281,12 +291,13 @@ mod tests {
     }
 
     async fn get_exec(
+        ctx: &SessionState,
         file_name: &str,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let root = format!("{}/csv", crate::test_util::arrow_test_data());
         let format = CsvFormat::default();
-        scan_format(&format, &root, file_name, projection, limit).await
+        scan_format(ctx, &format, &root, file_name, projection, limit).await
     }
 }

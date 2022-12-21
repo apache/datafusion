@@ -385,7 +385,7 @@ impl ListingOptions {
             .try_collect()
             .await?;
 
-        self.format.infer_schema(&store, &files).await
+        self.format.infer_schema(ctx, &store, &files).await
     }
 }
 
@@ -582,6 +582,7 @@ impl TableProvider for ListingTable {
         self.options
             .format
             .create_physical_plan(
+                ctx,
                 FileScanConfig {
                     object_store_url: self.table_paths.get(0).unwrap().object_store(),
                     file_schema: Arc::clone(&self.file_schema),
@@ -591,7 +592,7 @@ impl TableProvider for ListingTable {
                     limit,
                     output_ordering: self.try_create_output_ordering()?,
                     table_partition_cols,
-                    config_options: ctx.config.config_options(),
+                    config_options: ctx.config_options(),
                 },
                 filters,
             )
@@ -663,6 +664,7 @@ impl ListingTable {
                             .options
                             .format
                             .infer_stats(
+                                ctx,
                                 &store,
                                 self.file_schema.clone(),
                                 &part_file.object_meta,

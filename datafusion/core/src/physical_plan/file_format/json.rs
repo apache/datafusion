@@ -268,11 +268,11 @@ mod tests {
     const TEST_DATA_BASE: &str = "tests/jsons";
 
     async fn prepare_store(
-        ctx: &SessionContext,
+        ctx: &SessionState,
         file_compression_type: FileCompressionType,
     ) -> (ObjectStoreUrl, Vec<Vec<PartitionedFile>>, SchemaRef) {
         let store_url = ObjectStoreUrl::local_filesystem();
-        let store = ctx.runtime_env().object_store(&store_url).unwrap();
+        let store = ctx.runtime_env.object_store(&store_url).unwrap();
 
         let filename = "1.json";
         let file_groups = partitioned_file_groups(
@@ -292,7 +292,7 @@ mod tests {
             .object_meta;
         let schema = JsonFormat::default()
             .with_file_compression_type(file_compression_type.to_owned())
-            .infer_schema(&store, &[meta.clone()])
+            .infer_schema(ctx, &store, &[meta.clone()])
             .await
             .unwrap();
 
@@ -366,11 +366,12 @@ mod tests {
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
+        let ctx = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
 
         let (object_store_url, file_groups, file_schema) =
-            prepare_store(&session_ctx, file_compression_type.to_owned()).await;
+            prepare_store(&ctx, file_compression_type.to_owned()).await;
 
         let exec = NdJsonExec::new(
             FileScanConfig {
@@ -435,10 +436,11 @@ mod tests {
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
+        let ctx = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
         let (object_store_url, file_groups, actual_schema) =
-            prepare_store(&session_ctx, file_compression_type.to_owned()).await;
+            prepare_store(&ctx, file_compression_type.to_owned()).await;
 
         let mut fields = actual_schema.fields().clone();
         fields.push(Field::new("missing_col", DataType::Int32, true));
@@ -486,9 +488,10 @@ mod tests {
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
+        let ctx = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         let (object_store_url, file_groups, file_schema) =
-            prepare_store(&session_ctx, file_compression_type.to_owned()).await;
+            prepare_store(&ctx, file_compression_type.to_owned()).await;
 
         let exec = NdJsonExec::new(
             FileScanConfig {

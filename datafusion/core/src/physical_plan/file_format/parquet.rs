@@ -1294,15 +1294,22 @@ mod tests {
     async fn parquet_exec_with_projection() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = "alltypes_plain.parquet";
-        let ctx = SessionContext::new();
+        let session_ctx = SessionContext::new();
+        let ctx = session_ctx.state();
+        let task_ctx = ctx.task_ctx();
         let format = ParquetFormat::new(ctx.config_options());
-        let parquet_exec =
-            scan_format(&format, &testdata, filename, Some(vec![0, 1, 2]), None)
-                .await
-                .unwrap();
+        let parquet_exec = scan_format(
+            &ctx,
+            &format,
+            &testdata,
+            filename,
+            Some(vec![0, 1, 2]),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let task_ctx = SessionContext::new().task_ctx();
         let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap()?;
 
@@ -1372,14 +1379,16 @@ mod tests {
         }
 
         let session_ctx = SessionContext::new();
+        let ctx = session_ctx.state();
+
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
 
         let meta = local_unpartitioned_file(filename);
 
         let store = Arc::new(LocalFileSystem::new()) as _;
-        let file_schema = ParquetFormat::new(session_ctx.config_options())
-            .infer_schema(&store, &[meta.clone()])
+        let file_schema = ParquetFormat::new(ctx.config_options())
+            .infer_schema(&ctx, &store, &[meta.clone()])
             .await?;
 
         let group_empty = vec![vec![file_range(&meta, 0, 5)]];
@@ -1389,22 +1398,11 @@ mod tests {
             file_range(&meta, 5, i64::MAX),
         ]];
 
-        assert_parquet_read(
-            group_empty,
-            None,
-            session_ctx.task_ctx(),
-            file_schema.clone(),
-        )
-        .await?;
-        assert_parquet_read(
-            group_contain,
-            Some(8),
-            session_ctx.task_ctx(),
-            file_schema.clone(),
-        )
-        .await?;
-        assert_parquet_read(group_all, Some(8), session_ctx.task_ctx(), file_schema)
+        assert_parquet_read(group_empty, None, ctx.task_ctx(), file_schema.clone())
             .await?;
+        assert_parquet_read(group_contain, Some(8), ctx.task_ctx(), file_schema.clone())
+            .await?;
+        assert_parquet_read(group_all, Some(8), ctx.task_ctx(), file_schema).await?;
 
         Ok(())
     }
@@ -1412,13 +1410,11 @@ mod tests {
     #[tokio::test]
     async fn parquet_exec_with_partition() -> Result<()> {
         let session_ctx = SessionContext::new();
+        let ctx = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
 
         let object_store_url = ObjectStoreUrl::local_filesystem();
-        let store = session_ctx
-            .runtime_env()
-            .object_store(&object_store_url)
-            .unwrap();
+        let store = ctx.runtime_env.object_store(&object_store_url).unwrap();
 
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
@@ -1426,7 +1422,7 @@ mod tests {
         let meta = local_unpartitioned_file(filename);
 
         let schema = ParquetFormat::new(session_ctx.config_options())
-            .infer_schema(&store, &[meta.clone()])
+            .infer_schema(&ctx, &store, &[meta.clone()])
             .await
             .unwrap();
 
