@@ -115,19 +115,16 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
         if self.pop_stack.is_empty() {
             match self.push_stack.pop() {
                 Some((val, _)) => {
-                    self.pop_stack.push((val.clone(), val));
+                    let mut last = (val.clone(), val);
+                    self.pop_stack.push(last.clone());
                     while let Some((val, _)) = self.push_stack.pop() {
-                        // This is safe, because we just pushed one element onto
-                        // pop_stack and therefore it cannot be empty.
-                        let last = unsafe {
-                            self.pop_stack.get_unchecked(self.pop_stack.len() - 1)
-                        };
                         let min = if last.1 < val {
                             last.1.clone()
                         } else {
                             val.clone()
                         };
-                        self.pop_stack.push((val.clone(), min));
+                        last = (val.clone(), min);
+                        self.pop_stack.push(last.clone());
                     }
                 }
                 None => return None,
@@ -229,19 +226,16 @@ impl<T: Clone + PartialOrd> MovingMax<T> {
         if self.pop_stack.is_empty() {
             match self.push_stack.pop() {
                 Some((val, _)) => {
-                    self.pop_stack.push((val.clone(), val));
+                    let mut last = (val.clone(), val);
+                    self.pop_stack.push(last.clone());
                     while let Some((val, _)) = self.push_stack.pop() {
-                        // This is safe, because we just pushed one element onto
-                        // pop_stack and therefore it cannot be empty.
-                        let last = unsafe {
-                            self.pop_stack.get_unchecked(self.pop_stack.len() - 1)
-                        };
                         let max = if last.1 > val {
                             last.1.clone()
                         } else {
                             val.clone()
                         };
-                        self.pop_stack.push((val.clone(), max));
+                        last = (val.clone(), max);
+                        self.pop_stack.push(last.clone());
                     }
                 }
                 None => return None,
@@ -260,5 +254,77 @@ impl<T: Clone + PartialOrd> MovingMax<T> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_common::Result;
+    use rand::Rng;
+
+    fn get_random_vec_i32(len: usize) -> Vec<i32> {
+        let mut rng = rand::thread_rng();
+        let mut input = Vec::with_capacity(len);
+        for _i in 0..len {
+            input.push(rng.gen_range(0..100));
+        }
+        input
+    }
+
+    fn moving_min_i32(len: usize, n_sliding_window: usize) -> Result<()> {
+        let data = get_random_vec_i32(len);
+        let mut expected = Vec::with_capacity(len);
+        let mut moving_min = MovingMin::<i32>::new();
+        let mut res = Vec::with_capacity(len);
+        for i in 0..len {
+            let start = i.saturating_sub(n_sliding_window);
+            expected.push(*data[start..i + 1].iter().min().unwrap());
+
+            moving_min.push(data[i]);
+            if i > n_sliding_window {
+                moving_min.pop();
+            }
+            res.push(*moving_min.min().unwrap());
+        }
+        assert_eq!(res, expected);
+        Ok(())
+    }
+
+    fn moving_max_i32(len: usize, n_sliding_window: usize) -> Result<()> {
+        let data = get_random_vec_i32(len);
+        let mut expected = Vec::with_capacity(len);
+        let mut moving_max = MovingMax::<i32>::new();
+        let mut res = Vec::with_capacity(len);
+        for i in 0..len {
+            let start = i.saturating_sub(n_sliding_window);
+            expected.push(*data[start..i + 1].iter().max().unwrap());
+
+            moving_max.push(data[i]);
+            if i > n_sliding_window {
+                moving_max.pop();
+            }
+            res.push(*moving_max.max().unwrap());
+        }
+        assert_eq!(res, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn moving_min_tests() -> Result<()> {
+        moving_min_i32(100, 10)?;
+        moving_min_i32(100, 20)?;
+        moving_min_i32(100, 50)?;
+        moving_min_i32(100, 100)?;
+        Ok(())
+    }
+
+    #[test]
+    fn moving_max_tests() -> Result<()> {
+        moving_max_i32(100, 10)?;
+        moving_max_i32(100, 20)?;
+        moving_max_i32(100, 50)?;
+        moving_max_i32(100, 100)?;
+        Ok(())
     }
 }
