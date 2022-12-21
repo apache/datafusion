@@ -2718,11 +2718,8 @@ async fn join_with_type_coercion_for_equi_expr() -> Result<()> {
 
     // assert logical plan
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.to_optimized_plan().unwrap();
 
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
@@ -2764,11 +2761,8 @@ async fn join_only_with_filter() -> Result<()> {
 
     // assert logical plan
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.to_optimized_plan().unwrap();
 
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
@@ -2811,11 +2805,8 @@ async fn type_coercion_join_with_filter_and_equi_expr() -> Result<()> {
 
     // assert logical plan
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.to_optimized_plan().unwrap();
 
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
