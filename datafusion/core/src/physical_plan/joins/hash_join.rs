@@ -317,7 +317,10 @@ impl ExecutionPlan for HashJoinExec {
             || (right
                 && matches!(
                     self.join_type,
-                    JoinType::Right | JoinType::Full | JoinType::RightAnti
+                    JoinType::Left
+                        | JoinType::Full
+                        | JoinType::LeftAnti
+                        | JoinType::LeftSemi
                 ));
 
         if breaking {

@@ -69,7 +69,7 @@ impl PhysicalOptimizerRule for PipelineChecker {
     }
 }
 
-/// For [JoinType::Full], [JoinType::Left], [JoinType::LeftAnti] and [JoinType::LeftSemi] cannot
+/// For [JoinType::Full], [JoinType::Right], [JoinType::RightAnti] and [JoinType::RightSemi] cannot
 /// be executed with unbounded left side, even if we swap. This is why we do not bring them
 /// in this function.
 fn swap(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
@@ -78,7 +78,7 @@ fn swap(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
     match (*partition_mode, *join_type) {
         (
             _,
-            JoinType::LeftSemi | JoinType::Left | JoinType::LeftAnti | JoinType::Full,
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::Full,
         ) => Err(DataFusionError::Internal(format!(
             "{} join cannot be swapped.",
             join_type
@@ -86,12 +86,8 @@ fn swap(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
         (PartitionMode::Partitioned, _) => {
             swap_hash_join(hash_join, PartitionMode::Partitioned)
         }
-        (PartitionMode::CollectLeft, JoinType::RightSemi | JoinType::Inner) => {
+        (PartitionMode::CollectLeft, _) => {
             swap_hash_join(hash_join, PartitionMode::CollectLeft)
-        }
-
-        (PartitionMode::CollectLeft, JoinType::Right | JoinType::RightAnti) => {
-            swap_hash_join(hash_join, PartitionMode::Partitioned)
         }
         (PartitionMode::Auto, _) => Err(DataFusionError::Internal(
             "Auto is not acceptable here.".to_string(),
@@ -99,12 +95,12 @@ fn swap(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
     }
 }
 
-/// JoinType::Full | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti can not be executed
+/// JoinType::Full | JoinType::Right | JoinType::RightSemi | JoinType::RightAnti can not be executed
 /// even if we swap. So, we do not swap.
 fn executable_after_swap(join_type: JoinType) -> bool {
     matches!(
         join_type,
-        JoinType::Inner | JoinType::Right | JoinType::RightSemi | JoinType::RightAnti
+        JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti
     )
 }
 /// It will reorder the build and probe sides of a hash
@@ -276,6 +272,40 @@ mod sql_tests {
     async fn test_hash_left_join_swap() -> Result<()> {
         let test1 = BinaryTestCase {
             source_types: (SourceType::Unbounded, SourceType::Bounded),
+            expect_fail: false,
+        };
+        let test2 = BinaryTestCase {
+            source_types: (SourceType::Unbounded, SourceType::Unbounded),
+            expect_fail: true,
+        };
+        let test3 = BinaryTestCase {
+            source_types: (SourceType::Bounded, SourceType::Unbounded),
+            expect_fail: true,
+        };
+        let test4 = BinaryTestCase {
+            source_types: (SourceType::Bounded, SourceType::Bounded),
+            expect_fail: false,
+        };
+        let case = QueryCase {
+            sql: "SELECT t2.c1 FROM left as t1 LEFT JOIN right as t2 ON t1.c1 = t2.c1"
+                .to_string(),
+            cases: vec![
+                Arc::new(test1),
+                Arc::new(test2),
+                Arc::new(test3),
+                Arc::new(test4),
+            ],
+            error_operator: "Join Error".to_string(),
+        };
+
+        case.run().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hash_right_join_swap() -> Result<()> {
+        let test1 = BinaryTestCase {
+            source_types: (SourceType::Unbounded, SourceType::Bounded),
             expect_fail: true,
         };
         let test2 = BinaryTestCase {
@@ -291,7 +321,7 @@ mod sql_tests {
             expect_fail: false,
         };
         let case = QueryCase {
-            sql: "SELECT t2.c1 FROM left as t1 LEFT JOIN right as t2 ON t1.c1 = t2.c1"
+            sql: "SELECT t2.c1 FROM left as t1 RIGHT JOIN right as t2 ON t1.c1 = t2.c1"
                 .to_string(),
             cases: vec![
                 Arc::new(test1),
@@ -575,7 +605,7 @@ mod hash_join_tests {
     #[tokio::test]
     async fn test_cases_without_collect_left_check() -> Result<()> {
         let mut cases = vec![];
-        let join_types = vec![JoinType::RightSemi, JoinType::Inner];
+        let join_types = vec![JoinType::LeftSemi, JoinType::Inner];
         for join_type in join_types {
             cases.push(TestCase {
                 case: "Unbounded - Bounded / CollectLeft".to_string(),
@@ -676,18 +706,17 @@ mod hash_join_tests {
         let mut cases = vec![];
         // After [JoinSelection] optimization, these join types cannot run in CollectLeft mode except
         // [JoinType::LeftSemi]
-        let the_ones_not_support_collect_left =
-            vec![JoinType::Left, JoinType::LeftAnti, JoinType::LeftSemi];
+        let the_ones_not_support_collect_left = vec![JoinType::Left, JoinType::LeftAnti];
         for join_type in the_ones_not_support_collect_left {
             cases.push(TestCase {
                 case: "Unbounded - Bounded".to_string(),
                 initial_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
-                expected_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
-                expected_join_type: join_type,
+                expected_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
+                expected_join_type: swap_join_type(join_type),
                 expected_mode: PartitionMode::Partitioned,
-                expecting_swap: false,
+                expecting_swap: true,
             });
             cases.push(TestCase {
                 case: "Bounded - Unbounded".to_string(),
@@ -731,10 +760,10 @@ mod hash_join_tests {
     }
 
     #[tokio::test]
-    async fn test_must_collect_left_swap_makes_partitioned() -> Result<()> {
+    async fn test_not_supporting_swaps_possible_collect_left() -> Result<()> {
         let mut cases = vec![];
         let the_ones_not_support_collect_left =
-            vec![JoinType::Right, JoinType::RightAnti];
+            vec![JoinType::Right, JoinType::RightAnti, JoinType::RightSemi];
         for join_type in the_ones_not_support_collect_left {
             // We expect that (SourceType::Unbounded, SourceType::Bounded) will change, regardless of the
             // statistics.
@@ -743,10 +772,10 @@ mod hash_join_tests {
                 initial_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::CollectLeft,
-                expected_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
-                expected_join_type: swap_join_type(join_type),
-                expected_mode: PartitionMode::Partitioned,
-                expecting_swap: true,
+                expected_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
+                expected_join_type: join_type,
+                expected_mode: PartitionMode::CollectLeft,
+                expecting_swap: false,
             });
             // We expect that (SourceType::Bounded, SourceType::Unbounded) will stay same, regardless of the
             // statistics.
@@ -790,10 +819,10 @@ mod hash_join_tests {
                 initial_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
                 initial_join_type: join_type,
                 initial_mode: PartitionMode::Partitioned,
-                expected_sources_unbounded: (SourceType::Bounded, SourceType::Unbounded),
-                expected_join_type: swap_join_type(join_type),
+                expected_sources_unbounded: (SourceType::Unbounded, SourceType::Bounded),
+                expected_join_type: join_type,
                 expected_mode: PartitionMode::Partitioned,
-                expecting_swap: true,
+                expecting_swap: false,
             });
             cases.push(TestCase {
                 case: "Bounded - Unbounded / Partitioned".to_string(),
