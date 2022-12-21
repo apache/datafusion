@@ -143,6 +143,10 @@ impl AggregateExpr for Max {
             self.data_type.clone(),
         )))
     }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(SlidingMaxAccumulator::try_new(&self.data_type)?))
+    }
 }
 
 // Statically-typed version of min/max(array) -> ScalarValue for string types.
@@ -543,10 +547,50 @@ pub fn max_row(index: usize, accessor: &mut RowAccessor, s: &ScalarValue) -> Res
 #[derive(Debug)]
 pub struct MaxAccumulator {
     max: ScalarValue,
-    moving_max: moving_min_max::MovingMax<ScalarValue>,
 }
 
 impl MaxAccumulator {
+    /// new max accumulator
+    pub fn try_new(datatype: &DataType) -> Result<Self> {
+        Ok(Self {
+            max: ScalarValue::try_from(datatype)?,
+        })
+    }
+}
+
+impl Accumulator for MaxAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = &values[0];
+        let delta = &max_batch(values)?;
+        self.max = max(&self.max, delta)?;
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
+    }
+
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.max.clone()])
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Ok(self.max.clone())
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.max) + self.max.size()
+    }
+}
+
+/// An accumulator to compute the maximum value
+#[derive(Debug)]
+pub struct SlidingMaxAccumulator {
+    max: ScalarValue,
+    moving_max: moving_min_max::MovingMax<ScalarValue>,
+}
+
+impl SlidingMaxAccumulator {
     /// new max accumulator
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
@@ -556,7 +600,7 @@ impl MaxAccumulator {
     }
 }
 
-impl Accumulator for MaxAccumulator {
+impl Accumulator for SlidingMaxAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         for idx in 0..values[0].len() {
             let val = ScalarValue::try_from_array(&values[0], idx)?;
@@ -721,16 +765,60 @@ impl AggregateExpr for Min {
             self.data_type.clone(),
         )))
     }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(SlidingMinAccumulator::try_new(&self.data_type)?))
+    }
 }
 
 /// An accumulator to compute the minimum value
 #[derive(Debug)]
 pub struct MinAccumulator {
     min: ScalarValue,
-    moving_min: moving_min_max::MovingMin<ScalarValue>,
 }
 
 impl MinAccumulator {
+    /// new min accumulator
+    pub fn try_new(datatype: &DataType) -> Result<Self> {
+        Ok(Self {
+            min: ScalarValue::try_from(datatype)?,
+        })
+    }
+}
+
+impl Accumulator for MinAccumulator {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.min.clone()])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = &values[0];
+        let delta = &min_batch(values)?;
+        self.min = min(&self.min, delta)?;
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Ok(self.min.clone())
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.min) + self.min.size()
+    }
+}
+
+/// An accumulator to compute the minimum value
+#[derive(Debug)]
+pub struct SlidingMinAccumulator {
+    min: ScalarValue,
+    moving_min: moving_min_max::MovingMin<ScalarValue>,
+}
+
+impl SlidingMinAccumulator {
     /// new min accumulator
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
@@ -740,7 +828,7 @@ impl MinAccumulator {
     }
 }
 
-impl Accumulator for MinAccumulator {
+impl Accumulator for SlidingMinAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![self.min.clone()])
     }

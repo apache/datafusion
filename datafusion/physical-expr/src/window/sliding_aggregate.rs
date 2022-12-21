@@ -25,14 +25,10 @@ use arrow::array::Array;
 use arrow::compute::SortOptions;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
-use arrow_schema::Schema;
 
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::WindowFrame;
-use datafusion_row::accessor::RowAccessor;
-use datafusion_row::layout::RowLayout;
-use datafusion_row::RowType;
 
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use crate::{window::WindowExpr, AggregateExpr};
@@ -41,14 +37,14 @@ use super::window_frame_state::WindowFrameContext;
 
 /// A window expr that takes the form of an aggregate function
 #[derive(Debug)]
-pub struct ForwardAggregateWindowExpr {
+pub struct SlidingAggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
 }
 
-impl ForwardAggregateWindowExpr {
+impl SlidingAggregateWindowExpr {
     /// create a new aggregate window function expression
     pub fn new(
         aggregate: Arc<dyn AggregateExpr>,
@@ -74,7 +70,7 @@ impl ForwardAggregateWindowExpr {
 /// and then per partition point we'll evaluate the peer group (e.g. SUM or MAX gives the same
 /// results for peers) and concatenate the results.
 
-impl WindowExpr for ForwardAggregateWindowExpr {
+impl WindowExpr for SlidingAggregateWindowExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -100,13 +96,7 @@ impl WindowExpr for ForwardAggregateWindowExpr {
             self.order_by.iter().map(|o| o.options).collect();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
         for partition_range in &partition_points {
-            let fields = self.aggregate.state_fields().unwrap();
-            let aggr_schema = Arc::new(Schema::new(fields));
-            let layout = Arc::new(RowLayout::new(&aggr_schema, RowType::WordAligned));
-            let mut buffer: Vec<u8> = vec![0; layout.fixed_part_width()];
-            let mut accessor = RowAccessor::new_from_layout(layout);
-            accessor.point_to(0, &mut buffer);
-            let mut accumulator = self.aggregate.create_row_accumulator(0)?;
+            let mut accumulator = self.aggregate.create_sliding_accumulator()?;
             let length = partition_range.end - partition_range.start;
             let (values, order_bys) =
                 self.get_values_orderbys(&batch.slice(partition_range.start, length))?;
@@ -134,9 +124,18 @@ impl WindowExpr for ForwardAggregateWindowExpr {
                             .iter()
                             .map(|v| v.slice(last_range.1, update_bound))
                             .collect();
-                        accumulator.update_batch(&update, &mut accessor)?;
+                        accumulator.update_batch(&update)?
                     }
-                    accumulator.evaluate(&accessor)?
+                    // Remove rows that have now left the window:
+                    let retract_bound = cur_range.0 - last_range.0;
+                    if retract_bound > 0 {
+                        let retract: Vec<ArrayRef> = values
+                            .iter()
+                            .map(|v| v.slice(last_range.0, retract_bound))
+                            .collect();
+                        accumulator.retract_batch(&retract)?
+                    }
+                    accumulator.evaluate()?
                 };
                 row_wise_results.push(value);
                 last_range = cur_range;

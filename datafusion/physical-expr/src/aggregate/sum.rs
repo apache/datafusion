@@ -132,6 +132,10 @@ impl AggregateExpr for Sum {
             self.data_type.clone(),
         )))
     }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(SumAccumulator::try_new(&self.data_type)?))
+    }
 }
 
 #[derive(Debug)]

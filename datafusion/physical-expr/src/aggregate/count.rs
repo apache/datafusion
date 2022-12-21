@@ -104,6 +104,10 @@ impl AggregateExpr for Count {
     ) -> Result<Box<dyn RowAccumulator>> {
         Ok(Box::new(CountRowAccumulator::new(start_index)))
     }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(CountAccumulator::new()))
+    }
 }
 
 #[derive(Debug)]

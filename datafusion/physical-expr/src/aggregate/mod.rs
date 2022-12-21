@@ -102,4 +102,12 @@ pub trait AggregateExpr: Send + Sync + Debug {
             self
         )))
     }
+
+    /// Creates accumulator implementation that supports retract
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Retractable Accumulator hasn't been implemented for {:?} yet",
+            self
+        )))
+    }
 }

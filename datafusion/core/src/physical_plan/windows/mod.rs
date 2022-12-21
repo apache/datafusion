@@ -34,7 +34,7 @@ use datafusion_expr::{
     WindowFrame,
 };
 use datafusion_physical_expr::window::{
-    BuiltInWindowFunctionExpr, ForwardAggregateWindowExpr,
+    BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr,
 };
 use std::convert::TryInto;
 use std::sync::Arc;
@@ -60,10 +60,8 @@ pub fn create_window_expr(
         WindowFunction::AggregateFunction(fun) => {
             let aggregate =
                 aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?;
-            if aggregate.row_accumulator_supported()
-                && window_frame.start_bound.is_unbounded()
-            {
-                Arc::new(ForwardAggregateWindowExpr::new(
+            if !window_frame.start_bound.is_unbounded() {
+                Arc::new(SlidingAggregateWindowExpr::new(
                     aggregate,
                     partition_by,
                     order_by,
