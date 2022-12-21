@@ -226,7 +226,7 @@ impl WindowExpr for BuiltInWindowExpr {
         &self.window_frame
     }
 
-    fn get_reversed_expr(&self) -> Option<Arc<dyn WindowExpr>> {
+    fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>> {
         if let Some(reverse_expr) = self.expr.reverse_expr() {
             Some(Arc::new(BuiltInWindowExpr::new(
                 reverse_expr,

@@ -208,7 +208,7 @@ impl WindowExpr for AggregateWindowExpr {
         &self.window_frame
     }
 
-    fn get_reversed_expr(&self) -> Option<Arc<dyn WindowExpr>> {
+    fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>> {
         if let Some(reverse_expr) = self.aggregate.reverse_expr() {
             Some(Arc::new(AggregateWindowExpr::new(
                 reverse_expr,

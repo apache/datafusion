@@ -108,9 +108,11 @@ pub trait AggregateExpr: Send + Sync + Debug {
         )))
     }
 
-    /// Construct Reverse Expression
-    // Typically expression itself for aggregate functions By default returns None
+    /// Construct an expression that calculates the aggregate in reverse.
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        // Typically the "reverse" expression is itself (e.g. SUM, COUNT).
+        // For aggregates that do not support calculation in reverse,
+        // returns None (which is the default value).
         None
     }
 }
