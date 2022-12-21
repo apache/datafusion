@@ -30,7 +30,7 @@ use crate::physical_plan::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
@@ -364,6 +364,16 @@ impl ExecutionPlan for AggregateExec {
             }
             // Final Aggregation's output partitioning is the same as its real input
             _ => self.input.output_partitioning(),
+        }
+    }
+
+    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+        if children[0] {
+            Err(DataFusionError::Plan(
+                "Aggregate Error: `GROUP BY` clause (including the more general GROUPING SET) is not supported for unbounded inputs.".to_string(),
+            ))
+        } else {
+            Ok(false)
         }
     }
 

@@ -99,10 +99,6 @@ impl ExecutionPlan for FilterExec {
         self.input.schema()
     }
 
-    fn unbounded_output(&self) -> bool {
-        self.input.unbounded_output()
-    }
-
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
     }
@@ -110,6 +106,10 @@ impl ExecutionPlan for FilterExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         self.input.output_partitioning()
+    }
+
+    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+        Ok(children[0])
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {

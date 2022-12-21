@@ -757,7 +757,7 @@ mod tests {
         // Create executor from table
         let source_exec = table.scan(&ctx.state(), None, &[], None).await?;
 
-        assert_eq!(source_exec.unbounded_output(), infinite_data);
+        assert_eq!(source_exec.unbounded_output(&vec![])?, infinite_data);
 
         Ok(())
     }

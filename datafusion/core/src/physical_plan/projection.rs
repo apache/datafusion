@@ -158,8 +158,9 @@ impl ExecutionPlan for ProjectionExec {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
-    fn unbounded_output(&self) -> bool {
-        self.input.unbounded_output()
+
+    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+        Ok(children[0])
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

@@ -283,9 +283,10 @@ impl ExecutionPlan for RepartitionExec {
             self.partitioning.clone(),
         )?))
     }
-    fn unbounded_output(&self) -> bool {
-        self.input.unbounded_output()
+    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+        Ok(children[0])
     }
+
     fn output_partitioning(&self) -> Partitioning {
         self.partitioning.clone()
     }

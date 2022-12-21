@@ -111,8 +111,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     fn output_partitioning(&self) -> Partitioning;
 
     /// Specifies whether this plan generates an infinite stream of records
-    fn unbounded_output(&self) -> bool {
-        false
+    fn unbounded_output(&self, _children: &Vec<bool>) -> Result<bool> {
+        Ok(false)
     }
 
     /// If the output of this operator is sorted, returns `Some(keys)`

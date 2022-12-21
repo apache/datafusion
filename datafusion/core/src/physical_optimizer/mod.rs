@@ -25,7 +25,6 @@ pub mod join_selection;
 pub mod optimizer;
 pub mod pipeline_checker;
 pub mod pruning;
-pub mod reorder_unbounded_joins;
 pub mod repartition;
 mod utils;
 

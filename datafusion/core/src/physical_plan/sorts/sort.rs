@@ -745,6 +745,16 @@ impl ExecutionPlan for SortExec {
         }
     }
 
+    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+        if children[0] {
+            Err(DataFusionError::Plan(
+                "Sort Error: Can not sort unbounded inputs.".to_string(),
+            ))
+        } else {
+            Ok(false)
+        }
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.preserve_partitioning {
             vec![Distribution::UnspecifiedDistribution]

@@ -76,6 +76,17 @@ impl ExecutionPlan for AnalyzeExec {
         vec![Distribution::SinglePartition]
     }
 
+    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+        if children[0] {
+            Err(DataFusionError::Plan(
+                "Analyze Error: Analysis is not supported for unbounded inputs"
+                    .to_string(),
+            ))
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)

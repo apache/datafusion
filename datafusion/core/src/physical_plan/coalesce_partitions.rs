@@ -80,8 +80,8 @@ impl ExecutionPlan for CoalescePartitionsExec {
         vec![self.input.clone()]
     }
 
-    fn unbounded_output(&self) -> bool {
-        self.input.unbounded_output()
+    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+        Ok(children[0])
     }
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {

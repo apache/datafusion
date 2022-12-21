@@ -306,8 +306,29 @@ impl ExecutionPlan for HashJoinExec {
         }
     }
 
-    fn unbounded_output(&self) -> bool {
-        self.right.unbounded_output()
+    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+        let (left, right) = (children[0], children[1]);
+        // If left is unbounded, or right is unbounded with JoinType::Right,
+        // JoinType::Full, JoinType::RightAnti types.
+        let breaking = left
+            || (right
+                && matches!(
+                    self.join_type,
+                    JoinType::Right | JoinType::Full | JoinType::RightAnti
+                ));
+
+        if breaking {
+            Err(DataFusionError::Plan(format!(
+                "Join Error: The join with cannot be executed. {}",
+                if left && right {
+                    "Currently, we do not support unbounded inputs on both sides."
+                } else {
+                    "Please consider a different type of join or sources."
+                }
+            )))
+        } else {
+            Ok(left || right)
+        }
     }
 
     fn output_partitioning(&self) -> Partitioning {

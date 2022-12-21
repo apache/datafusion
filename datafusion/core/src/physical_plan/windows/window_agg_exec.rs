@@ -35,6 +35,7 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
+use datafusion_common::DataFusionError;
 use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 use datafusion_physical_expr::EquivalentClass;
 use futures::stream::Stream;
@@ -176,6 +177,17 @@ impl ExecutionPlan for WindowAggExec {
                     .collect::<Vec<_>>();
                 Partitioning::Hash(new_exprs, size)
             }
+        }
+    }
+
+    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+        if children[0] {
+            Err(DataFusionError::Plan(
+                "Window Error: Windowing is not currently support for unbounded inputs."
+                    .to_string(),
+            ))
+        } else {
+            Ok(false)
         }
     }
 

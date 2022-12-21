@@ -123,10 +123,8 @@ impl ExecutionPlan for UnionExec {
         self.schema.clone()
     }
 
-    fn unbounded_output(&self) -> bool {
-        // Since this is an n-ary operator, we need to propagate if there is
-        // at least one unbounded data source.
-        self.inputs.iter().any(|plan| plan.unbounded_output())
+    fn unbounded_output(&self, children: &Vec<bool>) -> Result<bool> {
+        Ok(children.iter().any(|x| *x))
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
