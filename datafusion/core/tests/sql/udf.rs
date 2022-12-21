@@ -77,7 +77,7 @@ async fn scalar_udf() -> Result<()> {
 
     let t = ctx.table("t")?;
 
-    let plan = LogicalPlanBuilder::from(t.to_optimized_plan()?)
+    let plan = LogicalPlanBuilder::from(t.into_optimized_plan()?)
         .project(vec![
             col("a"),
             col("b"),

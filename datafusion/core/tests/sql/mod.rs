@@ -1531,7 +1531,7 @@ async fn nyc() -> Result<()> {
          FROM tripdata GROUP BY passenger_count",
         )
         .await?;
-    let optimized_plan = dataframe.to_optimized_plan().unwrap();
+    let optimized_plan = dataframe.into_optimized_plan().unwrap();
 
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match input.as_ref() {

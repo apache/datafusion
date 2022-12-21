@@ -328,7 +328,7 @@ async fn execute_query(
     enable_scheduler: bool,
 ) -> Result<Vec<RecordBatch>> {
     let plan = ctx.sql(sql).await?;
-    let plan = plan.to_unoptimized_plan();
+    let plan = plan.into_unoptimized_plan();
 
     if debug {
         println!("=== Logical plan ===\n{:?}\n", plan);
@@ -643,7 +643,7 @@ mod tests {
         let sql = get_query_sql(query)?;
         for sql in &sql {
             let df = ctx.sql(sql.as_str()).await?;
-            let plan = df.to_optimized_plan()?;
+            let plan = df.into_optimized_plan()?;
             if !actual.is_empty() {
                 actual += "\n";
             }

@@ -2235,7 +2235,7 @@ mod tests {
         let ctx = SessionContext::new();
 
         let logical_plan = LogicalPlanBuilder::from(
-            ctx.read_table(Arc::new(table))?.to_optimized_plan()?,
+            ctx.read_table(Arc::new(table))?.into_optimized_plan()?,
         )
         .aggregate(vec![col("d1")], vec![sum(col("d2"))])?
         .build()?;
@@ -2446,20 +2446,21 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        let logical_plan = match ctx.read_csv(path, options).await?.to_optimized_plan()? {
-            LogicalPlan::TableScan(ref scan) => {
-                let mut scan = scan.clone();
-                scan.table_name = name.to_string();
-                let new_schema = scan
-                    .projected_schema
-                    .as_ref()
-                    .clone()
-                    .replace_qualifier(name);
-                scan.projected_schema = Arc::new(new_schema);
-                LogicalPlan::TableScan(scan)
-            }
-            _ => unimplemented!(),
-        };
+        let logical_plan =
+            match ctx.read_csv(path, options).await?.into_optimized_plan()? {
+                LogicalPlan::TableScan(ref scan) => {
+                    let mut scan = scan.clone();
+                    scan.table_name = name.to_string();
+                    let new_schema = scan
+                        .projected_schema
+                        .as_ref()
+                        .clone()
+                        .replace_qualifier(name);
+                    scan.projected_schema = Arc::new(new_schema);
+                    LogicalPlan::TableScan(scan)
+                }
+                _ => unimplemented!(),
+            };
         Ok(LogicalPlanBuilder::from(logical_plan))
     }
 
@@ -2469,7 +2470,7 @@ mod tests {
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
         let options = CsvReadOptions::new().schema_infer_max_records(100);
         Ok(LogicalPlanBuilder::from(
-            ctx.read_csv(path, options).await?.to_optimized_plan()?,
+            ctx.read_csv(path, options).await?.into_optimized_plan()?,
         ))
     }
 }

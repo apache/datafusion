@@ -515,7 +515,7 @@ impl DataFrame {
     /// Note: This method should not be used outside testing, as it loses the snapshot
     /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
     /// operations may take place against a different state
-    pub fn to_unoptimized_plan(self) -> LogicalPlan {
+    pub fn into_unoptimized_plan(self) -> LogicalPlan {
         self.plan
     }
 
@@ -524,7 +524,7 @@ impl DataFrame {
     /// Note: This method should not be used outside testing, as it loses the snapshot
     /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
     /// operations may take place against a different state
-    pub fn to_optimized_plan(self) -> Result<LogicalPlan> {
+    pub fn into_optimized_plan(self) -> Result<LogicalPlan> {
         // Optimize the plan first for better UX
         self.session_state.optimize(&self.plan)
     }
@@ -534,9 +534,9 @@ impl DataFrame {
     /// Note: This method should not be used outside testing, as it loses the snapshot
     /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
     /// operations may take place against a different state
-    #[deprecated(note = "Use DataFrame::to_optimized_plan")]
+    #[deprecated(note = "Use DataFrame::into_optimized_plan")]
     pub fn to_logical_plan(self) -> Result<LogicalPlan> {
-        self.to_optimized_plan()
+        self.into_optimized_plan()
     }
 
     /// Return a DataFrame with the explanation of its plan so far.
@@ -1156,7 +1156,7 @@ mod tests {
     async fn create_plan(sql: &str) -> Result<LogicalPlan> {
         let mut ctx = SessionContext::new();
         register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
-        Ok(ctx.sql(sql).await?.to_unoptimized_plan())
+        Ok(ctx.sql(sql).await?.into_unoptimized_plan())
     }
 
     async fn test_table_with_name(name: &str) -> Result<DataFrame> {
@@ -1350,7 +1350,7 @@ mod tests {
         \n        SubqueryAlias: t2\
         \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
         \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]",
-                   format!("{:?}", df_renamed.clone().to_optimized_plan()?)
+                   format!("{:?}", df_renamed.clone().into_optimized_plan()?)
         );
 
         let df_results = df_renamed.collect().await?;
@@ -1497,7 +1497,7 @@ mod tests {
 
         assert_eq!(
             "TableScan: ?table? projection=[c2, c3, sum]",
-            format!("{:?}", cached_df.clone().to_optimized_plan()?)
+            format!("{:?}", cached_df.clone().into_optimized_plan()?)
         );
 
         let df_results = df.collect().await?;

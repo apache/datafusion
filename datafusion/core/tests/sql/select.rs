@@ -1429,7 +1429,7 @@ async fn unprojected_filter() {
         .select(vec![col("i") + col("i")])
         .unwrap();
 
-    let plan = df.clone().to_optimized_plan().unwrap();
+    let plan = df.clone().into_optimized_plan().unwrap();
     println!("{}", plan.display_indent());
 
     let results = df.collect().await.unwrap();

@@ -582,7 +582,7 @@ async fn multiple_or_predicates() -> Result<()> {
         )";
     let msg = format!("Creating logical plan for '{}'", sql);
     let dataframe = ctx.sql(sql).await.expect(&msg);
-    let plan = dataframe.to_optimized_plan().unwrap();
+    let plan = dataframe.into_optimized_plan().unwrap();
     // Note that we expect `part.p_partkey = lineitem.l_partkey` to have been
     // factored out and appear only once in the following plan
     let expected = vec![
@@ -644,7 +644,7 @@ where
         ;"#;
 
     let dataframe = ctx.sql(sql).await.unwrap();
-    let plan = dataframe.to_optimized_plan().unwrap();
+    let plan = dataframe.into_optimized_plan().unwrap();
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     let expected =vec![

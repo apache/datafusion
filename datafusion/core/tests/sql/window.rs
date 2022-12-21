@@ -326,7 +326,7 @@ async fn window_expr_eliminate() -> Result<()> {
 
     let msg = format!("Creating logical plan for '{}'", sql);
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
-    let plan = dataframe.to_optimized_plan().unwrap();
+    let plan = dataframe.into_optimized_plan().unwrap();
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Sort: d.b ASC NULLS LAST [b:Utf8, max_a:Int64;N]",
@@ -389,7 +389,7 @@ async fn window_expr_eliminate() -> Result<()> {
             ORDER BY d.b;";
 
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
-    let plan = dataframe.to_optimized_plan().unwrap();
+    let plan = dataframe.into_optimized_plan().unwrap();
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Sort: d.b ASC NULLS LAST [b:Utf8, max_a:Int64;N, MAX(d.seq):UInt64;N]",

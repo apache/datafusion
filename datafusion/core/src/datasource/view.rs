@@ -496,7 +496,7 @@ mod tests {
         let dataframe = session_ctx
             .sql("EXPLAIN CREATE VIEW xyz AS SELECT * FROM abc")
             .await?;
-        let plan = dataframe.to_optimized_plan()?;
+        let plan = dataframe.into_optimized_plan()?;
         let actual = format!("{}", plan.display_indent());
         let expected = "\
         Explain\
@@ -508,7 +508,7 @@ mod tests {
         let dataframe = session_ctx
             .sql("EXPLAIN CREATE VIEW xyz AS SELECT * FROM abc WHERE column2 = 5")
             .await?;
-        let plan = dataframe.to_optimized_plan()?;
+        let plan = dataframe.into_optimized_plan()?;
         let actual = format!("{}", plan.display_indent());
         let expected = "\
         Explain\
@@ -521,7 +521,7 @@ mod tests {
         let dataframe = session_ctx
             .sql("EXPLAIN CREATE VIEW xyz AS SELECT column1, column2 FROM abc WHERE column2 = 5")
             .await?;
-        let plan = dataframe.to_optimized_plan()?;
+        let plan = dataframe.into_optimized_plan()?;
         let actual = format!("{}", plan.display_indent());
         let expected = "\
         Explain\

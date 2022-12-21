@@ -488,7 +488,7 @@ async fn csv_explain_verbose_plans() {
     // Optimized logical plan
     //
     let msg = format!("Optimizing logical plan for '{}': {:?}", sql, dataframe);
-    let plan = dataframe.to_optimized_plan().expect(&msg);
+    let plan = dataframe.into_optimized_plan().expect(&msg);
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
     assert_eq!(&logical_schema, optimized_logical_schema.as_ref());
@@ -650,7 +650,7 @@ order by
     revenue desc;";
 
     let dataframe = ctx.sql(sql).await.unwrap();
-    let plan = dataframe.to_optimized_plan().unwrap();
+    let plan = dataframe.into_optimized_plan().unwrap();
 
     let expected = "\
     Sort: revenue DESC NULLS FIRST\

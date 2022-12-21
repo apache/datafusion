@@ -168,7 +168,7 @@ async fn projection_on_table_scan() -> Result<()> {
     let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
 
     let table = ctx.table("test")?;
-    let logical_plan = LogicalPlanBuilder::from(table.to_optimized_plan()?)
+    let logical_plan = LogicalPlanBuilder::from(table.into_optimized_plan()?)
         .project(vec![col("c2")])?
         .build()?;
 
