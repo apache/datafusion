@@ -136,7 +136,6 @@ pub trait WindowExpr: Send + Sync + Debug {
 
     /// Get the reverse expression of this [WindowExpr].
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
-
 }
 
 /// Reverses the ORDER BY expression, which is useful during equivalent window
