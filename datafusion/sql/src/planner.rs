@@ -36,18 +36,18 @@ use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::ast::{TimezoneInfo, WildcardAdditionalOptions};
 use sqlparser::parser::ParserError::ParserError;
 
-use datafusion_common::parsers::parse_interval;
+use datafusion_common::parsers::{parse_interval, CompressionTypeVariant};
 use datafusion_common::ToDFSchema;
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_common::{OwnedTableReference, TableReference};
-use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
+use datafusion_expr::expr::{
+    self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort, TryCast,
+};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::builder::{
-    project, wrap_projection_for_join_if_necessary,
-};
+use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::Join as HashJoin;
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
@@ -68,13 +68,12 @@ use datafusion_expr::{
     GetIndexedField, Operator, ScalarUDF, SubqueryAlias, WindowFrame, WindowFrameUnits,
 };
 use datafusion_expr::{
-    window_function::WindowFunction, BuiltinScalarFunction, TableSource,
+    window_function::{self, WindowFunction},
+    BuiltinScalarFunction, TableSource,
 };
 
 use crate::parser::{CreateExternalTable, DescribeTable, Statement as DFStatement};
-use crate::utils::{
-    make_decimal_type, normalize_ident, normalize_ident_owned, resolve_columns,
-};
+use crate::utils::{make_decimal_type, normalize_ident, resolve_columns};
 
 use super::{
     parser::DFParser,
@@ -296,7 +295,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ..
             } if with_options.is_empty() => {
                 let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
-                plan = self.apply_expr_alias(plan, &columns)?;
+                plan = self.apply_expr_alias(plan, columns)?;
 
                 Ok(LogicalPlan::CreateView(CreateView {
                     name: object_name_to_table_reference(name)?,
@@ -484,7 +483,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             for cte in with.cte_tables {
                 // A `WITH` block can't use the same name more than once
-                let cte_name = normalize_ident(&cte.alias.name);
+                let cte_name = normalize_ident(cte.alias.name.clone());
                 if planner_context.ctes.contains_key(&cte_name) {
                     return Err(DataFusionError::SQL(ParserError(format!(
                         "WITH query name {:?} specified more than once",
@@ -621,7 +620,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))?;
         }
 
-        if file_type != "CSV" && file_type != "JSON" && !file_compression_type.is_empty()
+        if file_type != "CSV"
+            && file_type != "JSON"
+            && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
         {
             Err(DataFusionError::Plan(
                 "File compression type can be specified for CSV/JSON files.".into(),
@@ -689,7 +690,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .any(|x| x.option == ColumnOption::Null);
             fields.push(Field::new(
-                &normalize_ident(&column.name),
+                normalize_ident(column.name),
                 data_type,
                 allow_null,
             ));
@@ -702,26 +703,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         mut from: Vec<TableWithJoins>,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         match from.len() {
             0 => Ok(LogicalPlanBuilder::empty(true).build()?),
             1 => {
                 let from = from.remove(0);
-                self.plan_table_with_joins(from, planner_context, outer_query_schema)
+                self.plan_table_with_joins(from, planner_context)
             }
             _ => {
-                let plans = from
+                let mut plans = from
                     .into_iter()
-                    .map(|t| {
-                        self.plan_table_with_joins(t, planner_context, outer_query_schema)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let mut left = plans[0].clone();
-                for right in plans.iter().skip(1) {
-                    left = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+                    .map(|t| self.plan_table_with_joins(t, planner_context));
+
+                let mut left = LogicalPlanBuilder::from(plans.next().unwrap()?);
+
+                for right in plans {
+                    left = left.cross_join(right?)?;
                 }
-                Ok(left)
+                Ok(left.build()?)
             }
         }
     }
@@ -730,7 +729,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         t: TableWithJoins,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         // From clause may exist CTEs, we should separate them from global CTEs.
         // CTEs in from clause are allowed to be duplicated.
@@ -738,8 +736,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // So always use original global CTEs to plan CTEs in from clause.
         // Btw, don't need to add CTEs in from to global CTEs.
         let origin_planner_context = planner_context.clone();
-        let left =
-            self.create_relation(t.relation, planner_context, outer_query_schema)?;
+        let left = self.create_relation(t.relation, planner_context)?;
         match t.joins.len() {
             0 => {
                 *planner_context = origin_planner_context;
@@ -752,16 +749,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     left,
                     joins.next().unwrap(), // length of joins > 0
                     planner_context,
-                    outer_query_schema,
                 )?;
                 for join in joins {
                     *planner_context = origin_planner_context.clone();
-                    left = self.parse_relation_join(
-                        left,
-                        join,
-                        planner_context,
-                        outer_query_schema,
-                    )?;
+                    left = self.parse_relation_join(left, join, planner_context)?;
                 }
                 *planner_context = origin_planner_context;
                 Ok(left)
@@ -774,10 +765,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         left: LogicalPlan,
         join: Join,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
-        let right =
-            self.create_relation(join.relation, planner_context, outer_query_schema)?;
+        let right = self.create_relation(join.relation, planner_context)?;
         match join.join_operator {
             JoinOperator::LeftOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Left, planner_context)
@@ -791,7 +780,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinOperator::FullOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Full, planner_context)
             }
-            JoinOperator::CrossJoin => self.parse_cross_join(left, &right),
+            JoinOperator::CrossJoin => self.parse_cross_join(left, right),
             other => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported JOIN operator {:?}",
                 other
@@ -802,7 +791,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn parse_cross_join(
         &self,
         left: LogicalPlan,
-        right: &LogicalPlan,
+        right: LogicalPlan,
     ) -> Result<LogicalPlan> {
         LogicalPlanBuilder::from(left).cross_join(right)?.build()
     }
@@ -854,50 +843,30 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 let join_filter = filter.into_iter().reduce(Expr::and);
 
-                if left_keys.is_empty() {
-                    // TODO should not use cross join when the join_filter exists
-                    // https://github.com/apache/arrow-datafusion/issues/4363
-                    let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
-                    join_filter
-                        .map(|filter| join.filter(filter))
-                        .unwrap_or(Ok(join))?
-                        .build()
-                } else {
-                    // Wrap projection for left input if left join keys contain normal expression.
-                    let (left_child, left_join_keys, left_projected) =
-                        wrap_projection_for_join_if_necessary(&left_keys, left)?;
-
-                    // Wrap projection for right input if right join keys contains normal expression.
-                    let (right_child, right_join_keys, right_projected) =
-                        wrap_projection_for_join_if_necessary(&right_keys, right)?;
-
-                    let join_plan_builder = LogicalPlanBuilder::from(left_child).join(
-                        &right_child,
-                        join_type,
-                        (left_join_keys, right_join_keys),
-                        join_filter,
-                    )?;
-
-                    // Remove temporary projected columns if necessary.
-                    if left_projected || right_projected {
-                        let final_join_result = join_schema
-                            .fields()
-                            .iter()
-                            .map(|field| Expr::Column(field.qualified_column()))
-                            .collect::<Vec<_>>();
-                        join_plan_builder.project(final_join_result)?.build()
-                    } else {
-                        join_plan_builder.build()
+                if left_keys.is_empty() && join_filter.is_none() {
+                    let mut join = LogicalPlanBuilder::from(left).cross_join(right)?;
+                    if let Some(filter) = join_filter {
+                        join = join.filter(filter)?;
                     }
+                    join.build()
+                } else {
+                    LogicalPlanBuilder::from(left)
+                        .join_with_expr_keys(
+                            right,
+                            join_type,
+                            (left_keys, right_keys),
+                            join_filter,
+                        )?
+                        .build()
                 }
             }
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
-                    .map(|x| Column::from_name(normalize_ident(&x)))
+                    .map(|x| Column::from_name(normalize_ident(x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
-                    .join_using(&right, join_type, keys)?
+                    .join_using(right, join_type, keys)?
                     .build()
             }
             JoinConstraint::Natural => {
@@ -915,7 +884,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         relation: TableFactor,
         planner_context: &mut PlannerContext,
-        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         let (plan, alias) = match relation {
             TableFactor::Table { name, alias, .. } => {
@@ -947,11 +915,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table_with_joins,
                 alias,
             } => (
-                self.plan_table_with_joins(
-                    *table_with_joins,
-                    planner_context,
-                    outer_query_schema,
-                )?,
+                self.plan_table_with_joins(*table_with_joins, planner_context)?,
                 alias,
             ),
             // @todo Support TableFactory::TableFunction?
@@ -977,16 +941,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let apply_name_plan = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
             plan,
-            &normalize_ident(&alias.name),
+            normalize_ident(alias.name),
         )?);
 
-        self.apply_expr_alias(apply_name_plan, &alias.columns)
+        self.apply_expr_alias(apply_name_plan, alias.columns)
     }
 
     fn apply_expr_alias(
         &self,
         plan: LogicalPlan,
-        idents: &Vec<Ident>,
+        idents: Vec<Ident>,
     ) -> Result<LogicalPlan> {
         if idents.is_empty() {
             Ok(plan)
@@ -999,7 +963,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             let fields = plan.schema().fields().clone();
             LogicalPlanBuilder::from(plan)
-                .project(fields.iter().zip(idents.iter()).map(|(field, ident)| {
+                .project(fields.iter().zip(idents.into_iter()).map(|(field, ident)| {
                     col(field.name()).alias(normalize_ident(ident))
                 }))?
                 .build()
@@ -1061,8 +1025,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         {
             // For query: select id from t1 join t2 using(id), this is legal.
             // We should dedup the fields for cols in using clause.
-            for join_cols in on.iter() {
-                let left_field = left.schema().field_from_column(&join_cols.0)?;
+            for join_keys in on.iter() {
+                let join_col = &join_keys.0.try_into_col()?;
+                let left_field = left.schema().field_from_column(join_col)?;
                 fields.retain(|field| {
                     field.unqualified_column().name
                         != left_field.unqualified_column().name
@@ -1096,9 +1061,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         // process `from` clause
-        let plan =
-            self.plan_from_tables(select.from, planner_context, outer_query_schema)?;
-
+        let plan = self.plan_from_tables(select.from, planner_context)?;
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
         // build from schema for unqualifier column ambiguous check
         // we should get only one field for unqualifier column from schema.
@@ -1206,10 +1169,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?
         } else {
             match having_expr_opt {
-                    Some(having_expr) => return Err(DataFusionError::Plan(
-                        format!("HAVING clause references: {} must appear in the GROUP BY clause or be used in an aggregate function", having_expr))),
-                    None => (plan, select_exprs, having_expr_opt)
-                }
+                Some(having_expr) => return Err(DataFusionError::Plan(
+                    format!("HAVING clause references: {} must appear in the GROUP BY clause or be used in an aggregate function", having_expr))),
+                None => (plan, select_exprs, having_expr_opt)
+            }
         };
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
@@ -1517,13 +1480,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
         Ok({
             let asc = asc.unwrap_or(true);
-            Expr::Sort {
-                expr: Box::new(expr),
+            Expr::Sort(Sort::new(
+                Box::new(expr),
                 asc,
                 // when asc is true, by default nulls last to be consistent with postgres
                 // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
-                nulls_first: nulls_first.unwrap_or(!asc),
-            }
+                nulls_first.unwrap_or(!asc),
+            ))
         })
     }
 
@@ -1609,7 +1572,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     from_schema,
                     &[select_expr.clone()],
                 )?;
-                let expr = Alias(Box::new(select_expr), normalize_ident(&alias));
+                let expr = Alias(Box::new(select_expr), normalize_ident(alias));
                 Ok(vec![normalize_col(expr, plan)?])
             }
             SelectItem::Wildcard(options) => {
@@ -1881,7 +1844,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return Err(DataFusionError::Internal(format!(
                     "Invalid placeholder, not a number: {}",
                     param
-                )))
+                )));
             }
         };
         // Check if the placeholder is in the parameter list
@@ -1960,14 +1923,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                     Ok(Expr::Column(Column {
                         relation: None,
-                        name: normalize_ident(&id),
+                        name: normalize_ident(id),
                     }))
                 }
             }
 
-            SQLExpr::MapAccess { ref column, keys } => {
-                if let SQLExpr::Identifier(ref id) = column.as_ref() {
-                    plan_indexed(col(&normalize_ident(id)), keys)
+            SQLExpr::MapAccess { column, keys } => {
+                if let SQLExpr::Identifier(id) = *column {
+                    plan_indexed(col(normalize_ident(id)), keys)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {} instead",
@@ -1983,7 +1946,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::CompoundIdentifier(ids) => {
                 if ids[0].value.starts_with('@') {
-                    let var_names: Vec<_> = ids.into_iter().map(|s| normalize_ident(&s)).collect();
+                    let var_names: Vec<_> = ids.into_iter().map(normalize_ident).collect();
                     let ty = self
                         .schema_provider
                         .get_variable_type(&var_names)
@@ -2001,8 +1964,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         r @ OwnedTableReference::Bare { .. } |
                         r @ OwnedTableReference::Full { .. } => {
                             return Err(DataFusionError::Plan(format!(
-                            "Unsupported compound identifier '{:?}'", r,
-                            )))
+                                "Unsupported compound identifier '{:?}'", r,
+                            )));
                         }
                     };
 
@@ -2081,10 +2044,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::TryCast {
                 expr,
                 data_type,
-            } => Ok(Expr::TryCast {
-                expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
-                data_type: self.convert_data_type(&data_type)?,
-            }),
+            } => Ok(Expr::TryCast(TryCast::new(
+                Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
+                self.convert_data_type(&data_type)?,
+            ))),
 
             SQLExpr::TypedString {
                 data_type,
@@ -2201,7 +2164,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     negated,
                     Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
                     Box::new(pattern),
-                    escape_char
+                    escape_char,
                 )))
             }
 
@@ -2295,9 +2258,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::AggregateExpressionWithFilter { expr, filter } => {
                 match self.sql_expr_to_logical_expr(*expr, schema, planner_context)? {
-                    Expr::AggregateFunction {
+                    Expr::AggregateFunction(expr::AggregateFunction {
                         fun, args, distinct, ..
-                    } => Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, planner_context)?)) }),
+                    }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new( fun, args, distinct, Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, planner_context)?)) ))),
                     _ => Err(DataFusionError::Internal("AggregateExpressionWithFilter expression was not an AggregateFunction".to_string()))
                 }
             }
@@ -2308,7 +2271,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // (e.g. "foo.bar") for function names yet
                     function.name.to_string()
                 } else {
-                    normalize_ident(&function.name.0[0])
+                    normalize_ident(function.name.0[0].clone())
                 };
 
                 // first, check SQL reserved words
@@ -2358,8 +2321,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     } else {
                         WindowFrame::new(!order_by.is_empty())
                     };
-                    let fun = WindowFunction::from_str(&name)?;
-                    match fun {
+                    let fun = self.find_window_func(&name)?;
+                    let expr = match fun {
                         WindowFunction::AggregateFunction(
                             aggregate_fun,
                         ) => {
@@ -2369,42 +2332,39 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 schema,
                             )?;
 
-                            return Ok(Expr::WindowFunction {
-                                fun: WindowFunction::AggregateFunction(
+                            Expr::WindowFunction(expr::WindowFunction::new(
+                                 WindowFunction::AggregateFunction(
                                     aggregate_fun,
                                 ),
                                 args,
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            });
+                            ))
                         }
-                        WindowFunction::BuiltInWindowFunction(
-                            window_fun,
-                        ) => {
-                            return Ok(Expr::WindowFunction {
-                                fun: WindowFunction::BuiltInWindowFunction(
-                                    window_fun,
-                                ),
-                                args: self.function_args_to_expr(function.args, schema)?,
+                        _ => {
+                            Expr::WindowFunction(expr::WindowFunction::new(
+                                fun,
+                                self.function_args_to_expr(function.args, schema)?,
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            });
+                            ))
                         }
-                    }
+                    };
+                    return Ok(expr);
                 }
 
                 // next, aggregate built-ins
                 if let Ok(fun) = AggregateFunction::from_str(&name) {
                     let distinct = function.distinct;
                     let (fun, args) = self.aggregate_fn_to_expr(fun, function.args, schema)?;
-                    return Ok(Expr::AggregateFunction {
+                    return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                         fun,
-                        distinct,
                         args,
-                        filter: None,
-                    });
+                        distinct,
+                        None,
+                    )));
                 };
 
                 // finally, user-defined functions (UDF) and UDAF
@@ -2427,13 +2387,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
 
-            SQLExpr::Floor{expr, field: _field} => {
+            SQLExpr::Floor { expr, field: _field } => {
                 let fun = BuiltinScalarFunction::Floor;
                 let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
                 Ok(Expr::ScalarFunction { fun, args })
             }
 
-            SQLExpr::Ceil{expr, field: _field} => {
+            SQLExpr::Ceil { expr, field: _field } => {
                 let fun = BuiltinScalarFunction::Ceil;
                 let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
                 Ok(Expr::ScalarFunction { fun, args })
@@ -2454,6 +2414,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 sql
             ))),
         }
+    }
+
+    fn find_window_func(&self, name: &str) -> Result<WindowFunction> {
+        window_function::find_df_window_func(name)
+            .or_else(|| {
+                self.schema_provider
+                    .get_aggregate_meta(name)
+                    .map(WindowFunction::AggregateUDF)
+            })
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "There is no window function named {}",
+                    name
+                ))
+            })
     }
 
     fn parse_exists_subquery(
@@ -2551,12 +2526,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // next, aggregate built-ins
         let fun = AggregateFunction::ArrayAgg;
 
-        Ok(Expr::AggregateFunction {
-            fun,
-            distinct,
-            args,
-            filter: None,
-        })
+        Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
+            fun, args, distinct, None,
+        )))
     }
 
     fn function_args_to_expr(
@@ -2724,7 +2696,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported Value {}",
                         value[0]
-                    )))
+                    )));
                 }
             },
             // for capture signed number e.g. +8, -8
@@ -2735,14 +2707,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported Value {}",
                         value[0]
-                    )))
+                    )));
                 }
             },
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "Unsupported Value {}",
                     value[0]
-                )))
+                )));
             }
         };
 
@@ -2974,7 +2946,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             return Err(DataFusionError::Internal(format!(
                                 "Incorrect data type for time_zone: {}",
                                 v.get_datatype(),
-                            )))
+                            )));
                         }
                         None => return Err(DataFusionError::Internal(
                             "Config Option datafusion.execution.time_zone doesn't exist"
@@ -3002,7 +2974,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             SQLDataType::Numeric(exact_number_info)
-            |SQLDataType::Decimal(exact_number_info) => {
+            | SQLDataType::Decimal(exact_number_info) => {
                 let (precision, scale) = match *exact_number_info {
                     ExactNumberInfo::None => (None, None),
                     ExactNumberInfo::Precision(precision) => (Some(precision), None),
@@ -3034,12 +3006,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharacterVarying(_)
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
-                | SQLDataType::CharLargeObject(_)
+            | SQLDataType::CharLargeObject(_)
             // precision is not supported
-                | SQLDataType::Timestamp(Some(_), _)
+            | SQLDataType::Timestamp(Some(_), _)
             // precision is not supported
-                | SQLDataType::Time(Some(_), _)
-                | SQLDataType::Dec(_)
+            | SQLDataType::Time(Some(_), _)
+            | SQLDataType::Dec(_)
             | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL type {:?}",
                 sql_type
@@ -3074,7 +3046,7 @@ fn idents_to_table_reference(idents: Vec<Ident>) -> Result<OwnedTableReference> 
     impl IdentTaker {
         fn take(&mut self) -> String {
             let ident = self.0.pop().expect("no more identifiers");
-            normalize_ident_owned(ident)
+            normalize_ident(ident)
         }
     }
 
@@ -3117,7 +3089,7 @@ pub fn object_name_to_qualifier(sql_table_name: &ObjectName) -> String {
         .rev()
         .zip(columns)
         .map(|(ident, column_name)| {
-            format!(r#"{} = '{}'"#, column_name, normalize_ident(ident))
+            format!(r#"{} = '{}'"#, column_name, normalize_ident(ident.clone()))
         })
         .collect::<Vec<_>>()
         .join(" AND ")
@@ -3377,6 +3349,16 @@ mod tests {
             "Projection: CAST(a AS Float32)\
             \n  Projection: Int64(1) AS a\
             \n    EmptyRelation",
+        );
+    }
+
+    #[test]
+    fn try_cast_from_aggregation() {
+        quick_test(
+            "SELECT TRY_CAST(SUM(age) AS FLOAT) FROM person",
+            "Projection: TRY_CAST(SUM(person.age) AS Float32)\
+            \n  Aggregate: groupBy=[[]], aggr=[[SUM(person.age)]]\
+            \n    TableScan: person",
         );
     }
 
@@ -4053,7 +4035,7 @@ mod tests {
             "Projection: col1, col2\
             \n  Projection: t.column1 AS col1, t.column2 AS col2\
             \n    SubqueryAlias: t\
-            \n      Values: (CAST(Utf8(\"2021-06-10 17:01:00Z\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2004-04-09\") AS Date32))"
+            \n      Values: (CAST(Utf8(\"2021-06-10 17:01:00Z\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2004-04-09\") AS Date32))",
         );
     }
 
@@ -4301,7 +4283,7 @@ mod tests {
         let sql = "SELECT age, MIN(first_name) FROM person GROUP BY age + 1";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!("Plan(\"Projection references non-aggregate values: Expression person.age could not be resolved from available columns: person.age + Int64(1), MIN(person.first_name)\")",
-            format!("{:?}", err)
+                   format!("{:?}", err)
         );
     }
 
@@ -5166,7 +5148,6 @@ mod tests {
     ///                     ->  Seq Scan on orders  (cost=0.00..20.00 rows=1000 width=8)
     /// ```
     ///
-    /// FIXME: for now we are not detecting prefix of sorting keys in order to save one sort exec phase
     #[test]
     fn over_order_by_sort_keys_sorting_prefix_compacting() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
@@ -5347,7 +5328,8 @@ mod tests {
         sql: &str,
         dialect: &dyn Dialect,
     ) -> Result<LogicalPlan> {
-        let planner = SqlToRel::new(&MockContextProvider {});
+        let context = MockContextProvider::default();
+        let planner = SqlToRel::new(&context);
         let result = DFParser::parse_sql_with_dialect(sql, dialect);
         let mut ast = result?;
         planner.statement_to_plan(ast.pop_front().unwrap())
@@ -5358,7 +5340,8 @@ mod tests {
         dialect: &dyn Dialect,
         options: ParserOptions,
     ) -> Result<LogicalPlan> {
-        let planner = SqlToRel::new_with_options(&MockContextProvider {}, options);
+        let context = MockContextProvider::default();
+        let planner = SqlToRel::new_with_options(&context, options);
         let result = DFParser::parse_sql_with_dialect(sql, dialect);
         let mut ast = result?;
         planner.statement_to_plan(ast.pop_front().unwrap())
@@ -5379,18 +5362,38 @@ mod tests {
         sql: &str,
         expected_plan: &str,
         expected_data_types: &str,
-    ) {
+    ) -> LogicalPlan {
         let plan = logical_plan(sql).unwrap();
+
+        let assert_plan = plan.clone();
         // verify plan
-        assert_eq!(format!("{:?}", plan), expected_plan);
+        assert_eq!(format!("{:?}", assert_plan), expected_plan);
+
         // verify data types
-        if let LogicalPlan::Prepare(Prepare { data_types, .. }) = plan {
+        if let LogicalPlan::Prepare(Prepare { data_types, .. }) = assert_plan {
             let dt = format!("{:?}", data_types);
             assert_eq!(dt, expected_data_types);
         }
+
+        plan
     }
 
-    struct MockContextProvider {}
+    fn prepare_stmt_replace_params_quick_test(
+        plan: LogicalPlan,
+        param_values: Vec<ScalarValue>,
+        expected_plan: &str,
+    ) -> LogicalPlan {
+        // replace params
+        let plan = plan.with_param_values(param_values).unwrap();
+        assert_eq!(format!("{:?}", plan), expected_plan);
+
+        plan
+    }
+
+    #[derive(Default)]
+    struct MockContextProvider {
+        udafs: HashMap<String, Arc<AggregateUDF>>,
+    }
 
     impl ContextProvider for MockContextProvider {
         fn get_table_provider(
@@ -5476,8 +5479,8 @@ mod tests {
             unimplemented!()
         }
 
-        fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
-            unimplemented!()
+        fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+            self.udafs.get(name).map(Arc::clone)
         }
 
         fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
@@ -5840,10 +5843,9 @@ mod tests {
             FROM person \
             JOIN orders ON id = customer_id OR person.age > 30";
         let expected = "Projection: person.id, orders.order_id\
-            \n  Filter: person.id = orders.customer_id OR person.age > Int64(30)\
-            \n    CrossJoin:\
-            \n      TableScan: person\
-            \n      TableScan: orders";
+            \n  Inner Join:  Filter: person.id = orders.customer_id OR person.age > Int64(30)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -5965,10 +5967,9 @@ mod tests {
             ON person.id = 10";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Filter: person.id = Int64(10)\
-        \n    CrossJoin:\
-        \n      TableScan: person\
-        \n      TableScan: orders";
+        \n  Inner Join:  Filter: person.id = Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -5980,12 +5981,10 @@ mod tests {
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+
         quick_test(sql, expected);
     }
 
@@ -5997,12 +5996,9 @@ mod tests {
             ON person.id + 10 = orders.customer_id * 2";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6014,12 +6010,9 @@ mod tests {
             ON person.id + person.age + 10 = orders.customer_id * 2 - orders.price";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + person.age + Int64(10) = orders.customer_id * Int64(2) - orders.price\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + person.age + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + person.age + Int64(10) = orders.customer_id * Int64(2) - orders.price\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6031,11 +6024,9 @@ mod tests {
             ON person.id + person.age + 10 = orders.customer_id";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + person.age + Int64(10) = orders.customer_id\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + person.age + Int64(10)\
-        \n        TableScan: person\
-        \n      TableScan: orders";
+        \n  Inner Join: person.id + person.age + Int64(10) = orders.customer_id\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6047,11 +6038,49 @@ mod tests {
             ON person.id = orders.customer_id * 2 - orders.price";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id = orders.customer_id * Int64(2) - orders.price\
-        \n      TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
-        \n        TableScan: orders";
+       \n  Inner Join: person.id = orders.customer_id * Int64(2) - orders.price\
+       \n    TableScan: person\
+       \n    TableScan: orders";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_noneq_with_filter_join() {
+        // inner join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person INNER JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Inner Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+        quick_test(sql, expected);
+        // left join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person LEFT JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Left Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+        quick_test(sql, expected);
+        // right join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person RIGHT JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Right Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+        quick_test(sql, expected);
+        // full join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person FULL JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Full Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6065,10 +6094,9 @@ mod tests {
             ON person.id = 10";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Filter: person.id = Int64(10)\
-        \n    CrossJoin:\
-        \n      TableScan: person\
-        \n      TableScan: orders";
+            \n  Full Join:  Filter: person.id = Int64(10)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6080,12 +6108,9 @@ mod tests {
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6097,12 +6122,9 @@ mod tests {
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: orders.customer_id * Int64(2), person.id + Int64(10)\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6130,12 +6152,9 @@ mod tests {
             ON person.id * 2 = orders.customer_id + 10 and person.id * 2 = orders.order_id";
 
         let expected = "Projection: person.id, person.age\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id * Int64(2) = orders.order_id\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id * Int64(2)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id + Int64(10)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id * Int64(2) = orders.order_id\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6148,11 +6167,9 @@ mod tests {
             ON person.id * 2 = orders.customer_id + 10 and person.id =  orders.customer_id + 10";
 
         let expected = "Projection: person.id, person.age\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\n    Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id = orders.customer_id + Int64(10)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id * Int64(2)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id + Int64(10)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id = orders.customer_id + Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6197,11 +6214,7 @@ mod tests {
         // param is not number following the $ sign
         // panic due to error returned from the parser
         let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $foo";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6210,11 +6223,7 @@ mod tests {
         // param is not number following the $ sign
         // panic due to error returned from the parser
         let sql = "PREPARE AS SELECT id, age  FROM person WHERE age = $foo";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6223,11 +6232,7 @@ mod tests {
     )]
     fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
         let sql = "PREPARE my_plan(INT) AS SELECT id + $1";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6237,11 +6242,7 @@ mod tests {
     fn test_prepare_statement_to_plan_panic_no_data_types() {
         // only provide 1 data type while using 2 params
         let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1 + $2";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6250,11 +6251,7 @@ mod tests {
     )]
     fn test_prepare_statement_to_plan_panic_is_param() {
         let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";
-
-        let expected_plan = "whatever";
-        let expected_dt = "whatever";
-
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        logical_plan(sql).unwrap();
     }
 
     #[test]
@@ -6269,9 +6266,18 @@ mod tests {
 
         let expected_dt = "[Int32]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
-        /////////////////////////
+        ///////////////////
+        // replace params with values
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "Projection: person.id, person.age\
+        \n  Filter: person.age = Int64(10)\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+
+        //////////////////////////////////////////
         // no embedded parameter and no declare it
         let sql = "PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10";
 
@@ -6282,7 +6288,54 @@ mod tests {
 
         let expected_dt = "[]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![];
+        let expected_plan = "Projection: person.id, person.age\
+        \n  Filter: person.age = Int64(10)\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    }
+
+    #[test]
+    #[should_panic(expected = "value: Internal(\"Expected 1 parameters, got 0\")")]
+    fn test_prepare_statement_to_plan_one_param_no_value_panic() {
+        // no embedded parameter but still declare it
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
+        let plan = logical_plan(sql).unwrap();
+        // declare 1 param but provide 0
+        let param_values = vec![];
+        let expected_plan = "whatever";
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "value: Internal(\"Expected parameter of type Int32, got Float64 at index 0\")"
+    )]
+    fn test_prepare_statement_to_plan_one_param_one_value_different_type_panic() {
+        // no embedded parameter but still declare it
+        let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = 10";
+        let plan = logical_plan(sql).unwrap();
+        // declare 1 param but provide 0
+        let param_values = vec![ScalarValue::Float64(Some(20.0))];
+        let expected_plan = "whatever";
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    }
+
+    #[test]
+    #[should_panic(expected = "value: Internal(\"Expected 0 parameters, got 1\")")]
+    fn test_prepare_statement_to_plan_no_param_on_value_panic() {
+        // no embedded parameter but still declare it
+        let sql = "PREPARE my_plan AS SELECT id, age  FROM person WHERE age = 10";
+        let plan = logical_plan(sql).unwrap();
+        // declare 1 param but provide 0
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "whatever";
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6293,25 +6346,50 @@ mod tests {
         \n  Projection: $1\n    EmptyRelation";
         let expected_dt = "[Int32]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
-        /////////////////////////
+        ///////////////////
+        // replace params with values
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "Projection: Int32(10)\n  EmptyRelation";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+
+        ///////////////////////////////////////
         let sql = "PREPARE my_plan(INT) AS SELECT 1 + $1";
 
         let expected_plan = "Prepare: \"my_plan\" [Int32] \
         \n  Projection: Int64(1) + $1\n    EmptyRelation";
         let expected_dt = "[Int32]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
 
-        /////////////////////////
+        ///////////////////
+        // replace params with values
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "Projection: Int64(1) + Int32(10)\n  EmptyRelation";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+
+        ///////////////////////////////////////
         let sql = "PREPARE my_plan(INT, DOUBLE) AS SELECT 1 + $1 + $2";
 
         let expected_plan = "Prepare: \"my_plan\" [Int32, Float64] \
         \n  Projection: Int64(1) + $1 + $2\n    EmptyRelation";
         let expected_dt = "[Int32, Float64]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![
+            ScalarValue::Int32(Some(10)),
+            ScalarValue::Float64(Some(10.0)),
+        ];
+        let expected_plan =
+            "Projection: Int64(1) + Int32(10) + Float64(10)\n  EmptyRelation";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6325,7 +6403,41 @@ mod tests {
 
         let expected_dt = "[Int32]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![ScalarValue::Int32(Some(10))];
+        let expected_plan = "Projection: person.id, person.age\
+        \n  Filter: person.age = Int32(10)\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+    }
+
+    #[test]
+    fn test_prepare_statement_to_plan_data_type() {
+        let sql = "PREPARE my_plan(DOUBLE) AS SELECT id, age  FROM person WHERE age = $1";
+
+        // age is defined as Int32 but prepare statement declares it as DOUBLE/Float64
+        // Prepare statement and its logical plan should be created successfully
+        let expected_plan = "Prepare: \"my_plan\" [Float64] \
+        \n  Projection: person.id, person.age\
+        \n    Filter: person.age = $1\
+        \n      TableScan: person";
+
+        let expected_dt = "[Float64]";
+
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values still succeed and use Float64
+        let param_values = vec![ScalarValue::Float64(Some(10.0))];
+        let expected_plan = "Projection: person.id, person.age\
+        \n  Filter: person.age = Float64(10)\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6342,7 +6454,24 @@ mod tests {
 
         let expected_dt = "[Int32, Utf8, Float64, Int32, Float64, Utf8]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![
+            ScalarValue::Int32(Some(10)),
+            ScalarValue::Utf8(Some("abc".to_string())),
+            ScalarValue::Float64(Some(100.0)),
+            ScalarValue::Int32(Some(20)),
+            ScalarValue::Float64(Some(200.0)),
+            ScalarValue::Utf8(Some("xyz".to_string())),
+        ];
+        let expected_plan =
+            "Projection: person.id, person.age, Utf8(\"xyz\")\
+        \n  Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8(\"abc\")\
+        \n    TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6364,7 +6493,24 @@ mod tests {
 
         let expected_dt = "[Int32, Float64, Float64, Float64]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![
+            ScalarValue::Int32(Some(10)),
+            ScalarValue::Float64(Some(100.0)),
+            ScalarValue::Float64(Some(200.0)),
+            ScalarValue::Float64(Some(300.0)),
+        ];
+        let expected_plan =
+            "Projection: person.id, SUM(person.age)\
+        \n  Filter: SUM(person.age) < Int32(10) AND SUM(person.age) > Int64(10) OR SUM(person.age) IN ([Float64(200), Float64(300)])\
+        \n    Aggregate: groupBy=[[person.id]], aggr=[[SUM(person.age)]]\
+        \n      Filter: person.salary > Float64(100)\
+        \n        TableScan: person";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6379,7 +6525,20 @@ mod tests {
 
         let expected_dt = "[Utf8, Utf8]";
 
-        prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+        let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+        ///////////////////
+        // replace params with values
+        let param_values = vec![
+            ScalarValue::Utf8(Some("a".to_string())),
+            ScalarValue::Utf8(Some("b".to_string())),
+        ];
+        let expected_plan = "Projection: num, letter\
+        \n  Projection: t.column1 AS num, t.column2 AS letter\
+        \n    SubqueryAlias: t\
+        \n      Values: (Int64(1), Utf8(\"a\")), (Int64(2), Utf8(\"b\"))";
+
+        prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
     }
 
     #[test]
@@ -6428,12 +6587,9 @@ mod tests {
             ON cast(person.id as Int) = cast(orders.customer_id as Int)";
 
         let expected = "Projection: person.id, person.age\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, CAST(person.id AS Int32) AS CAST(person.id AS Int32)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, CAST(orders.customer_id AS Int32) AS CAST(orders.customer_id AS Int32)\
-        \n        TableScan: orders";
+        \n  Inner Join: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 

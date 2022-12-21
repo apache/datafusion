@@ -35,12 +35,12 @@ use arrow::datatypes::{
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like,
+    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
-    BuiltInWindowFunction, BuiltinScalarFunction, Expr, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunction,
+    BuiltInWindowFunction, BuiltinScalarFunction, Expr, JoinConstraint, JoinType,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
 };
 
 #[derive(Debug)]
@@ -61,6 +61,8 @@ pub enum Error {
     InvalidTimeUnit(TimeUnit),
 
     UnsupportedScalarFunction(BuiltinScalarFunction),
+
+    NotImplemented(String),
 }
 
 impl std::error::Error for Error {}
@@ -98,6 +100,9 @@ impl std::fmt::Display for Error {
             }
             Self::UnsupportedScalarFunction(function) => {
                 write!(f, "Unsupported scalar function {:?}", function)
+            }
+            Self::NotImplemented(s) => {
+                write!(f, "Not implemented: {}", s)
             }
         }
     }
@@ -528,13 +533,13 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::SimilarTo(pb)),
                 }
             }
-            Expr::WindowFunction {
+            Expr::WindowFunction(expr::WindowFunction {
                 ref fun,
                 ref args,
                 ref partition_by,
                 ref order_by,
                 ref window_frame,
-            } => {
+            }) => {
                 let window_function = match fun {
                     WindowFunction::AggregateFunction(fun) => {
                         protobuf::window_expr_node::WindowFunction::AggrFunction(
@@ -546,6 +551,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                             protobuf::BuiltInWindowFunction::from(fun).into(),
                         )
                     }
+                    // TODO: Tracked in https://github.com/apache/arrow-datafusion/issues/4584
+                    WindowFunction::AggregateUDF(_) => return Err(Error::NotImplemented("UDAF as window function in proto".to_string()))
                 };
                 let arg_expr: Option<Box<Self>> = if !args.is_empty() {
                     let arg = &args[0];
@@ -574,12 +581,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::WindowExpr(window_expr)),
                 }
             }
-            Expr::AggregateFunction {
+            Expr::AggregateFunction(expr::AggregateFunction {
                 ref fun,
                 ref args,
                 ref distinct,
                 ref filter
-            } => {
+            }) => {
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
                         protobuf::AggregateFunction::ApproxDistinct
@@ -800,11 +807,11 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::Cast(expr)),
                 }
             }
-            Expr::Sort {
+            Expr::Sort(Sort{
                 expr,
                 asc,
                 nulls_first,
-            } => {
+            }) => {
                 let expr = Box::new(protobuf::SortExprNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     asc: *asc,
@@ -1321,6 +1328,30 @@ impl From<OwnedTableReference> for protobuf::OwnedTableReference {
 
         protobuf::OwnedTableReference {
             table_reference_enum: Some(table_reference_enum),
+        }
+    }
+}
+
+impl From<JoinType> for protobuf::JoinType {
+    fn from(t: JoinType) -> Self {
+        match t {
+            JoinType::Inner => protobuf::JoinType::Inner,
+            JoinType::Left => protobuf::JoinType::Left,
+            JoinType::Right => protobuf::JoinType::Right,
+            JoinType::Full => protobuf::JoinType::Full,
+            JoinType::LeftSemi => protobuf::JoinType::Leftsemi,
+            JoinType::RightSemi => protobuf::JoinType::Rightsemi,
+            JoinType::LeftAnti => protobuf::JoinType::Leftanti,
+            JoinType::RightAnti => protobuf::JoinType::Rightanti,
+        }
+    }
+}
+
+impl From<JoinConstraint> for protobuf::JoinConstraint {
+    fn from(t: JoinConstraint) -> Self {
+        match t {
+            JoinConstraint::On => protobuf::JoinConstraint::On,
+            JoinConstraint::Using => protobuf::JoinConstraint::Using,
         }
     }
 }

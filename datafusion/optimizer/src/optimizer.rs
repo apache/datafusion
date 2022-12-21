@@ -41,6 +41,7 @@ use chrono::{DateTime, Utc};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -54,33 +55,50 @@ pub trait OptimizerRule {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        self.optimize(plan, optimizer_config).map(Some)
-    }
-
-    /// Rewrite `plan` to an optimized form. This method will eventually be deprecated and
-    /// replace by `try_optimize`.
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan>;
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>>;
 
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
+
+    /// How should the rule be applied by the optimizer? See comments on [`ApplyOrder`] for details.
+    ///
+    /// If a rule use default None, its should traverse recursively plan inside itself
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        None
+    }
 }
 
 /// Options to control the DataFusion Optimizer.
+pub trait OptimizerConfig {
+    /// Return the time at which the query execution started. This
+    /// time is used as the value for now()
+    fn query_execution_start_time(&self) -> DateTime<Utc>;
+
+    /// Returns false if the given rule should be skipped
+    fn rule_enabled(&self, name: &str) -> bool;
+
+    /// The optimizer will skip failing rules if this returns true
+    fn skip_failing_rules(&self) -> bool;
+
+    /// How many times to attempt to optimize the plan
+    fn max_passes(&self) -> u8;
+
+    /// Return a unique ID
+    ///
+    /// This is useful for assigning unique names to aliases
+    fn next_id(&self) -> usize;
+}
+
+/// A standalone [`OptimizerConfig`] that can be used independently
+/// of DataFusion's config management
 #[derive(Debug)]
-pub struct OptimizerConfig {
+pub struct OptimizerContext {
     /// Query execution start time that can be used to rewrite
     /// expressions such as `now()` to use a literal value instead
     query_execution_start_time: DateTime<Utc>,
     /// id generator for optimizer passes
-    // TODO this should not be on the config,
-    // it should be its own 'OptimizerState' or something)
-    next_id: usize,
+    next_id: AtomicUsize,
     /// Option to skip rules that produce errors
     skip_failing_rules: bool,
     /// Specify whether to enable the filter_null_keys rule
@@ -89,12 +107,12 @@ pub struct OptimizerConfig {
     max_passes: u8,
 }
 
-impl OptimizerConfig {
+impl OptimizerContext {
     /// Create optimizer config
     pub fn new() -> Self {
         Self {
             query_execution_start_time: Utc::now(),
-            next_id: 0, // useful for generating things like unique subquery aliases
+            next_id: AtomicUsize::new(1),
             skip_failing_rules: true,
             filter_null_keys: true,
             max_passes: 3,
@@ -129,24 +147,36 @@ impl OptimizerConfig {
         self.max_passes = v;
         self
     }
-
-    /// Generate the next ID needed
-    pub fn next_id(&mut self) -> usize {
-        self.next_id += 1;
-        self.next_id
-    }
-
-    /// Return the time at which the query execution started. This
-    /// time is used as the value for now()
-    pub fn query_execution_start_time(&self) -> DateTime<Utc> {
-        self.query_execution_start_time
-    }
 }
 
-impl Default for OptimizerConfig {
+impl Default for OptimizerContext {
     /// Create optimizer config
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl OptimizerConfig for OptimizerContext {
+    fn query_execution_start_time(&self) -> DateTime<Utc> {
+        self.query_execution_start_time
+    }
+
+    fn rule_enabled(&self, name: &str) -> bool {
+        self.filter_null_keys || name != FilterNullJoinKeys::NAME
+    }
+
+    fn skip_failing_rules(&self) -> bool {
+        self.skip_failing_rules
+    }
+
+    fn max_passes(&self) -> u8 {
+        self.max_passes
+    }
+
+    fn next_id(&self) -> usize {
+        use std::sync::atomic::Ordering;
+        // Can use relaxed ordering as not used for synchronisation
+        self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -157,10 +187,54 @@ pub struct Optimizer {
     pub rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
 }
 
+/// If a rule is with `ApplyOrder`, it means the optimizer will derive to handle children instead of
+/// recursively handling in rule.
+/// We just need handle a subtree pattern itself.
+///
+/// Notice: **sometime** result after optimize still can be optimized, we need apply again.
+///
+/// Usage Example: Merge Limit (subtree pattern is: Limit-Limit)
+/// ```rust
+/// use datafusion_expr::{Limit, LogicalPlan, LogicalPlanBuilder};
+/// use datafusion_common::Result;
+/// fn merge_limit(parent: &Limit, child: &Limit) -> LogicalPlan {
+///     // just for run
+///     return parent.input.as_ref().clone();
+/// }
+/// fn try_optimize(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
+///     match plan {
+///         LogicalPlan::Limit(limit) => match limit.input.as_ref() {
+///             LogicalPlan::Limit(child_limit) => {
+///                 // merge limit ...
+///                 let optimized_plan = merge_limit(limit, child_limit);
+///                 // due to optimized_plan may be optimized again,
+///                 // for example: plan is Limit-Limit-Limit
+///                 Ok(Some(
+///                     try_optimize(&optimized_plan)?
+///                         .unwrap_or_else(|| optimized_plan.clone()),
+///                 ))
+///             }
+///             _ => Ok(None),
+///         },
+///         _ => Ok(None),
+///     }
+/// }
+/// ```
+pub enum ApplyOrder {
+    TopDown,
+    BottomUp,
+}
+
+impl Default for Optimizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
-    pub fn new(config: &OptimizerConfig) -> Self {
-        let mut rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
+    pub fn new() -> Self {
+        let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
             Arc::new(InlineTableScan::new()),
             Arc::new(TypeCoercion::new()),
             Arc::new(SimplifyExpressions::new()),
@@ -179,22 +253,19 @@ impl Optimizer {
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
             Arc::new(RewriteDisjunctivePredicate::new()),
+            Arc::new(FilterNullJoinKeys::default()),
+            Arc::new(EliminateOuterJoin::new()),
+            // Filters can't be pushed down past Limits, we should do PushDownFilter after LimitPushDown
+            Arc::new(PushDownLimit::new()),
+            Arc::new(PushDownFilter::new()),
+            Arc::new(SingleDistinctToGroupBy::new()),
+            // The previous optimizations added expressions and projections,
+            // that might benefit from the following rules
+            Arc::new(SimplifyExpressions::new()),
+            Arc::new(UnwrapCastInComparison::new()),
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(PushDownProjection::new()),
         ];
-        if config.filter_null_keys {
-            rules.push(Arc::new(FilterNullJoinKeys::default()));
-        }
-        rules.push(Arc::new(EliminateOuterJoin::new()));
-        // Filters can't be pushed down past Limits, we should do PushDownFilter after LimitPushDown
-        rules.push(Arc::new(PushDownLimit::new()));
-        rules.push(Arc::new(PushDownFilter::new()));
-        rules.push(Arc::new(SingleDistinctToGroupBy::new()));
-
-        // The previous optimizations added expressions and projections,
-        // that might benefit from the following rules
-        rules.push(Arc::new(SimplifyExpressions::new()));
-        rules.push(Arc::new(UnwrapCastInComparison::new()));
-        rules.push(Arc::new(CommonSubexprEliminate::new()));
-        rules.push(Arc::new(PushDownProjection::new()));
 
         Self::with_rules(rules)
     }
@@ -209,7 +280,7 @@ impl Optimizer {
     pub fn optimize<F>(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
         mut observer: F,
     ) -> Result<LogicalPlan>
     where
@@ -219,11 +290,16 @@ impl Optimizer {
         let mut plan_str = format!("{}", plan.display_indent());
         let mut new_plan = plan.clone();
         let mut i = 0;
-        while i < optimizer_config.max_passes {
+        while i < config.max_passes() {
             log_plan(&format!("Optimizer input (pass {})", i), &new_plan);
 
             for rule in &self.rules {
-                let result = rule.try_optimize(&new_plan, optimizer_config);
+                if !config.rule_enabled(rule.name()) {
+                    debug!("Skipping rule {} due to optimizer config", rule.name());
+                    continue;
+                }
+                let result = self.optimize_recursively(rule, &new_plan, config);
+
                 match result {
                     Ok(Some(plan)) => {
                         if !plan.schema().equivalent_names_and_types(new_plan.schema()) {
@@ -247,7 +323,7 @@ impl Optimizer {
                         );
                     }
                     Err(ref e) => {
-                        if optimizer_config.skip_failing_rules {
+                        if config.skip_failing_rules() {
                             // Note to future readers: if you see this warning it signals a
                             // bug in the DataFusion optimizer. Please consider filing a ticket
                             // https://github.com/apache/arrow-datafusion
@@ -284,6 +360,78 @@ impl Optimizer {
         debug!("Optimizer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
     }
+
+    fn optimize_node(
+        &self,
+        rule: &Arc<dyn OptimizerRule + Send + Sync>,
+        plan: &LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
+        // TODO: future feature: We can do Batch optimize
+        rule.try_optimize(plan, config)
+    }
+
+    fn optimize_inputs(
+        &self,
+        rule: &Arc<dyn OptimizerRule + Send + Sync>,
+        plan: &LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
+        let inputs = plan.inputs();
+        let result = inputs
+            .iter()
+            .map(|sub_plan| self.optimize_recursively(rule, sub_plan, config))
+            .collect::<Result<Vec<_>>>()?;
+        if result.is_empty() || result.iter().all(|o| o.is_none()) {
+            return Ok(None);
+        }
+
+        let new_inputs = result
+            .into_iter()
+            .enumerate()
+            .map(|(i, o)| match o {
+                Some(plan) => plan,
+                None => (*(inputs.get(i).unwrap())).clone(),
+            })
+            .collect::<Vec<_>>();
+
+        Ok(Some(plan.with_new_inputs(new_inputs.as_slice())?))
+    }
+
+    /// Use a rule to optimize the whole plan.
+    /// If the rule with `ApplyOrder`, we don't need to recursively handle children in rule.
+    pub fn optimize_recursively(
+        &self,
+        rule: &Arc<dyn OptimizerRule + Send + Sync>,
+        plan: &LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
+        match rule.apply_order() {
+            Some(order) => match order {
+                ApplyOrder::TopDown => {
+                    let optimize_self_opt = self.optimize_node(rule, plan, config)?;
+                    let optimize_inputs_opt = match &optimize_self_opt {
+                        Some(optimized_plan) => {
+                            self.optimize_inputs(rule, optimized_plan, config)?
+                        }
+                        _ => self.optimize_inputs(rule, plan, config)?,
+                    };
+                    Ok(optimize_inputs_opt.or(optimize_self_opt))
+                }
+                ApplyOrder::BottomUp => {
+                    let optimize_inputs_opt = self.optimize_inputs(rule, plan, config)?;
+                    let optimize_self_opt = match &optimize_inputs_opt {
+                        Some(optimized_plan) => {
+                            self.optimize_node(rule, optimized_plan, config)?
+                        }
+                        _ => self.optimize_node(rule, plan, config)?,
+                    };
+                    Ok(optimize_self_opt.or(optimize_inputs_opt))
+                }
+            },
+            _ => rule.try_optimize(plan, config),
+        }
+    }
 }
 
 /// Log the plan in debug/tracing mode after some part of the optimizer runs
@@ -296,51 +444,49 @@ fn log_plan(description: &str, plan: &LogicalPlan) {
 mod tests {
     use crate::optimizer::Optimizer;
     use crate::test::test_table_scan;
-    use crate::{OptimizerConfig, OptimizerRule};
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError};
+    use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
+    use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{col, LogicalPlan, LogicalPlanBuilder, Projection};
     use std::sync::Arc;
 
     #[test]
-    fn skip_failing_rule() -> Result<(), DataFusionError> {
+    fn skip_failing_rule() {
         let opt = Optimizer::with_rules(vec![Arc::new(BadRule {})]);
-        let mut config = OptimizerConfig::new().with_skip_failing_rules(true);
+        let config = OptimizerContext::new().with_skip_failing_rules(true);
         let plan = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
-        opt.optimize(&plan, &mut config, &observe)?;
-        Ok(())
+        opt.optimize(&plan, &config, &observe).unwrap();
     }
 
     #[test]
-    fn no_skip_failing_rule() -> Result<(), DataFusionError> {
+    fn no_skip_failing_rule() {
         let opt = Optimizer::with_rules(vec![Arc::new(BadRule {})]);
-        let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
+        let config = OptimizerContext::new().with_skip_failing_rules(false);
         let plan = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
-        let result = opt.optimize(&plan, &mut config, &observe);
+        let err = opt.optimize(&plan, &config, &observe).unwrap_err();
         assert_eq!(
             "Internal error: Optimizer rule 'bad rule' failed due to unexpected error: \
             Error during planning: rule failed. This was likely caused by a bug in \
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
-            format!("{}", result.err().unwrap())
+            err.to_string()
         );
-        Ok(())
     }
 
     #[test]
-    fn generate_different_schema() -> Result<(), DataFusionError> {
+    fn generate_different_schema() {
         let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
-        let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
+        let config = OptimizerContext::new().with_skip_failing_rules(false);
         let plan = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::empty()),
         });
-        let result = opt.optimize(&plan, &mut config, &observe);
+        let err = opt.optimize(&plan, &config, &observe).unwrap_err();
         assert_eq!(
             "Internal error: Optimizer rule 'get table_scan rule' failed, due to generate a different schema, \
              original schema: DFSchema { fields: [], metadata: {} }, \
@@ -351,9 +497,8 @@ mod tests {
              metadata: {} }. \
              This was likely caused by a bug in DataFusion's code \
              and we would welcome that you file an bug report in our issue tracker",
-            format!("{}", result.err().unwrap())
+            err.to_string()
         );
-        Ok(())
     }
 
     #[test]
@@ -361,7 +506,7 @@ mod tests {
         // if the plan creates more metadata than previously (because
         // some wrapping functions are removed, etc) do not error
         let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
-        let mut config = OptimizerConfig::new().with_skip_failing_rules(false);
+        let config = OptimizerContext::new().with_skip_failing_rules(false);
 
         let input = Arc::new(test_table_scan().unwrap());
         let input_schema = input.schema().clone();
@@ -374,7 +519,7 @@ mod tests {
 
         // optimizing should be ok, but the schema will have changed  (no metadata)
         assert_ne!(plan.schema().as_ref(), input_schema.as_ref());
-        let optimized_plan = opt.optimize(&plan, &mut config, &observe).unwrap();
+        let optimized_plan = opt.optimize(&plan, &config, &observe).unwrap();
         // metadata was removed
         assert_eq!(optimized_plan.schema().as_ref(), input_schema.as_ref());
     }
@@ -407,11 +552,11 @@ mod tests {
     struct BadRule {}
 
     impl OptimizerRule for BadRule {
-        fn optimize(
+        fn try_optimize(
             &self,
-            _plan: &LogicalPlan,
-            _optimizer_config: &mut OptimizerConfig,
-        ) -> datafusion_common::Result<LogicalPlan> {
+            _: &LogicalPlan,
+            _: &dyn OptimizerConfig,
+        ) -> Result<Option<LogicalPlan>> {
             Err(DataFusionError::Plan("rule failed".to_string()))
         }
 
@@ -424,13 +569,13 @@ mod tests {
     struct GetTableScanRule {}
 
     impl OptimizerRule for GetTableScanRule {
-        fn optimize(
+        fn try_optimize(
             &self,
-            _plan: &LogicalPlan,
-            _optimizer_config: &mut OptimizerConfig,
-        ) -> datafusion_common::Result<LogicalPlan> {
+            _: &LogicalPlan,
+            _: &dyn OptimizerConfig,
+        ) -> Result<Option<LogicalPlan>> {
             let table_scan = test_table_scan()?;
-            LogicalPlanBuilder::from(table_scan).build()
+            Ok(Some(LogicalPlanBuilder::from(table_scan).build()?))
         }
 
         fn name(&self) -> &str {

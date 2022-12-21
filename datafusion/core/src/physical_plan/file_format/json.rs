@@ -123,19 +123,18 @@ impl ExecutionPlan for NdJsonExec {
             options
         };
 
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.base_config.object_store_url)?;
         let opener = JsonOpener {
             file_schema,
             options,
             file_compression_type: self.file_compression_type.to_owned(),
+            object_store,
         };
 
-        let stream = FileStream::new(
-            &self.base_config,
-            partition,
-            context,
-            opener,
-            self.metrics.clone(),
-        )?;
+        let stream =
+            FileStream::new(&self.base_config, partition, opener, self.metrics.clone())?;
 
         Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
@@ -166,16 +165,14 @@ struct JsonOpener {
     options: DecoderOptions,
     file_schema: SchemaRef,
     file_compression_type: FileCompressionType,
+    object_store: Arc<dyn ObjectStore>,
 }
 
 impl FileOpener for JsonOpener {
-    fn open(
-        &self,
-        store: Arc<dyn ObjectStore>,
-        file_meta: FileMeta,
-    ) -> Result<FileOpenFuture> {
+    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let options = self.options.clone();
         let schema = self.file_schema.clone();
+        let store = self.object_store.clone();
         let file_compression_type = self.file_compression_type.to_owned();
         Ok(Box::pin(async move {
             match store.get(file_meta.location()).await? {
@@ -310,7 +307,7 @@ mod tests {
         file_compression_type: FileCompressionType,
         store: Arc<dyn ObjectStore>,
     ) {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.runtime_env()
             .register_object_store("file", "", store.clone());
         let filename = "1.json";

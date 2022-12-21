@@ -201,14 +201,14 @@ impl CoalesceBatchesStream {
     ) -> Poll<Option<ArrowResult<RecordBatch>>> {
         // Get a clone (uses same underlying atomic) as self gets borrowed below
         let cloned_time = self.baseline_metrics.elapsed_compute().clone();
-        // records time on drop
-        let _timer = cloned_time.timer();
 
         if self.is_closed {
             return Poll::Ready(None);
         }
         loop {
             let input_batch = self.input.poll_next_unpin(cx);
+            // records time on drop
+            let _timer = cloned_time.timer();
             match input_batch {
                 Poll::Ready(x) => match x {
                     Some(Ok(ref batch)) => {

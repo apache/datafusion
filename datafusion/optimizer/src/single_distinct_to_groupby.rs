@@ -21,6 +21,7 @@ use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::{
     col,
+    expr::AggregateFunction,
     logical_plan::{Aggregate, LogicalPlan, Projection},
     utils::columnize_expr,
     Expr, ExprSchemable,
@@ -61,7 +62,10 @@ fn is_single_distinct_agg(plan: &LogicalPlan) -> Result<bool> {
             let mut fields_set = HashSet::new();
             let mut distinct_count = 0;
             for expr in aggr_expr {
-                if let Expr::AggregateFunction { distinct, args, .. } = expr {
+                if let Expr::AggregateFunction(AggregateFunction {
+                    distinct, args, ..
+                }) = expr
+                {
                     if *distinct {
                         distinct_count += 1;
                     }
@@ -83,11 +87,11 @@ fn contains_grouping_set(expr: &[Expr]) -> bool {
 }
 
 impl OptimizerRule for SingleDistinctToGroupBy {
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Aggregate(Aggregate {
                 input,
@@ -121,21 +125,24 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     let new_aggr_exprs = aggr_expr
                         .iter()
                         .map(|aggr_expr| match aggr_expr {
-                            Expr::AggregateFunction {
-                                fun, args, filter, ..
-                            } => {
+                            Expr::AggregateFunction(AggregateFunction {
+                                fun,
+                                args,
+                                filter,
+                                ..
+                            }) => {
                                 // is_single_distinct_agg ensure args.len=1
                                 if group_fields_set.insert(args[0].display_name()?) {
                                     inner_group_exprs.push(
                                         args[0].clone().alias(SINGLE_DISTINCT_ALIAS),
                                     );
                                 }
-                                Ok(Expr::AggregateFunction {
-                                    fun: fun.clone(),
-                                    args: vec![col(SINGLE_DISTINCT_ALIAS)],
-                                    distinct: false, // intentional to remove distinct here
-                                    filter: filter.clone(),
-                                })
+                                Ok(Expr::AggregateFunction(AggregateFunction::new(
+                                    fun.clone(),
+                                    vec![col(SINGLE_DISTINCT_ALIAS)],
+                                    false, // intentional to remove distinct here
+                                    filter.clone(),
+                                )))
                             }
                             _ => Ok(aggr_expr.clone()),
                         })
@@ -156,7 +163,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         Vec::new(),
                     )?);
                     let inner_agg =
-                        utils::optimize_children(self, &grouped_aggr, _optimizer_config)?;
+                        utils::optimize_children(self, &grouped_aggr, config)?;
 
                     let outer_aggr_schema = Arc::new(DFSchema::new_with_metadata(
                         outer_group_exprs
@@ -174,7 +181,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     let mut alias_expr: Vec<Expr> = Vec::new();
                     for (alias, original_field) in group_expr_alias {
                         alias_expr
-                            .push(col(&alias).alias(original_field.qualified_name()));
+                            .push(col(alias).alias(original_field.qualified_name()));
                     }
                     for (i, expr) in new_aggr_exprs.iter().enumerate() {
                         alias_expr.push(columnize_expr(
@@ -192,16 +199,18 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         new_aggr_exprs,
                     )?);
 
-                    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                        alias_expr,
-                        Arc::new(outer_aggr),
-                        schema.clone(),
-                    )?))
+                    Ok(Some(LogicalPlan::Projection(
+                        Projection::try_new_with_schema(
+                            alias_expr,
+                            Arc::new(outer_aggr),
+                            schema.clone(),
+                        )?,
+                    )))
                 } else {
-                    utils::optimize_children(self, plan, _optimizer_config)
+                    Ok(Some(utils::optimize_children(self, plan, config)?))
                 }
             }
-            _ => utils::optimize_children(self, plan, _optimizer_config),
+            _ => Ok(Some(utils::optimize_children(self, plan, config)?)),
         }
     }
     fn name(&self) -> &str {
@@ -213,6 +222,8 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 mod tests {
     use super::*;
     use crate::test::*;
+    use crate::OptimizerContext;
+    use datafusion_expr::expr;
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::{
         col, count, count_distinct, lit, logical_plan::builder::LogicalPlanBuilder, max,
@@ -222,7 +233,8 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SingleDistinctToGroupBy::new();
         let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
+            .unwrap()
             .expect("failed to optimize plan");
 
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
@@ -388,12 +400,12 @@ mod tests {
                 vec![col("a")],
                 vec![
                     count_distinct(col("b")),
-                    Expr::AggregateFunction {
-                        fun: AggregateFunction::Max,
-                        distinct: true,
-                        args: vec![col("b")],
-                        filter: None,
-                    },
+                    Expr::AggregateFunction(expr::AggregateFunction::new(
+                        AggregateFunction::Max,
+                        vec![col("b")],
+                        true,
+                        None,
+                    )),
                 ],
             )?
             .build()?;

@@ -24,6 +24,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use dashmap::DashMap;
+use datafusion_expr::expr::Sort;
 use datafusion_physical_expr::PhysicalSortExpr;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
@@ -122,7 +123,7 @@ impl ListingTableConfig {
         let file_compression_type = FileCompressionType::from_str(splitted)
             .unwrap_or(FileCompressionType::UNCOMPRESSED);
 
-        if file_compression_type != FileCompressionType::UNCOMPRESSED {
+        if file_compression_type.is_compressed() {
             splitted = exts.next().unwrap_or("");
         }
 
@@ -530,7 +531,7 @@ impl ListingTable {
         let sort_exprs = file_sort_order
             .iter()
             .map(|expr| {
-                if let Expr::Sort { expr, asc, nulls_first } = expr {
+                if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
                     if let Expr::Column(col) = expr.as_ref() {
                         let expr = physical_plan::expressions::col(&col.name, self.table_schema.as_ref())?;
                         Ok(PhysicalSortExpr {
@@ -802,6 +803,30 @@ mod tests {
         let exec = table.scan(&state, None, &[], None).await?;
         assert_eq!(exec.statistics().num_rows, Some(8));
         assert_eq!(exec.statistics().total_byte_size, Some(671));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn load_table_stats_when_no_stats() -> Result<()> {
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::new(ctx.config_options())))
+            .with_collect_stat(false);
+        let schema = opt.infer_schema(&state, &table_path).await?;
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(schema);
+        let table = ListingTable::try_new(config)?;
+
+        let exec = table.scan(&state, None, &[], None).await?;
+        assert_eq!(exec.statistics().num_rows, None);
+        assert_eq!(exec.statistics().total_byte_size, None);
 
         Ok(())
     }

@@ -51,11 +51,12 @@ impl Column {
     }
 
     /// Deserialize a fully qualified name string into a column
-    pub fn from_qualified_name(flat_name: &str) -> Self {
+    pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
+        let flat_name = flat_name.into();
         use sqlparser::tokenizer::Token;
 
         let dialect = sqlparser::dialect::GenericDialect {};
-        let mut tokenizer = sqlparser::tokenizer::Tokenizer::new(&dialect, flat_name);
+        let mut tokenizer = sqlparser::tokenizer::Tokenizer::new(&dialect, &flat_name);
         if let Ok(tokens) = tokenizer.tokenize() {
             if let [Token::Word(relation), Token::Period, Token::Word(name)] =
                 tokens.as_slice()
@@ -70,7 +71,7 @@ impl Column {
         // name
         Column {
             relation: None,
-            name: String::from(flat_name),
+            name: flat_name,
         }
     }
 
@@ -141,6 +142,20 @@ impl Column {
 
 impl From<&str> for Column {
     fn from(c: &str) -> Self {
+        Self::from_qualified_name(c)
+    }
+}
+
+/// Create a column, cloning the string
+impl From<&String> for Column {
+    fn from(c: &String) -> Self {
+        Self::from_qualified_name(c)
+    }
+}
+
+/// Create a column, reusing the existing string
+impl From<String> for Column {
+    fn from(c: String) -> Self {
         Self::from_qualified_name(c)
     }
 }

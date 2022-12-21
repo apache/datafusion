@@ -16,17 +16,23 @@
 // under the License.
 
 use crate::expr::BinaryExpr;
+use crate::expr_rewriter::{ExprRewritable, ExprRewriter};
 ///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::utils::{
-    exprlist_to_fields, from_plan, grouping_set_expr_count, grouping_set_to_exprlist,
+    self, exprlist_to_fields, from_plan, grouping_set_expr_count,
+    grouping_set_to_exprlist,
 };
-use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
+use crate::{
+    build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
+    ScalarValue,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
@@ -247,9 +253,12 @@ impl LogicalPlan {
                 aggr_expr,
                 ..
             }) => group_expr.iter().chain(aggr_expr.iter()).cloned().collect(),
+            // There are two part of expression for join, equijoin(on) and non-equijoin(filter).
+            // 1. the first part is `on.len()` equijoin expressions, and the struct of each expr is `left-on = right-on`.
+            // 2. the second part is non-equijoin(filter).
             LogicalPlan::Join(Join { on, filter, .. }) => on
                 .iter()
-                .flat_map(|(l, r)| vec![Expr::Column(l.clone()), Expr::Column(r.clone())])
+                .map(|(l, r)| Expr::eq(l.clone(), r.clone()))
                 .chain(
                     filter
                         .as_ref()
@@ -259,9 +268,9 @@ impl LogicalPlan {
                 .collect(),
             LogicalPlan::Sort(Sort { expr, .. }) => expr.clone(),
             LogicalPlan::Extension(extension) => extension.node.expressions(),
+            LogicalPlan::TableScan(TableScan { filters, .. }) => filters.clone(),
             // plans without expressions
-            LogicalPlan::TableScan(_)
-            | LogicalPlan::EmptyRelation(_)
+            LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
@@ -340,12 +349,14 @@ impl LogicalPlan {
                     ..
                 }) = plan
                 {
-                    self.using_columns.push(
-                        on.iter()
-                            .flat_map(|entry| [&entry.0, &entry.1])
-                            .cloned()
-                            .collect::<HashSet<Column>>(),
-                    );
+                    // The join keys in using-join must be columns.
+                    let columns =
+                        on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
+                            accumu.insert(l.try_into_col()?);
+                            accumu.insert(r.try_into_col()?);
+                            Result::<_, DataFusionError>::Ok(accumu)
+                        })?;
+                    self.using_columns.push(columns);
                 }
                 Ok(true)
             }
@@ -363,6 +374,42 @@ impl LogicalPlan {
         inputs: &[LogicalPlan],
     ) -> Result<LogicalPlan, DataFusionError> {
         from_plan(self, &self.expressions(), inputs)
+    }
+
+    /// Convert a prepare logical plan into its inner logical plan with all params replaced with their corresponding values
+    pub fn with_param_values(
+        self,
+        param_values: Vec<ScalarValue>,
+    ) -> Result<LogicalPlan, DataFusionError> {
+        match self {
+            LogicalPlan::Prepare(prepare_lp) => {
+                // Verify if the number of params matches the number of values
+                if prepare_lp.data_types.len() != param_values.len() {
+                    return Err(DataFusionError::Internal(format!(
+                        "Expected {} parameters, got {}",
+                        prepare_lp.data_types.len(),
+                        param_values.len()
+                    )));
+                }
+
+                // Verify if the types of the params matches the types of the values
+                let iter = prepare_lp.data_types.iter().zip(param_values.iter());
+                for (i, (param_type, value)) in iter.enumerate() {
+                    if *param_type != value.get_datatype() {
+                        return Err(DataFusionError::Internal(format!(
+                            "Expected parameter of type {:?}, got {:?} at index {}",
+                            param_type,
+                            value.get_datatype(),
+                            i
+                        )));
+                    }
+                }
+
+                let input_plan = prepare_lp.input;
+                input_plan.replace_params_with_values(&param_values)
+            }
+            _ => Ok(self),
+        }
     }
 }
 
@@ -533,6 +580,72 @@ impl LogicalPlan {
             }
             _ => {}
         }
+    }
+
+    /// Return a logical plan with all placeholders/params (e.g $1 $2, ...) replaced with corresponding values provided in the prams_values
+    pub fn replace_params_with_values(
+        &self,
+        param_values: &Vec<ScalarValue>,
+    ) -> Result<LogicalPlan, DataFusionError> {
+        let exprs = self.expressions();
+        let mut new_exprs = vec![];
+        for expr in exprs {
+            new_exprs.push(Self::replace_placeholders_with_values(expr, param_values)?);
+        }
+
+        let new_inputs = self.inputs();
+        let mut new_inputs_with_values = vec![];
+        for input in new_inputs {
+            new_inputs_with_values.push(input.replace_params_with_values(param_values)?);
+        }
+
+        let new_plan = utils::from_plan(self, &new_exprs, &new_inputs_with_values)?;
+        Ok(new_plan)
+    }
+
+    /// Return an Expr with all placeholders replaced with their corresponding values provided in the prams_values
+    fn replace_placeholders_with_values(
+        expr: Expr,
+        param_values: &Vec<ScalarValue>,
+    ) -> Result<Expr, DataFusionError> {
+        struct PlaceholderReplacer<'a> {
+            param_values: &'a Vec<ScalarValue>,
+        }
+
+        impl<'a> ExprRewriter for PlaceholderReplacer<'a> {
+            fn mutate(&mut self, expr: Expr) -> Result<Expr, DataFusionError> {
+                if let Expr::Placeholder { id, data_type } = &expr {
+                    // convert id (in format $1, $2, ..) to idx (0, 1, ..)
+                    let idx = id[1..].parse::<usize>().map_err(|e| {
+                        DataFusionError::Internal(format!(
+                            "Failed to parse placeholder id: {}",
+                            e
+                        ))
+                    })? - 1;
+                    // value at the idx-th position in param_values should be the value for the placeholder
+                    let value = self.param_values.get(idx).ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "No value found for placeholder with id {}",
+                            id
+                        ))
+                    })?;
+                    // check if the data type of the value matches the data type of the placeholder
+                    if value.get_datatype() != *data_type {
+                        return Err(DataFusionError::Internal(format!(
+                            "Placeholder value type mismatch: expected {:?}, got {:?}",
+                            data_type,
+                            value.get_datatype()
+                        )));
+                    }
+                    // Replace the placeholder with the value
+                    Ok(Expr::Literal(value.clone()))
+                } else {
+                    Ok(expr)
+                }
+            }
+        }
+
+        expr.rewrite(&mut PlaceholderReplacer { param_values })
     }
 }
 
@@ -1195,13 +1308,17 @@ pub struct SubqueryAlias {
 }
 
 impl SubqueryAlias {
-    pub fn try_new(plan: LogicalPlan, alias: &str) -> datafusion_common::Result<Self> {
+    pub fn try_new(
+        plan: LogicalPlan,
+        alias: impl Into<String>,
+    ) -> datafusion_common::Result<Self> {
+        let alias = alias.into();
         let schema: Schema = plan.schema().as_ref().clone().into();
         let schema =
-            DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
+            DFSchemaRef::new(DFSchema::try_from_qualified_schema(&alias, &schema)?);
         Ok(SubqueryAlias {
             input: Arc::new(plan),
-            alias: alias.to_string(),
+            alias,
             schema,
         })
     }
@@ -1215,12 +1332,16 @@ impl SubqueryAlias {
 /// If the value of `<predicate>` is true, the input row is passed to
 /// the output. If the value of `<predicate>` is false, the row is
 /// discarded.
+///
+/// Filter should not be created directly but instead use `try_new()`
+/// and that these fields are only pub to support pattern matching
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
-    predicate: Expr,
+    pub predicate: Expr,
     /// The incoming logical plan
-    input: Arc<LogicalPlan>,
+    pub input: Arc<LogicalPlan>,
 }
 
 impl Filter {
@@ -1378,7 +1499,7 @@ pub struct CreateExternalTable {
     /// SQL used to create the table, if available
     pub definition: Option<String>,
     /// File compression type (GZIP, BZIP2, XZ)
-    pub file_compression_type: String,
+    pub file_compression_type: CompressionTypeVariant,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
 }
@@ -1537,8 +1658,8 @@ pub struct Join {
     pub left: Arc<LogicalPlan>,
     /// Right input
     pub right: Arc<LogicalPlan>,
-    /// Equijoin clause expressed as pairs of (left, right) join columns
-    pub on: Vec<(Column, Column)>,
+    /// Equijoin clause expressed as pairs of (left, right) join expressions
+    pub on: Vec<(Expr, Expr)>,
     /// Filters applied during join (non-equi conditions)
     pub filter: Option<Expr>,
     /// Join type
@@ -1549,6 +1670,41 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
+}
+
+impl Join {
+    /// Create Join with input which wrapped with projection, this method is used to help create physical join.
+    pub fn try_new_with_project_input(
+        original: &LogicalPlan,
+        left: Arc<LogicalPlan>,
+        right: Arc<LogicalPlan>,
+        column_on: (Vec<Column>, Vec<Column>),
+    ) -> Result<Self, DataFusionError> {
+        let original_join = match original {
+            LogicalPlan::Join(join) => join,
+            _ => return plan_err!("Could not create join with project input"),
+        };
+
+        let on: Vec<(Expr, Expr)> = column_on
+            .0
+            .into_iter()
+            .zip(column_on.1.into_iter())
+            .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
+            .collect();
+        let join_schema =
+            build_join_schema(left.schema(), right.schema(), &original_join.join_type)?;
+
+        Ok(Join {
+            left,
+            right,
+            on,
+            filter: original_join.filter.clone(),
+            join_type: original_join.join_type,
+            join_constraint: original_join.join_constraint,
+            schema: Arc::new(join_schema),
+            null_equals_null: original_join.null_equals_null,
+        })
+    }
 }
 
 /// Subquery
