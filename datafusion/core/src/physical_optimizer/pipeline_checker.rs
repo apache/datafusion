@@ -28,6 +28,7 @@ use crate::prelude::SessionConfig;
 use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;
 use std::sync::Arc;
+
 /// The PipelineChecker rule ensures that the given plan can accommodate
 /// its infinite sources, if there are any. It will reject any plan with
 /// pipeline-breaking operators with an diagnostic error message.
@@ -40,16 +41,16 @@ impl PipelineChecker {
         Self {}
     }
 }
-type PhysicalOptimizerSubrule =
-    dyn Fn(&UnboundedStatePropagator) -> Option<Result<UnboundedStatePropagator>>;
+type PipelineCheckerSubrule =
+    dyn Fn(&PipelineStatePropagator) -> Option<Result<PipelineStatePropagator>>;
 impl PhysicalOptimizerRule for PipelineChecker {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         _config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let pipeline = UnboundedStatePropagator::new(plan);
-        let physical_optimizer_subrules: Vec<Box<PhysicalOptimizerSubrule>> =
+        let pipeline = PipelineStatePropagator::new(plan);
+        let physical_optimizer_subrules: Vec<Box<PipelineCheckerSubrule>> =
             vec![Box::new(hash_join_swap_subrule)];
         let state = pipeline.transform_up(&|p| {
             apply_subrules_and_check_finiteness_requirements(
@@ -69,46 +70,11 @@ impl PhysicalOptimizerRule for PipelineChecker {
     }
 }
 
-/// For [JoinType::Full], [JoinType::Right], [JoinType::RightAnti] and [JoinType::RightSemi] cannot
-/// be executed with unbounded left side, even if we swap. This is why we do not bring them
-/// in this function.
-fn swap(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
-    let partition_mode = hash_join.partition_mode();
-    let join_type = hash_join.join_type();
-    match (*partition_mode, *join_type) {
-        (
-            _,
-            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::Full,
-        ) => Err(DataFusionError::Internal(format!(
-            "{} join cannot be swapped.",
-            join_type
-        ))),
-        (PartitionMode::Partitioned, _) => {
-            swap_hash_join(hash_join, PartitionMode::Partitioned)
-        }
-        (PartitionMode::CollectLeft, _) => {
-            swap_hash_join(hash_join, PartitionMode::CollectLeft)
-        }
-        (PartitionMode::Auto, _) => Err(DataFusionError::Internal(
-            "Auto is not acceptable here.".to_string(),
-        )),
-    }
-}
-
-/// JoinType::Full | JoinType::Right | JoinType::RightSemi | JoinType::RightAnti can not be executed
-/// even if we swap. So, we do not swap.
-fn executable_after_swap(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti
-    )
-}
-/// It will reorder the build and probe sides of a hash
-/// join depending on whether its inputs may produce an infinite stream of records.
-/// The rule ensure that the left (build) side of the join always operates on an
-/// input stream that will produce a finite set of records.
-/// If the left side can not be chosen to be "finite", the order stays the same as
-/// the original query.
+/// It will swap build/probe sides of a hash join depending on whether its inputs may
+/// produce an infinite stream of records. The rule ensures that the left (build) side
+/// of the join always operates on an input stream that will produce a finite set of.
+/// recordsç If the left side can not be chosen to be "finite", the order stays the
+/// same as the original query.
 /// ```text
 /// For example, this rule makes the following transformation:
 ///
@@ -146,15 +112,18 @@ fn executable_after_swap(join_type: JoinType) -> bool {
 ///
 /// ```
 fn hash_join_swap_subrule(
-    input: &UnboundedStatePropagator,
-) -> Option<Result<UnboundedStatePropagator>> {
+    input: &PipelineStatePropagator,
+) -> Option<Result<PipelineStatePropagator>> {
     let plan = input.plan.clone();
     let children = &input.children_unbounded;
     if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
         let (left_unbounded, right_unbounded) = (children[0], children[1]);
         let new_plan = match (left_unbounded, right_unbounded) {
             (true, false) => {
-                if executable_after_swap(*hash_join.join_type()) {
+                if matches!(
+                    *hash_join.join_type(),
+                    JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti
+                ) {
                     swap(hash_join)
                 } else {
                     Ok(plan)
@@ -163,7 +132,7 @@ fn hash_join_swap_subrule(
             _ => Ok(plan),
         };
         match new_plan {
-            Ok(plan) => Some(Ok(UnboundedStatePropagator {
+            Ok(plan) => Some(Ok(PipelineStatePropagator {
                 plan,
                 unbounded: left_unbounded || right_unbounded,
                 children_unbounded: vec![left_unbounded, right_unbounded],
@@ -174,33 +143,60 @@ fn hash_join_swap_subrule(
         None
     }
 }
-/// [UnboundedStatePropagator] propagates the [ExecutionPlan] unbounded information.
+
+/// This function swaps sides of a hash join to make it runnable even if one of its
+/// inputs are infinite. Note that this is not always possible; i.e. [JoinType::Full],
+/// [JoinType::Left], [JoinType::LeftAnti] and [JoinType::LeftSemi] can not run with
+/// an unbounded left side, even if we swap. Therefore, we do not consider them here.
+fn swap(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
+    let partition_mode = hash_join.partition_mode();
+    let join_type = hash_join.join_type();
+    match (*partition_mode, *join_type) {
+        (
+            _,
+            JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::Full,
+        ) => Err(DataFusionError::Internal(format!(
+            "{} join cannot be swapped.",
+            join_type
+        ))),
+        (PartitionMode::Partitioned, _) => {
+            swap_hash_join(hash_join, PartitionMode::Partitioned)
+        }
+        (PartitionMode::CollectLeft, _) => {
+            swap_hash_join(hash_join, PartitionMode::CollectLeft)
+        }
+        (PartitionMode::Auto, _) => Err(DataFusionError::Internal(
+            "Auto is not acceptable here.".to_string(),
+        )),
+    }
+}
+
+/// [PipelineStatePropagator] propagates the [ExecutionPlan] pipelining information.
 #[derive(Clone, Debug)]
-pub struct UnboundedStatePropagator {
+pub struct PipelineStatePropagator {
     pub(crate) plan: Arc<dyn ExecutionPlan>,
     pub(crate) unbounded: bool,
     pub(crate) children_unbounded: Vec<bool>,
 }
 
-impl UnboundedStatePropagator {
-    /// Constructor
+impl PipelineStatePropagator {
+    /// Constructs a new, default pipelining state.
     pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        let children_len = plan.children().len();
-        UnboundedStatePropagator {
+        let length = plan.children().len();
+        PipelineStatePropagator {
             plan,
             unbounded: false,
-            children_unbounded: vec![false; children_len],
+            children_unbounded: vec![false; length],
         }
     }
     /// It generates children of the execution plan with state.
-    pub fn children(&self) -> Vec<UnboundedStatePropagator> {
-        let plan_children = self.plan.children();
-        assert_eq!(plan_children.len(), self.children_unbounded.len());
-        plan_children
+    pub fn children(&self) -> Vec<PipelineStatePropagator> {
+        self.plan
+            .children()
             .into_iter()
             .map(|child| {
                 let length = child.children().len();
-                UnboundedStatePropagator {
+                PipelineStatePropagator {
                     plan: child,
                     unbounded: false,
                     children_unbounded: vec![false; length],
@@ -210,23 +206,27 @@ impl UnboundedStatePropagator {
     }
 }
 
-impl TreeNodeRewritable for UnboundedStatePropagator {
+impl TreeNodeRewritable for PipelineStatePropagator {
     fn map_children<F>(self, transform: F) -> Result<Self>
     where
         F: FnMut(Self) -> Result<Self>,
     {
         let children = self.children();
         if !children.is_empty() {
-            let new_children: Result<Vec<_>> =
-                children.into_iter().map(transform).collect();
-            let temp = new_children?;
-            let children_unbounded =
-                temp.iter().map(|c| c.unbounded).collect::<Vec<bool>>();
-            let children_plans =
-                temp.into_iter().map(|child| child.plan).collect::<Vec<_>>();
-            let new_plan = with_new_children_if_necessary(self.plan, children_plans)?;
-            Ok(UnboundedStatePropagator {
-                plan: new_plan,
+            let new_children = children
+                .into_iter()
+                .map(transform)
+                .collect::<Result<Vec<_>>>()?;
+            let children_unbounded = new_children
+                .iter()
+                .map(|c| c.unbounded)
+                .collect::<Vec<bool>>();
+            let children_plans = new_children
+                .into_iter()
+                .map(|child| child.plan)
+                .collect::<Vec<_>>();
+            Ok(PipelineStatePropagator {
+                plan: with_new_children_if_necessary(self.plan, children_plans)?,
                 unbounded: self.unbounded,
                 children_unbounded,
             })
@@ -237,9 +237,9 @@ impl TreeNodeRewritable for UnboundedStatePropagator {
 }
 
 fn apply_subrules_and_check_finiteness_requirements(
-    mut input: UnboundedStatePropagator,
-    physical_optimizer_subrules: &Vec<Box<PhysicalOptimizerSubrule>>,
-) -> Result<Option<UnboundedStatePropagator>> {
+    mut input: PipelineStatePropagator,
+    physical_optimizer_subrules: &Vec<Box<PipelineCheckerSubrule>>,
+) -> Result<Option<PipelineStatePropagator>> {
     for sub_rule in physical_optimizer_subrules {
         match sub_rule(&input) {
             Some(Ok(value)) => {
@@ -253,7 +253,7 @@ fn apply_subrules_and_check_finiteness_requirements(
     let plan = input.plan;
     let children = &input.children_unbounded;
     match plan.unbounded_output(children) {
-        Ok(value) => Ok(Some(UnboundedStatePropagator {
+        Ok(value) => Ok(Some(PipelineStatePropagator {
             plan,
             unbounded: value,
             children_unbounded: input.children_unbounded,
@@ -890,7 +890,7 @@ mod hash_join_tests {
             &false,
         )?;
 
-        let initial_hash_join_state = UnboundedStatePropagator {
+        let initial_hash_join_state = PipelineStatePropagator {
             plan: Arc::new(join),
             unbounded: false,
             children_unbounded: vec![left_unbounded, right_unbounded],
