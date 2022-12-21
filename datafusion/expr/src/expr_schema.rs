@@ -16,7 +16,9 @@
 // under the License.
 
 use super::{Between, Expr, Like};
-use crate::expr::{BinaryExpr, Cast, GetIndexedField, Sort, TryCast};
+use crate::expr::{
+    AggregateFunction, BinaryExpr, Cast, GetIndexedField, Sort, TryCast, WindowFunction,
+};
 use crate::field_util::get_indexed_field;
 use crate::type_coercion::binary::binary_operator_data_type;
 use crate::{aggregate_function, function, window_function};
@@ -77,14 +79,14 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 function::return_type(fun, &data_types)
             }
-            Expr::WindowFunction { fun, args, .. } => {
+            Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
                 window_function::return_type(fun, &data_types)
             }
-            Expr::AggregateFunction { fun, args, .. } => {
+            Expr::AggregateFunction(AggregateFunction { fun, args, .. }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))

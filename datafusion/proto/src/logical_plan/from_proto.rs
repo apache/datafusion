@@ -36,7 +36,7 @@ use datafusion_expr::{
     abs, acos, array, ascii, asin, atan, atan2, bit_length, btrim, ceil,
     character_length, chr, coalesce, concat_expr, concat_ws_expr, cos, date_bin,
     date_part, date_trunc, digest, exp,
-    expr::Sort,
+    expr::{self, Sort, WindowFunction},
     floor, from_unixtime, left, ln, log10, log2,
     logical_plan::{PlanType, StringifiedPlan},
     lower, lpad, ltrim, md5, now, nullif, octet_length, power, random, regexp_match,
@@ -924,15 +924,15 @@ pub fn parse_expr(
                 window_expr_node::WindowFunction::AggrFunction(i) => {
                     let aggr_function = parse_i32_to_aggregate_function(i)?;
 
-                    Ok(Expr::WindowFunction {
-                        fun: datafusion_expr::window_function::WindowFunction::AggregateFunction(
+                    Ok(Expr::WindowFunction(WindowFunction::new(
+                        datafusion_expr::window_function::WindowFunction::AggregateFunction(
                             aggr_function,
                         ),
-                        args: vec![parse_required_expr(&expr.expr, registry, "expr")?],
+                        vec![parse_required_expr(&expr.expr, registry, "expr")?],
                         partition_by,
                         order_by,
                         window_frame,
-                    })
+                    )))
                 }
                 window_expr_node::WindowFunction::BuiltInFunction(i) => {
                     let built_in_function = protobuf::BuiltInWindowFunction::from_i32(*i)
@@ -943,31 +943,30 @@ pub fn parse_expr(
                         .map(|e| vec![e])
                         .unwrap_or_else(Vec::new);
 
-                    Ok(Expr::WindowFunction {
-                        fun: datafusion_expr::window_function::WindowFunction::BuiltInWindowFunction(
+                    Ok(Expr::WindowFunction(WindowFunction::new(
+                        datafusion_expr::window_function::WindowFunction::BuiltInWindowFunction(
                             built_in_function,
                         ),
                         args,
                         partition_by,
                         order_by,
                         window_frame,
-                    })
+                    )))
                 }
             }
         }
         ExprType::AggregateExpr(expr) => {
             let fun = parse_i32_to_aggregate_function(&expr.aggr_function)?;
 
-            Ok(Expr::AggregateFunction {
+            Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                 fun,
-                args: expr
-                    .expr
+                expr.expr
                     .iter()
                     .map(|e| parse_expr(e, registry))
                     .collect::<Result<Vec<_>, _>>()?,
-                distinct: expr.distinct,
-                filter: parse_optional_expr(&expr.filter, registry)?.map(Box::new),
-            })
+                expr.distinct,
+                parse_optional_expr(&expr.filter, registry)?.map(Box::new),
+            )))
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(
             Box::new(parse_required_expr(&alias.expr, registry, "expr")?),
