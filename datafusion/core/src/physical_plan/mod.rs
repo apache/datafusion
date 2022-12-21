@@ -317,11 +317,8 @@ pub fn with_new_children_if_necessary(
 ///   ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await.unwrap();
 ///
 ///   // create a plan to run a SQL query
-///   let plan = ctx
-///      .create_logical_plan("SELECT a FROM example WHERE a < 5")
-///      .unwrap();
-///   let plan = ctx.optimize(&plan).unwrap();
-///   let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
+///   let dataframe = ctx.sql("SELECT a FROM example WHERE a < 5").await.unwrap();
+///   let physical_plan = dataframe.create_physical_plan().await.unwrap();
 ///
 ///   // Format using display string
 ///   let displayable_plan = displayable(physical_plan.as_ref());
