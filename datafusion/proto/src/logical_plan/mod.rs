@@ -1443,7 +1443,7 @@ mod roundtrip_tests {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
-        let scan = ctx.table("t1")?.to_logical_plan()?;
+        let scan = ctx.table("t1")?.into_optimized_plan()?;
         let topk_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(TopKPlanNode::new(3, scan, col("revenue"))),
         });
@@ -1540,7 +1540,7 @@ mod roundtrip_tests {
         ctx.sql(sql).await.unwrap();
 
         let codec = TestTableProviderCodec {};
-        let scan = ctx.table("t")?.to_logical_plan()?;
+        let scan = ctx.table("t")?.into_optimized_plan()?;
         let bytes = logical_plan_to_bytes_with_extension_codec(&scan, &codec)?;
         let logical_round_trip =
             logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
@@ -1566,7 +1566,7 @@ mod roundtrip_tests {
 
         let query =
             "SELECT a, SUM(b + 1) as b_sum FROM t1 GROUP BY a ORDER BY b_sum DESC";
-        let plan = ctx.sql(query).await?.to_logical_plan()?;
+        let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
@@ -1592,7 +1592,7 @@ mod roundtrip_tests {
         .await?;
 
         let query = "SELECT a, COUNT(DISTINCT b) as b_cd FROM t1 GROUP BY a";
-        let plan = ctx.sql(query).await?.to_logical_plan()?;
+        let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
@@ -1606,7 +1606,7 @@ mod roundtrip_tests {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
-        let plan = ctx.table("t1")?.to_logical_plan()?;
+        let plan = ctx.table("t1")?.into_optimized_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
@@ -1620,7 +1620,10 @@ mod roundtrip_tests {
             .await?;
         ctx.sql("CREATE VIEW view_t1(a, b) AS SELECT a, b FROM t1")
             .await?;
-        let plan = ctx.sql("SELECT * FROM view_t1").await?.to_logical_plan()?;
+        let plan = ctx
+            .sql("SELECT * FROM view_t1")
+            .await?
+            .into_optimized_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
