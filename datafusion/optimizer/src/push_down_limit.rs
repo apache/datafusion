@@ -79,7 +79,7 @@ impl OptimizerRule for PushDownLimit {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         let limit = match plan {
             LogicalPlan::Limit(limit) => limit,
@@ -113,7 +113,7 @@ impl OptimizerRule for PushDownLimit {
                 fetch: new_fetch,
                 input: Arc::new((*child_limit.input).clone()),
             });
-            return self.try_optimize(&plan, config);
+            return self.try_optimize(&plan, _config);
         }
 
         let fetch = match limit.fetch {

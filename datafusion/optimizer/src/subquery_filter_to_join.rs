@@ -26,6 +26,7 @@
 //!   WHERE t1.f IN (SELECT f FROM t2) OR t2.f = 'x'
 //! ```
 //! won't
+use crate::optimizer::ApplyOrder;
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
@@ -36,7 +37,6 @@ use datafusion_expr::{
     Expr,
 };
 use std::sync::Arc;
-use crate::optimizer::ApplyOrder;
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -53,7 +53,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
@@ -97,7 +97,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                         } => {
                             let right_input = self.try_optimize(
                                 &subquery.subquery,
-                                config
+                                _config
                             )?.unwrap_or_else(||subquery.subquery.as_ref().clone());
                             let right_schema = right_input.schema();
                             if right_schema.fields().len() != 1 {
@@ -165,9 +165,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                     Ok(Some(utils::add_filter(new_input, &regular_filters)?))
                 }
             }
-            _ => {
-                Ok(None)
-            }
+            _ => Ok(None),
         }
     }
 
@@ -208,7 +206,11 @@ mod tests {
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq_display_indent(Arc::new(SubqueryFilterToJoin::new()), plan, expected);
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(SubqueryFilterToJoin::new()),
+            plan,
+            expected,
+        );
         Ok(())
     }
 

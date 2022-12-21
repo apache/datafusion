@@ -234,7 +234,11 @@ mod tests {
     };
 
     fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        assert_optimized_plan_eq_display_indent(Arc::new(SingleDistinctToGroupBy::new()), plan, expected);
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(SingleDistinctToGroupBy::new()),
+            plan,
+            expected,
+        );
         Ok(())
     }
 

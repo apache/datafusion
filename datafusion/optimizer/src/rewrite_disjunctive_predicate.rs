@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::logical_plan::Filter;
 use datafusion_expr::{Expr, LogicalPlan, Operator};
-use crate::optimizer::ApplyOrder;
 
 /// Optimizer pass that rewrites predicates of the form
 ///
@@ -136,7 +136,7 @@ impl OptimizerRule for RewriteDisjunctivePredicate {
                 let rewritten_expr = normalize_predicate(rewritten_predicate);
                 Ok(Some(LogicalPlan::Filter(Filter::try_new(
                     rewritten_expr,
-                    filter.input.clone()
+                    filter.input.clone(),
                 )?)))
             }
             _ => Ok(None),
