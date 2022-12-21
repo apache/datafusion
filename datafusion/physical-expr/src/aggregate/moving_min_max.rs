@@ -33,6 +33,8 @@
 //! - O(1) for push
 //! - amortized O(1) for pop
 
+/// ```
+///
 /// let mut moving_min = MovingMin::<i32>::new();
 /// moving_min.push(2);
 /// moving_min.push(1);
@@ -49,6 +51,7 @@
 ///
 /// assert_eq!(moving_min.min(), None);
 /// assert_eq!(moving_min.pop(), None);
+/// ```
 #[derive(Debug)]
 pub struct MovingMin<T> {
     push_stack: Vec<(T, T)>,
@@ -145,7 +148,8 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
         self.len() == 0
     }
 }
-
+/// ```
+///
 /// let mut moving_max = MovingMax::<i32>::new();
 /// moving_max.push(2);
 /// moving_max.push(3);
@@ -162,6 +166,7 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
 ///
 /// assert_eq!(moving_max.max(), None);
 /// assert_eq!(moving_max.pop(), None);
+/// ```
 #[derive(Debug)]
 pub struct MovingMax<T> {
     push_stack: Vec<(T, T)>,
