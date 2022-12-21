@@ -122,7 +122,10 @@ fn hash_join_swap_subrule(
             (true, false) => {
                 if matches!(
                     *hash_join.join_type(),
-                    JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti
+                    JoinType::Inner
+                        | JoinType::Left
+                        | JoinType::LeftSemi
+                        | JoinType::LeftAnti
                 ) {
                     swap(hash_join)
                 } else {
