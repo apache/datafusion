@@ -300,7 +300,7 @@ fn analyze_window_sort_removal(
         let new_window_expr = if should_reverse {
             window_expr
                 .iter()
-                .map(|e| e.get_reversed_expr())
+                .map(|e| e.get_reverse_expr())
                 .collect::<Option<Vec<_>>>()
         } else {
             Some(window_expr.to_vec())

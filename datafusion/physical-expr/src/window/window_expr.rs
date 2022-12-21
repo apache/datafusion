@@ -113,11 +113,11 @@ pub trait WindowExpr: Send + Sync + Debug {
         Ok((values, order_bys))
     }
 
-    // Get window frame of this WindowExpr
+    /// Get the window frame of this [WindowExpr].
     fn get_window_frame(&self) -> &Arc<WindowFrame>;
 
-    /// get reversed expression
-    fn get_reversed_expr(&self) -> Option<Arc<dyn WindowExpr>>;
+    /// Get the reverse expression of this [WindowExpr].
+    fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
 }
 
 /// Reverses the ORDER BY expression, which is useful during equivalent window
