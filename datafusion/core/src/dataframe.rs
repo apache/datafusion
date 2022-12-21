@@ -836,7 +836,7 @@ mod tests {
     use arrow::datatypes::DataType;
 
     use datafusion_expr::{
-        avg, cast, count, count_distinct, create_udf, lit, max, min, sum,
+        avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
         BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
         WindowFunction,
     };
@@ -890,13 +890,13 @@ mod tests {
     async fn select_with_window_exprs() -> Result<()> {
         // build plan using Table API
         let t = test_table().await?;
-        let first_row = Expr::WindowFunction {
-            fun: WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::FirstValue),
-            args: vec![col("aggregate_test_100.c1")],
-            partition_by: vec![col("aggregate_test_100.c2")],
-            order_by: vec![],
-            window_frame: WindowFrame::new(false),
-        };
+        let first_row = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::FirstValue),
+            vec![col("aggregate_test_100.c1")],
+            vec![col("aggregate_test_100.c2")],
+            vec![],
+            WindowFrame::new(false),
+        ));
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
 

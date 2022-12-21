@@ -1433,11 +1433,11 @@ async fn hash_join_with_decimal() -> Result<()> {
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.to_optimized_plan()?;
     let expected = vec![
-    "Explain [plan_type:Utf8, plan:Utf8]",
-    "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
-    "    Right Join: t1.c3 = t2.c3 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
-    "      TableScan: t1 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N]",
-    "      TableScan: t2 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "    Right Join: CAST(t1.c3 AS Decimal128(10, 2)) = t2.c3 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "      TableScan: t1 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N]",
+        "      TableScan: t2 projection=[c1, c2, c3, c4] [c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -1938,17 +1938,19 @@ async fn sort_merge_join_on_decimal() -> Result<()> {
     let physical_plan = dataframe.create_physical_plan().await?;
     let expected = vec![
         "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@4 as c1, c2@5 as c2, c3@6 as c3, c4@7 as c4]",
-        "  SortMergeJoin: join_type=Right, on=[(Column { name: \"c3\", index: 2 }, Column { name: \"c3\", index: 2 })]",
-        "    SortExec: [c3@2 ASC]",
-        "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c3\", index: 2 }], 2)",
-        "          RepartitionExec: partitioning=RoundRobinBatch(2)",
-        "            MemoryExec: partitions=1, partition_sizes=[1]",
-        "    SortExec: [c3@2 ASC]",
-        "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c3\", index: 2 }], 2)",
-        "          RepartitionExec: partitioning=RoundRobinBatch(2)",
-        "            MemoryExec: partitions=1, partition_sizes=[1]",
+        "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@5 as c1, c2@6 as c2, c3@7 as c3, c4@8 as c4]",
+        "    SortMergeJoin: join_type=Right, on=[(Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }, Column { name: \"c3\", index: 2 })]",
+        "      SortExec: [CAST(t1.c3 AS Decimal128(10, 2))@4 ASC]",
+        "        CoalesceBatchesExec: target_batch_size=4096",
+        "          RepartitionExec: partitioning=Hash([Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }], 2)",
+        "            ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, CAST(c3@2 AS Decimal128(10, 2)) as CAST(t1.c3 AS Decimal128(10, 2))]",
+        "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+        "                MemoryExec: partitions=1, partition_sizes=[1]",
+        "      SortExec: [c3@2 ASC]",
+        "        CoalesceBatchesExec: target_batch_size=4096",
+        "          RepartitionExec: partitioning=Hash([Column { name: \"c3\", index: 2 }], 2)",
+        "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+        "              MemoryExec: partitions=1, partition_sizes=[1]",
     ];
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -2229,9 +2231,7 @@ async fn right_semi_join() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "Test ignored, will be enabled after fixing cross join bug"]
-// https://github.com/apache/arrow-datafusion/issues/4363
-async fn error_cross_join() -> Result<()> {
+async fn left_join_with_nonequal_condition() -> Result<()> {
     let test_repartition_joins = vec![true, false];
     for repartition_joins in test_repartition_joins {
         let ctx = create_join_context("t1_id", "t2_id", repartition_joins).unwrap();
@@ -2706,6 +2706,143 @@ async fn select_wildcard_with_expr_key_inner_join() -> Result<()> {
         let results = execute_to_batches(&ctx, sql).await;
         assert_batches_sorted_eq!(expected, &results);
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_with_type_coercion_for_equi_expr() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t2.t2_id from t1 inner join t2 on t1.t1_id + 11 = t2.t2_id";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let state = ctx.state();
+    let plan = state.optimize(&plan)?;
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "    Inner Join: CAST(t1.t1_id AS Int64) + Int64(11) = CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+
+    let expected = vec![
+        "+-------+---------+-------+",
+        "| t1_id | t1_name | t2_id |",
+        "+-------+---------+-------+",
+        "| 11    | a       | 22    |",
+        "| 33    | c       | 44    |",
+        "| 44    | d       | 55    |",
+        "+-------+---------+-------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_only_with_filter() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t2.t2_id from t1 inner join t2 on t1.t1_id * 4 < t2.t2_id";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let state = ctx.state();
+    let plan = state.optimize(&plan)?;
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "    Inner Join:  Filter: CAST(t1.t1_id AS Int64) * Int64(4) < CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+
+    let expected = vec![
+        "+-------+---------+-------+",
+        "| t1_id | t1_name | t2_id |",
+        "+-------+---------+-------+",
+        "| 11    | a       | 55    |",
+        "+-------+---------+-------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn type_coercion_join_with_filter_and_equi_expr() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t2.t2_id \
+                     from t1 \
+                     inner join t2 \
+                     on t1.t1_id * 5 = t2.t2_id and t1.t1_id * 4 < t2.t2_id";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{}'", sql);
+    let plan = ctx
+        .create_logical_plan(&("explain ".to_owned() + sql))
+        .expect(&msg);
+    let state = ctx.state();
+    let plan = state.optimize(&plan)?;
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "    Inner Join: CAST(t1.t1_id AS Int64) * Int64(5) = CAST(t2.t2_id AS Int64) Filter: CAST(t1.t1_id AS Int64) * Int64(4) < CAST(t2.t2_id AS Int64) [t1_id:UInt32;N, t1_name:Utf8;N, t2_id:UInt32;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "      TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+        expected, actual
+    );
+
+    let expected = vec![
+        "+-------+---------+-------+",
+        "| t1_id | t1_name | t2_id |",
+        "+-------+---------+-------+",
+        "| 11    | a       | 55    |",
+        "+-------+---------+-------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
 }
