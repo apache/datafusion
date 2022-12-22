@@ -325,11 +325,8 @@ async fn window_expr_eliminate() -> Result<()> {
             ORDER BY d.b;";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Sort: d.b ASC NULLS LAST [b:Utf8, max_a:Int64;N]",
@@ -391,10 +388,8 @@ async fn window_expr_eliminate() -> Result<()> {
             GROUP BY d.b
             ORDER BY d.b;";
 
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Sort: d.b ASC NULLS LAST [b:Utf8, max_a:Int64;N, MAX(d.seq):UInt64;N]",
@@ -889,6 +884,32 @@ async fn window_frame_ranges_preceding_following() -> Result<()> {
         "| 260620                     | 781                        | 63              |",
         "| 260620                     | 781                        | 63              |",
         "+----------------------------+----------------------------+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_frame_ranges_ntile() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT \
+               NTILE(8) OVER (ORDER BY C4) as ntile1,\
+               NTILE(12) OVER (ORDER BY C12 DESC) as ntile2 \
+               FROM aggregate_test_100 \
+               ORDER BY c7 \
+               LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------+--------+",
+        "| ntile1 | ntile2 |",
+        "+--------+--------+",
+        "| 8      | 12     |",
+        "| 5      | 11     |",
+        "| 3      | 11     |",
+        "| 2      | 7      |",
+        "| 7      | 12     |",
+        "+--------+--------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -1621,10 +1642,8 @@ async fn test_window_agg_sort() -> Result<()> {
       FROM aggregate_test_100";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     // Only 1 SortExec was added
     let expected = {
@@ -1655,10 +1674,8 @@ async fn over_order_by_sort_keys_sorting_prefix_compacting() -> Result<()> {
     let sql = "SELECT c2, MAX(c9) OVER (ORDER BY c2), SUM(c9) OVER (), MIN(c9) OVER (ORDER BY c2, c9) from aggregate_test_100";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     // Only 1 SortExec was added
     let expected = {
@@ -1690,10 +1707,8 @@ async fn over_order_by_sort_keys_sorting_global_order_compacting() -> Result<()>
 
     let sql = "SELECT c2, MAX(c9) OVER (ORDER BY c9, c2), SUM(c9) OVER (), MIN(c9) OVER (ORDER BY c2, c9) from aggregate_test_100 ORDER BY c2";
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     // 3 SortExec are added
     let expected = {
@@ -1732,10 +1747,8 @@ async fn test_window_partition_by_order_by() -> Result<()> {
                FROM aggregate_test_100";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     let expected = {
         vec![

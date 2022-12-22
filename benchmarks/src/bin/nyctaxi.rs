@@ -28,7 +28,6 @@ use datafusion::arrow::util::pretty;
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionConfig, SessionContext};
 
-use datafusion::physical_plan::collect;
 use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use structopt::StructOpt;
 
@@ -119,14 +118,11 @@ async fn datafusion_sql_benchmarks(
 }
 
 async fn execute_sql(ctx: &SessionContext, sql: &str, debug: bool) -> Result<()> {
-    let plan = ctx.create_logical_plan(sql)?;
-    let plan = ctx.optimize(&plan)?;
+    let dataframe = ctx.sql(sql).await?;
     if debug {
-        println!("Optimized logical plan:\n{:?}", plan);
+        println!("Optimized logical plan:\n{:?}", dataframe.logical_plan());
     }
-    let physical_plan = ctx.create_physical_plan(&plan).await?;
-    let task_ctx = ctx.task_ctx();
-    let result = collect(physical_plan, task_ctx).await?;
+    let result = dataframe.collect().await?;
     if debug {
         pretty::print_batches(&result)?;
     }

@@ -21,6 +21,7 @@ mod built_in_window_function_expr;
 pub(crate) mod cume_dist;
 pub(crate) mod lead_lag;
 pub(crate) mod nth_value;
+pub(crate) mod ntile;
 pub(crate) mod partition_evaluator;
 pub(crate) mod rank;
 pub(crate) mod row_number;

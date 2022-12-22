@@ -187,7 +187,7 @@ impl ContextWithParquet {
             .sql(sql)
             .await
             .expect("planning")
-            .to_unoptimized_plan();
+            .into_unoptimized_plan();
         self.run_test(logical_plan, sql).await
     }
 

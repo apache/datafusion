@@ -502,7 +502,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 };
 
                 let file_type = create_extern_table.file_type.as_str();
-                let env = &ctx.state.as_ref().read().runtime_env;
+                let env = ctx.runtime_env();
                 if !env.table_factories.contains_key(file_type) {
                     Err(DataFusionError::Internal(format!(
                         "No TableProvider for file type: {}",
@@ -1387,7 +1387,7 @@ mod roundtrip_tests {
     use datafusion::test_util::{TestTableFactory, TestTableProvider};
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
     use datafusion_expr::expr::{
-        Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort,
+        self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort,
     };
     use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNode};
     use datafusion_expr::{
@@ -1443,7 +1443,7 @@ mod roundtrip_tests {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
-        let scan = ctx.table("t1")?.to_logical_plan()?;
+        let scan = ctx.table("t1")?.into_optimized_plan()?;
         let topk_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(TopKPlanNode::new(3, scan, col("revenue"))),
         });
@@ -1540,7 +1540,7 @@ mod roundtrip_tests {
         ctx.sql(sql).await.unwrap();
 
         let codec = TestTableProviderCodec {};
-        let scan = ctx.table("t")?.to_logical_plan()?;
+        let scan = ctx.table("t")?.into_optimized_plan()?;
         let bytes = logical_plan_to_bytes_with_extension_codec(&scan, &codec)?;
         let logical_round_trip =
             logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
@@ -1566,7 +1566,7 @@ mod roundtrip_tests {
 
         let query =
             "SELECT a, SUM(b + 1) as b_sum FROM t1 GROUP BY a ORDER BY b_sum DESC";
-        let plan = ctx.sql(query).await?.to_logical_plan()?;
+        let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
@@ -1592,7 +1592,7 @@ mod roundtrip_tests {
         .await?;
 
         let query = "SELECT a, COUNT(DISTINCT b) as b_cd FROM t1 GROUP BY a";
-        let plan = ctx.sql(query).await?.to_logical_plan()?;
+        let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
@@ -1606,7 +1606,7 @@ mod roundtrip_tests {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
-        let plan = ctx.table("t1")?.to_logical_plan()?;
+        let plan = ctx.table("t1")?.into_optimized_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
@@ -1620,7 +1620,10 @@ mod roundtrip_tests {
             .await?;
         ctx.sql("CREATE VIEW view_t1(a, b) AS SELECT a, b FROM t1")
             .await?;
-        let plan = ctx.sql("SELECT * FROM view_t1").await?.to_logical_plan()?;
+        let plan = ctx
+            .sql("SELECT * FROM view_t1")
+            .await?
+            .into_optimized_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
@@ -2484,36 +2487,36 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_count() {
-        let test_expr = Expr::AggregateFunction {
-            fun: AggregateFunction::Count,
-            args: vec![col("bananas")],
-            distinct: false,
-            filter: None,
-        };
+        let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            AggregateFunction::Count,
+            vec![col("bananas")],
+            false,
+            None,
+        ));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_count_distinct() {
-        let test_expr = Expr::AggregateFunction {
-            fun: AggregateFunction::Count,
-            args: vec![col("bananas")],
-            distinct: true,
-            filter: None,
-        };
+        let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            AggregateFunction::Count,
+            vec![col("bananas")],
+            true,
+            None,
+        ));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_approx_percentile_cont() {
-        let test_expr = Expr::AggregateFunction {
-            fun: AggregateFunction::ApproxPercentileCont,
-            args: vec![col("bananas"), lit(0.42_f32)],
-            distinct: false,
-            filter: None,
-        };
+        let test_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+            AggregateFunction::ApproxPercentileCont,
+            vec![col("bananas"), lit(0.42_f32)],
+            false,
+            None,
+        ));
 
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
@@ -2654,26 +2657,26 @@ mod roundtrip_tests {
         let ctx = SessionContext::new();
 
         // 1. without window_frame
-        let test_expr1 = Expr::WindowFunction {
-            fun: WindowFunction::BuiltInWindowFunction(
+        let test_expr1 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::BuiltInWindowFunction(
                 datafusion_expr::window_function::BuiltInWindowFunction::Rank,
             ),
-            args: vec![],
-            partition_by: vec![col("col1")],
-            order_by: vec![col("col2")],
-            window_frame: WindowFrame::new(true),
-        };
+            vec![],
+            vec![col("col1")],
+            vec![col("col2")],
+            WindowFrame::new(true),
+        ));
 
         // 2. with default window_frame
-        let test_expr2 = Expr::WindowFunction {
-            fun: WindowFunction::BuiltInWindowFunction(
+        let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::BuiltInWindowFunction(
                 datafusion_expr::window_function::BuiltInWindowFunction::Rank,
             ),
-            args: vec![],
-            partition_by: vec![col("col1")],
-            order_by: vec![col("col2")],
-            window_frame: WindowFrame::new(true),
-        };
+            vec![],
+            vec![col("col1")],
+            vec![col("col2")],
+            WindowFrame::new(true),
+        ));
 
         // 3. with window_frame with row numbers
         let range_number_frame = WindowFrame {
@@ -2682,15 +2685,15 @@ mod roundtrip_tests {
             end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
         };
 
-        let test_expr3 = Expr::WindowFunction {
-            fun: WindowFunction::BuiltInWindowFunction(
+        let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::BuiltInWindowFunction(
                 datafusion_expr::window_function::BuiltInWindowFunction::Rank,
             ),
-            args: vec![],
-            partition_by: vec![col("col1")],
-            order_by: vec![col("col2")],
-            window_frame: range_number_frame,
-        };
+            vec![],
+            vec![col("col1")],
+            vec![col("col2")],
+            range_number_frame,
+        ));
 
         // 4. test with AggregateFunction
         let row_number_frame = WindowFrame {
@@ -2699,13 +2702,13 @@ mod roundtrip_tests {
             end_bound: WindowFrameBound::Following(ScalarValue::UInt64(Some(2))),
         };
 
-        let test_expr4 = Expr::WindowFunction {
-            fun: WindowFunction::AggregateFunction(AggregateFunction::Max),
-            args: vec![col("col1")],
-            partition_by: vec![col("col1")],
-            order_by: vec![col("col2")],
-            window_frame: row_number_frame,
-        };
+        let test_expr4 = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            vec![col("col1")],
+            vec![col("col1")],
+            vec![col("col2")],
+            row_number_frame,
+        ));
 
         roundtrip_expr_test(test_expr1, ctx.clone());
         roundtrip_expr_test(test_expr2, ctx.clone());

@@ -159,9 +159,9 @@ pub struct SessionContext {
     /// Uuid for the session
     session_id: String,
     /// Session start time
-    pub session_start_time: DateTime<Utc>,
+    session_start_time: DateTime<Utc>,
     /// Shared session state for the session
-    pub state: Arc<RwLock<SessionState>>,
+    state: Arc<RwLock<SessionState>>,
 }
 
 impl Default for SessionContext {
@@ -205,20 +205,21 @@ impl SessionContext {
     /// Creates a new session context using the provided configuration and RuntimeEnv.
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let state = SessionState::with_config_rt(config, runtime);
-        Self {
-            session_id: state.session_id.clone(),
-            session_start_time: chrono::Utc::now(),
-            state: Arc::new(RwLock::new(state)),
-        }
+        Self::with_state(state)
     }
 
     /// Creates a new session context using the provided session state.
     pub fn with_state(state: SessionState) -> Self {
         Self {
             session_id: state.session_id.clone(),
-            session_start_time: chrono::Utc::now(),
+            session_start_time: Utc::now(),
             state: Arc::new(RwLock::new(state)),
         }
+    }
+
+    /// Returns the time this session was created
+    pub fn session_start_time(&self) -> DateTime<Utc> {
+        self.session_start_time
     }
 
     /// Registers the [`RecordBatch`] as the specified table name
@@ -256,7 +257,21 @@ impl SessionContext {
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
     /// might require the schema to be inferred.
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
-        let plan = self.create_logical_plan(sql)?;
+        let mut statements = DFParser::parse_sql(sql)?;
+        if statements.len() != 1 {
+            return Err(DataFusionError::NotImplemented(
+                "The context currently only supports a single SQL statement".to_string(),
+            ));
+        }
+
+        // create a query planner
+        let plan = {
+            // TODO: Move catalog off SessionState onto SessionContext
+            let state = self.state.read();
+            let query_planner = SqlToRel::new(&*state);
+            query_planner.statement_to_plan(statements.pop_front().unwrap())?
+        };
+
         match plan {
             LogicalPlan::CreateExternalTable(cmd) => {
                 self.create_external_table(&cmd).await
@@ -555,6 +570,7 @@ impl SessionContext {
     /// Creates a logical plan.
     ///
     /// This function is intended for internal use and should not be called directly.
+    #[deprecated(note = "Use SessionContext::sql which snapshots the SessionState")]
     pub fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
         let mut statements = DFParser::parse_sql(sql)?;
 
@@ -1802,9 +1818,10 @@ impl SessionState {
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let planner = self.query_planner.clone();
         let logical_plan = self.optimize(logical_plan)?;
-        planner.create_physical_plan(&logical_plan, self).await
+        self.query_planner
+            .create_physical_plan(&logical_plan, self)
+            .await
     }
 
     /// return the configuration options
@@ -2057,8 +2074,7 @@ mod tests {
     use std::fs::File;
     use std::path::PathBuf;
     use std::sync::Weak;
-    use std::thread::{self, JoinHandle};
-    use std::{env, io::prelude::*, sync::Mutex};
+    use std::{env, io::prelude::*};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -2278,23 +2294,21 @@ mod tests {
         // environment. Usecase is for concurrent planing.
         let tmp_dir = TempDir::new()?;
         let partition_count = 4;
-        let ctx = Arc::new(Mutex::new(create_ctx(&tmp_dir, partition_count).await?));
+        let ctx = Arc::new(create_ctx(&tmp_dir, partition_count).await?);
 
-        let threads: Vec<JoinHandle<Result<_>>> = (0..2)
+        let threads: Vec<_> = (0..2)
             .map(|_| ctx.clone())
-            .map(|ctx_clone| {
-                thread::spawn(move || {
-                    let ctx = ctx_clone.lock().expect("Locked context");
+            .map(|ctx| {
+                tokio::spawn(async move {
                     // Ensure we can create logical plan code on a separate thread.
-                    ctx.create_logical_plan(
-                        "SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3",
-                    )
+                    ctx.sql("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")
+                        .await
                 })
             })
             .collect();
 
-        for thread in threads {
-            thread.join().expect("Failed to join thread")?;
+        for handle in threads {
+            handle.await.unwrap().unwrap();
         }
         Ok(())
     }
