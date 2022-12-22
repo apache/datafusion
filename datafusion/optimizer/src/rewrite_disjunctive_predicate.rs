@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{utils, OptimizerConfig, OptimizerRule};
+use crate::optimizer::ApplyOrder;
+use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::logical_plan::Filter;
 use datafusion_expr::{Expr, LogicalPlan, Operator};
-use std::sync::Arc;
 
 /// Optimizer pass that rewrites predicates of the form
 ///
@@ -127,7 +127,7 @@ impl OptimizerRule for RewriteDisjunctivePredicate {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
@@ -136,17 +136,19 @@ impl OptimizerRule for RewriteDisjunctivePredicate {
                 let rewritten_expr = normalize_predicate(rewritten_predicate);
                 Ok(Some(LogicalPlan::Filter(Filter::try_new(
                     rewritten_expr,
-                    self.try_optimize(filter.input(), config)?
-                        .map(Arc::new)
-                        .unwrap_or_else(|| filter.input().clone()),
+                    filter.input.clone(),
                 )?)))
             }
-            _ => Ok(Some(utils::optimize_children(self, plan, config)?)),
+            _ => Ok(None),
         }
     }
 
     fn name(&self) -> &str {
         "rewrite_disjunctive_predicate"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
     }
 }
 

@@ -114,7 +114,7 @@ pub fn assert_optimized_plan_eq(
             plan,
             &OptimizerContext::new(),
         )?
-        .unwrap();
+        .unwrap_or_else(|| plan.clone());
     let formatted_plan = format!("{:?}", optimized_plan);
     assert_eq!(formatted_plan, expected);
 
