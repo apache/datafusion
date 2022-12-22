@@ -317,7 +317,6 @@ impl ListingOptions {
     /// # use std::sync::Arc;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let ctx = SessionContext::new();
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
     ///   ))
@@ -334,7 +333,7 @@ impl ListingOptions {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::prelude::{col, SessionContext};
+    /// # use datafusion::prelude::col;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     ///  // Tell datafusion that the files are sorted by column "a"
@@ -342,9 +341,8 @@ impl ListingOptions {
     ///    col("a").sort(true, true)
     ///  ]);
     ///
-    /// let ctx = SessionContext::new();
     /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::new(ctx.config_options())
+    ///     ParquetFormat::default()
     ///   ))
     ///   .with_file_sort_order(file_sort_order.clone());
     ///
