@@ -1748,7 +1748,7 @@ async fn test_window_partition_by_order_by() -> Result<()> {
 
     let msg = format!("Creating logical plan for '{}'", sql);
     let dataframe = ctx.sql(sql).await.expect(&msg);
-    let physical_plan = dataframe.create_physical_plan().await.unwrap();
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     let expected = {
         vec![
@@ -1788,10 +1788,8 @@ async fn test_window_agg_sort_reversed_plan() -> Result<()> {
     LIMIT 5";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     // Only 1 SortExec was added
     let expected = {
@@ -1846,10 +1844,8 @@ async fn test_window_agg_sort_reversed_plan_builtin() -> Result<()> {
     LIMIT 5";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     // Only 1 SortExec was added
     let expected = {
@@ -1900,10 +1896,8 @@ async fn test_window_agg_sort_non_reversed_plan() -> Result<()> {
     LIMIT 5";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     // We cannot reverse each window function (ROW_NUMBER is not reversible)
     let expected = {
@@ -1956,10 +1950,8 @@ async fn test_window_agg_sort_multi_layer_non_reversed_plan() -> Result<()> {
     LIMIT 5";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     // We cannot reverse each window function (ROW_NUMBER is not reversible)
     let expected = {
@@ -2046,10 +2038,8 @@ async fn test_window_agg_complex_plan() -> Result<()> {
     LIMIT 5";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     // Unnecessary SortExecs are removed
     let expected = {
@@ -2095,10 +2085,8 @@ async fn test_window_agg_sort_orderby_reversed_partitionby_plan() -> Result<()> 
     LIMIT 5";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     // Only 1 SortExec was added
     let expected = {
@@ -2150,10 +2138,8 @@ async fn test_window_agg_sort_partitionby_reversed_plan() -> Result<()> {
     LIMIT 5";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     // Only 1 SortExec was added
     let expected = {
@@ -2204,10 +2190,8 @@ async fn test_window_agg_sort_orderby_reversed_binary_expr() -> Result<()> {
     LIMIT 5";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     // Only 1 SortExec was added
     let expected = {
@@ -2261,10 +2245,8 @@ async fn test_remove_unnecessary_sort_in_sub_query() -> Result<()> {
                   ORDER BY c1 ) AS a ";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     // Unnecessary Sort in the sub query is removed
     let expected = {
@@ -2319,10 +2301,8 @@ async fn test_window_agg_sort_orderby_reversed_partitionby_reversed_plan() -> Re
     LIMIT 5";
 
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
     // Only 1 SortExec was added
     let expected = {
