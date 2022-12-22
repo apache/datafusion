@@ -41,7 +41,7 @@ pub use self::view::ViewTable;
 use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
 pub use crate::logical_expr::TableType;
-use crate::physical_plan::expressions::{MinAccumulator, SlidingMaxAccumulator};
+use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
 use futures::StreamExt;
 
@@ -155,14 +155,11 @@ pub async fn get_statistics_with_limit(
 
 fn create_max_min_accs(
     schema: &Schema,
-) -> (
-    Vec<Option<SlidingMaxAccumulator>>,
-    Vec<Option<MinAccumulator>>,
-) {
-    let max_values: Vec<Option<SlidingMaxAccumulator>> = schema
+) -> (Vec<Option<MaxAccumulator>>, Vec<Option<MinAccumulator>>) {
+    let max_values: Vec<Option<MaxAccumulator>> = schema
         .fields()
         .iter()
-        .map(|field| SlidingMaxAccumulator::try_new(field.data_type()).ok())
+        .map(|field| MaxAccumulator::try_new(field.data_type()).ok())
         .collect::<Vec<_>>();
     let min_values: Vec<Option<MinAccumulator>> = schema
         .fields()
@@ -175,7 +172,7 @@ fn create_max_min_accs(
 fn get_col_stats(
     schema: &Schema,
     null_counts: Vec<usize>,
-    max_values: &mut [Option<SlidingMaxAccumulator>],
+    max_values: &mut [Option<MaxAccumulator>],
     min_values: &mut [Option<MinAccumulator>],
 ) -> Vec<ColumnStatistics> {
     (0..schema.fields().len())

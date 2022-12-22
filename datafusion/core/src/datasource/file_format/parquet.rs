@@ -47,7 +47,7 @@ use crate::config::OPT_PARQUET_SKIP_METADATA;
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::logical_expr::Expr;
-use crate::physical_plan::expressions::{MinAccumulator, SlidingMaxAccumulator};
+use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
 use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 
@@ -220,7 +220,7 @@ impl FileFormat for ParquetFormat {
 }
 
 fn summarize_min_max(
-    max_values: &mut [Option<SlidingMaxAccumulator>],
+    max_values: &mut [Option<MaxAccumulator>],
     min_values: &mut [Option<MinAccumulator>],
     fields: &[Field],
     i: usize,
