@@ -157,7 +157,7 @@ impl PagePruningPredicate {
                             selectors.extend(
                                 prune_pages_in_one_row_group(
                                     &groups[*r],
-                                    &predicate,
+                                    predicate,
                                     rg_offset_indexes.get(col_id),
                                     rg_page_indexes.get(col_id),
                                     groups[*r].column(col_id).column_descr(),
