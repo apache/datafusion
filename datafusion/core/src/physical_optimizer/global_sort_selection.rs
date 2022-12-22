@@ -48,16 +48,14 @@ impl PhysicalOptimizerRule for GlobalSortSelection {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &SessionConfig,
+        _config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         plan.transform_up(&|plan| {
             Ok(plan
                 .as_any()
                 .downcast_ref::<SortExec>()
                 .and_then(|sort_exec| {
-                    // Temporary use the config target partition number to pass through the unit test.
-                    // Later it will be changed to use the input output partition number.
-                    if config.target_partitions() > 1
+                    if sort_exec.input().output_partitioning().partition_count() > 1
                         && sort_exec.fetch().is_some()
                         // It's already preserving the partitioning so that it can be regarded as a local sort
                         && !sort_exec.preserve_partitioning()

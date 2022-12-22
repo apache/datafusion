@@ -143,7 +143,7 @@ impl Repartition {
 /// is an intervening node that does not `maintain_input_order`
 ///
 /// if `can_reorder` is false, means that the output of this node
-/// can not be reordered as as something upstream is relying on that order
+/// can not be reordered as as the final output is relying on that order
 ///
 /// If 'would_benefit` is false, the upstream operator doesn't
 ///  benefit from additional repartition
@@ -161,26 +161,6 @@ fn optimize_partitions(
         // leaf node - don't replace children
         plan
     } else {
-        let can_reorder_children =
-            match (plan.relies_on_input_order(), plan.maintains_input_order()) {
-                (true, _) => {
-                    // `plan` itself relies on the order of its
-                    // children, so don't reorder them!
-                    false
-                }
-                (false, false) => {
-                    // `plan` may reorder the input itself, so no need
-                    // to preserve the order of any children
-                    true
-                }
-                (false, true) => {
-                    // `plan` will maintain the order, so we can only
-                    // repartition children if it is ok to reorder the
-                    // output of this node
-                    can_reorder
-                }
-            };
-
         let children = plan
             .children()
             .iter()
@@ -188,7 +168,7 @@ fn optimize_partitions(
                 optimize_partitions(
                     target_partitions,
                     child.clone(),
-                    can_reorder_children,
+                    can_reorder || child.output_ordering().is_none(),
                     plan.benefits_from_input_partitioning(),
                 )
             })
@@ -197,7 +177,7 @@ fn optimize_partitions(
     };
 
     // decide if we should bother trying to repartition the output of this plan
-    let could_repartition = match new_plan.output_partitioning() {
+    let mut could_repartition = match new_plan.output_partitioning() {
         // Apply when underlying node has less than `self.target_partitions` amount of concurrency
         RoundRobinBatch(x) => x < target_partitions,
         UnknownPartitioning(x) => x < target_partitions,
@@ -205,6 +185,13 @@ fn optimize_partitions(
         // as the plan will likely depend on this
         Hash(_, _) => false,
     };
+
+    // Don't need to apply when the returned row count is not greater than 1
+    let stats = new_plan.statistics();
+    if stats.is_exact {
+        could_repartition = could_repartition
+            && stats.num_rows.map(|num_rows| num_rows > 1).unwrap_or(true);
+    }
 
     if would_benefit && could_repartition && can_reorder {
         Ok(Arc::new(RepartitionExec::try_new(
@@ -226,7 +213,12 @@ impl PhysicalOptimizerRule for Repartition {
         if config.target_partitions() == 1 {
             Ok(plan)
         } else {
-            optimize_partitions(config.target_partitions(), plan, false, false)
+            optimize_partitions(
+                config.target_partitions(),
+                plan.clone(),
+                plan.output_ordering().is_none(),
+                false,
+            )
         }
     }
 
@@ -546,12 +538,12 @@ mod tests {
     }
 
     #[test]
-    fn repartition_ignores_sort_preserving_merge() -> Result<()> {
+    fn repartition_with_preserving_merge() -> Result<()> {
         let plan = sort_preserving_merge_exec(parquet_exec());
 
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
-            // Expect no repartition of SortPreservingMergeExec
+            "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 
@@ -560,14 +552,13 @@ mod tests {
     }
 
     #[test]
-    fn repartition_does_not_repartition_transitively() -> Result<()> {
+    fn repartition_transitively() -> Result<()> {
         let plan = sort_preserving_merge_exec(projection_exec(parquet_exec()));
 
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
-            // Expect no repartition of SortPreservingMergeExec
-            // even though there is a projection exec between it
             "ProjectionExec: expr=[c1@0 as c1]",
+            "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
 

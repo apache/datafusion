@@ -1579,12 +1579,43 @@ impl SessionState {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
-        let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
-            Arc::new(AggregateStatistics::new()),
-            Arc::new(GlobalSortSelection::new()),
-            Arc::new(JoinSelection::new()),
-        ];
+        // We need to take care of the rule ordering. They may influence each other.
+        let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> =
+            vec![Arc::new(AggregateStatistics::new())];
+        // - In order to increase the parallelism, it will change the output partitioning
+        // of some operators in the plan tree, which will influence other rules.
+        // Therefore, it should be run as soon as possible.
+        // - The reason to make it optional is
+        //      - it's not used for the distributed engine, Ballista.
+        //      - it's conflicted with some parts of the BasicEnforcement, since it will
+        //      introduce additional repartitioning while the BasicEnforcement aims at
+        //      reducing unnecessary repartitioning.
+        if config
+            .config_options
+            .read()
+            .get_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION)
+            .unwrap_or_default()
+        {
+            physical_optimizers.push(Arc::new(Repartition::new()));
+        }
+        //- Currently it will depend on the partition number to decide whether to change the
+        // single node sort to parallel local sort and merge. Therefore, it should be run
+        // after the Repartition.
+        // - Since it will change the output ordering of some operators, it should be run
+        // before JoinSelection and BasicEnforcement, which may depend on that.
+        physical_optimizers.push(Arc::new(GlobalSortSelection::new()));
+        // Statistics-base join selection will change the Auto mode to real join implementation,
+        // like collect left, or hash join, or future sort merge join, which will
+        // influence the BasicEnforcement to decide whether to add additional repartition
+        // and local sort to meet the distribution and ordering requirements.
+        // Therefore, it should be run before BasicEnforcement
+        physical_optimizers.push(Arc::new(JoinSelection::new()));
+        // It's for adding essential repartition and local sorting operator to satisfy the
+        // required distribution and local sort.
+        // Please make sure that the whole plan tree is determined.
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
+        // It will not influence the distribution and ordering of the whole plan tree.
+        // Therefore, to avoid influencing other rules, it should be run at last.
         if config
             .config_options
             .read()
@@ -1601,18 +1632,6 @@ impl SessionState {
                     .unwrap(),
             )));
         }
-        // It's for increasing the parallelism by introducing round robin repartition
-        if config
-            .config_options
-            .read()
-            .get_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION)
-            .unwrap_or_default()
-        {
-            physical_optimizers.push(Arc::new(Repartition::new()));
-        }
-        // Repartition rule could introduce additional RepartitionExec with RoundRobin partitioning.
-        // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
-        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
 
         SessionState {
             session_id,
