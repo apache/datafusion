@@ -495,10 +495,10 @@ impl<'a> TestCase<'a> {
     ) -> RecordBatch {
         println!("  scan options: {scan_options:?}");
         println!("  reading with filter {:?}", filter);
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::with_config(scan_options.config());
         let exec = self
             .test_parquet_file
-            .create_scan(filter.clone(), scan_options)
+            .create_scan(filter.clone())
             .await
             .unwrap();
         let result = collect(exec.clone(), ctx.task_ctx()).await.unwrap();
