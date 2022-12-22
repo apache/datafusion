@@ -157,9 +157,9 @@ pub struct SessionContext {
     /// Uuid for the session
     session_id: String,
     /// Session start time
-    pub session_start_time: DateTime<Utc>,
+    session_start_time: DateTime<Utc>,
     /// Shared session state for the session
-    pub state: Arc<RwLock<SessionState>>,
+    state: Arc<RwLock<SessionState>>,
 }
 
 impl Default for SessionContext {
@@ -203,20 +203,21 @@ impl SessionContext {
     /// Creates a new session context using the provided configuration and RuntimeEnv.
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let state = SessionState::with_config_rt(config, runtime);
-        Self {
-            session_id: state.session_id.clone(),
-            session_start_time: chrono::Utc::now(),
-            state: Arc::new(RwLock::new(state)),
-        }
+        Self::with_state(state)
     }
 
     /// Creates a new session context using the provided session state.
     pub fn with_state(state: SessionState) -> Self {
         Self {
             session_id: state.session_id.clone(),
-            session_start_time: chrono::Utc::now(),
+            session_start_time: Utc::now(),
             state: Arc::new(RwLock::new(state)),
         }
+    }
+
+    /// Returns the time this session was created
+    pub fn session_start_time(&self) -> DateTime<Utc> {
+        self.session_start_time
     }
 
     /// Registers the [`RecordBatch`] as the specified table name
