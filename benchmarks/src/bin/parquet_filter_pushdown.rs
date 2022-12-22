@@ -20,7 +20,7 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{lit, or, Expr};
 use datafusion::optimizer::utils::disjunction;
 use datafusion::physical_plan::collect;
-use datafusion::prelude::{col, SessionConfig, SessionContext};
+use datafusion::prelude::{col, SessionContext};
 use parquet::file::properties::WriterProperties;
 use parquet_test_utils::{ParquetScanOptions, TestParquetFile};
 use std::path::PathBuf;
