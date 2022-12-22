@@ -34,7 +34,7 @@
 //! - amortized O(1) for pop
 
 /// ```
-///
+/// # use datafusion_physical_expr::aggregate::moving_min_max::MovingMin;
 /// let mut moving_min = MovingMin::<i32>::new();
 /// moving_min.push(2);
 /// moving_min.push(1);
@@ -149,7 +149,7 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
     }
 }
 /// ```
-///
+/// # use datafusion_physical_expr::aggregate::moving_min_max::MovingMax;
 /// let mut moving_max = MovingMax::<i32>::new();
 /// moving_max.push(2);
 /// moving_max.push(3);
