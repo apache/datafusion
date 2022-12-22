@@ -55,46 +55,51 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 let left_schema = left.schema();
                 let right_schema = right.schema();
 
-                let new_expr = if let Some(filter) = filter {
-                    let mut accum = vec![];
-                    let mut accum_filter = vec![];
+                let new_on_and_accumu_filter = if let Some(expr) = filter {
+                    let mut accum: Vec<(Expr, Expr)> = vec![];
+                    let mut accum_filter: Vec<Expr> = vec![];
                     // TODO: avoding clone with split_conjunction
                     extract_join_keys(
-                        filter.clone(),
+                        expr.clone(),
                         &mut accum,
                         &mut accum_filter,
                         left_schema,
                         right_schema,
                     )?;
 
-                    let new_filter = accum_filter.into_iter().reduce(Expr::and);
-                    if !accum.is_empty() {
+                    (!accum.is_empty()).then(|| {
                         let mut new_on = on.clone();
                         new_on.extend(accum);
-                        Some((new_on, new_filter))
-                    } else {
-                        None
-                    }
+                        (new_on, accum_filter)
+                    })
                 } else {
                     None
                 };
 
                 let optimized_left = self.try_optimize(left.as_ref(), config)?;
                 let optimized_right = self.try_optimize(right.as_ref(), config)?;
-                let plan_changed = new_expr.is_some()
+                let plan_changed = new_on_and_accumu_filter.is_some()
                     || optimized_left.is_some()
                     || optimized_right.is_some();
 
                 let plan = plan_changed.then(|| {
-                    let left = optimized_left.map(Arc::new).unwrap_or(left.clone());
-                    let right = optimized_right.map(Arc::new).unwrap_or(left.clone());
-                    let (on, filter) =
-                        new_expr.unwrap_or_else(|| (on.clone(), filter.clone()));
+                    let left =
+                        optimized_left.map(Arc::new).unwrap_or_else(|| left.clone());
+                    let right = optimized_right
+                        .map(Arc::new)
+                        .unwrap_or_else(|| right.clone());
+                    let (new_on, new_filter) = new_on_and_accumu_filter
+                        .map(|(on, accumu_filter)| {
+                            let filter = accumu_filter.into_iter().reduce(Expr::and);
+                            (on, filter)
+                        })
+                        .unwrap_or_else(|| (on.clone(), filter.clone()));
+
                     LogicalPlan::Join(Join {
                         left,
                         right,
-                        on,
-                        filter,
+                        on: new_on,
+                        filter: new_filter,
                         join_type: *join_type,
                         join_constraint: *join_constraint,
                         schema: schema.clone(),
