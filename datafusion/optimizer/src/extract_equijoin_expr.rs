@@ -26,16 +26,16 @@ use std::sync::Arc;
 
 /// Optimization rule that extract equijoin expr from the filter
 #[derive(Default)]
-pub struct ExtractEquijoinExpr;
+pub struct ExtractEquijoinPredicate;
 
-impl ExtractEquijoinExpr {
+impl ExtractEquijoinPredicate {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl OptimizerRule for ExtractEquijoinExpr {
+impl OptimizerRule for ExtractEquijoinPredicate {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
@@ -109,7 +109,7 @@ impl OptimizerRule for ExtractEquijoinExpr {
     }
 
     fn name(&self) -> &str {
-        "extract_equijoin_exprs"
+        "extract_equijoin_predicate"
     }
 }
 
@@ -233,7 +233,7 @@ mod tests {
     use super::*;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: Vec<&str>) {
-        let rule = ExtractEquijoinExpr::new();
+        let rule = ExtractEquijoinPredicate::new();
         let optimized_plan = rule
             .try_optimize(plan, &OptimizerContext::new())
             .unwrap()
