@@ -180,11 +180,11 @@ impl ListingTableConfig {
     }
 
     /// Infer `SchemaRef` based on `table_path` suffix.  Requires `self.options` to be set prior to using.
-    pub async fn infer_schema(self, ctx: &SessionState) -> Result<Self> {
+    pub async fn infer_schema(self, state: &SessionState) -> Result<Self> {
         match self.options {
             Some(options) => {
                 let schema = options
-                    .infer_schema(ctx, self.table_paths.get(0).unwrap())
+                    .infer_schema(state, self.table_paths.get(0).unwrap())
                     .await?;
 
                 Ok(Self {
@@ -200,8 +200,8 @@ impl ListingTableConfig {
     }
 
     /// Convenience wrapper for calling `infer_options` and `infer_schema`
-    pub async fn infer(self, ctx: &SessionState) -> Result<Self> {
-        self.infer_options(ctx).await?.infer_schema(ctx).await
+    pub async fn infer(self, state: &SessionState) -> Result<Self> {
+        self.infer_options(state).await?.infer_schema(state).await
     }
 }
 
@@ -375,17 +375,17 @@ impl ListingOptions {
     /// locally or ask a remote service to do it (e.g a scheduler).
     pub async fn infer_schema<'a>(
         &'a self,
-        ctx: &SessionState,
+        state: &SessionState,
         table_path: &'a ListingTableUrl,
     ) -> Result<SchemaRef> {
-        let store = ctx.runtime_env.object_store(table_path)?;
+        let store = state.runtime_env.object_store(table_path)?;
 
         let files: Vec<_> = table_path
             .list_all_files(store.as_ref(), &self.file_extension)
             .try_collect()
             .await?;
 
-        self.format.infer_schema(ctx, &store, &files).await
+        self.format.infer_schema(state, &store, &files).await
     }
 }
 
@@ -547,13 +547,13 @@ impl TableProvider for ListingTable {
 
     async fn scan(
         &self,
-        ctx: &SessionState,
+        state: &SessionState,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let (partitioned_file_lists, statistics) =
-            self.list_files_for_scan(ctx, filters, limit).await?;
+            self.list_files_for_scan(state, filters, limit).await?;
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
@@ -582,7 +582,7 @@ impl TableProvider for ListingTable {
         self.options
             .format
             .create_physical_plan(
-                ctx,
+                state,
                 FileScanConfig {
                     object_store_url: self.table_paths.get(0).unwrap().object_store(),
                     file_schema: Arc::clone(&self.file_schema),
@@ -592,7 +592,7 @@ impl TableProvider for ListingTable {
                     limit,
                     output_ordering: self.try_create_output_ordering()?,
                     table_partition_cols,
-                    config_options: ctx.config_options(),
+                    config_options: state.config_options(),
                 },
                 filters,
             )

@@ -875,10 +875,10 @@ mod tests {
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
         let session_ctx = SessionContext::with_config(config);
-        let ctx = session_ctx.state();
-        let task_ctx = ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = None;
-        let exec = get_exec(&ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
         let stream = exec.execute(0, task_ctx)?;
 
         let tt_batches = stream
@@ -928,10 +928,11 @@ mod tests {
     #[tokio::test]
     async fn read_limit() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let ctx = session_ctx.state();
-        let task_ctx = ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = None;
-        let exec = get_exec(&ctx, "alltypes_plain.parquet", projection, Some(1)).await?;
+        let exec =
+            get_exec(&state, "alltypes_plain.parquet", projection, Some(1)).await?;
 
         // note: even if the limit is set, the executor rounds up to the batch size
         assert_eq!(exec.statistics().num_rows, Some(8));
@@ -948,10 +949,10 @@ mod tests {
     #[tokio::test]
     async fn read_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let ctx = session_ctx.state();
-        let task_ctx = ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = None;
-        let exec = get_exec(&ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -987,10 +988,10 @@ mod tests {
     #[tokio::test]
     async fn read_bool_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let ctx = session_ctx.state();
-        let task_ctx = ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![1]);
-        let exec = get_exec(&ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -1014,10 +1015,10 @@ mod tests {
     #[tokio::test]
     async fn read_i32_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let ctx = session_ctx.state();
-        let task_ctx = ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![0]);
-        let exec = get_exec(&ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -1038,10 +1039,10 @@ mod tests {
     #[tokio::test]
     async fn read_i96_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let ctx = session_ctx.state();
-        let task_ctx = ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![10]);
-        let exec = get_exec(&ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -1062,10 +1063,10 @@ mod tests {
     #[tokio::test]
     async fn read_f32_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let ctx = session_ctx.state();
-        let task_ctx = ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![6]);
-        let exec = get_exec(&ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -1089,10 +1090,10 @@ mod tests {
     #[tokio::test]
     async fn read_f64_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let ctx = session_ctx.state();
-        let task_ctx = ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![7]);
-        let exec = get_exec(&ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -1116,10 +1117,10 @@ mod tests {
     #[tokio::test]
     async fn read_binary_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let ctx = session_ctx.state();
-        let task_ctx = ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![9]);
-        let exec = get_exec(&ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -1143,11 +1144,11 @@ mod tests {
     #[tokio::test]
     async fn read_decimal_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let ctx = session_ctx.state();
-        let task_ctx = ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
 
         // parquet use the int32 as the physical type to store decimal
-        let exec = get_exec(&ctx, "int32_decimal.parquet", None, None).await?;
+        let exec = get_exec(&state, "int32_decimal.parquet", None, None).await?;
         let batches = collect(exec, task_ctx.clone()).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
@@ -1155,7 +1156,7 @@ mod tests {
         assert_eq!(&DataType::Decimal128(4, 2), column.data_type());
 
         // parquet use the int64 as the physical type to store decimal
-        let exec = get_exec(&ctx, "int64_decimal.parquet", None, None).await?;
+        let exec = get_exec(&state, "int64_decimal.parquet", None, None).await?;
         let batches = collect(exec, task_ctx.clone()).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
@@ -1163,7 +1164,7 @@ mod tests {
         assert_eq!(&DataType::Decimal128(10, 2), column.data_type());
 
         // parquet use the fixed length binary as the physical type to store decimal
-        let exec = get_exec(&ctx, "fixed_length_decimal.parquet", None, None).await?;
+        let exec = get_exec(&state, "fixed_length_decimal.parquet", None, None).await?;
         let batches = collect(exec, task_ctx.clone()).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
@@ -1171,7 +1172,7 @@ mod tests {
         assert_eq!(&DataType::Decimal128(25, 2), column.data_type());
 
         let exec =
-            get_exec(&ctx, "fixed_length_decimal_legacy.parquet", None, None).await?;
+            get_exec(&state, "fixed_length_decimal_legacy.parquet", None, None).await?;
         let batches = collect(exec, task_ctx.clone()).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
@@ -1265,13 +1266,13 @@ mod tests {
     }
 
     async fn get_exec(
-        ctx: &SessionState,
+        state: &SessionState,
         file_name: &str,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::parquet_test_data();
-        let format = ParquetFormat::new(ctx.config_options());
-        scan_format(ctx, &format, &testdata, file_name, projection, limit).await
+        let format = ParquetFormat::new(state.config_options());
+        scan_format(state, &format, &testdata, file_name, projection, limit).await
     }
 }

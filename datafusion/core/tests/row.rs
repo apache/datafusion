@@ -76,7 +76,7 @@ async fn test_with_parquet_word_aligned() -> Result<()> {
 }
 
 async fn get_exec(
-    ctx: &SessionState,
+    state: &SessionState,
     file_name: &str,
     projection: Option<&Vec<usize>>,
     limit: Option<usize>,
@@ -86,24 +86,24 @@ async fn get_exec(
 
     let path = Path::from_filesystem_path(filename).unwrap();
 
-    let format = ParquetFormat::new(ctx.config_options());
+    let format = ParquetFormat::new(state.config_options());
     let object_store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
     let object_store_url = ObjectStoreUrl::local_filesystem();
 
     let meta = object_store.head(&path).await.unwrap();
 
     let file_schema = format
-        .infer_schema(ctx, &object_store, &[meta.clone()])
+        .infer_schema(state, &object_store, &[meta.clone()])
         .await
         .expect("Schema inference");
     let statistics = format
-        .infer_stats(ctx, &object_store, file_schema.clone(), &meta)
+        .infer_stats(state, &object_store, file_schema.clone(), &meta)
         .await
         .expect("Stats inference");
     let file_groups = vec![vec![meta.into()]];
     let exec = format
         .create_physical_plan(
-            ctx,
+            state,
             FileScanConfig {
                 object_store_url,
                 file_schema,
@@ -113,7 +113,7 @@ async fn get_exec(
                 limit,
                 table_partition_cols: vec![],
                 output_ordering: None,
-                config_options: ctx.config_options(),
+                config_options: state.config_options(),
             },
             &[],
         )

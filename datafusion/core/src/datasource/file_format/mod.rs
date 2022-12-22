@@ -55,7 +55,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// the files have schemas that cannot be merged.
     async fn infer_schema(
         &self,
-        ctx: &SessionState,
+        state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef>;
@@ -69,7 +69,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// TODO: should the file source return statistics for only columns referred to in the table schema?
     async fn infer_stats(
         &self,
-        ctx: &SessionState,
+        state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         object: &ObjectMeta,
@@ -79,7 +79,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// according to this file format.
     async fn create_physical_plan(
         &self,
-        ctx: &SessionState,
+        state: &SessionState,
         conf: FileScanConfig,
         filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>>;
@@ -94,7 +94,7 @@ pub(crate) mod test_util {
     use object_store::local::LocalFileSystem;
 
     pub async fn scan_format(
-        ctx: &SessionState,
+        state: &SessionState,
         format: &dyn FileFormat,
         store_root: &str,
         file_name: &str,
@@ -104,10 +104,10 @@ pub(crate) mod test_util {
         let store = Arc::new(LocalFileSystem::new()) as _;
         let meta = local_unpartitioned_file(format!("{}/{}", store_root, file_name));
 
-        let file_schema = format.infer_schema(ctx, &store, &[meta.clone()]).await?;
+        let file_schema = format.infer_schema(state, &store, &[meta.clone()]).await?;
 
         let statistics = format
-            .infer_stats(ctx, &store, file_schema.clone(), &meta)
+            .infer_stats(state, &store, file_schema.clone(), &meta)
             .await?;
 
         let file_groups = vec![vec![PartitionedFile {
@@ -119,7 +119,7 @@ pub(crate) mod test_util {
 
         let exec = format
             .create_physical_plan(
-                ctx,
+                state,
                 FileScanConfig {
                     object_store_url: ObjectStoreUrl::local_filesystem(),
                     file_schema,
@@ -128,7 +128,7 @@ pub(crate) mod test_util {
                     projection,
                     limit,
                     table_partition_cols: vec![],
-                    config_options: ctx.config_options(),
+                    config_options: state.config_options(),
                     output_ordering: None,
                 },
                 &[],
