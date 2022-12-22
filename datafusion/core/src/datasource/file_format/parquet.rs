@@ -163,7 +163,7 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_schema(
         &self,
-        _ctx: &SessionState,
+        _state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -185,7 +185,7 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_stats(
         &self,
-        _ctx: &SessionState,
+        _state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         object: &ObjectMeta,
@@ -202,7 +202,7 @@ impl FileFormat for ParquetFormat {
 
     async fn create_physical_plan(
         &self,
-        _ctx: &SessionState,
+        _state: &SessionState,
         conf: FileScanConfig,
         filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {

@@ -768,7 +768,7 @@ impl TableProvider for DataFrame {
 
     async fn scan(
         &self,
-        _ctx: &SessionState,
+        _state: &SessionState,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,

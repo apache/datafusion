@@ -87,7 +87,7 @@ impl FileFormat for JsonFormat {
 
     async fn infer_schema(
         &self,
-        _ctx: &SessionState,
+        _state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -131,7 +131,7 @@ impl FileFormat for JsonFormat {
 
     async fn infer_stats(
         &self,
-        _ctx: &SessionState,
+        _state: &SessionState,
         _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
         _object: &ObjectMeta,
@@ -141,7 +141,7 @@ impl FileFormat for JsonFormat {
 
     async fn create_physical_plan(
         &self,
-        _ctx: &SessionState,
+        _state: &SessionState,
         conf: FileScanConfig,
         _filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {

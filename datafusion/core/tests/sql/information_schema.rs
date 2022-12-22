@@ -190,7 +190,7 @@ async fn information_schema_tables_table_types() {
 
         async fn scan(
             &self,
-            _ctx: &SessionState,
+            _state: &SessionState,
             _: Option<&Vec<usize>>,
             _: &[Expr],
             _: Option<usize>,
