@@ -38,6 +38,9 @@ pub enum DFSqlLogicTestError {
     /// Error from arrow-rs
     #[error("Arrow error: {0}")]
     Arrow(ArrowError),
+    /// Generic error
+    #[error("Other Error: {0}")]
+    Other(String),
 }
 
 impl From<TestError> for DFSqlLogicTestError {
@@ -61,5 +64,11 @@ impl From<ParserError> for DFSqlLogicTestError {
 impl From<ArrowError> for DFSqlLogicTestError {
     fn from(value: ArrowError) -> Self {
         DFSqlLogicTestError::Arrow(value)
+    }
+}
+
+impl From<String> for DFSqlLogicTestError {
+    fn from(value: String) -> Self {
+        DFSqlLogicTestError::Other(value)
     }
 }

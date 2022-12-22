@@ -21,7 +21,11 @@
 
 This is the Datafusion implementation of [sqllogictest](https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki). We use [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) as a parser/runner of `.slt` files in `test_files`.
 
-#### Running tests
+#### Running tests: Validation Mode
+
+In this model, `sqllogictests` runs the statements and queries in a `.slt` file, comparing the expected output in the file to the output produced by that run.
+
+Run all tests suites in validation mode
 
 ```shell
 cargo test -p datafusion --test sqllogictests
@@ -38,6 +42,17 @@ Run only the tests in `information_schema.slt`:
 ```shell
 # information_schema.slt matches due to substring matching `information`
 cargo test -p datafusion --test sqllogictests -- information
+```
+
+#### Updating tests: Completion Mode
+
+In test script completion mode, `sqllogictests` reads a prototype script and runs the statements and queries against the database engine. The output is is a full script that is a copy of the prototype script with result inserted.
+
+You can update tests by passing the `--complete` argument.
+
+```shell
+# Update ddl.slt with output from running
+cargo test -p datafusion --test sqllogictests -- ddl --complete
 ```
 
 #### sqllogictests
