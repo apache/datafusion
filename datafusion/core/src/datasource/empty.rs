@@ -68,7 +68,7 @@ impl TableProvider for EmptyTable {
 
     async fn scan(
         &self,
-        _ctx: &SessionState,
+        _state: &SessionState,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,

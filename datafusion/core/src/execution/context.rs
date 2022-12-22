@@ -1817,6 +1817,11 @@ impl SessionState {
     pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
         self.config.config_options()
     }
+
+    /// Get a new TaskContext to run in this session
+    pub fn task_ctx(&self) -> Arc<TaskContext> {
+        Arc::new(TaskContext::from(self))
+    }
 }
 
 impl ContextProvider for SessionState {
