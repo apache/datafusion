@@ -64,7 +64,9 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
         None
     }
 
-    fn bounded_exec_supported(&self) -> bool;
+    fn bounded_exec_supported(&self) -> bool {
+        false
+    }
 
     fn uses_window_frame(&self) -> bool {
         false

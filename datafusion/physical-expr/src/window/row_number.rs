@@ -81,16 +81,6 @@ impl PartitionEvaluator for NumRowsEvaluator {
         Ok(BuiltinWindowState::NumRows(self.state.clone()))
     }
 
-    fn set_state(&mut self, state: &BuiltinWindowState) -> Result<()> {
-        match &state {
-            BuiltinWindowState::NumRows(num_rows_state) => {
-                self.state = num_rows_state.clone();
-            }
-            _ => self.state = NumRowsState::default(),
-        }
-        Ok(())
-    }
-
     fn get_range(&self, state: &WindowAggState, _n_rows: usize) -> Result<Range<usize>> {
         Ok(Range {
             start: state.last_calculated_index,

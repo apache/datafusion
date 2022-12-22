@@ -32,20 +32,10 @@ pub trait PartitionEvaluator: Debug + Send + Sync {
         false
     }
 
-    // fn uses_window_frame(&self) -> bool {
-    //     false
-    // }
-
     /// Returns state of the Built-in Window Function
     fn state(&self) -> Result<BuiltinWindowState> {
         // If we do not use state we just return Default
         Ok(BuiltinWindowState::Default)
-    }
-
-    /// Initializes state of the Built-in Window Function (useful for bounded memory implementation)
-    fn set_state(&mut self, _state: &BuiltinWindowState) -> Result<()> {
-        // If we do not use state, set_state does nothing
-        Ok(())
     }
 
     fn update_state(

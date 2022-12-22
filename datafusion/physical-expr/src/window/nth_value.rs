@@ -164,16 +164,6 @@ impl PartitionEvaluator for NthValueEvaluator {
         Ok(BuiltinWindowState::NthValue(self.state.clone()))
     }
 
-    fn set_state(&mut self, state: &BuiltinWindowState) -> Result<()> {
-        match &state {
-            BuiltinWindowState::NthValue(nth_value_state) => {
-                self.state = nth_value_state.clone();
-            }
-            _ => self.state = NthValueState::default(),
-        }
-        Ok(())
-    }
-
     fn update_state(
         &mut self,
         state: &WindowAggState,

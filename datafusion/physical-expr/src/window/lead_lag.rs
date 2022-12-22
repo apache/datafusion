@@ -187,16 +187,6 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         Ok(BuiltinWindowState::LeadLag(self.state.clone()))
     }
 
-    fn set_state(&mut self, state: &BuiltinWindowState) -> Result<()> {
-        match &state {
-            BuiltinWindowState::LeadLag(lead_lag_state) => {
-                self.state = lead_lag_state.clone()
-            }
-            _ => self.state = LeadLagState::default(),
-        }
-        Ok(())
-    }
-
     fn update_state(
         &mut self,
         state: &WindowAggState,
@@ -220,7 +210,6 @@ impl PartitionEvaluator for WindowShiftEvaluator {
             })
         } else {
             let end = state.last_calculated_index + (-self.shift_offset) as usize;
-            // let n_rows = self.values[0].len();
             let end = min(end, n_rows);
             Ok(Range {
                 start: state.last_calculated_index,

@@ -129,16 +129,6 @@ impl PartitionEvaluator for RankEvaluator {
         Ok(BuiltinWindowState::Rank(self.state.clone()))
     }
 
-    fn set_state(&mut self, state: &BuiltinWindowState) -> Result<()> {
-        match &state {
-            BuiltinWindowState::Rank(rank_state) => {
-                self.state = rank_state.clone();
-            }
-            _ => self.state = RankState::default(),
-        }
-        Ok(())
-    }
-
     fn update_state(
         &mut self,
         state: &WindowAggState,
