@@ -100,6 +100,7 @@ use url::Url;
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::memory_pool::MemoryPool;
+use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use uuid::Uuid;
 
 use super::options::{
@@ -1579,6 +1580,7 @@ impl SessionState {
 
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
+            Arc::new(GlobalSortSelection::new()),
             Arc::new(JoinSelection::new()),
         ];
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));

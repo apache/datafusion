@@ -21,6 +21,7 @@
 pub mod aggregate_statistics;
 pub mod coalesce_batches;
 pub mod enforcement;
+pub mod global_sort_selection;
 pub mod join_selection;
 pub mod optimizer;
 pub mod pruning;
