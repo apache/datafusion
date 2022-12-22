@@ -76,7 +76,8 @@ use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
-    OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
+    OPT_ENABLE_ROUND_ROBIN_REPARTITION, OPT_FILTER_NULL_JOIN_KEYS,
+    OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_optimizer::enforcement::BasicEnforcement;
@@ -1600,7 +1601,15 @@ impl SessionState {
                     .unwrap(),
             )));
         }
-        physical_optimizers.push(Arc::new(Repartition::new()));
+        // It's for increasing the parallelism by introducing round robin repartition
+        if config
+            .config_options
+            .read()
+            .get_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION)
+            .unwrap_or_default()
+        {
+            physical_optimizers.push(Arc::new(Repartition::new()));
+        }
         // Repartition rule could introduce additional RepartitionExec with RoundRobin partitioning.
         // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
