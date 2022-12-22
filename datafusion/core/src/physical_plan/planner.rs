@@ -43,9 +43,9 @@ use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGro
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
 use crate::physical_plan::filter::FilterExec;
-use crate::physical_plan::joins::CrossJoinExec;
 use crate::physical_plan::joins::HashJoinExec;
 use crate::physical_plan::joins::SortMergeJoinExec;
+use crate::physical_plan::joins::{CrossJoinExec, NestedLoopJoinExec};
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
@@ -62,7 +62,8 @@ use arrow::datatypes::{Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, TryCast,
+    self, AggregateFunction, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet,
+    Like, TryCast, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan;
@@ -190,15 +191,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::ScalarUDF { fun, args, .. } => {
             create_function_physical_name(&fun.name, false, args)
         }
-        Expr::WindowFunction { fun, args, .. } => {
+        Expr::WindowFunction(WindowFunction { fun, args, .. }) => {
             create_function_physical_name(&fun.to_string(), false, args)
         }
-        Expr::AggregateFunction {
+        Expr::AggregateFunction(AggregateFunction {
             fun,
             distinct,
             args,
             ..
-        } => create_function_physical_name(&fun.to_string(), *distinct, args),
+        }) => create_function_physical_name(&fun.to_string(), *distinct, args),
         Expr::AggregateUDF { fun, args, filter } => {
             if filter.is_some() {
                 return Err(DataFusionError::Execution(
@@ -547,18 +548,18 @@ impl DefaultPhysicalPlanner {
                     };
 
                     let get_sort_keys = |expr: &Expr| match expr {
-                        Expr::WindowFunction {
+                        Expr::WindowFunction(WindowFunction{
                             ref partition_by,
                             ref order_by,
                             ..
-                        } => generate_sort_key(partition_by, order_by),
+                        }) => generate_sort_key(partition_by, order_by),
                         Expr::Alias(expr, _) => {
                             // Convert &Box<T> to &T
                             match &**expr {
-                                Expr::WindowFunction {
+                                Expr::WindowFunction(WindowFunction{
                                     ref partition_by,
                                     ref order_by,
-                                    ..} => generate_sort_key(partition_by, order_by),
+                                    ..}) => generate_sort_key(partition_by, order_by),
                                 _ => unreachable!(),
                             }
                         }
@@ -998,7 +999,16 @@ impl DefaultPhysicalPlanner {
                         .read()
                         .get_bool(OPT_PREFER_HASH_JOIN)
                         .unwrap_or_default();
-                    if session_state.config.target_partitions() > 1
+                    if join_on.is_empty() {
+                        // there is no equal join condition, use the nested loop join
+                        // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
+                        Ok(Arc::new(NestedLoopJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_filter,
+                            join_type,
+                        )?))
+                    } else if session_state.config.target_partitions() > 1
                         && session_state.config.repartition_joins()
                         && !prefer_hash_join
                     {
@@ -1502,13 +1512,13 @@ pub fn create_window_expr_with_name(
 ) -> Result<Arc<dyn WindowExpr>> {
     let name = name.into();
     match e {
-        Expr::WindowFunction {
+        Expr::WindowFunction(WindowFunction {
             fun,
             args,
             partition_by,
             order_by,
             window_frame,
-        } => {
+        }) => {
             let args = args
                 .iter()
                 .map(|e| {
@@ -1608,12 +1618,12 @@ pub fn create_aggregate_expr_with_name(
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn AggregateExpr>> {
     match e {
-        Expr::AggregateFunction {
+        Expr::AggregateFunction(AggregateFunction {
             fun,
             distinct,
             args,
             ..
-        } => {
+        }) => {
             let args = args
                 .iter()
                 .map(|e| {
@@ -2224,10 +2234,11 @@ mod tests {
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
         let ctx = SessionContext::new();
 
-        let logical_plan =
-            LogicalPlanBuilder::from(ctx.read_table(Arc::new(table))?.to_logical_plan()?)
-                .aggregate(vec![col("d1")], vec![sum(col("d2"))])?
-                .build()?;
+        let logical_plan = LogicalPlanBuilder::from(
+            ctx.read_table(Arc::new(table))?.into_optimized_plan()?,
+        )
+        .aggregate(vec![col("d1")], vec![sum(col("d2"))])?
+        .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
         let formatted = format!("{:?}", execution_plan);
@@ -2435,20 +2446,21 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        let logical_plan = match ctx.read_csv(path, options).await?.to_logical_plan()? {
-            LogicalPlan::TableScan(ref scan) => {
-                let mut scan = scan.clone();
-                scan.table_name = name.to_string();
-                let new_schema = scan
-                    .projected_schema
-                    .as_ref()
-                    .clone()
-                    .replace_qualifier(name);
-                scan.projected_schema = Arc::new(new_schema);
-                LogicalPlan::TableScan(scan)
-            }
-            _ => unimplemented!(),
-        };
+        let logical_plan =
+            match ctx.read_csv(path, options).await?.into_optimized_plan()? {
+                LogicalPlan::TableScan(ref scan) => {
+                    let mut scan = scan.clone();
+                    scan.table_name = name.to_string();
+                    let new_schema = scan
+                        .projected_schema
+                        .as_ref()
+                        .clone()
+                        .replace_qualifier(name);
+                    scan.projected_schema = Arc::new(new_schema);
+                    LogicalPlan::TableScan(scan)
+                }
+                _ => unimplemented!(),
+            };
         Ok(LogicalPlanBuilder::from(logical_plan))
     }
 
@@ -2458,7 +2470,7 @@ mod tests {
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
         let options = CsvReadOptions::new().schema_infer_max_records(100);
         Ok(LogicalPlanBuilder::from(
-            ctx.read_csv(path, options).await?.to_logical_plan()?,
+            ctx.read_csv(path, options).await?.into_optimized_plan()?,
         ))
     }
 }

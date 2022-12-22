@@ -42,9 +42,8 @@ async fn explain_analyze_baseline_metrics() {
                SELECT lead(c1, 1) OVER () as cnt FROM (select 1 as c1) AS b \
                LIMIT 3";
     println!("running query: {}", sql);
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-    let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let task_ctx = ctx.task_ctx();
     let results = collect(physical_plan.clone(), task_ctx).await.unwrap();
     let formatted = arrow::util::pretty::pretty_format_batches(&results)
@@ -183,8 +182,10 @@ async fn csv_explain_plans() {
     // Logical plan
     // Create plan
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let logical_schema = plan.schema();
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let logical_schema = dataframe.schema();
+    let plan = dataframe.logical_plan();
+
     //
     println!("SQL: {}", sql);
     //
@@ -258,10 +259,10 @@ async fn csv_explain_plans() {
     // Optimized logical plan
     //
     let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.optimize(&plan).expect(&msg);
+    let plan = ctx.optimize(plan).expect(&msg);
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
-    assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
+    assert_eq!(logical_schema, optimized_logical_schema.as_ref());
     //
     // Verify schema
     let expected = vec![
@@ -406,8 +407,8 @@ async fn csv_explain_verbose_plans() {
     // Logical plan
     // Create plan
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let logical_schema = plan.schema();
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let logical_schema = dataframe.schema().clone();
     //
     println!("SQL: {}", sql);
 
@@ -419,7 +420,7 @@ async fn csv_explain_verbose_plans() {
         "    Filter: aggregate_test_100.c2 > Int64(10) [c1:Utf8, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]",
         "      TableScan: aggregate_test_100 [c1:Utf8, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]",
     ];
-    let formatted = plan.display_indent_schema().to_string();
+    let formatted = dataframe.logical_plan().display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
@@ -434,7 +435,7 @@ async fn csv_explain_verbose_plans() {
         "    Filter: aggregate_test_100.c2 > Int64(10)",
         "      TableScan: aggregate_test_100",
     ];
-    let formatted = plan.display_indent().to_string();
+    let formatted = dataframe.logical_plan().display_indent().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
@@ -471,7 +472,7 @@ async fn csv_explain_verbose_plans() {
         "}",
         "// End DataFusion GraphViz Plan",
     ];
-    let formatted = plan.display_graphviz().to_string();
+    let formatted = dataframe.logical_plan().display_graphviz().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
@@ -481,11 +482,11 @@ async fn csv_explain_verbose_plans() {
 
     // Optimized logical plan
     //
-    let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.optimize(&plan).expect(&msg);
+    let msg = format!("Optimizing logical plan for '{}': {:?}", sql, dataframe);
+    let plan = dataframe.into_optimized_plan().expect(&msg);
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
-    assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
+    assert_eq!(&logical_schema, optimized_logical_schema.as_ref());
     //
     // Verify schema
     let expected = vec![
@@ -643,8 +644,8 @@ group by
 order by
     revenue desc;";
 
-    let mut plan = ctx.create_logical_plan(sql);
-    plan = ctx.optimize(&plan.unwrap());
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let plan = dataframe.into_optimized_plan().unwrap();
 
     let expected = "\
     Sort: revenue DESC NULLS FIRST\
@@ -659,7 +660,7 @@ order by
     \n          Filter: lineitem.l_returnflag = Utf8(\"R\")\
     \n            TableScan: lineitem projection=[l_orderkey, l_extendedprice, l_discount, l_returnflag], partial_filters=[lineitem.l_returnflag = Utf8(\"R\")]\
     \n        TableScan: nation projection=[n_nationkey, n_name]";
-    assert_eq!(expected, format!("{:?}", plan.unwrap()));
+    assert_eq!(expected, format!("{:?}", plan));
 
     Ok(())
 }
@@ -676,10 +677,8 @@ async fn test_physical_plan_display_indent() {
                GROUP BY c1 \
                ORDER BY the_min DESC \
                LIMIT 10";
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-
-    let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let expected = vec![
         "GlobalLimitExec: skip=0, fetch=10",
         "  SortPreservingMergeExec: [the_min@2 DESC]",
@@ -723,10 +722,8 @@ async fn test_physical_plan_display_indent_multi_children() {
                ON c1=c2\
                ";
 
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-
-    let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let expected = vec![
         "ProjectionExec: expr=[c1@0 as c1]",
         "  CoalesceBatchesExec: target_batch_size=4096",
@@ -910,15 +907,9 @@ async fn explain_nested() {
             .set_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY, explain_phy_plan_flag);
         let ctx = SessionContext::with_config(config);
         let sql = "EXPLAIN explain select 1";
-        let plan = ctx.create_logical_plan(sql).unwrap();
-
-        let plan = ctx.create_physical_plan(&plan).await;
-
-        assert!(plan
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("Explain must be root of the plan"));
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let err = dataframe.create_physical_plan().await.unwrap_err();
+        assert!(err.to_string().contains("Explain must be root of the plan"));
     }
 
     test_nested_explain(true).await;
