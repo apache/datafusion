@@ -201,7 +201,6 @@ mod private {
 #[cfg(test)]
 #[cfg(feature = "avro")]
 mod tests {
-    use crate::config::ConfigOptions;
     use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
@@ -259,7 +258,6 @@ mod tests {
             projection: Some(vec![0, 1, 2]),
             limit: None,
             table_partition_cols: vec![],
-            config_options: state.config_options(),
             output_ordering: None,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
@@ -331,7 +329,6 @@ mod tests {
             projection,
             limit: None,
             table_partition_cols: vec![],
-            config_options: state.config_options(),
             output_ordering: None,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
@@ -406,7 +403,6 @@ mod tests {
                 "date".to_owned(),
                 partition_type_wrap(DataType::Utf8),
             )],
-            config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);

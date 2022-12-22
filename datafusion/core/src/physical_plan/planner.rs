@@ -996,7 +996,6 @@ impl DefaultPhysicalPlanner {
                     };
 
                     let prefer_hash_join = session_state.config.config_options()
-                        .read()
                         .get_bool(OPT_PREFER_HASH_JOIN)
                         .unwrap_or_default();
                     if join_on.is_empty() {
@@ -1718,8 +1717,7 @@ impl DefaultPhysicalPlanner {
 
             if !session_state
                 .config
-                .config_options
-                .read()
+                .config_options()
                 .get_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY)
                 .unwrap_or_default()
             {
@@ -1730,8 +1728,7 @@ impl DefaultPhysicalPlanner {
 
             if !session_state
                 .config
-                .config_options
-                .read()
+                .config_options()
                 .get_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY)
                 .unwrap_or_default()
             {

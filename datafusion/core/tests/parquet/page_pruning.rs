@@ -59,6 +59,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     };
 
     let parquet_exec = ParquetExec::new(
+        state,
         FileScanConfig {
             object_store_url,
             file_groups: vec![vec![partitioned_file]],
@@ -68,7 +69,6 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            config_options: state.config_options(),
             output_ordering: None,
         },
         Some(filter),

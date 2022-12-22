@@ -235,11 +235,6 @@ impl SessionContext {
         self.state.read().runtime_env.clone()
     }
 
-    /// Return a handle to the shared configuration options
-    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
-        self.state.read().config_options()
-    }
-
     /// Return the session_id of this Session
     pub fn session_id(&self) -> String {
         self.session_id.clone()
@@ -379,16 +374,15 @@ impl SessionContext {
             LogicalPlan::SetVariable(SetVariable {
                 variable, value, ..
             }) => {
-                let state = self.state.write();
-                let config_options = &state.config.config_options;
+                let mut state = self.state.write();
+                let config_options = &mut state.config.config_options;
 
-                let old_value =
-                    config_options.read().get(&variable).ok_or_else(|| {
-                        DataFusionError::Execution(format!(
-                            "Can not SET variable: Unknown Variable {}",
-                            variable
-                        ))
-                    })?;
+                let old_value = config_options.get(&variable).ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Can not SET variable: Unknown Variable {}",
+                        variable
+                    ))
+                })?;
 
                 match old_value {
                     ScalarValue::Boolean(_) => {
@@ -398,7 +392,7 @@ impl SessionContext {
                                 value,
                             ))
                         })?;
-                        config_options.write().set_bool(&variable, new_value);
+                        config_options.set_bool(&variable, new_value);
                     }
 
                     ScalarValue::UInt64(_) => {
@@ -408,7 +402,7 @@ impl SessionContext {
                                 value,
                             ))
                         })?;
-                        config_options.write().set_u64(&variable, new_value);
+                        config_options.set_u64(&variable, new_value);
                     }
 
                     ScalarValue::Utf8(_) => {
@@ -418,7 +412,7 @@ impl SessionContext {
                                 value,
                             ))
                         })?;
-                        config_options.write().set_string(&variable, new_value);
+                        config_options.set_string(&variable, new_value);
                     }
 
                     _ => {
@@ -883,7 +877,6 @@ impl SessionContext {
         let catalog = if information_schema {
             Arc::new(CatalogWithInformationSchema::new(
                 Arc::downgrade(&state.catalog_list),
-                Arc::downgrade(&state.config.config_options),
                 catalog,
             ))
         } else {
@@ -1173,7 +1166,7 @@ pub struct SessionConfig {
     /// due to `resolve_table_ref` which passes back references)
     default_schema: String,
     /// Configuration options
-    pub config_options: Arc<RwLock<ConfigOptions>>,
+    config_options: ConfigOptions,
     /// Opaque extensions.
     extensions: AnyMap,
 }
@@ -1183,7 +1176,7 @@ impl Default for SessionConfig {
         Self {
             default_catalog: DEFAULT_CATALOG.to_owned(),
             default_schema: DEFAULT_SCHEMA.to_owned(),
-            config_options: Arc::new(RwLock::new(ConfigOptions::new())),
+            config_options: ConfigOptions::new(),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
                 0,
@@ -1202,14 +1195,14 @@ impl SessionConfig {
     /// Create an execution config with config options read from the environment
     pub fn from_env() -> Self {
         Self {
-            config_options: ConfigOptions::from_env().into_shareable(),
+            config_options: ConfigOptions::from_env(),
             ..Default::default()
         }
     }
 
     /// Set a configuration option
-    pub fn set(self, key: &str, value: ScalarValue) -> Self {
-        self.config_options.write().set(key, value);
+    pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
+        self.config_options.set(key, value);
         self
     }
 
@@ -1251,7 +1244,6 @@ impl SessionConfig {
     /// get target_partitions
     pub fn target_partitions(&self) -> usize {
         self.config_options
-            .read()
             .get_usize(OPT_TARGET_PARTITIONS)
             .expect("target partitions must be set")
     }
@@ -1259,7 +1251,6 @@ impl SessionConfig {
     /// Is the information schema enabled?
     pub fn information_schema(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_INFORMATION_SCHEMA)
             .unwrap_or_default()
     }
@@ -1267,7 +1258,6 @@ impl SessionConfig {
     /// Should the context create the default catalog and schema?
     pub fn create_default_catalog_and_schema(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA)
             .unwrap_or_default()
     }
@@ -1275,7 +1265,6 @@ impl SessionConfig {
     /// Are joins repartitioned during execution?
     pub fn repartition_joins(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_REPARTITION_JOINS)
             .unwrap_or_default()
     }
@@ -1283,7 +1272,6 @@ impl SessionConfig {
     /// Are aggregates repartitioned during execution?
     pub fn repartition_aggregations(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_REPARTITION_AGGREGATIONS)
             .unwrap_or_default()
     }
@@ -1291,7 +1279,6 @@ impl SessionConfig {
     /// Are window functions repartitioned during execution?
     pub fn repartition_window_functions(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_REPARTITION_WINDOWS)
             .unwrap_or_default()
     }
@@ -1299,7 +1286,6 @@ impl SessionConfig {
     /// Are statistics collected during execution?
     pub fn collect_statistics(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_COLLECT_STATISTICS)
             .unwrap_or_default()
     }
@@ -1316,49 +1302,42 @@ impl SessionConfig {
     }
 
     /// Controls whether the default catalog and schema will be automatically created
-    pub fn with_create_default_catalog_and_schema(self, create: bool) -> Self {
+    pub fn with_create_default_catalog_and_schema(mut self, create: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA, create);
         self
     }
 
     /// Enables or disables the inclusion of `information_schema` virtual tables
-    pub fn with_information_schema(self, enabled: bool) -> Self {
+    pub fn with_information_schema(mut self, enabled: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_INFORMATION_SCHEMA, enabled);
         self
     }
 
     /// Enables or disables the use of repartitioning for joins to improve parallelism
-    pub fn with_repartition_joins(self, enabled: bool) -> Self {
-        self.config_options
-            .write()
-            .set_bool(OPT_REPARTITION_JOINS, enabled);
+    pub fn with_repartition_joins(mut self, enabled: bool) -> Self {
+        self.config_options.set_bool(OPT_REPARTITION_JOINS, enabled);
         self
     }
 
     /// Enables or disables the use of repartitioning for aggregations to improve parallelism
-    pub fn with_repartition_aggregations(self, enabled: bool) -> Self {
+    pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_REPARTITION_AGGREGATIONS, enabled);
         self
     }
 
     /// Enables or disables the use of repartitioning for window functions to improve parallelism
-    pub fn with_repartition_windows(self, enabled: bool) -> Self {
+    pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_REPARTITION_WINDOWS, enabled);
         self
     }
 
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
-    pub fn with_parquet_pruning(self, enabled: bool) -> Self {
+    pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_PARQUET_ENABLE_PRUNING, enabled);
         self
     }
@@ -1366,15 +1345,13 @@ impl SessionConfig {
     /// Returns true if pruning predicate should be used to skip parquet row groups
     pub fn parquet_pruning(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_PARQUET_ENABLE_PRUNING)
             .unwrap_or(false)
     }
 
     /// Enables or disables the collection of statistics after listing files
-    pub fn with_collect_statistics(self, enabled: bool) -> Self {
+    pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_COLLECT_STATISTICS, enabled);
         self
     }
@@ -1382,7 +1359,6 @@ impl SessionConfig {
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
         self.config_options
-            .read()
             .get_u64(OPT_BATCH_SIZE)
             .unwrap_or_default()
             .try_into()
@@ -1399,7 +1375,7 @@ impl SessionConfig {
     pub fn to_props(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         // copy configs from config_options
-        for (k, v) in self.config_options.read().options() {
+        for (k, v) in self.config_options.options() {
             map.insert(k.to_string(), format!("{}", v));
         }
         map.insert(
@@ -1430,11 +1406,11 @@ impl SessionConfig {
         map
     }
 
-    /// Return a handle to the shared configuration options.
+    /// Return a handle to the configuration options.
     ///
     /// [`config_options`]: SessionContext::config_option
-    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
-        self.config_options.clone()
+    pub fn config_options(&self) -> &ConfigOptions {
+        &self.config_options
     }
 
     /// Add extensions.
@@ -1567,7 +1543,6 @@ impl SessionState {
             {
                 Arc::new(CatalogWithInformationSchema::new(
                     Arc::downgrade(&catalog_list),
-                    Arc::downgrade(&config.config_options),
                     Arc::new(default_catalog),
                 ))
             } else {
@@ -1584,14 +1559,12 @@ impl SessionState {
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
         if config
             .config_options
-            .read()
             .get_bool(OPT_COALESCE_BATCHES)
             .unwrap_or_default()
         {
             physical_optimizers.push(Arc::new(CoalesceBatches::new(
                 config
                     .config_options
-                    .read()
                     .get_u64(OPT_COALESCE_TARGET_BATCH_SIZE)
                     .unwrap_or_default()
                     .try_into()
@@ -1622,11 +1595,8 @@ impl SessionState {
         runtime: &Arc<RuntimeEnv>,
         default_catalog: &MemoryCatalogProvider,
     ) {
-        let url = config
-            .config_options
-            .read()
-            .get("datafusion.catalog.location");
-        let format = config.config_options.read().get("datafusion.catalog.type");
+        let url = config.config_options.get("datafusion.catalog.location");
+        let format = config.config_options.get("datafusion.catalog.type");
         let (url, format) = match (url, format) {
             (Some(url), Some(format)) => (url, format),
             _ => return,
@@ -1637,10 +1607,7 @@ impl SessionState {
         let url = url.to_string();
         let format = format.to_string();
 
-        let has_header = config
-            .config_options
-            .read()
-            .get("datafusion.catalog.has_header");
+        let has_header = config.config_options.get("datafusion.catalog.has_header");
         let has_header: bool = has_header
             .map(|x| FromStr::from_str(&x.to_string()).unwrap_or_default())
             .unwrap_or_default();
@@ -1755,7 +1722,7 @@ impl SessionState {
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         // TODO: Implement OptimizerContext directly on DataFrame (#4631) (#4626)
         let config = {
-            let config_options = self.config.config_options.read();
+            let config_options = self.config_options();
             OptimizerContext::new()
                 .with_skip_failing_rules(
                     config_options
@@ -1814,7 +1781,7 @@ impl SessionState {
     }
 
     /// return the configuration options
-    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
+    pub fn config_options(&self) -> &ConfigOptions {
         self.config.config_options()
     }
 
@@ -1867,7 +1834,7 @@ impl ContextProvider for SessionState {
     }
 
     fn get_config_option(&self, variable: &str) -> Option<ScalarValue> {
-        self.config.config_options.read().get(variable)
+        self.config_options().get(variable)
     }
 }
 

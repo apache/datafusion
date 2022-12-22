@@ -24,6 +24,7 @@ use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::file_format::{
     FileMeta, FileScanConfig, ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory,
 };
@@ -83,7 +84,6 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
         },
         None,
@@ -94,7 +94,6 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
     )));
 
     let session_ctx = SessionContext::new();
-
     let task_ctx = session_ctx.task_ctx();
     let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
 

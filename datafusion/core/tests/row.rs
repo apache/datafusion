@@ -113,7 +113,6 @@ async fn get_exec(
                 limit,
                 table_partition_cols: vec![],
                 output_ordering: None,
-                config_options: state.config_options(),
             },
             &[],
         )
