@@ -112,7 +112,10 @@ impl PagePruningPredicate {
             .into_iter()
             .filter_map(|predicate| match predicate.to_columns() {
                 Ok(columns) if columns.len() == 1 => {
-                    Some(PruningPredicate::try_new(predicate.clone(), schema.clone()))
+                    match PruningPredicate::try_new(predicate.clone(), schema.clone()) {
+                        Ok(p) if !p.allways_true() => Some(Ok(p)),
+                        _ => None,
+                    }
                 }
                 _ => None,
             })
@@ -172,8 +175,8 @@ impl PagePruningPredicate {
                             );
                         } else {
                             trace!(
-                        "Did not have enough metadata to prune with page indexes, falling back, falling back to all rows",
-                    );
+                                "Did not have enough metadata to prune with page indexes, falling back, falling back to all rows",
+                            );
                             // fallback select all rows
                             let all_selected =
                                 vec![RowSelector::select(groups[*r].num_rows() as usize)];
@@ -181,10 +184,10 @@ impl PagePruningPredicate {
                         }
                     }
                     debug!(
-                    "Use filter and page index create RowSelection {:?} from predicate: {:?}",
-                    &selectors,
-                    predicate.predicate_expr(),
-                );
+                        "Use filter and page index create RowSelection {:?} from predicate: {:?}",
+                        &selectors,
+                        predicate.predicate_expr(),
+                    );
                     row_selections
                         .push(selectors.into_iter().flatten().collect::<Vec<_>>());
                 }
