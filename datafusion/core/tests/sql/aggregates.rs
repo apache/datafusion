@@ -680,6 +680,60 @@ async fn aggregate_grouped_min() -> Result<()> {
 }
 
 #[tokio::test]
+async fn aggregate_min_max_w_custom_window_frames() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql =
+        "SELECT
+        MIN(c12) OVER (ORDER BY C12 RANGE BETWEEN 0.3 PRECEDING AND 0.2 FOLLOWING) as min1,
+        MAX(c12) OVER (ORDER BY C11 RANGE BETWEEN 0.1 PRECEDING AND 0.2 FOLLOWING) as max1
+        FROM aggregate_test_100
+        ORDER BY C9
+        LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+--------------------+",
+        "| min1                | max1               |",
+        "+---------------------+--------------------+",
+        "| 0.01479305307777301 | 0.9965400387585364 |",
+        "| 0.01479305307777301 | 0.9800193410444061 |",
+        "| 0.01479305307777301 | 0.9706712283358269 |",
+        "| 0.2667177795079635  | 0.9965400387585364 |",
+        "| 0.3600766362333053  | 0.9706712283358269 |",
+        "+---------------------+--------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_min_max_w_custom_window_frames_unbounded_start() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql =
+        "SELECT
+        MIN(c12) OVER (ORDER BY C12 RANGE BETWEEN UNBOUNDED PRECEDING AND 0.2 FOLLOWING) as min1,
+        MAX(c12) OVER (ORDER BY C11 RANGE BETWEEN UNBOUNDED PRECEDING AND 0.2 FOLLOWING) as max1
+        FROM aggregate_test_100
+        ORDER BY C9
+        LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+--------------------+",
+        "| min1                | max1               |",
+        "+---------------------+--------------------+",
+        "| 0.01479305307777301 | 0.9965400387585364 |",
+        "| 0.01479305307777301 | 0.9800193410444061 |",
+        "| 0.01479305307777301 | 0.9800193410444061 |",
+        "| 0.01479305307777301 | 0.9965400387585364 |",
+        "| 0.01479305307777301 | 0.9800193410444061 |",
+        "+---------------------+--------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn aggregate_avg_add() -> Result<()> {
     let results = execute_with_partition(
         "SELECT AVG(c1), AVG(c1) + 1, AVG(c1) + 2, 1 + AVG(c1) FROM test",
