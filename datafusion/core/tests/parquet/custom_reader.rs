@@ -20,11 +20,9 @@ use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use datafusion::assert_batches_sorted_eq;
-use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::file_format::{
     FileMeta, FileScanConfig, ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory,
 };

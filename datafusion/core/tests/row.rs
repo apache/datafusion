@@ -86,7 +86,7 @@ async fn get_exec(
 
     let path = Path::from_filesystem_path(filename).unwrap();
 
-    let format = ParquetFormat::new(state.config_options());
+    let format = ParquetFormat::default();
     let object_store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
     let object_store_url = ObjectStoreUrl::local_filesystem();
 

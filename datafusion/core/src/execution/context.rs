@@ -1413,6 +1413,13 @@ impl SessionConfig {
         &self.config_options
     }
 
+    /// Return a mutable handle to the configuration options.
+    ///
+    /// [`config_options`]: SessionContext::config_option
+    pub fn config_options_mut(&mut self) -> &mut ConfigOptions {
+        &mut self.config_options
+    }
+
     /// Add extensions.
     ///
     /// Extensions can be used to attach extra data to the session config -- e.g. tracing information or caches.

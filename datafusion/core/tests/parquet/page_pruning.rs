@@ -46,7 +46,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
         size: metadata.len() as usize,
     };
 
-    let schema = ParquetFormat::new(state.config_options())
+    let schema = ParquetFormat::default()
         .infer_schema(state, &store, &[meta.clone()])
         .await
         .unwrap();
@@ -59,7 +59,6 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     };
 
     let parquet_exec = ParquetExec::new(
-        state,
         FileScanConfig {
             object_store_url,
             file_groups: vec![vec![partitioned_file]],
