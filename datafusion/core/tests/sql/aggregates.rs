@@ -25,11 +25,8 @@ async fn csv_query_avg_multi_batch() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(c12) FROM aggregate_test_100";
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx).await.unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let results = dataframe.collect().await.unwrap();
     let batch = &results[0];
     let column = batch.column(0);
     let array = as_float64_array(column)?;

@@ -99,6 +99,7 @@ use url::Url;
 
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
+use crate::execution::memory_pool::MemoryPool;
 use uuid::Uuid;
 
 use super::options::{
@@ -156,9 +157,9 @@ pub struct SessionContext {
     /// Uuid for the session
     session_id: String,
     /// Session start time
-    pub session_start_time: DateTime<Utc>,
+    session_start_time: DateTime<Utc>,
     /// Shared session state for the session
-    pub state: Arc<RwLock<SessionState>>,
+    state: Arc<RwLock<SessionState>>,
 }
 
 impl Default for SessionContext {
@@ -202,20 +203,21 @@ impl SessionContext {
     /// Creates a new session context using the provided configuration and RuntimeEnv.
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let state = SessionState::with_config_rt(config, runtime);
-        Self {
-            session_id: state.session_id.clone(),
-            session_start_time: chrono::Utc::now(),
-            state: Arc::new(RwLock::new(state)),
-        }
+        Self::with_state(state)
     }
 
     /// Creates a new session context using the provided session state.
     pub fn with_state(state: SessionState) -> Self {
         Self {
             session_id: state.session_id.clone(),
-            session_start_time: chrono::Utc::now(),
+            session_start_time: Utc::now(),
             state: Arc::new(RwLock::new(state)),
         }
+    }
+
+    /// Returns the time this session was created
+    pub fn session_start_time(&self) -> DateTime<Utc> {
+        self.session_start_time
     }
 
     /// Registers the [`RecordBatch`] as the specified table name
@@ -253,7 +255,21 @@ impl SessionContext {
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
     /// might require the schema to be inferred.
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
-        let plan = self.create_logical_plan(sql)?;
+        let mut statements = DFParser::parse_sql(sql)?;
+        if statements.len() != 1 {
+            return Err(DataFusionError::NotImplemented(
+                "The context currently only supports a single SQL statement".to_string(),
+            ));
+        }
+
+        // create a query planner
+        let plan = {
+            // TODO: Move catalog off SessionState onto SessionContext
+            let state = self.state.read();
+            let query_planner = SqlToRel::new(&*state);
+            query_planner.statement_to_plan(statements.pop_front().unwrap())?
+        };
+
         match plan {
             LogicalPlan::CreateExternalTable(cmd) => {
                 self.create_external_table(&cmd).await
@@ -552,6 +568,7 @@ impl SessionContext {
     /// Creates a logical plan.
     ///
     /// This function is intended for internal use and should not be called directly.
+    #[deprecated(note = "Use SessionContext::sql which snapshots the SessionState")]
     pub fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
         let mut statements = DFParser::parse_sql(sql)?;
 
@@ -1790,14 +1807,20 @@ impl SessionState {
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let planner = self.query_planner.clone();
         let logical_plan = self.optimize(logical_plan)?;
-        planner.create_physical_plan(&logical_plan, self).await
+        self.query_planner
+            .create_physical_plan(&logical_plan, self)
+            .await
     }
 
     /// return the configuration options
     pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
         self.config.config_options()
+    }
+
+    /// Get a new TaskContext to run in this session
+    pub fn task_ctx(&self) -> Arc<TaskContext> {
+        Arc::new(TaskContext::from(self))
     }
 }
 
@@ -1960,6 +1983,11 @@ impl TaskContext {
         self.task_id.clone()
     }
 
+    /// Return the [`MemoryPool`] associated with this [TaskContext]
+    pub fn memory_pool(&self) -> &Arc<dyn MemoryPool> {
+        &self.runtime.memory_pool
+    }
+
     /// Return the [RuntimeEnv] associated with this [TaskContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.runtime.clone()
@@ -2025,6 +2053,7 @@ mod tests {
     use super::*;
     use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
+    use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
@@ -2039,31 +2068,33 @@ mod tests {
     use std::fs::File;
     use std::path::PathBuf;
     use std::sync::Weak;
-    use std::thread::{self, JoinHandle};
-    use std::{env, io::prelude::*, sync::Mutex};
+    use std::{env, io::prelude::*};
     use tempfile::TempDir;
 
     #[tokio::test]
     async fn shared_memory_and_disk_manager() {
         // Demonstrate the ability to share DiskManager and
-        // MemoryManager between two different executions.
+        // MemoryPool between two different executions.
         let ctx1 = SessionContext::new();
 
         // configure with same memory / disk manager
-        let memory_manager = ctx1.runtime_env().memory_manager.clone();
+        let memory_pool = ctx1.runtime_env().memory_pool.clone();
+
+        let mut reservation = MemoryConsumer::new("test").register(&memory_pool);
+        reservation.grow(100);
+
         let disk_manager = ctx1.runtime_env().disk_manager.clone();
 
         let ctx2 =
             SessionContext::with_config_rt(SessionConfig::new(), ctx1.runtime_env());
 
-        assert!(std::ptr::eq(
-            Arc::as_ptr(&memory_manager),
-            Arc::as_ptr(&ctx1.runtime_env().memory_manager)
-        ));
-        assert!(std::ptr::eq(
-            Arc::as_ptr(&memory_manager),
-            Arc::as_ptr(&ctx2.runtime_env().memory_manager)
-        ));
+        assert_eq!(ctx1.runtime_env().memory_pool.reserved(), 100);
+        assert_eq!(ctx2.runtime_env().memory_pool.reserved(), 100);
+
+        drop(reservation);
+
+        assert_eq!(ctx1.runtime_env().memory_pool.reserved(), 0);
+        assert_eq!(ctx2.runtime_env().memory_pool.reserved(), 0);
 
         assert!(std::ptr::eq(
             Arc::as_ptr(&disk_manager),
@@ -2257,23 +2288,21 @@ mod tests {
         // environment. Usecase is for concurrent planing.
         let tmp_dir = TempDir::new()?;
         let partition_count = 4;
-        let ctx = Arc::new(Mutex::new(create_ctx(&tmp_dir, partition_count).await?));
+        let ctx = Arc::new(create_ctx(&tmp_dir, partition_count).await?);
 
-        let threads: Vec<JoinHandle<Result<_>>> = (0..2)
+        let threads: Vec<_> = (0..2)
             .map(|_| ctx.clone())
-            .map(|ctx_clone| {
-                thread::spawn(move || {
-                    let ctx = ctx_clone.lock().expect("Locked context");
+            .map(|ctx| {
+                tokio::spawn(async move {
                     // Ensure we can create logical plan code on a separate thread.
-                    ctx.create_logical_plan(
-                        "SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3",
-                    )
+                    ctx.sql("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")
+                        .await
                 })
             })
             .collect();
 
-        for thread in threads {
-            thread.join().expect("Failed to join thread")?;
+        for handle in threads {
+            handle.await.unwrap().unwrap();
         }
         Ok(())
     }

@@ -22,7 +22,7 @@ use crate::expr_rewriter::{
     normalize_cols, rewrite_sort_cols_by_aggs,
 };
 use crate::type_coercion::binary::comparison_coercion;
-use crate::utils::{columnize_expr, exprlist_to_fields, from_plan};
+use crate::utils::{columnize_expr, compare_sort_expr, exprlist_to_fields, from_plan};
 use crate::{and, binary_expr, Operator};
 use crate::{
     logical_plan::{
@@ -43,6 +43,7 @@ use datafusion_common::{
     ToDFSchema,
 };
 use std::any::Any;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::sync::Arc;
@@ -250,16 +251,29 @@ impl LogicalPlanBuilder {
     ) -> Result<LogicalPlan> {
         let mut plan = input;
         let mut groups = group_window_expr_by_sort_keys(&window_exprs)?;
-        // sort by sort_key len descending, so that more deeply sorted plans gets nested further
-        // down as children; to further mimic the behavior of PostgreSQL, we want stable sort
-        // and a reverse so that tieing sort keys are reversed in order; note that by this rule
-        // if there's an empty over, it'll be at the top level
-        groups.sort_by(|(key_a, _), (key_b, _)| key_a.len().cmp(&key_b.len()));
-        groups.reverse();
+        // To align with the behavior of PostgreSQL, we want the sort_keys sorted as same rule as PostgreSQL that first
+        // we compare the sort key themselves and if one window's sort keys are a prefix of another
+        // put the window with more sort keys first. so more deeply sorted plans gets nested further down as children.
+        // The sort_by() implementation here is a stable sort.
+        // Note that by this rule if there's an empty over, it'll be at the top level
+        groups.sort_by(|(key_a, _), (key_b, _)| {
+            for (first, second) in key_a.iter().zip(key_b.iter()) {
+                let key_ordering = compare_sort_expr(first, second, plan.schema());
+                match key_ordering {
+                    Ordering::Less => {
+                        return Ordering::Less;
+                    }
+                    Ordering::Greater => {
+                        return Ordering::Greater;
+                    }
+                    Ordering::Equal => {}
+                }
+            }
+            key_b.len().cmp(&key_a.len())
+        });
         for (_, exprs) in groups {
             let window_exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-            // the partition and sort itself is done at physical level, see physical_planner's
-            // fn create_initial_plan
+            // the partition and sort itself is done at physical level, see the BasicEnforcement rule
             plan = LogicalPlanBuilder::from(plan)
                 .window(window_exprs)?
                 .build()?;
