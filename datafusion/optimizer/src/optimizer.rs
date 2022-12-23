@@ -502,26 +502,27 @@ mod tests {
     }
 
     #[test]
-    fn generate_same_schema_different_metadata() {
+    fn generate_same_schema_different_metadata() -> Result<()> {
         // if the plan creates more metadata than previously (because
         // some wrapping functions are removed, etc) do not error
         let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
         let config = OptimizerContext::new().with_skip_failing_rules(false);
 
-        let input = Arc::new(test_table_scan().unwrap());
+        let input = Arc::new(test_table_scan()?);
         let input_schema = input.schema().clone();
 
-        let plan = LogicalPlan::Projection(Projection {
-            expr: vec![col("a"), col("b"), col("c")],
+        let plan = LogicalPlan::Projection(Projection::try_new_with_schema(
+            vec![col("a"), col("b"), col("c")],
             input,
-            schema: add_metadata_to_fields(input_schema.as_ref()),
-        });
+            add_metadata_to_fields(input_schema.as_ref()),
+        )?);
 
         // optimizing should be ok, but the schema will have changed  (no metadata)
         assert_ne!(plan.schema().as_ref(), input_schema.as_ref());
-        let optimized_plan = opt.optimize(&plan, &config, &observe).unwrap();
+        let optimized_plan = opt.optimize(&plan, &config, &observe)?;
         // metadata was removed
         assert_eq!(optimized_plan.schema().as_ref(), input_schema.as_ref());
+        Ok(())
     }
 
     fn add_metadata_to_fields(schema: &DFSchema) -> DFSchemaRef {
