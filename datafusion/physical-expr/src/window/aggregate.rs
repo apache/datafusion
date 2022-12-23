@@ -164,7 +164,7 @@ impl WindowExpr for AggregateWindowExpr {
     }
 
     fn can_run_bounded(&self) -> bool {
-        self.aggregate.bounded_exec_supported()
+        self.aggregate.supports_bounded_execution()
             && !self.window_frame.start_bound.is_unbounded()
             && !self.window_frame.end_bound.is_unbounded()
     }

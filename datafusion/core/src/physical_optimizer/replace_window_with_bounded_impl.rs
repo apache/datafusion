@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! CoalesceBatches optimizer that groups batches together rows
-//! in bigger batches to avoid overhead with small batches
+//! ReplaceWindowWithBoundedImpl optimizer that replaces `WindowAggExec`
+//! with `BoundedWindowAggExec` if window_expr can run using `BoundedWindowAggExec`
 
 use crate::physical_plan::windows::BoundedWindowAggExec;
 use crate::physical_plan::windows::WindowAggExec;
@@ -25,11 +25,10 @@ use crate::{
     physical_plan::rewrite::TreeNodeRewritable,
 };
 use datafusion_expr::WindowFrameUnits;
-use datafusion_physical_expr::window::WindowExpr;
 use std::sync::Arc;
 
-/// Optimizer rule that introduces CoalesceBatchesExec to avoid overhead with small batches that
-/// are produced by highly selective filters
+/// Optimizer rule that introduces replaces `WindowAggExec` with `BoundedWindowAggExec`
+/// to run executor with bounded memory.
 #[derive(Default)]
 pub struct ReplaceWindowWithBoundedImpl {}
 
@@ -47,10 +46,13 @@ impl PhysicalOptimizerRule for ReplaceWindowWithBoundedImpl {
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
         plan.transform_up(&|plan| {
             if let Some(window_agg_exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
-                let is_contains_groups = window_agg_exec
-                    .window_expr()
-                    .iter()
-                    .any(is_window_frame_groups);
+                let is_contains_groups =
+                    window_agg_exec.window_expr().iter().any(|window_expr| {
+                        matches!(
+                            window_expr.get_window_frame().units,
+                            WindowFrameUnits::Groups
+                        )
+                    });
                 let can_run_bounded = window_agg_exec
                     .window_expr()
                     .iter()
@@ -70,18 +72,10 @@ impl PhysicalOptimizerRule for ReplaceWindowWithBoundedImpl {
     }
 
     fn name(&self) -> &str {
-        "coalesce_batches"
+        "ReplaceWindowWithBoundedImpl"
     }
 
     fn schema_check(&self) -> bool {
         true
     }
-}
-
-/// Checks window expression whether it is GROUPS mode
-fn is_window_frame_groups(window_expr: &Arc<dyn WindowExpr>) -> bool {
-    matches!(
-        window_expr.get_window_frame().units,
-        WindowFrameUnits::Groups
-    )
 }

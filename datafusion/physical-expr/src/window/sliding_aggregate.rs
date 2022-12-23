@@ -151,7 +151,6 @@ impl WindowExpr for SlidingAggregateWindowExpr {
                 let accumulator = self.aggregate.create_accumulator()?;
                 let field = self.aggregate.field()?;
                 let out_type = field.data_type();
-                // let out_type = &accumulator.out_type()?;
                 window_agg_state.insert(
                     partition_row.clone(),
                     WindowState {
@@ -230,7 +229,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     }
 
     fn can_run_bounded(&self) -> bool {
-        self.aggregate.bounded_exec_supported()
+        self.aggregate.supports_bounded_execution()
             && !self.window_frame.start_bound.is_unbounded()
             && !self.window_frame.end_bound.is_unbounded()
     }

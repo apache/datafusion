@@ -90,7 +90,7 @@ pub trait AggregateExpr: Send + Sync + Debug {
 
     /// Specifies whether this aggregate function can run using bounded memory
     /// To be true accumulator should have `retract_batch` implemented
-    fn bounded_exec_supported(&self) -> bool {
+    fn supports_bounded_execution(&self) -> bool {
         false
     }
 

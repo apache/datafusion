@@ -113,7 +113,7 @@ impl AggregateExpr for Sum {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn bounded_exec_supported(&self) -> bool {
+    fn supports_bounded_execution(&self) -> bool {
         true
     }
 

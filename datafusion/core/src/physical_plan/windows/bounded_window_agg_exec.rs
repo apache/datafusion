@@ -388,7 +388,7 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
                         is_end: false,
                     };
                     self.partition_batches
-                        .insert(partition_row.clone(), partition_batch_state);
+                        .insert(partition_row, partition_batch_state);
                 };
             }
         }

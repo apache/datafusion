@@ -65,7 +65,7 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
         None
     }
 
-    fn bounded_exec_supported(&self) -> bool {
+    fn supports_bounded_execution(&self) -> bool {
         false
     }
 

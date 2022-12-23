@@ -239,11 +239,11 @@ impl WindowExpr for BuiltInWindowExpr {
 
     fn can_run_bounded(&self) -> bool {
         if self.expr.uses_window_frame() {
-            self.expr.bounded_exec_supported()
+            self.expr.supports_bounded_execution()
                 && !self.window_frame.start_bound.is_unbounded()
                 && !self.window_frame.end_bound.is_unbounded()
         } else {
-            self.expr.bounded_exec_supported()
+            self.expr.supports_bounded_execution()
         }
     }
 }

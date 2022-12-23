@@ -99,7 +99,7 @@ impl BuiltInWindowFunctionExpr for Rank {
         &self.name
     }
 
-    fn bounded_exec_supported(&self) -> bool {
+    fn supports_bounded_execution(&self) -> bool {
         matches!(self.rank_type, RankType::Basic | RankType::Dense)
     }
 

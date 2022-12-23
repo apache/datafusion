@@ -65,7 +65,7 @@ impl BuiltInWindowFunctionExpr for RowNumber {
         Ok(Box::<NumRowsEvaluator>::default())
     }
 
-    fn bounded_exec_supported(&self) -> bool {
+    fn supports_bounded_execution(&self) -> bool {
         true
     }
 }

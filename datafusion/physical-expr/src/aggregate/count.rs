@@ -98,7 +98,7 @@ impl AggregateExpr for Count {
         true
     }
 
-    fn bounded_exec_supported(&self) -> bool {
+    fn supports_bounded_execution(&self) -> bool {
         true
     }
 

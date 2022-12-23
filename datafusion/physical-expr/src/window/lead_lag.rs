@@ -110,7 +110,7 @@ impl BuiltInWindowFunctionExpr for WindowShift {
         }))
     }
 
-    fn bounded_exec_supported(&self) -> bool {
+    fn supports_bounded_execution(&self) -> bool {
         true
     }
 
