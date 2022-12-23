@@ -263,7 +263,7 @@ fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schem
 mod tests {
     use super::super::test_util::scan_format;
     use super::*;
-    use crate::datasource::file_format::test_util::InfiniteStream;
+    use crate::datasource::file_format::test_util::VariableStream;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
     use bytes::Bytes;
@@ -379,21 +379,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_infer_schema_unbounded_stream() -> Result<()> {
+    async fn test_infer_schema_stream() -> Result<()> {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
-        let infinite_object_store =
-            Arc::new(InfiniteStream::new(Bytes::from("1,2,3,4,5\n")))
-                as Arc<dyn ObjectStore>;
+        let variable_object_store =
+            Arc::new(VariableStream::new(Bytes::from("1,2,3,4,5\n"), 200));
         let object_meta = ObjectMeta {
             location: Path::parse("/")?,
             last_modified: DateTime::default(),
             size: usize::MAX,
         };
 
-        let csv_format = CsvFormat::default();
+        let num_rows_to_read = 100;
+        let csv_format = CsvFormat {
+            has_header: false,
+            schema_infer_max_rec: Some(num_rows_to_read),
+            ..Default::default()
+        };
         let inferred_schema = csv_format
-            .infer_schema(&state, &infinite_object_store, &[object_meta])
+            .infer_schema(
+                &state,
+                &(variable_object_store.clone() as Arc<dyn ObjectStore>),
+                &[object_meta],
+            )
             .await?;
 
         let actual_fields: Vec<_> = inferred_schema
@@ -402,8 +410,20 @@ mod tests {
             .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
             .collect();
         assert_eq!(
-            vec!["1: Int64", "2: Int64", "3: Int64", "4: Int64", "5: Int64"],
+            vec![
+                "column_1: Int64",
+                "column_2: Int64",
+                "column_3: Int64",
+                "column_4: Int64",
+                "column_5: Int64"
+            ],
             actual_fields
+        );
+        // ensuring on csv infer that it won't try to read entire file
+        // should only read as many rows as was configured in the CsvFormat
+        assert_eq!(
+            num_rows_to_read,
+            variable_object_store.get_iterations_detected()
         );
 
         Ok(())

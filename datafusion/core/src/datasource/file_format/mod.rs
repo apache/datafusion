@@ -88,6 +88,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
 #[cfg(test)]
 pub(crate) mod test_util {
     use std::ops::Range;
+    use std::sync::Mutex;
 
     use super::*;
     use crate::datasource::listing::PartitionedFile;
@@ -145,20 +146,23 @@ pub(crate) mod test_util {
         Ok(exec)
     }
 
-    /// Mock ObjectStore to provide an infinite stream of bytes on get
+    /// Mock ObjectStore to provide an variable stream of bytes on get
+    /// Able to keep track of how many iterations of the provided bytes were repeated
     #[derive(Debug)]
-    pub struct InfiniteStream {
+    pub struct VariableStream {
         bytes_to_repeat: Bytes,
+        max_iterations: usize,
+        iterations_detected: Arc<Mutex<usize>>,
     }
 
-    impl std::fmt::Display for InfiniteStream {
+    impl std::fmt::Display for VariableStream {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "InfiniteStream")
+            write!(f, "VariableStream")
         }
     }
 
     #[async_trait]
-    impl ObjectStore for InfiniteStream {
+    impl ObjectStore for VariableStream {
         async fn put(&self, _location: &Path, _bytes: Bytes) -> object_store::Result<()> {
             unimplemented!()
         }
@@ -181,8 +185,15 @@ pub(crate) mod test_util {
 
         async fn get(&self, _location: &Path) -> object_store::Result<GetResult> {
             let bytes = self.bytes_to_repeat.clone();
+            let arc = self.iterations_detected.clone();
             Ok(GetResult::Stream(
-                futures::stream::repeat_with(move || Ok(bytes.clone())).boxed(),
+                futures::stream::repeat_with(move || {
+                    let arc_inner = arc.clone();
+                    *arc_inner.lock().unwrap() += 1;
+                    Ok(bytes.clone())
+                })
+                .take(self.max_iterations)
+                .boxed(),
             ))
         }
 
@@ -238,9 +249,17 @@ pub(crate) mod test_util {
         }
     }
 
-    impl InfiniteStream {
-        pub fn new(bytes_to_repeat: Bytes) -> Self {
-            Self { bytes_to_repeat }
+    impl VariableStream {
+        pub fn new(bytes_to_repeat: Bytes, max_iterations: usize) -> Self {
+            Self {
+                bytes_to_repeat,
+                max_iterations,
+                iterations_detected: Arc::new(Mutex::new(0)),
+            }
+        }
+
+        pub fn get_iterations_detected(&self) -> usize {
+            *self.iterations_detected.lock().unwrap()
         }
     }
 }
