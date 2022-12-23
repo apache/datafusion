@@ -172,7 +172,11 @@ impl OptimizerConfig for OptimizerContext {
     }
 
     fn rule_enabled(&self, name: &str) -> bool {
-        self.filter_null_keys || name != FilterNullJoinKeys::NAME
+        match name {
+            FilterNullJoinKeys::NAME => self.filter_null_keys,
+            JoinReorder::NAME => self.reorder_joins,
+            _ => true,
+        }
     }
 
     fn skip_failing_rules(&self) -> bool {

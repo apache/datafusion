@@ -26,12 +26,17 @@ use std::{
     time::{Instant, SystemTime},
 };
 
+use datafusion::config::OPT_JOIN_REORDER_ENABLED;
+use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
+use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::parquet::basic::Compression;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
+use datafusion::scheduler::Scheduler;
 use datafusion::{
     arrow::record_batch::RecordBatch, datasource::file_format::parquet::ParquetFormat,
 };
@@ -44,11 +49,6 @@ use datafusion::{
     DATAFUSION_VERSION,
 };
 use datafusion_benchmarks::tpch::*;
-
-use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
-use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
-use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::scheduler::Scheduler;
 use futures::TryStreamExt;
 use serde::Serialize;
 use structopt::StructOpt;
@@ -221,7 +221,8 @@ async fn benchmark_query(
     let config = SessionConfig::new()
         .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size)
-        .with_collect_statistics(!opt.disable_statistics);
+        .with_collect_statistics(!opt.disable_statistics)
+        .set_bool(OPT_JOIN_REORDER_ENABLED, false);
     let ctx = SessionContext::with_config(config);
 
     // register tables
@@ -423,7 +424,9 @@ async fn get_table(
 
     // pre-populate stats so that they are available to logical plan optimizer rules
     // TODO should not do this here - we should simplify the code here to just use SessionContext to register tables
-    let (_, stats) = listing_table.list_files_for_scan(ctx, &[], None).await?;
+    let (_, stats) = listing_table
+        .list_files_for_scan(&ctx.state(), &[], None)
+        .await?;
     println!("list_files_for_scan: {:?}", stats);
 
     Ok(Arc::new(listing_table))

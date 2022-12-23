@@ -85,6 +85,7 @@ impl OptimizerRule for JoinReorder {
                 let mut facts = vec![];
                 let mut dims = vec![];
                 for rel in &rels {
+                    println!("rel size = {}", rel.size);
                     if rel.size as f64 / largest_rel > self.fact_dimension_ratio {
                         facts.push(rel.clone());
                     } else {
