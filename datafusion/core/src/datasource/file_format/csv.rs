@@ -263,10 +263,14 @@ fn build_schema_helper(names: Vec<String>, types: &[HashSet<DataType>]) -> Schem
 mod tests {
     use super::super::test_util::scan_format;
     use super::*;
+    use crate::datasource::file_format::test_util::InfiniteStream;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
+    use bytes::Bytes;
+    use chrono::DateTime;
     use datafusion_common::cast::as_string_array;
     use futures::StreamExt;
+    use object_store::path::Path;
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
@@ -370,6 +374,37 @@ mod tests {
         }
 
         assert_eq!(vec!["c", "d", "b", "a", "b"], values);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_infer_schema_unbounded_stream() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let infinite_object_store =
+            Arc::new(InfiniteStream::new(Bytes::from("1,2,3,4,5\n")))
+                as Arc<dyn ObjectStore>;
+        let object_meta = ObjectMeta {
+            location: Path::parse("/")?,
+            last_modified: DateTime::default(),
+            size: usize::MAX,
+        };
+
+        let csv_format = CsvFormat::default();
+        let inferred_schema = csv_format
+            .infer_schema(&state, &infinite_object_store, &[object_meta])
+            .await?;
+
+        let actual_fields: Vec<_> = inferred_schema
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+        assert_eq!(
+            vec!["1: Int64", "2: Int64", "3: Int64", "4: Int64", "5: Int64"],
+            actual_fields
+        );
 
         Ok(())
     }

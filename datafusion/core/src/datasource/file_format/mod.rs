@@ -87,11 +87,19 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
 
 #[cfg(test)]
 pub(crate) mod test_util {
+    use std::ops::Range;
+
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::test::object_store::local_unpartitioned_file;
+    use bytes::Bytes;
+    use futures::stream::BoxStream;
+    use futures::StreamExt;
     use object_store::local::LocalFileSystem;
+    use object_store::path::Path;
+    use object_store::{GetResult, ListResult, MultipartId};
+    use tokio::io::AsyncWrite;
 
     pub async fn scan_format(
         state: &SessionState,
@@ -135,5 +143,104 @@ pub(crate) mod test_util {
             )
             .await?;
         Ok(exec)
+    }
+
+    /// Mock ObjectStore to provide an infinite stream of bytes on get
+    #[derive(Debug)]
+    pub struct InfiniteStream {
+        bytes_to_repeat: Bytes,
+    }
+
+    impl std::fmt::Display for InfiniteStream {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "InfiniteStream")
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for InfiniteStream {
+        async fn put(&self, _location: &Path, _bytes: Bytes) -> object_store::Result<()> {
+            unimplemented!()
+        }
+
+        async fn put_multipart(
+            &self,
+            _location: &Path,
+        ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)>
+        {
+            unimplemented!()
+        }
+
+        async fn abort_multipart(
+            &self,
+            _location: &Path,
+            _multipart_id: &MultipartId,
+        ) -> object_store::Result<()> {
+            unimplemented!()
+        }
+
+        async fn get(&self, _location: &Path) -> object_store::Result<GetResult> {
+            let bytes = self.bytes_to_repeat.clone();
+            Ok(GetResult::Stream(
+                futures::stream::repeat_with(move || Ok(bytes.clone())).boxed(),
+            ))
+        }
+
+        async fn get_range(
+            &self,
+            _location: &Path,
+            _range: Range<usize>,
+        ) -> object_store::Result<Bytes> {
+            unimplemented!()
+        }
+
+        async fn get_ranges(
+            &self,
+            _location: &Path,
+            _ranges: &[Range<usize>],
+        ) -> object_store::Result<Vec<Bytes>> {
+            unimplemented!()
+        }
+
+        async fn head(&self, _location: &Path) -> object_store::Result<ObjectMeta> {
+            unimplemented!()
+        }
+
+        async fn delete(&self, _location: &Path) -> object_store::Result<()> {
+            unimplemented!()
+        }
+
+        async fn list(
+            &self,
+            _prefix: Option<&Path>,
+        ) -> object_store::Result<BoxStream<'_, object_store::Result<ObjectMeta>>>
+        {
+            unimplemented!()
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            _prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            unimplemented!()
+        }
+
+        async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
+            unimplemented!()
+        }
+
+        async fn copy_if_not_exists(
+            &self,
+            _from: &Path,
+            _to: &Path,
+        ) -> object_store::Result<()> {
+            unimplemented!()
+        }
+    }
+
+    impl InfiniteStream {
+        pub fn new(bytes_to_repeat: Bytes) -> Self {
+            Self { bytes_to_repeat }
+        }
     }
 }
