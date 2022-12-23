@@ -27,7 +27,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{Expr, TableType};
 
 use crate::datasource::TableProvider;
-use crate::execution::context::SessionState;
+use crate::execution::context::{SessionState, TaskContext};
 use crate::physical_plan::streaming::StreamingTableExec;
 use crate::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 
@@ -37,7 +37,7 @@ pub trait PartitionStream: Send + Sync {
     fn schema(&self) -> &SchemaRef;
 
     /// Returns a stream yielding this partitions values
-    fn execute(&self) -> SendableRecordBatchStream;
+    fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream;
 }
 
 /// A [`TableProvider`] that streams a set of [`PartitionStream`]

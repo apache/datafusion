@@ -28,7 +28,6 @@ use datafusion_common::DataFusionError;
 use datafusion_optimizer::utils::conjunction;
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
-use parking_lot::RwLock;
 use parquet::arrow::parquet_to_arrow_schema;
 use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
@@ -56,25 +55,26 @@ use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
 
 /// The Apache Parquet `FileFormat` implementation
-#[derive(Debug)]
+///
+/// Note it is recommended these are instead configured on the [`ConfigOptions`]
+/// associated with the [`SessionState`] instead of overridden on a format-basis
+///
+/// TODO: Deprecate and remove overrides
+/// <https://github.com/apache/arrow-datafusion/issues/4349>
+#[derive(Debug, Default)]
 pub struct ParquetFormat {
-    // Session level configuration
-    config_options: Arc<RwLock<ConfigOptions>>,
-    // local overides
+    /// Override the global setting for enable_pruning
     enable_pruning: Option<bool>,
+    /// Override the global setting for metadata_size_hint
     metadata_size_hint: Option<usize>,
+    /// Override the global setting for skip_metadata
     skip_metadata: Option<bool>,
 }
 
 impl ParquetFormat {
-    /// construct a new Format with the specified `ConfigOptions`
-    pub fn new(config_options: Arc<RwLock<ConfigOptions>>) -> Self {
-        Self {
-            config_options,
-            enable_pruning: None,
-            metadata_size_hint: None,
-            skip_metadata: None,
-        }
+    /// construct a new Format with no local overrides
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Activate statistics based row group level pruning
@@ -85,13 +85,9 @@ impl ParquetFormat {
     }
 
     /// Return true if pruning is enabled
-    pub fn enable_pruning(&self) -> bool {
+    pub fn enable_pruning(&self, config_options: &ConfigOptions) -> bool {
         self.enable_pruning
-            .or_else(|| {
-                self.config_options
-                    .read()
-                    .get_bool(OPT_PARQUET_ENABLE_PRUNING)
-            })
+            .or_else(|| config_options.get_bool(OPT_PARQUET_ENABLE_PRUNING))
             .unwrap_or(true)
     }
 
@@ -107,12 +103,9 @@ impl ParquetFormat {
     }
 
     /// Return the metadata size hint if set
-    pub fn metadata_size_hint(&self) -> Option<usize> {
-        self.metadata_size_hint.or_else(|| {
-            self.config_options
-                .read()
-                .get_usize(OPT_PARQUET_METADATA_SIZE_HINT)
-        })
+    pub fn metadata_size_hint(&self, config_options: &ConfigOptions) -> Option<usize> {
+        self.metadata_size_hint
+            .or_else(|| config_options.get_usize(OPT_PARQUET_METADATA_SIZE_HINT))
     }
 
     /// Tell the parquet reader to skip any metadata that may be in
@@ -127,13 +120,9 @@ impl ParquetFormat {
 
     /// returns true if schema metadata will be cleared prior to
     /// schema merging.
-    pub fn skip_metadata(&self) -> bool {
+    pub fn skip_metadata(&self, config_options: &ConfigOptions) -> bool {
         self.skip_metadata
-            .or_else(|| {
-                self.config_options
-                    .read()
-                    .get_bool(OPT_PARQUET_SKIP_METADATA)
-            })
+            .or_else(|| config_options.get_bool(OPT_PARQUET_SKIP_METADATA))
             .unwrap_or(true)
     }
 }
@@ -163,7 +152,7 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_schema(
         &self,
-        _state: &SessionState,
+        state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -174,7 +163,7 @@ impl FileFormat for ParquetFormat {
             schemas.push(schema)
         }
 
-        let schema = if self.skip_metadata() {
+        let schema = if self.skip_metadata(state.config_options()) {
             Schema::try_merge(clear_metadata(schemas))
         } else {
             Schema::try_merge(schemas)
@@ -202,14 +191,14 @@ impl FileFormat for ParquetFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &SessionState,
+        state: &SessionState,
         conf: FileScanConfig,
         filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
-        let predicate = if self.enable_pruning() {
+        let predicate = if self.enable_pruning(state.config_options()) {
             conjunction(filters.to_vec())
         } else {
             None
@@ -218,7 +207,7 @@ impl FileFormat for ParquetFormat {
         Ok(Arc::new(ParquetExec::new(
             conf,
             predicate,
-            self.metadata_size_hint(),
+            self.metadata_size_hint(state.config_options()),
         )))
     }
 }
@@ -655,7 +644,7 @@ mod tests {
 
         let session = SessionContext::new();
         let ctx = session.state();
-        let format = ParquetFormat::new(ctx.config_options());
+        let format = ParquetFormat::default();
         let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
 
         let stats =
@@ -804,8 +793,7 @@ mod tests {
 
         let session = SessionContext::new();
         let ctx = session.state();
-        let format =
-            ParquetFormat::new(ctx.config_options()).with_metadata_size_hint(Some(9));
+        let format = ParquetFormat::default().with_metadata_size_hint(Some(9));
         let schema = format
             .infer_schema(&ctx, &store.upcast(), &meta)
             .await
@@ -835,8 +823,7 @@ mod tests {
         // ensure the requests were coalesced into a single request
         assert_eq!(store.request_count(), 1);
 
-        let format = ParquetFormat::new(ctx.config_options())
-            .with_metadata_size_hint(Some(size_hint));
+        let format = ParquetFormat::default().with_metadata_size_hint(Some(size_hint));
         let schema = format
             .infer_schema(&ctx, &store.upcast(), &meta)
             .await
@@ -1272,7 +1259,7 @@ mod tests {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::parquet_test_data();
-        let format = ParquetFormat::new(state.config_options());
+        let format = ParquetFormat::default();
         scan_format(state, &format, &testdata, file_name, projection, limit).await
     }
 }

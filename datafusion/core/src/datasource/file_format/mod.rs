@@ -128,7 +128,6 @@ pub(crate) mod test_util {
                     projection,
                     limit,
                     table_partition_cols: vec![],
-                    config_options: state.config_options(),
                     output_ordering: None,
                 },
                 &[],
