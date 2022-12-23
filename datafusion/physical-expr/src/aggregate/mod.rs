@@ -41,6 +41,7 @@ pub(crate) mod median;
 pub(crate) mod min_max;
 pub mod build_in;
 mod hyperloglog;
+pub mod moving_min_max;
 pub mod row_accumulator;
 pub(crate) mod stats;
 pub(crate) mod stddev;
@@ -109,10 +110,18 @@ pub trait AggregateExpr: Send + Sync + Debug {
     }
 
     /// Construct an expression that calculates the aggregate in reverse.
+    /// Typically the "reverse" expression is itself (e.g. SUM, COUNT).
+    /// For aggregates that do not support calculation in reverse,
+    /// returns None (which is the default value).
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
-        // Typically the "reverse" expression is itself (e.g. SUM, COUNT).
-        // For aggregates that do not support calculation in reverse,
-        // returns None (which is the default value).
         None
+    }
+
+    /// Creates accumulator implementation that supports retract
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Retractable Accumulator hasn't been implemented for {:?} yet",
+            self
+        )))
     }
 }

@@ -33,7 +33,9 @@ use datafusion_expr::{
     window_function::{signature_for_built_in, BuiltInWindowFunction, WindowFunction},
     WindowFrame,
 };
-use datafusion_physical_expr::window::BuiltInWindowFunctionExpr;
+use datafusion_physical_expr::window::{
+    BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr,
+};
 use std::convert::TryInto;
 use std::sync::Arc;
 
@@ -57,12 +59,25 @@ pub fn create_window_expr(
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
-        WindowFunction::AggregateFunction(fun) => Arc::new(AggregateWindowExpr::new(
-            aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?,
-            partition_by,
-            order_by,
-            window_frame,
-        )),
+        WindowFunction::AggregateFunction(fun) => {
+            let aggregate =
+                aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?;
+            if !window_frame.start_bound.is_unbounded() {
+                Arc::new(SlidingAggregateWindowExpr::new(
+                    aggregate,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                ))
+            } else {
+                Arc::new(AggregateWindowExpr::new(
+                    aggregate,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                ))
+            }
+        }
         WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr::new(
             create_built_in_window_expr(fun, args, input_schema, name)?,
             partition_by,

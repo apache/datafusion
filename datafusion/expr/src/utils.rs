@@ -204,6 +204,8 @@ pub fn expand_qualified_wildcard(
     expand_wildcard(&qualifier_schema, plan)
 }
 
+/// (expr, "is the SortExpr for window (either comes from PARTITION BY or ORDER BY columns)")
+/// if bool is true SortExpr comes from `PARTITION BY` column, if false comes from `ORDER BY` column
 type WindowSortKey = Vec<(Expr, bool)>;
 
 /// Generate a sort key for a given window expr's partition_by and order_bu expr

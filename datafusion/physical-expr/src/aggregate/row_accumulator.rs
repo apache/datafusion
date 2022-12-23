@@ -18,6 +18,7 @@
 //! Accumulator over row format
 
 use arrow::array::ArrayRef;
+use arrow_schema::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_row::accessor::RowAccessor;
 use std::fmt::Debug;
@@ -62,4 +63,21 @@ pub trait RowAccumulator: Send + Sync + Debug {
 
     /// State's starting field index in the row.
     fn state_index(&self) -> usize;
+}
+
+/// Returns if `data_type` is supported with `RowAccumulator`
+pub fn is_row_accumulator_support_dtype(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Float32
+            | DataType::Float64
+    )
 }

@@ -114,7 +114,9 @@ impl WindowFrame {
         }
     }
 
-    /// Get reversed window frame
+    /// Get reversed window frame. For example
+    /// `3 ROWS PRECEDING AND 2 ROWS FOLLOWING` -->
+    /// `2 ROWS PRECEDING AND 3 ROWS FOLLOWING`
     pub fn reverse(&self) -> Self {
         let start_bound = match &self.end_bound {
             WindowFrameBound::Preceding(elem) => {

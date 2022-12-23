@@ -112,6 +112,10 @@ impl AggregateExpr for Count {
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
         Some(Arc::new(self.clone()))
     }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(CountAccumulator::new()))
+    }
 }
 
 #[derive(Debug)]

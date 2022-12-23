@@ -25,6 +25,7 @@ pub(crate) mod ntile;
 pub(crate) mod partition_evaluator;
 pub(crate) mod rank;
 pub(crate) mod row_number;
+mod sliding_aggregate;
 mod window_expr;
 mod window_frame_state;
 
@@ -36,5 +37,6 @@ pub use window_expr::PartitionBatches;
 pub use window_expr::PartitionKey;
 pub use window_expr::PartitionWindowAggStates;
 pub use window_expr::WindowAggState;
+pub use sliding_aggregate::SlidingAggregateWindowExpr;
 pub use window_expr::WindowExpr;
 pub use window_expr::WindowState;

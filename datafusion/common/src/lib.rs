@@ -73,19 +73,3 @@ pub fn reverse_sort_options(options: SortOptions) -> SortOptions {
         nulls_first: !options.nulls_first,
     }
 }
-
-/// Transposes the given vector of vectors.
-pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
-    match original.as_slice() {
-        [] => vec![],
-        [first, ..] => {
-            let mut result = (0..first.len()).map(|_| vec![]).collect::<Vec<_>>();
-            for row in original {
-                for (item, transposed_row) in row.into_iter().zip(&mut result) {
-                    transposed_row.push(item);
-                }
-            }
-            result
-        }
-    }
-}
