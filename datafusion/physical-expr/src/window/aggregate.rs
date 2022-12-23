@@ -143,25 +143,23 @@ impl WindowExpr for AggregateWindowExpr {
     }
 
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>> {
-        if let Some(reverse_expr) = self.aggregate.reverse_expr() {
+        self.aggregate.reverse_expr().map(|reverse_expr| {
             let reverse_window_frame = self.window_frame.reverse();
             if reverse_window_frame.start_bound.is_unbounded() {
-                Some(Arc::new(AggregateWindowExpr::new(
+                Arc::new(AggregateWindowExpr::new(
                     reverse_expr,
                     &self.partition_by.clone(),
                     &reverse_order_bys(&self.order_by),
                     Arc::new(self.window_frame.reverse()),
-                )))
+                )) as _
             } else {
-                Some(Arc::new(SlidingAggregateWindowExpr::new(
+                Arc::new(SlidingAggregateWindowExpr::new(
                     reverse_expr,
                     &self.partition_by.clone(),
                     &reverse_order_bys(&self.order_by),
                     Arc::new(self.window_frame.reverse()),
-                )))
+                )) as _
             }
-        } else {
-            None
-        }
+        })
     }
 }

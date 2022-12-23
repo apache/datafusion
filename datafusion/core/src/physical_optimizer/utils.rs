@@ -102,6 +102,7 @@ pub fn ordering_satisfy_concrete<F: FnOnce() -> EquivalenceProperties>(
 }
 
 /// Util function to add SortExec above child
+/// preserving the original partitioning
 pub fn add_sort_above_child(
     child: &Arc<dyn ExecutionPlan>,
     sort_expr: Vec<PhysicalSortExpr>,

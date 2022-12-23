@@ -19,6 +19,7 @@
 
 use crate::error::Result;
 use crate::execution::context::TaskContext;
+use crate::physical_plan::common::transpose;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
@@ -37,7 +38,7 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use datafusion_common::{transpose, DataFusionError};
+use datafusion_common::DataFusionError;
 use datafusion_physical_expr::rewrite::TreeNodeRewritable;
 use datafusion_physical_expr::EquivalentClass;
 use futures::stream::Stream;
@@ -136,15 +137,16 @@ impl WindowAggExec {
         self.input_schema.clone()
     }
 
-    /// Get partition keys
+    /// Return the output sort order of partition keys: For example
+    /// OVER(PARTITION BY a, ORDER BY b) -> would give sorting of the column a
+    // We are sure that partition by columns are always at the beginning of sort_keys
+    // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
+    // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
         let mut result = vec![];
         // All window exprs have the same partition by, so we just use the first one:
         let partition_by = self.window_expr()[0].partition_by();
-        let sort_keys = self
-            .sort_keys
-            .as_ref()
-            .map_or_else(|| &[] as &[PhysicalSortExpr], |v| v.as_slice());
+        let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
         for item in partition_by {
             if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
                 result.push(a.clone());

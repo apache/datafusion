@@ -298,12 +298,7 @@ impl ExecutionPlan for RepartitionExec {
 
     fn maintains_input_order(&self) -> bool {
         // We preserve ordering when input partitioning is 1
-        let n_input = match self.input().output_partitioning() {
-            Partitioning::RoundRobinBatch(n) => n,
-            Partitioning::Hash(_, n) => n,
-            Partitioning::UnknownPartitioning(n) => n,
-        };
-        n_input <= 1
+        self.input().output_partitioning().partition_count() <= 1
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
