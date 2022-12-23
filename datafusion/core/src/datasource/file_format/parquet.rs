@@ -57,9 +57,10 @@ pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
 /// The Apache Parquet `FileFormat` implementation
 ///
 /// Note it is recommended these are instead configured on the [`ConfigOptions`]
-/// associated with the [`SessionState`] instead of overridden on a format-bases
+/// associated with the [`SessionState`] instead of overridden on a format-basis
 ///
-/// TODO: Deprecate and remove overrides (#4349)
+/// TODO: Deprecate and remove overrides
+/// <https://github.com/apache/arrow-datafusion/issues/4349>
 #[derive(Debug, Default)]
 pub struct ParquetFormat {
     /// Override the global setting for enable_pruning
