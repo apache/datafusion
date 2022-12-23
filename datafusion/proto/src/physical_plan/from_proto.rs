@@ -22,7 +22,6 @@ use arrow::datatypes::DataType;
 use chrono::TimeZone;
 use chrono::Utc;
 use datafusion::arrow::datatypes::Schema;
-use datafusion::config::ConfigOptions;
 use datafusion::datasource::listing::{FileRange, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::ExecutionProps;
@@ -52,7 +51,6 @@ use crate::logical_plan;
 use crate::protobuf::physical_expr_node::ExprType;
 use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion::physical_plan::sorts::sort::SortOptions;
-use parking_lot::RwLock;
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
@@ -370,19 +368,6 @@ pub fn parse_protobuf_file_scan_config(
         Some(output_ordering)
     };
 
-    let mut config_options = ConfigOptions::new();
-    for option in proto.options.iter() {
-        config_options.set(
-            &option.key,
-            option
-                .value
-                .as_ref()
-                .map(|value| value.try_into())
-                .transpose()?
-                .unwrap(),
-        );
-    }
-
     Ok(FileScanConfig {
         object_store_url,
         file_schema: schema,
@@ -392,7 +377,6 @@ pub fn parse_protobuf_file_scan_config(
         limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
         table_partition_cols,
         output_ordering,
-        config_options: Arc::new(RwLock::new(config_options)),
     })
 }
 

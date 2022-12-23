@@ -42,10 +42,11 @@ use datafusion_physical_expr::PhysicalSortExpr;
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
-use parking_lot::RwLock;
 
-use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
-use crate::{config::ConfigOptions, datasource::listing::FileRange};
+use crate::datasource::{
+    listing::{FileRange, PartitionedFile},
+    object_store::ObjectStoreUrl,
+};
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -102,8 +103,6 @@ pub struct FileScanConfig {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// The order in which the data is sorted, if known.
     pub output_ordering: Option<Vec<PhysicalSortExpr>>,
-    /// Configuration options passed to the physical plans
-    pub config_options: Arc<RwLock<ConfigOptions>>,
 }
 
 impl FileScanConfig {
@@ -808,7 +807,6 @@ mod tests {
             projection,
             statistics,
             table_partition_cols,
-            config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
         }
     }
