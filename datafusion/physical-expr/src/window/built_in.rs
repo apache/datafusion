@@ -30,8 +30,8 @@ use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::Result;
 use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::WindowFrame;
 use std::any::Any;
 use std::sync::Arc;
@@ -153,7 +153,10 @@ impl WindowExpr for BuiltInWindowExpr {
                     },
                 );
             };
-            let window_state = window_agg_state.get_mut(partition_row).unwrap();
+            let window_state =
+                window_agg_state.get_mut(partition_row).ok_or_else(|| {
+                    DataFusionError::Execution("Cannot find state".to_string())
+                })?;
             let evaluator = match &mut window_state.window_fn {
                 WindowFn::Builtin(evaluator) => evaluator,
                 _ => unreachable!(),

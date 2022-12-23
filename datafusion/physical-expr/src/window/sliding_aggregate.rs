@@ -27,8 +27,8 @@ use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 
-use datafusion_common::Result;
 use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{Accumulator, WindowFrame};
 
 use crate::window::window_expr::{reverse_order_bys, WindowFn, WindowFunctionState};
@@ -162,7 +162,10 @@ impl WindowExpr for SlidingAggregateWindowExpr {
                     },
                 );
             };
-            let window_state = window_agg_state.get_mut(partition_row).unwrap();
+            let window_state =
+                window_agg_state.get_mut(partition_row).ok_or_else(|| {
+                    DataFusionError::Execution("Cannot find state".to_string())
+                })?;
             let accumulator = match &mut window_state.window_fn {
                 WindowFn::Aggregate(accumulator) => accumulator,
                 _ => unreachable!(),
