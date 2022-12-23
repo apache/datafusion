@@ -53,7 +53,7 @@ async fn scalar_udf() -> Result<()> {
         ],
     )?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     ctx.register_batch("t", batch)?;
 
@@ -77,7 +77,7 @@ async fn scalar_udf() -> Result<()> {
 
     let t = ctx.table("t")?;
 
-    let plan = LogicalPlanBuilder::from(t.to_logical_plan()?)
+    let plan = LogicalPlanBuilder::from(t.into_optimized_plan()?)
         .project(vec![
             col("a"),
             col("b"),
@@ -138,7 +138,7 @@ async fn simple_udaf() -> Result<()> {
         vec![Arc::new(Int32Array::from_slice([4, 5]))],
     )?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
     ctx.register_table("t", Arc::new(provider))?;
@@ -169,8 +169,8 @@ async fn simple_udaf() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn udaf_as_window_func() -> Result<()> {
+#[tokio::test]
+async fn udaf_as_window_func() -> Result<()> {
     #[derive(Debug)]
     struct MyAccumulator;
 
@@ -205,7 +205,7 @@ fn udaf_as_window_func() -> Result<()> {
         Arc::new(vec![DataType::Int32]),
     );
 
-    let mut context = SessionContext::new();
+    let context = SessionContext::new();
     context.register_table(
         "my_table",
         Arc::new(datafusion::datasource::empty::EmptyTable::new(Arc::new(
@@ -222,7 +222,7 @@ fn udaf_as_window_func() -> Result<()> {
   WindowAggr: windowExpr=[[AggregateUDF { name: "my_acc", signature: Signature { type_signature: Exact([Int32]), volatility: Immutable }, fun: "<FUNC>" }(my_table.b) PARTITION BY [my_table.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
     TableScan: my_table"#;
 
-    let plan = context.create_logical_plan(sql)?;
-    assert_eq!(format!("{:?}", plan), expected);
+    let dataframe = context.sql(sql).await.unwrap();
+    assert_eq!(format!("{:?}", dataframe.logical_plan()), expected);
     Ok(())
 }

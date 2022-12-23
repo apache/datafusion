@@ -76,7 +76,7 @@ impl AggregateExpr for Count {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "count"),
+            format_state_name(&self.name, "count"),
             self.data_type.clone(),
             true,
         )])
@@ -103,6 +103,10 @@ impl AggregateExpr for Count {
         start_index: usize,
     ) -> Result<Box<dyn RowAccumulator>> {
         Ok(Box::new(CountRowAccumulator::new(start_index)))
+    }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(CountAccumulator::new()))
     }
 }
 

@@ -26,6 +26,7 @@
 //!   WHERE t1.f IN (SELECT f FROM t2) OR t2.f = 'x'
 //! ```
 //! won't
+use crate::optimizer::ApplyOrder;
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
@@ -49,18 +50,18 @@ impl SubqueryFilterToJoin {
 }
 
 impl OptimizerRule for SubqueryFilterToJoin {
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
                 // Apply optimizer rule to current input
-                let optimized_input = self.optimize(filter.input(), optimizer_config)?;
+                let input = filter.input.as_ref().clone();
 
                 // Splitting filter expression into components by AND
-                let filters = utils::split_conjunction(filter.predicate());
+                let filters = utils::split_conjunction(&filter.predicate);
 
                 // Searching for subquery-based filters
                 let (subquery_filters, regular_filters): (Vec<&Expr>, Vec<&Expr>) =
@@ -78,26 +79,26 @@ impl OptimizerRule for SubqueryFilterToJoin {
                 })?;
 
                 if !subqueries_in_regular.is_empty() {
-                    return Ok(LogicalPlan::Filter(Filter::try_new(
-                        filter.predicate().clone(),
-                        Arc::new(optimized_input),
-                    )?));
+                    return Ok(Some(LogicalPlan::Filter(Filter::try_new(
+                        filter.predicate.clone(),
+                        Arc::new(input),
+                    )?)));
                 };
 
                 // Add subquery joins to new_input
                 // optimized_input value should retain for possible optimization rollback
                 let opt_result = subquery_filters.iter().try_fold(
-                    optimized_input.clone(),
+                    input.clone(),
                     |input, &e| match e {
                         Expr::InSubquery {
                             expr,
                             subquery,
                             negated,
                         } => {
-                            let right_input = self.optimize(
+                            let right_input = self.try_optimize(
                                 &subquery.subquery,
-                                optimizer_config
-                            )?;
+                                _config
+                            )?.unwrap_or_else(||subquery.subquery.as_ref().clone());
                             let right_schema = right_input.schema();
                             if right_schema.fields().len() != 1 {
                                 return Err(DataFusionError::Plan(
@@ -122,7 +123,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                             };
 
                             let schema = build_join_schema(
-                                optimized_input.schema(),
+                                input.schema(),
                                 right_schema,
                                 &join_type,
                             )?;
@@ -130,7 +131,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                             Ok(LogicalPlan::Join(Join {
                                 left: Arc::new(input),
                                 right: Arc::new(right_input),
-                                on: vec![(left_key, right_key)],
+                                on: vec![(Expr::Column(left_key), Expr::Column(right_key))],
                                 filter: None,
                                 join_type,
                                 join_constraint: JoinConstraint::On,
@@ -150,29 +151,30 @@ impl OptimizerRule for SubqueryFilterToJoin {
                 let new_input = match opt_result {
                     Ok(plan) => plan,
                     Err(_) => {
-                        return Ok(LogicalPlan::Filter(Filter::try_new(
-                            filter.predicate().clone(),
-                            Arc::new(optimized_input),
-                        )?))
+                        return Ok(Some(LogicalPlan::Filter(Filter::try_new(
+                            filter.predicate.clone(),
+                            Arc::new(input),
+                        )?)))
                     }
                 };
 
                 // Apply regular filters to join output if some or just return join
                 if regular_filters.is_empty() {
-                    Ok(new_input)
+                    Ok(Some(new_input))
                 } else {
-                    utils::add_filter(new_input, &regular_filters)
+                    Ok(Some(utils::add_filter(new_input, &regular_filters)?))
                 }
             }
-            _ => {
-                // Apply the optimization to all inputs of the plan
-                utils::optimize_children(self, plan, optimizer_config)
-            }
+            _ => Ok(None),
         }
     }
 
     fn name(&self) -> &str {
         "subquery_filter_to_join"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
     }
 }
 
@@ -203,13 +205,13 @@ mod tests {
         not_in_subquery, or, Operator,
     };
 
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = SubqueryFilterToJoin::new();
-        let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
-            .expect("failed to optimize plan");
-        let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
-        assert_eq!(formatted_plan, expected);
+    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(SubqueryFilterToJoin::new()),
+            plan,
+            expected,
+        );
+        Ok(())
     }
 
     fn test_subquery_with_name(name: &str) -> Result<Arc<LogicalPlan>> {
@@ -236,8 +238,7 @@ mod tests {
         \n    Projection: sq.c [c:UInt32]\
         \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// Test for single NOT IN subquery filter
@@ -255,8 +256,7 @@ mod tests {
         \n    Projection: sq.c [c:UInt32]\
         \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// Test for several IN subquery expressions
@@ -280,8 +280,7 @@ mod tests {
         \n    Projection: sq_2.c [c:UInt32]\
         \n      TableScan: sq_2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// Test for IN subquery with additional AND filter
@@ -306,8 +305,7 @@ mod tests {
         \n      Projection: sq.c [c:UInt32]\
         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// Test for IN subquery with additional OR filter
@@ -333,8 +331,7 @@ mod tests {
         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -361,8 +358,7 @@ mod tests {
         \n        TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// Test for nested IN subqueries
@@ -389,8 +385,7 @@ mod tests {
         \n        Projection: sq_nested.c [c:UInt32]\
         \n          TableScan: sq_nested [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     /// Test for filter input modification in case filter not supported
@@ -421,7 +416,6 @@ mod tests {
         \n          Projection: sq_inner.c [c:UInt32]\
         \n            TableScan: sq_inner [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 }

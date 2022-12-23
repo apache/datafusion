@@ -25,9 +25,9 @@ use std::fs;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::config::OPT_PARQUET_ENABLE_PAGE_INDEX;
 use crate::config::OPT_PARQUET_PUSHDOWN_FILTERS;
 use crate::config::OPT_PARQUET_REORDER_FILTERS;
+use crate::config::{ConfigOptions, OPT_PARQUET_ENABLE_PAGE_INDEX};
 use crate::datasource::file_format::parquet::fetch_parquet_metadata;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -191,14 +191,9 @@ impl ParquetExec {
     }
 
     /// Return the value described in [`Self::with_pushdown_filters`]
-    pub fn pushdown_filters(&self) -> bool {
+    fn pushdown_filters(&self, config_options: &ConfigOptions) -> bool {
         self.pushdown_filters
-            .or_else(|| {
-                self.base_config
-                    .config_options
-                    .read()
-                    .get_bool(OPT_PARQUET_PUSHDOWN_FILTERS)
-            })
+            .or_else(|| config_options.get_bool(OPT_PARQUET_PUSHDOWN_FILTERS))
             // default to false
             .unwrap_or_default()
     }
@@ -213,14 +208,9 @@ impl ParquetExec {
     }
 
     /// Return the value described in [`Self::with_reorder_filters`]
-    pub fn reorder_filters(&self) -> bool {
+    fn reorder_filters(&self, config_options: &ConfigOptions) -> bool {
         self.reorder_filters
-            .or_else(|| {
-                self.base_config
-                    .config_options
-                    .read()
-                    .get_bool(OPT_PARQUET_REORDER_FILTERS)
-            })
+            .or_else(|| config_options.get_bool(OPT_PARQUET_REORDER_FILTERS))
             // default to false
             .unwrap_or_default()
     }
@@ -235,14 +225,9 @@ impl ParquetExec {
     }
 
     /// Return the value described in [`Self::with_enable_page_index`]
-    pub fn enable_page_index(&self) -> bool {
+    fn enable_page_index(&self, config_options: &ConfigOptions) -> bool {
         self.enable_page_index
-            .or_else(|| {
-                self.base_config
-                    .config_options
-                    .read()
-                    .get_bool(OPT_PARQUET_ENABLE_PAGE_INDEX)
-            })
+            .or_else(|| config_options.get_bool(OPT_PARQUET_ENABLE_PAGE_INDEX))
             // default to false
             .unwrap_or_default()
     }
@@ -302,6 +287,8 @@ impl ExecutionPlan for ParquetExec {
                     })
             })?;
 
+        let config_options = ctx.session_config().config_options();
+
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
@@ -312,9 +299,9 @@ impl ExecutionPlan for ParquetExec {
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
             parquet_file_reader_factory,
-            pushdown_filters: self.pushdown_filters(),
-            reorder_filters: self.reorder_filters(),
-            enable_page_index: self.enable_page_index(),
+            pushdown_filters: self.pushdown_filters(config_options),
+            reorder_filters: self.reorder_filters(config_options),
+            enable_page_index: self.enable_page_index(config_options),
         };
 
         let stream = FileStream::new(
@@ -726,7 +713,6 @@ mod tests {
     // See also `parquet_exec` integration test
 
     use super::*;
-    use crate::config::ConfigOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
     use crate::datasource::listing::{FileRange, PartitionedFile};
@@ -820,7 +806,6 @@ mod tests {
                 projection,
                 limit: None,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
             },
             predicate,
@@ -1294,15 +1279,21 @@ mod tests {
     async fn parquet_exec_with_projection() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = "alltypes_plain.parquet";
-        let ctx = SessionContext::new();
-        let format = ParquetFormat::new(ctx.config_options());
-        let parquet_exec =
-            scan_format(&format, &testdata, filename, Some(vec![0, 1, 2]), None)
-                .await
-                .unwrap();
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
+        let parquet_exec = scan_format(
+            &state,
+            &ParquetFormat::default(),
+            &testdata,
+            filename,
+            Some(vec![0, 1, 2]),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let task_ctx = SessionContext::new().task_ctx();
         let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap()?;
 
@@ -1338,9 +1329,9 @@ mod tests {
         }
 
         async fn assert_parquet_read(
+            state: &SessionState,
             file_groups: Vec<Vec<PartitionedFile>>,
             expected_row_num: Option<usize>,
-            task_ctx: Arc<TaskContext>,
             file_schema: SchemaRef,
         ) -> Result<()> {
             let parquet_exec = ParquetExec::new(
@@ -1352,14 +1343,13 @@ mod tests {
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
-                    config_options: ConfigOptions::new().into_shareable(),
                     output_ordering: None,
                 },
                 None,
                 None,
             );
             assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
-            let results = parquet_exec.execute(0, task_ctx)?.next().await;
+            let results = parquet_exec.execute(0, state.task_ctx())?.next().await;
 
             if let Some(expected_row_num) = expected_row_num {
                 let batch = results.unwrap()?;
@@ -1372,14 +1362,16 @@ mod tests {
         }
 
         let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
 
         let meta = local_unpartitioned_file(filename);
 
         let store = Arc::new(LocalFileSystem::new()) as _;
-        let file_schema = ParquetFormat::new(session_ctx.config_options())
-            .infer_schema(&store, &[meta.clone()])
+        let file_schema = ParquetFormat::default()
+            .infer_schema(&state, &store, &[meta.clone()])
             .await?;
 
         let group_empty = vec![vec![file_range(&meta, 0, 5)]];
@@ -1389,22 +1381,9 @@ mod tests {
             file_range(&meta, 5, i64::MAX),
         ]];
 
-        assert_parquet_read(
-            group_empty,
-            None,
-            session_ctx.task_ctx(),
-            file_schema.clone(),
-        )
-        .await?;
-        assert_parquet_read(
-            group_contain,
-            Some(8),
-            session_ctx.task_ctx(),
-            file_schema.clone(),
-        )
-        .await?;
-        assert_parquet_read(group_all, Some(8), session_ctx.task_ctx(), file_schema)
-            .await?;
+        assert_parquet_read(&state, group_empty, None, file_schema.clone()).await?;
+        assert_parquet_read(&state, group_contain, Some(8), file_schema.clone()).await?;
+        assert_parquet_read(&state, group_all, Some(8), file_schema).await?;
 
         Ok(())
     }
@@ -1412,21 +1391,19 @@ mod tests {
     #[tokio::test]
     async fn parquet_exec_with_partition() -> Result<()> {
         let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
 
         let object_store_url = ObjectStoreUrl::local_filesystem();
-        let store = session_ctx
-            .runtime_env()
-            .object_store(&object_store_url)
-            .unwrap();
+        let store = state.runtime_env.object_store(&object_store_url).unwrap();
 
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
 
         let meta = local_unpartitioned_file(filename);
 
-        let schema = ParquetFormat::new(session_ctx.config_options())
-            .infer_schema(&store, &[meta.clone()])
+        let schema = ParquetFormat::default()
+            .infer_schema(&state, &store, &[meta.clone()])
             .await
             .unwrap();
 
@@ -1455,7 +1432,6 @@ mod tests {
                     ("month".to_owned(), partition_type_wrap(DataType::Utf8)),
                     ("day".to_owned(), partition_type_wrap(DataType::Utf8)),
                 ],
-                config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
             },
             None,
@@ -1490,7 +1466,7 @@ mod tests {
     #[tokio::test]
     async fn parquet_exec_with_error() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
         let location = Path::from_filesystem_path(".")
             .unwrap()
             .child("invalid.parquet");
@@ -1515,14 +1491,13 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
             },
             None,
             None,
         );
 
-        let mut results = parquet_exec.execute(0, task_ctx)?;
+        let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();
         // invalid file should produce an error to that effect
         assert_contains!(batch.unwrap_err().to_string(), "invalid.parquet not found");

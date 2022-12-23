@@ -34,7 +34,9 @@ use arrow::{
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::aggregate::row_accumulator::{
+    is_row_accumulator_support_dtype, RowAccumulator,
+};
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
@@ -87,12 +89,12 @@ impl AggregateExpr for Sum {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
-                &format_state_name(&self.name, "sum"),
+                format_state_name(&self.name, "sum"),
                 self.data_type.clone(),
                 self.nullable,
             ),
             Field::new(
-                &format_state_name(&self.name, "count"),
+                format_state_name(&self.name, "count"),
                 DataType::UInt64,
                 self.nullable,
             ),
@@ -108,19 +110,7 @@ impl AggregateExpr for Sum {
     }
 
     fn row_accumulator_supported(&self) -> bool {
-        matches!(
-            self.data_type,
-            DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::Float32
-                | DataType::Float64
-        )
+        is_row_accumulator_support_dtype(&self.data_type)
     }
 
     fn create_row_accumulator(
@@ -131,6 +121,10 @@ impl AggregateExpr for Sum {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(SumAccumulator::try_new(&self.data_type)?))
     }
 }
 

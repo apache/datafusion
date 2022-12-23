@@ -16,10 +16,7 @@
 // under the License.
 
 use super::*;
-use datafusion::{
-    datasource::empty::EmptyTable, from_slice::FromSlice,
-    physical_plan::collect_partitioned,
-};
+use datafusion::{datasource::empty::EmptyTable, from_slice::FromSlice};
 use datafusion_common::ScalarValue;
 use tempfile::TempDir;
 
@@ -28,38 +25,31 @@ async fn select_values_list() -> Result<()> {
     let ctx = SessionContext::new();
     {
         let sql = "VALUES";
-        let plan = ctx.create_logical_plan(sql);
-        assert!(plan.is_err());
+        ctx.sql(sql).await.unwrap_err();
     }
     {
         let sql = "VALUES ()";
-        let plan = ctx.create_logical_plan(sql);
-        assert!(plan.is_err());
+        ctx.sql(sql).await.unwrap_err();
     }
     {
         let sql = "VALUES (1),()";
-        let plan = ctx.create_logical_plan(sql);
-        assert!(plan.is_err());
+        ctx.sql(sql).await.unwrap_err();
     }
     {
         let sql = "VALUES (1),(1,2)";
-        let plan = ctx.create_logical_plan(sql);
-        assert!(plan.is_err());
+        ctx.sql(sql).await.unwrap_err();
     }
     {
         let sql = "VALUES (1),('2')";
-        let plan = ctx.create_logical_plan(sql);
-        assert!(plan.is_err());
+        ctx.sql(sql).await.unwrap_err();
     }
     {
         let sql = "VALUES (1),(2.0)";
-        let plan = ctx.create_logical_plan(sql);
-        assert!(plan.is_err());
+        ctx.sql(sql).await.unwrap_err();
     }
     {
         let sql = "VALUES (1,2), (1,'2')";
-        let plan = ctx.create_logical_plan(sql);
-        assert!(plan.is_err());
+        ctx.sql(sql).await.unwrap_err();
     }
     {
         let sql = "VALUES (1,'a'),(NULL,'b'),(3,'c')";
@@ -836,6 +826,88 @@ async fn query_on_string_dictionary() -> Result<()> {
 }
 
 #[tokio::test]
+async fn sort_on_window_null_string() -> Result<()> {
+    let d1: DictionaryArray<Int32Type> =
+        vec![Some("one"), None, Some("three")].into_iter().collect();
+    let d2: StringArray = vec![Some("ONE"), None, Some("THREE")].into_iter().collect();
+    let d3: LargeStringArray =
+        vec![Some("One"), None, Some("Three")].into_iter().collect();
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("d1", Arc::new(d1) as ArrayRef),
+        ("d2", Arc::new(d2) as ArrayRef),
+        ("d3", Arc::new(d3) as ArrayRef),
+    ])
+    .unwrap();
+
+    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(2));
+    ctx.register_batch("test", batch)?;
+
+    let sql =
+        "SELECT d1, row_number() OVER (partition by d1) as rn1 FROM test order by d1 asc";
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    // NULLS LAST
+    let expected = vec![
+        "+-------+-----+",
+        "| d1    | rn1 |",
+        "+-------+-----+",
+        "| one   | 1   |",
+        "| three | 1   |",
+        "|       | 1   |",
+        "+-------+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT d2, row_number() OVER (partition by d2) as rn1 FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    // NULLS LAST
+    let expected = vec![
+        "+-------+-----+",
+        "| d2    | rn1 |",
+        "+-------+-----+",
+        "| ONE   | 1   |",
+        "| THREE | 1   |",
+        "|       | 1   |",
+        "+-------+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql =
+        "SELECT d2, row_number() OVER (partition by d2 order by d2 desc) as rn1 FROM test";
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    // NULLS FIRST
+    let expected = vec![
+        "+-------+-----+",
+        "| d2    | rn1 |",
+        "+-------+-----+",
+        "|       | 1   |",
+        "| THREE | 1   |",
+        "| ONE   | 1   |",
+        "+-------+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // FIXME sort on LargeUtf8 String has bug.
+    // let sql =
+    //     "SELECT d3, row_number() OVER (partition by d3) as rn1 FROM test";
+    // let actual = execute_to_batches(&ctx, sql).await;
+    // let expected = vec![
+    //     "+-------+-----+",
+    //     "| d3    | rn1 |",
+    //     "+-------+-----+",
+    //     "|       | 1   |",
+    //     "| One   | 1   |",
+    //     "| Three | 1   |",
+    //     "+-------+-----+",
+    // ];
+    // assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn filter_with_time32second() -> Result<()> {
     let ctx = SessionContext::new();
     let schema = Arc::new(Schema::new(vec![
@@ -1193,32 +1265,14 @@ async fn test_prepare_statement() -> Result<()> {
 
     // sql to statement then to prepare logical plan with parameters
     // c1 defined as UINT32, c2 defined as UInt64 but the params are Int32 and Float64
-    let logical_plan =
-        ctx.create_logical_plan("PREPARE my_plan(INT, DOUBLE) AS SELECT c1, c2 FROM test WHERE c1 > $2 AND c1 < $1")?;
+    let dataframe =
+        ctx.sql("PREPARE my_plan(INT, DOUBLE) AS SELECT c1, c2 FROM test WHERE c1 > $2 AND c1 < $1").await?;
 
     // prepare logical plan to logical plan without parameters
     let param_values = vec![ScalarValue::Int32(Some(3)), ScalarValue::Float64(Some(0.0))];
-    let logical_plan = logical_plan.with_param_values(param_values)?;
+    let dataframe = dataframe.with_param_values(param_values)?;
+    let results = dataframe.collect().await?;
 
-    // logical plan to optimized logical plan
-    let logical_plan = ctx.optimize(&logical_plan)?;
-
-    // optimized logical plan to physical plan
-    let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
-
-    let task_ctx = ctx.task_ctx();
-    let results = collect_partitioned(physical_plan, task_ctx).await?;
-
-    // note that the order of partitions is not deterministic
-    let mut num_rows = 0;
-    for partition in &results {
-        for batch in partition {
-            num_rows += batch.num_rows();
-        }
-    }
-    assert_eq!(20, num_rows);
-
-    let results: Vec<RecordBatch> = results.into_iter().flatten().collect();
     let expected = vec![
         "+----+----+",
         "| c1 | c2 |",
@@ -1256,25 +1310,10 @@ async fn parallel_query_with_filter() -> Result<()> {
     let partition_count = 4;
     let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
 
-    let logical_plan =
-        ctx.create_logical_plan("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")?;
-    let logical_plan = ctx.optimize(&logical_plan)?;
-
-    let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
-
-    let task_ctx = ctx.task_ctx();
-    let results = collect_partitioned(physical_plan, task_ctx).await?;
-
-    // note that the order of partitions is not deterministic
-    let mut num_rows = 0;
-    for partition in &results {
-        for batch in partition {
-            num_rows += batch.num_rows();
-        }
-    }
-    assert_eq!(20, num_rows);
-
-    let results: Vec<RecordBatch> = results.into_iter().flatten().collect();
+    let dataframe = ctx
+        .sql("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")
+        .await?;
+    let results = dataframe.collect().await.unwrap();
     let expected = vec![
         "+----+----+",
         "| c1 | c2 |",
@@ -1390,7 +1429,7 @@ async fn unprojected_filter() {
         .select(vec![col("i") + col("i")])
         .unwrap();
 
-    let plan = df.to_logical_plan().unwrap();
+    let plan = df.clone().into_optimized_plan().unwrap();
     println!("{}", plan.display_indent());
 
     let results = df.collect().await.unwrap();
@@ -1417,8 +1456,7 @@ async fn case_sensitive_in_default_dialect() {
 
     {
         let sql = "select \"int32\" from t";
-        let plan = ctx.create_logical_plan(sql);
-        assert!(plan.is_err());
+        ctx.sql(sql).await.unwrap_err();
     }
 
     {

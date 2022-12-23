@@ -55,7 +55,7 @@ impl OptimizerRule for JoinReorder {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _config: &mut OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         // TODO too many clones - use Box/Rc/Arc to reduce
 
@@ -76,7 +76,7 @@ impl OptimizerRule for JoinReorder {
                 );
 
                 // extract the relations and join conditions
-                let (rels, mut conds) = extract_inner_joins(plan);
+                let (rels, conds) = extract_inner_joins(plan);
 
                 // split rels into facts and dims
                 let rels: Vec<Relation> =
@@ -154,23 +154,41 @@ impl OptimizerRule for JoinReorder {
 
                 let dim_plans: Vec<LogicalPlan> =
                     result.iter().map(|rel| rel.plan.clone()).collect();
+
+                let mut join_conds = HashSet::new();
+                for cond in &conds {
+                    match cond {
+                        (Expr::Column(l), Expr::Column(r)) => {
+                            join_conds.insert((l.clone(), r.clone()));
+                        }
+                        _ => {
+                            println!("Only column expr are supported");
+                            return Ok(None);
+                        }
+                    }
+                }
+
                 let optimized = if facts.len() == 1 {
-                    build_join_tree(&facts[0].plan, &dim_plans, &mut conds)?
+                    build_join_tree(&facts[0].plan, &dim_plans, &mut join_conds)?
                 } else {
                     // build one join tree for each fact table
                     let fact_dim_joins = facts
                         .iter()
-                        .map(|f| build_join_tree(&f.plan, &dim_plans, &mut conds))
+                        .map(|f| build_join_tree(&f.plan, &dim_plans, &mut join_conds))
                         .collect::<Result<Vec<_>>>()?;
                     // join the trees together
-                    build_join_tree(&fact_dim_joins[0], &fact_dim_joins[1..], &mut conds)?
+                    build_join_tree(
+                        &fact_dim_joins[0],
+                        &fact_dim_joins[1..],
+                        &mut join_conds,
+                    )?
                 };
 
-                if conds.is_empty() {
+                if join_conds.is_empty() {
                     println!("Optimized: {}", optimized.display_indent());
                     return Ok(Some(optimized));
                 } else {
-                    println!("Did not use all join conditions: {:?}", conds);
+                    println!("Did not use all join conditions: {:?}", join_conds);
                     return Ok(None);
                 }
             }
@@ -179,15 +197,6 @@ impl OptimizerRule for JoinReorder {
                 Ok(None)
             }
         }
-    }
-
-    fn optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        // this method is not needed because we implement try_optimize instead
-        unimplemented!()
     }
 }
 
@@ -229,7 +238,7 @@ fn has_filter(plan: &LogicalPlan) -> bool {
     }
 
     match plan {
-        LogicalPlan::Filter(filter) => is_real_filter(filter.predicate()),
+        LogicalPlan::Filter(filter) => is_real_filter(&filter.predicate),
         LogicalPlan::TableScan(scan) => scan.filters.iter().any(is_real_filter),
         _ => plan.inputs().iter().any(|child| has_filter(child)),
     }
@@ -237,13 +246,11 @@ fn has_filter(plan: &LogicalPlan) -> bool {
 
 /// Extracts items of consecutive inner joins and join conditions.
 /// This method works for bushy trees and left/right deep trees.
-fn extract_inner_joins(
-    plan: &LogicalPlan,
-) -> (Vec<LogicalPlan>, HashSet<(Column, Column)>) {
+fn extract_inner_joins(plan: &LogicalPlan) -> (Vec<LogicalPlan>, HashSet<(Expr, Expr)>) {
     fn _extract_inner_joins(
         plan: &LogicalPlan,
         rels: &mut Vec<LogicalPlan>,
-        conds: &mut HashSet<(Column, Column)>,
+        conds: &mut HashSet<(Expr, Expr)>,
     ) {
         match plan {
             LogicalPlan::Join(join)
@@ -303,7 +310,7 @@ fn is_supported_join(join: &Join) -> bool {
                     && is_supported_rel(&join.left)
                     && is_supported_rel(&join.right)
             }
-            LogicalPlan::Filter(filter) => is_supported_rel(filter.input()),
+            LogicalPlan::Filter(filter) => is_supported_rel(&filter.input),
             LogicalPlan::SubqueryAlias(sq) => is_supported_rel(&sq.input),
             LogicalPlan::TableScan(_) => true,
             _ => {
@@ -372,7 +379,7 @@ fn build_join_tree(
             }
 
             println!("Joining fact to dim on {:?} = {:?}", left_keys, right_keys);
-            b = b.join(&dim, JoinType::Inner, (left_keys, right_keys), None)?;
+            b = b.join(dim.clone(), JoinType::Inner, (left_keys, right_keys), None)?;
         }
     }
     b.build()
@@ -394,6 +401,7 @@ fn get_table_size(plan: &LogicalPlan) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Result, Statistics};
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
@@ -407,7 +415,7 @@ mod tests {
         let a = test_table_scan("t1", 100);
         let b = test_table_scan("t2", 100);
         let join = LogicalPlanBuilder::from(a)
-            .join(&b, JoinType::Inner, (vec!["t1_a"], vec!["t2_b"]), None)?
+            .join(b, JoinType::Inner, (vec!["t1_a"], vec!["t2_b"]), None)?
             .build()?;
         if let LogicalPlan::Join(join) = join {
             assert!(is_supported_join(&join));
@@ -422,7 +430,7 @@ mod tests {
         let a = test_table_scan("t1", 100);
         let b = test_table_scan("t2", 100);
         let join = LogicalPlanBuilder::from(a)
-            .join(&b, JoinType::Left, (vec!["t1_a"], vec!["t2_b"]), None)?
+            .join(b, JoinType::Left, (vec!["t1_a"], vec!["t2_b"]), None)?
             .build()?;
         if let LogicalPlan::Join(join) = join {
             assert!(!is_supported_join(&join));
@@ -463,7 +471,7 @@ mod tests {
     TableScan: dim3"#;
         assert_eq!(expected_plan, formatted_plan);
         let rule = JoinReorder::default();
-        let mut config = OptimizerConfig::default();
+        let mut config = OptimizerContext::default();
         let optimized_plan = rule.try_optimize(&plan, &mut config)?.unwrap();
         let formatted_plan = format!("{}", optimized_plan.display_indent());
         let expected_plan = r#"Inner Join: fact.fact_c = dim2.dim2_a
@@ -495,7 +503,7 @@ mod tests {
       TableScan: date_dim"#;
         assert_eq!(expected_plan, formatted_plan);
         let rule = JoinReorder::default();
-        let mut config = OptimizerConfig::default();
+        let mut config = OptimizerContext::default();
         let optimized_plan = rule.try_optimize(&plan, &mut config)?.unwrap();
         let formatted_plan = format!("{}", optimized_plan.display_indent());
         let expected_plan = r#"Inner Join: fact.fact_c = dim2.date_dim_a
@@ -526,19 +534,19 @@ mod tests {
 
         LogicalPlanBuilder::from(fact)
             .join(
-                &dim1,
+                dim1,
                 JoinType::Inner,
                 (vec!["fact_b"], vec!["dim1_a"]),
                 None,
             )?
             .join(
-                &dim2,
+                dim2,
                 JoinType::Inner,
                 (vec!["fact_c"], vec!["dim2_a"]),
                 None,
             )?
             .join(
-                &dim3,
+                dim3,
                 JoinType::Inner,
                 (vec!["fact_d"], vec!["dim3_a"]),
                 None,
@@ -559,19 +567,19 @@ mod tests {
 
         LogicalPlanBuilder::from(fact)
             .join(
-                &dim1,
+                dim1,
                 JoinType::Inner,
                 (vec!["fact_b"], vec!["dim1.date_dim_a"]),
                 None,
             )?
             .join(
-                &dim2,
+                dim2,
                 JoinType::Inner,
                 (vec!["fact_c"], vec!["dim2.date_dim_a"]),
                 None,
             )?
             .join(
-                &dim3,
+                dim3,
                 JoinType::Inner,
                 (vec!["fact_d"], vec!["dim3.date_dim_a"]),
                 None,
@@ -580,13 +588,7 @@ mod tests {
     }
 
     fn aliased_plan(plan: LogicalPlan, alias: &str) -> LogicalPlan {
-        let schema = plan.schema().as_ref().clone();
-        let schema = schema.replace_qualifier(alias);
-        LogicalPlan::SubqueryAlias(SubqueryAlias {
-            input: Arc::new(plan),
-            alias: alias.to_string(),
-            schema: Arc::new(schema),
-        })
+        LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(plan, alias).unwrap())
     }
 
     fn test_table_scan(table_name: &str, size: usize) -> LogicalPlan {

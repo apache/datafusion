@@ -48,7 +48,6 @@ use datafusion_benchmarks::tpch::*;
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::execution::context::SessionState;
 use datafusion::scheduler::Scheduler;
 use futures::TryStreamExt;
 use serde::Serialize;
@@ -270,16 +269,14 @@ async fn benchmark_query(
     Ok((benchmark_run, result))
 }
 
-#[allow(clippy::await_holding_lock)]
 async fn register_tables(
     opt: &DataFusionBenchmarkOpt,
     ctx: &SessionContext,
 ) -> Result<()> {
     for table in TPCH_TABLES {
         let table_provider = {
-            let mut session_state = ctx.state.write();
             get_table(
-                &mut session_state,
+                ctx,
                 opt.path.to_str().unwrap(),
                 table,
                 opt.file_format.as_str(),
@@ -328,7 +325,7 @@ async fn execute_query(
     enable_scheduler: bool,
 ) -> Result<Vec<RecordBatch>> {
     let plan = ctx.sql(sql).await?;
-    let plan = plan.to_unoptimized_plan();
+    let plan = plan.into_unoptimized_plan();
 
     if debug {
         println!("=== Logical plan ===\n{:?}\n", plan);
@@ -368,12 +365,14 @@ async fn execute_query(
 }
 
 async fn get_table(
-    ctx: &mut SessionState,
+    ctx: &SessionContext,
     path: &str,
     table: &str,
     table_format: &str,
     target_partitions: usize,
 ) -> Result<Arc<dyn TableProvider>> {
+    // Obtain a snapshot of the SessionState
+    let state = ctx.state();
     let (format, path, extension): (Arc<dyn FileFormat>, String, &'static str) =
         match table_format {
             // dbgen creates .tbl ('|' delimited) files without header
@@ -396,8 +395,7 @@ async fn get_table(
             }
             "parquet" => {
                 let path = format!("{}/{}", path, table);
-                let format = ParquetFormat::new(ctx.config_options())
-                    .with_enable_pruning(Some(true));
+                let format = ParquetFormat::default().with_enable_pruning(Some(true));
 
                 (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
             }
@@ -410,13 +408,13 @@ async fn get_table(
     let options = ListingOptions::new(format)
         .with_file_extension(extension)
         .with_target_partitions(target_partitions)
-        .with_collect_stat(ctx.config.collect_statistics());
+        .with_collect_stat(state.config.collect_statistics());
 
     let table_path = ListingTableUrl::parse(path)?;
     let config = ListingTableConfig::new(table_path).with_listing_options(options);
 
     let config = if table_format == "parquet" {
-        config.infer_schema(ctx).await?
+        config.infer_schema(&state).await?
     } else {
         config.with_schema(schema)
     };
@@ -650,7 +648,7 @@ mod tests {
         let sql = get_query_sql(query)?;
         for sql in &sql {
             let df = ctx.sql(sql.as_str()).await?;
-            let plan = df.to_logical_plan()?;
+            let plan = df.into_optimized_plan()?;
             if !actual.is_empty() {
                 actual += "\n";
             }

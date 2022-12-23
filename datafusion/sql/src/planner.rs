@@ -36,18 +36,18 @@ use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::ast::{TimezoneInfo, WildcardAdditionalOptions};
 use sqlparser::parser::ParserError::ParserError;
 
-use datafusion_common::parsers::parse_interval;
+use datafusion_common::parsers::{parse_interval, CompressionTypeVariant};
 use datafusion_common::ToDFSchema;
 use datafusion_common::{
     field_not_found, Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
 use datafusion_common::{OwnedTableReference, TableReference};
-use datafusion_expr::expr::{Between, BinaryExpr, Case, Cast, GroupingSet, Like};
+use datafusion_expr::expr::{
+    self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort, TryCast,
+};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
-use datafusion_expr::logical_plan::builder::{
-    project, wrap_projection_for_join_if_necessary,
-};
+use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::Join as HashJoin;
 use datafusion_expr::logical_plan::JoinConstraint as HashJoinConstraint;
 use datafusion_expr::logical_plan::{
@@ -620,7 +620,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))?;
         }
 
-        if file_type != "CSV" && file_type != "JSON" && !file_compression_type.is_empty()
+        if file_type != "CSV"
+            && file_type != "JSON"
+            && file_compression_type != CompressionTypeVariant::UNCOMPRESSED
         {
             Err(DataFusionError::Plan(
                 "File compression type can be specified for CSV/JSON files.".into(),
@@ -688,7 +690,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .iter()
                 .any(|x| x.option == ColumnOption::Null);
             fields.push(Field::new(
-                &normalize_ident(column.name),
+                normalize_ident(column.name),
                 data_type,
                 allow_null,
             ));
@@ -709,15 +711,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 self.plan_table_with_joins(from, planner_context)
             }
             _ => {
-                let plans = from
+                let mut plans = from
                     .into_iter()
-                    .map(|t| self.plan_table_with_joins(t, planner_context))
-                    .collect::<Result<Vec<_>>>()?;
-                let mut left = plans[0].clone();
-                for right in plans.iter().skip(1) {
-                    left = LogicalPlanBuilder::from(left).cross_join(right)?.build()?;
+                    .map(|t| self.plan_table_with_joins(t, planner_context));
+
+                let mut left = LogicalPlanBuilder::from(plans.next().unwrap()?);
+
+                for right in plans {
+                    left = left.cross_join(right?)?;
                 }
-                Ok(left)
+                Ok(left.build()?)
             }
         }
     }
@@ -777,7 +780,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinOperator::FullOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Full, planner_context)
             }
-            JoinOperator::CrossJoin => self.parse_cross_join(left, &right),
+            JoinOperator::CrossJoin => self.parse_cross_join(left, right),
             other => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported JOIN operator {:?}",
                 other
@@ -788,7 +791,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn parse_cross_join(
         &self,
         left: LogicalPlan,
-        right: &LogicalPlan,
+        right: LogicalPlan,
     ) -> Result<LogicalPlan> {
         LogicalPlanBuilder::from(left).cross_join(right)?.build()
     }
@@ -840,41 +843,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 let join_filter = filter.into_iter().reduce(Expr::and);
 
-                if left_keys.is_empty() {
-                    // TODO should not use cross join when the join_filter exists
-                    // https://github.com/apache/arrow-datafusion/issues/4363
-                    let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
-                    join_filter
-                        .map(|filter| join.filter(filter))
-                        .unwrap_or(Ok(join))?
-                        .build()
-                } else {
-                    // Wrap projection for left input if left join keys contain normal expression.
-                    let (left_child, left_join_keys, left_projected) =
-                        wrap_projection_for_join_if_necessary(&left_keys, left)?;
-
-                    // Wrap projection for right input if right join keys contains normal expression.
-                    let (right_child, right_join_keys, right_projected) =
-                        wrap_projection_for_join_if_necessary(&right_keys, right)?;
-
-                    let join_plan_builder = LogicalPlanBuilder::from(left_child).join(
-                        &right_child,
-                        join_type,
-                        (left_join_keys, right_join_keys),
-                        join_filter,
-                    )?;
-
-                    // Remove temporary projected columns if necessary.
-                    if left_projected || right_projected {
-                        let final_join_result = join_schema
-                            .fields()
-                            .iter()
-                            .map(|field| Expr::Column(field.qualified_column()))
-                            .collect::<Vec<_>>();
-                        join_plan_builder.project(final_join_result)?.build()
-                    } else {
-                        join_plan_builder.build()
+                if left_keys.is_empty() && join_filter.is_none() {
+                    let mut join = LogicalPlanBuilder::from(left).cross_join(right)?;
+                    if let Some(filter) = join_filter {
+                        join = join.filter(filter)?;
                     }
+                    join.build()
+                } else {
+                    LogicalPlanBuilder::from(left)
+                        .join_with_expr_keys(
+                            right,
+                            join_type,
+                            (left_keys, right_keys),
+                            join_filter,
+                        )?
+                        .build()
                 }
             }
             JoinConstraint::Using(idents) => {
@@ -883,7 +866,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .map(|x| Column::from_name(normalize_ident(x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
-                    .join_using(&right, join_type, keys)?
+                    .join_using(right, join_type, keys)?
                     .build()
             }
             JoinConstraint::Natural => {
@@ -1042,8 +1025,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         {
             // For query: select id from t1 join t2 using(id), this is legal.
             // We should dedup the fields for cols in using clause.
-            for join_cols in on.iter() {
-                let left_field = left.schema().field_from_column(&join_cols.0)?;
+            for join_keys in on.iter() {
+                let join_col = &join_keys.0.try_into_col()?;
+                let left_field = left.schema().field_from_column(join_col)?;
                 fields.retain(|field| {
                     field.unqualified_column().name
                         != left_field.unqualified_column().name
@@ -1185,10 +1169,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?
         } else {
             match having_expr_opt {
-                    Some(having_expr) => return Err(DataFusionError::Plan(
-                        format!("HAVING clause references: {} must appear in the GROUP BY clause or be used in an aggregate function", having_expr))),
-                    None => (plan, select_exprs, having_expr_opt)
-                }
+                Some(having_expr) => return Err(DataFusionError::Plan(
+                    format!("HAVING clause references: {} must appear in the GROUP BY clause or be used in an aggregate function", having_expr))),
+                None => (plan, select_exprs, having_expr_opt)
+            }
         };
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
@@ -1496,13 +1480,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
         Ok({
             let asc = asc.unwrap_or(true);
-            Expr::Sort {
-                expr: Box::new(expr),
+            Expr::Sort(Sort::new(
+                Box::new(expr),
                 asc,
                 // when asc is true, by default nulls last to be consistent with postgres
                 // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
-                nulls_first: nulls_first.unwrap_or(!asc),
-            }
+                nulls_first.unwrap_or(!asc),
+            ))
         })
     }
 
@@ -1860,7 +1844,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return Err(DataFusionError::Internal(format!(
                     "Invalid placeholder, not a number: {}",
                     param
-                )))
+                )));
             }
         };
         // Check if the placeholder is in the parameter list
@@ -1980,8 +1964,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         r @ OwnedTableReference::Bare { .. } |
                         r @ OwnedTableReference::Full { .. } => {
                             return Err(DataFusionError::Plan(format!(
-                            "Unsupported compound identifier '{:?}'", r,
-                            )))
+                                "Unsupported compound identifier '{:?}'", r,
+                            )));
                         }
                     };
 
@@ -2060,10 +2044,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::TryCast {
                 expr,
                 data_type,
-            } => Ok(Expr::TryCast {
-                expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
-                data_type: self.convert_data_type(&data_type)?,
-            }),
+            } => Ok(Expr::TryCast(TryCast::new(
+                Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
+                self.convert_data_type(&data_type)?,
+            ))),
 
             SQLExpr::TypedString {
                 data_type,
@@ -2180,7 +2164,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     negated,
                     Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
                     Box::new(pattern),
-                    escape_char
+                    escape_char,
                 )))
             }
 
@@ -2274,9 +2258,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::AggregateExpressionWithFilter { expr, filter } => {
                 match self.sql_expr_to_logical_expr(*expr, schema, planner_context)? {
-                    Expr::AggregateFunction {
+                    Expr::AggregateFunction(expr::AggregateFunction {
                         fun, args, distinct, ..
-                    } => Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, planner_context)?)) }),
+                    }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new( fun, args, distinct, Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, planner_context)?)) ))),
                     _ => Err(DataFusionError::Internal("AggregateExpressionWithFilter expression was not an AggregateFunction".to_string()))
                 }
             }
@@ -2348,24 +2332,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 schema,
                             )?;
 
-                            Expr::WindowFunction {
-                                fun: WindowFunction::AggregateFunction(
+                            Expr::WindowFunction(expr::WindowFunction::new(
+                                 WindowFunction::AggregateFunction(
                                     aggregate_fun,
                                 ),
                                 args,
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            }
+                            ))
                         }
                         _ => {
-                            Expr::WindowFunction {
+                            Expr::WindowFunction(expr::WindowFunction::new(
                                 fun,
-                                args: self.function_args_to_expr(function.args, schema)?,
+                                self.function_args_to_expr(function.args, schema)?,
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            }
+                            ))
                         }
                     };
                     return Ok(expr);
@@ -2375,12 +2359,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if let Ok(fun) = AggregateFunction::from_str(&name) {
                     let distinct = function.distinct;
                     let (fun, args) = self.aggregate_fn_to_expr(fun, function.args, schema)?;
-                    return Ok(Expr::AggregateFunction {
+                    return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                         fun,
-                        distinct,
                         args,
-                        filter: None,
-                    });
+                        distinct,
+                        None,
+                    )));
                 };
 
                 // finally, user-defined functions (UDF) and UDAF
@@ -2403,13 +2387,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
 
-            SQLExpr::Floor{expr, field: _field} => {
+            SQLExpr::Floor { expr, field: _field } => {
                 let fun = BuiltinScalarFunction::Floor;
                 let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
                 Ok(Expr::ScalarFunction { fun, args })
             }
 
-            SQLExpr::Ceil{expr, field: _field} => {
+            SQLExpr::Ceil { expr, field: _field } => {
                 let fun = BuiltinScalarFunction::Ceil;
                 let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
                 Ok(Expr::ScalarFunction { fun, args })
@@ -2542,12 +2526,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // next, aggregate built-ins
         let fun = AggregateFunction::ArrayAgg;
 
-        Ok(Expr::AggregateFunction {
-            fun,
-            distinct,
-            args,
-            filter: None,
-        })
+        Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
+            fun, args, distinct, None,
+        )))
     }
 
     fn function_args_to_expr(
@@ -2715,7 +2696,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported Value {}",
                         value[0]
-                    )))
+                    )));
                 }
             },
             // for capture signed number e.g. +8, -8
@@ -2726,14 +2707,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported Value {}",
                         value[0]
-                    )))
+                    )));
                 }
             },
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "Unsupported Value {}",
                     value[0]
-                )))
+                )));
             }
         };
 
@@ -2965,7 +2946,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             return Err(DataFusionError::Internal(format!(
                                 "Incorrect data type for time_zone: {}",
                                 v.get_datatype(),
-                            )))
+                            )));
                         }
                         None => return Err(DataFusionError::Internal(
                             "Config Option datafusion.execution.time_zone doesn't exist"
@@ -2993,7 +2974,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             SQLDataType::Numeric(exact_number_info)
-            |SQLDataType::Decimal(exact_number_info) => {
+            | SQLDataType::Decimal(exact_number_info) => {
                 let (precision, scale) = match *exact_number_info {
                     ExactNumberInfo::None => (None, None),
                     ExactNumberInfo::Precision(precision) => (Some(precision), None),
@@ -3025,12 +3006,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharacterVarying(_)
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
-                | SQLDataType::CharLargeObject(_)
+            | SQLDataType::CharLargeObject(_)
             // precision is not supported
-                | SQLDataType::Timestamp(Some(_), _)
+            | SQLDataType::Timestamp(Some(_), _)
             // precision is not supported
-                | SQLDataType::Time(Some(_), _)
-                | SQLDataType::Dec(_)
+            | SQLDataType::Time(Some(_), _)
+            | SQLDataType::Dec(_)
             | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL type {:?}",
                 sql_type
@@ -4054,7 +4035,7 @@ mod tests {
             "Projection: col1, col2\
             \n  Projection: t.column1 AS col1, t.column2 AS col2\
             \n    SubqueryAlias: t\
-            \n      Values: (CAST(Utf8(\"2021-06-10 17:01:00Z\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2004-04-09\") AS Date32))"
+            \n      Values: (CAST(Utf8(\"2021-06-10 17:01:00Z\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2004-04-09\") AS Date32))",
         );
     }
 
@@ -4302,7 +4283,7 @@ mod tests {
         let sql = "SELECT age, MIN(first_name) FROM person GROUP BY age + 1";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!("Plan(\"Projection references non-aggregate values: Expression person.age could not be resolved from available columns: person.age + Int64(1), MIN(person.first_name)\")",
-            format!("{:?}", err)
+                   format!("{:?}", err)
         );
     }
 
@@ -5167,7 +5148,6 @@ mod tests {
     ///                     ->  Seq Scan on orders  (cost=0.00..20.00 rows=1000 width=8)
     /// ```
     ///
-    /// FIXME: for now we are not detecting prefix of sorting keys in order to save one sort exec phase
     #[test]
     fn over_order_by_sort_keys_sorting_prefix_compacting() {
         let sql = "SELECT order_id, MAX(qty) OVER (ORDER BY order_id), SUM(qty) OVER (), MIN(qty) OVER (ORDER BY order_id, qty) from orders";
@@ -5863,10 +5843,9 @@ mod tests {
             FROM person \
             JOIN orders ON id = customer_id OR person.age > 30";
         let expected = "Projection: person.id, orders.order_id\
-            \n  Filter: person.id = orders.customer_id OR person.age > Int64(30)\
-            \n    CrossJoin:\
-            \n      TableScan: person\
-            \n      TableScan: orders";
+            \n  Inner Join:  Filter: person.id = orders.customer_id OR person.age > Int64(30)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -5988,10 +5967,9 @@ mod tests {
             ON person.id = 10";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Filter: person.id = Int64(10)\
-        \n    CrossJoin:\
-        \n      TableScan: person\
-        \n      TableScan: orders";
+        \n  Inner Join:  Filter: person.id = Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6003,12 +5981,10 @@ mod tests {
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+
         quick_test(sql, expected);
     }
 
@@ -6020,12 +5996,9 @@ mod tests {
             ON person.id + 10 = orders.customer_id * 2";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6037,12 +6010,9 @@ mod tests {
             ON person.id + person.age + 10 = orders.customer_id * 2 - orders.price";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + person.age + Int64(10) = orders.customer_id * Int64(2) - orders.price\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + person.age + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + person.age + Int64(10) = orders.customer_id * Int64(2) - orders.price\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6054,11 +6024,9 @@ mod tests {
             ON person.id + person.age + 10 = orders.customer_id";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + person.age + Int64(10) = orders.customer_id\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + person.age + Int64(10)\
-        \n        TableScan: person\
-        \n      TableScan: orders";
+        \n  Inner Join: person.id + person.age + Int64(10) = orders.customer_id\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6070,11 +6038,49 @@ mod tests {
             ON person.id = orders.customer_id * 2 - orders.price";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id = orders.customer_id * Int64(2) - orders.price\
-        \n      TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2) - orders.price\
-        \n        TableScan: orders";
+       \n  Inner Join: person.id = orders.customer_id * Int64(2) - orders.price\
+       \n    TableScan: person\
+       \n    TableScan: orders";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_noneq_with_filter_join() {
+        // inner join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person INNER JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Inner Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+        quick_test(sql, expected);
+        // left join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person LEFT JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Left Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+        quick_test(sql, expected);
+        // right join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person RIGHT JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Right Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+        quick_test(sql, expected);
+        // full join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person FULL JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Full Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6088,10 +6094,9 @@ mod tests {
             ON person.id = 10";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Filter: person.id = Int64(10)\
-        \n    CrossJoin:\
-        \n      TableScan: person\
-        \n      TableScan: orders";
+            \n  Full Join:  Filter: person.id = Int64(10)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6103,12 +6108,9 @@ mod tests {
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6120,12 +6122,9 @@ mod tests {
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: orders.customer_id * Int64(2), person.id + Int64(10)\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id + Int64(10)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id * Int64(2)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6153,12 +6152,9 @@ mod tests {
             ON person.id * 2 = orders.customer_id + 10 and person.id * 2 = orders.order_id";
 
         let expected = "Projection: person.id, person.age\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id * Int64(2) = orders.order_id\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id * Int64(2)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id + Int64(10)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id * Int64(2) = orders.order_id\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6171,11 +6167,9 @@ mod tests {
             ON person.id * 2 = orders.customer_id + 10 and person.id =  orders.customer_id + 10";
 
         let expected = "Projection: person.id, person.age\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\n    Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id = orders.customer_id + Int64(10)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, person.id * Int64(2)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, orders.customer_id + Int64(10)\
-        \n        TableScan: orders";
+        \n  Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id = orders.customer_id + Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6473,7 +6467,7 @@ mod tests {
             ScalarValue::Utf8(Some("xyz".to_string())),
         ];
         let expected_plan =
-        "Projection: person.id, person.age, Utf8(\"xyz\")\
+            "Projection: person.id, person.age, Utf8(\"xyz\")\
         \n  Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8(\"abc\")\
         \n    TableScan: person";
 
@@ -6510,7 +6504,7 @@ mod tests {
             ScalarValue::Float64(Some(300.0)),
         ];
         let expected_plan =
-        "Projection: person.id, SUM(person.age)\
+            "Projection: person.id, SUM(person.age)\
         \n  Filter: SUM(person.age) < Int32(10) AND SUM(person.age) > Int64(10) OR SUM(person.age) IN ([Float64(200), Float64(300)])\
         \n    Aggregate: groupBy=[[person.id]], aggr=[[SUM(person.age)]]\
         \n      Filter: person.salary > Float64(100)\
@@ -6593,12 +6587,9 @@ mod tests {
             ON cast(person.id as Int) = cast(orders.customer_id as Int)";
 
         let expected = "Projection: person.id, person.age\
-        \n  Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n    Inner Join: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
-        \n      Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, CAST(person.id AS Int32) AS CAST(person.id AS Int32)\
-        \n        TableScan: person\
-        \n      Projection: orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered, CAST(orders.customer_id AS Int32) AS CAST(orders.customer_id AS Int32)\
-        \n        TableScan: orders";
+        \n  Inner Join: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 

@@ -17,13 +17,14 @@
 
 //! Optimizer rule for type validation and coercion
 
-use crate::utils::rewrite_preserving_name;
-use crate::{OptimizerConfig, OptimizerRule};
+use std::sync::Arc;
+
 use arrow::datatypes::{DataType, IntervalUnit};
+
 use datafusion_common::{
     parse_interval, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::expr::{Between, BinaryExpr, Case, Like};
+use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunction};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
@@ -39,7 +40,9 @@ use datafusion_expr::{
     WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion_expr::{ExprSchemable, Signature};
-use std::sync::Arc;
+
+use crate::utils::rewrite_preserving_name;
+use crate::{OptimizerConfig, OptimizerRule};
 
 #[derive(Default)]
 pub struct TypeCoercion {}
@@ -55,12 +58,12 @@ impl OptimizerRule for TypeCoercion {
         "type_coercion"
     }
 
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
-        optimize_internal(&DFSchema::empty(), plan)
+        _: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
+        Ok(Some(optimize_internal(&DFSchema::empty(), plan)?))
     }
 }
 
@@ -84,6 +87,12 @@ fn optimize_internal(
             lhs
         },
     );
+
+    if let LogicalPlan::TableScan(ts) = plan {
+        let source_schema =
+            DFSchema::try_from_qualified_schema(&ts.table_name, &ts.source.schema())?;
+        schema.merge(&source_schema);
+    }
 
     // merge the outer schema for correlated subqueries
     // like case:
@@ -182,7 +191,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let left_type = expr.get_type(&self.schema)?;
                 let right_type = pattern.get_type(&self.schema)?;
                 let coerced_type =
-                    coerce_types(&left_type, &Operator::Like, &right_type)?;
+                    coerce_types(&left_type, &Operator::ILike, &right_type)?;
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
                 let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
                 let expr = Expr::ILike(Like::new(negated, expr, pattern, escape_char));
@@ -367,24 +376,21 @@ impl ExprRewriter for TypeCoercionRewriter {
                 };
                 Ok(expr)
             }
-            Expr::AggregateFunction {
+            Expr::AggregateFunction(expr::AggregateFunction {
                 fun,
                 args,
                 distinct,
                 filter,
-            } => {
+            }) => {
                 let new_expr = coerce_agg_exprs_for_signature(
                     &fun,
                     &args,
                     &self.schema,
                     &aggregate_function::signature(&fun),
                 )?;
-                let expr = Expr::AggregateFunction {
-                    fun,
-                    args: new_expr,
-                    distinct,
-                    filter,
-                };
+                let expr = Expr::AggregateFunction(expr::AggregateFunction::new(
+                    fun, new_expr, distinct, filter,
+                ));
                 Ok(expr)
             }
             Expr::AggregateUDF { fun, args, filter } => {
@@ -400,22 +406,22 @@ impl ExprRewriter for TypeCoercionRewriter {
                 };
                 Ok(expr)
             }
-            Expr::WindowFunction {
+            Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
                 partition_by,
                 order_by,
                 window_frame,
-            } => {
+            }) => {
                 let window_frame =
                     get_coerced_window_frame(window_frame, &self.schema, &order_by)?;
-                let expr = Expr::WindowFunction {
+                let expr = Expr::WindowFunction(WindowFunction::new(
                     fun,
                     args,
                     partition_by,
                     order_by,
                     window_frame,
-                };
+                ));
                 Ok(expr)
             }
             expr => Ok(expr),
@@ -578,11 +584,12 @@ fn coerce_agg_exprs_for_signature(
 
 #[cfg(test)]
 mod test {
-    use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter};
-    use crate::{OptimizerConfig, OptimizerRule};
+    use std::sync::Arc;
+
     use arrow::datatypes::DataType;
+
     use datafusion_common::{DFField, DFSchema, Result, ScalarValue};
-    use datafusion_expr::expr::Like;
+    use datafusion_expr::expr::{self, Like};
     use datafusion_expr::expr_rewriter::ExprRewritable;
     use datafusion_expr::{
         cast, col, concat, concat_ws, create_udaf, is_true,
@@ -596,12 +603,14 @@ mod test {
         Signature, Volatility,
     };
     use datafusion_physical_expr::expressions::AvgAccumulator;
-    use std::sync::Arc;
+
+    use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter};
+    use crate::{OptimizerContext, OptimizerRule};
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let rule = TypeCoercion::new();
-        let mut config = OptimizerConfig::default();
-        let plan = rule.optimize(plan, &mut config)?;
+        let config = OptimizerContext::default();
+        let plan = rule.try_optimize(plan, &config)?.unwrap();
         assert_eq!(expected, &format!("{:?}", plan));
         Ok(())
     }
@@ -764,24 +773,24 @@ mod test {
     fn agg_function_case() -> Result<()> {
         let empty = empty();
         let fun: AggregateFunction = AggregateFunction::Avg;
-        let agg_expr = Expr::AggregateFunction {
+        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
             fun,
-            args: vec![lit(12i64)],
-            distinct: false,
-            filter: None,
-        };
+            vec![lit(12i64)],
+            false,
+            None,
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
         let expected = "Projection: AVG(Int64(12))\n  EmptyRelation";
         assert_optimized_plan_eq(&plan, expected)?;
 
         let empty = empty_with_type(DataType::Int32);
         let fun: AggregateFunction = AggregateFunction::Avg;
-        let agg_expr = Expr::AggregateFunction {
+        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
             fun,
-            args: vec![col("a")],
-            distinct: false,
-            filter: None,
-        };
+            vec![col("a")],
+            false,
+            None,
+        ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
         let expected = "Projection: AVG(a)\n  EmptyRelation";
         assert_optimized_plan_eq(&plan, expected)?;
@@ -792,12 +801,12 @@ mod test {
     fn agg_function_invalid_input() -> Result<()> {
         let empty = empty();
         let fun: AggregateFunction = AggregateFunction::Avg;
-        let agg_expr = Expr::AggregateFunction {
+        let agg_expr = Expr::AggregateFunction(expr::AggregateFunction::new(
             fun,
-            args: vec![lit("1")],
-            distinct: false,
-            filter: None,
-        };
+            vec![lit("1")],
+            false,
+            None,
+        ));
         let err = Projection::try_new(vec![agg_expr], empty).err().unwrap();
         assert_eq!(
             "Plan(\"The function Avg does not support inputs of type Utf8.\")",

@@ -356,8 +356,7 @@ pub async fn convert_tbl(
         }
 
         // create the physical plan
-        let csv = csv.to_logical_plan()?;
-        let csv = ctx.create_physical_plan(&csv).await?;
+        let csv = csv.create_physical_plan().await?;
 
         let output_path = output_root_path.join(table);
         let output_path = output_path.to_str().unwrap().to_owned();
