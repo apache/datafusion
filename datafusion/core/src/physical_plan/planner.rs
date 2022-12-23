@@ -1097,7 +1097,7 @@ impl DefaultPhysicalPlanner {
                     // TABLE" -- it must be handled at a higher level (so
                     // that the appropriate table can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::Plan(
                         "Unsupported logical plan: CreateExternalTable".to_string(),
                     ))
                 }
@@ -1105,7 +1105,7 @@ impl DefaultPhysicalPlanner {
                     // There is no default plan for "PREPARE" -- it must be
                     // handled at a higher level (so that the appropriate
                     // statement can be prepared)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::Plan(
                         "Unsupported logical plan: Prepare".to_string(),
                     ))
                 }
@@ -1114,7 +1114,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::Plan(
                         "Unsupported logical plan: CreateCatalogSchema".to_string(),
                     ))
                 }
@@ -1123,7 +1123,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::Plan(
                         "Unsupported logical plan: CreateCatalog".to_string(),
                     ))
                 }
@@ -1132,7 +1132,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::Plan(
                         "Unsupported logical plan: CreateMemoryTable".to_string(),
                     ))
                 }
@@ -1141,7 +1141,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::Plan(
                         "Unsupported logical plan: DropTable".to_string(),
                     ))
                 }
@@ -1150,7 +1150,7 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::Plan(
                         "Unsupported logical plan: DropView".to_string(),
                     ))
                 }
@@ -1159,16 +1159,16 @@ impl DefaultPhysicalPlanner {
                     // It must be handled at a higher level (so
                     // that the schema can be registered with
                     // the context)
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::Plan(
                         "Unsupported logical plan: CreateView".to_string(),
                     ))
                 }
                 LogicalPlan::SetVariable(_) => {
-                    Err(DataFusionError::Internal(
+                    Err(DataFusionError::Plan(
                         "Unsupported logical plan: SetVariable must be root of the plan".to_string(),
                     ))
                 }
-                LogicalPlan::Explain(_) => Err(DataFusionError::Internal(
+                LogicalPlan::Explain(_) => Err(DataFusionError::Plan(
                     "Unsupported logical plan: Explain must be root of the plan".to_string(),
                 )),
                 LogicalPlan::Analyze(a) => {

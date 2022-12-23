@@ -188,7 +188,7 @@ async fn csv_explain_plans() {
     // Create plan
     let msg = format!("Creating logical plan for '{}'", sql);
     let dataframe = ctx.sql(sql).await.expect(&msg);
-    let logical_schema = dataframe.schema();
+    let logical_schema = dataframe.schema().clone();
     let plan = dataframe.logical_plan();
 
     //
@@ -264,10 +264,10 @@ async fn csv_explain_plans() {
     // Optimized logical plan
     //
     let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.optimize(plan).expect(&msg);
+    let plan = dataframe.into_optimized_plan().expect(&msg);
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
-    assert_eq!(logical_schema, optimized_logical_schema.as_ref());
+    assert_eq!(&logical_schema, optimized_logical_schema.as_ref());
     //
     // Verify schema
     let expected = vec![
@@ -339,7 +339,14 @@ async fn csv_explain_plans() {
     // Physical plan
     // Create plan
     let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
+    let plan = ctx
+        .dataframe(plan)
+        .await
+        .expect(&msg)
+        .create_physical_plan()
+        .await
+        .unwrap();
+
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
@@ -563,7 +570,14 @@ async fn csv_explain_verbose_plans() {
     // Physical plan
     // Create plan
     let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
+    let plan = ctx
+        .dataframe(plan)
+        .await
+        .expect(&msg)
+        .create_physical_plan()
+        .await
+        .unwrap();
+
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);

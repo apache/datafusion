@@ -1120,9 +1120,8 @@ async fn aggregate_with_alias() -> Result<()> {
         .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
         .build()?;
 
-    let plan = ctx.optimize(&plan)?;
+    let physical_plan = ctx.dataframe(plan).await?.create_physical_plan().await?;
 
-    let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
     assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
     assert_eq!(
         "total_salary",

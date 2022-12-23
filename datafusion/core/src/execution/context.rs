@@ -245,26 +245,31 @@ impl SessionContext {
         self.state.read().config.clone()
     }
 
-    /// Creates a [`DataFrame`] that will execute a SQL query.
+    /// Creates a [`DataFrame`] that executes a SQL query supported by
+    /// DataFusion, including DDL (such as `CREATE TABLE`).
+    ///
+    /// You can use [`Self::plan_sql`] and
+    /// [`DataFrame::create_physical_plan`] directly if you need read only
+    /// query support (no way to create external tables, for example)
+    ///
+    /// This method is `async` because queries of type `CREATE
+    /// EXTERNAL TABLE` might require the schema to be inferred.
+    pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
+        let plan = self.plan_sql(sql)?;
+        self.dataframe(plan).await
+    }
+
+    /// Creates a [`DataFrame`] that will execute the specified
+    /// LogicalPlan, including DDL (such as `CREATE TABLE`).
+    /// Use [`Self::dataframe_without_ddl`] if you do not want
+    /// to support DDL statements.
+    ///
+    /// Any DDL statements are executed during this function (not when
+    /// the [`DataFrame`] is evaluated)
     ///
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
-    /// might require the schema to be inferred.
-    pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
-        let mut statements = DFParser::parse_sql(sql)?;
-        if statements.len() != 1 {
-            return Err(DataFusionError::NotImplemented(
-                "The context currently only supports a single SQL statement".to_string(),
-            ));
-        }
-
-        // create a query planner
-        let plan = {
-            // TODO: Move catalog off SessionState onto SessionContext
-            let state = self.state.read();
-            let query_planner = SqlToRel::new(&*state);
-            query_planner.statement_to_plan(statements.pop_front().unwrap())?
-        };
-
+    /// might require the schema to be inferred by performing I/O.
+    pub async fn dataframe(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
             LogicalPlan::CreateExternalTable(cmd) => {
                 self.create_external_table(&cmd).await
@@ -492,6 +497,15 @@ impl SessionContext {
         }
     }
 
+    /// Creates a [`DataFrame`] that will execute the specified
+    /// LogicalPlan, but will error if the plans represent DDL such as
+    /// `CREATE TABLE`
+    ///
+    /// Use [`Self::dataframe`] to run plans with DDL
+    pub fn dataframe_without_ddl(&self, plan: LogicalPlan) -> Result<DataFrame> {
+        Ok(DataFrame::new(self.state(), plan))
+    }
+
     // return an empty dataframe
     fn return_empty_dataframe(&self) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::empty(false).build()?;
@@ -559,11 +573,9 @@ impl SessionContext {
         }
         Ok(false)
     }
-    /// Creates a logical plan.
-    ///
-    /// This function is intended for internal use and should not be called directly.
-    #[deprecated(note = "Use SessionContext::sql which snapshots the SessionState")]
-    pub fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
+
+    /// Creates a [`LogicalPlan`] from a SQL query.
+    pub fn plan_sql(&self, sql: &str) -> Result<LogicalPlan> {
         let mut statements = DFParser::parse_sql(sql)?;
 
         if statements.len() != 1 {
@@ -1000,32 +1012,24 @@ impl SessionContext {
     }
 
     /// Optimizes the logical plan by applying optimizer rules.
-    pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        self.state.read().optimize(plan)
+    #[deprecated(
+        note = "Use `SessionContext::dataframe_without_ddl` and `DataFrame::into_optimized_plan`"
+    )]
+    pub fn optimize(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
+        self.dataframe_without_ddl(plan)?.into_optimized_plan()
     }
 
-    /// Creates a physical plan from a logical plan.
+    /// Creates a physical [`ExecutionPlan`] from a [`LogicalPlan`].
+    #[deprecated(
+        note = "Use `SessionContext::::dataframe_without_ddl` and `DataFrame::create_physical_plan`"
+    )]
     pub async fn create_physical_plan(
         &self,
-        logical_plan: &LogicalPlan,
+        logical_plan: LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let state_cloned = {
-            let mut state = self.state.write();
-            state.execution_props.start_execution();
-
-            // We need to clone `state` to release the lock that is not `Send`. We could
-            // make the lock `Send` by using `tokio::sync::Mutex`, but that would require to
-            // propagate async even to the `LogicalPlan` building methods.
-            // Cloning `state` here is fine as we then pass it as immutable `&state`, which
-            // means that we avoid write consistency issues as the cloned version will not
-            // be written to. As for eventual modifications that would be applied to the
-            // original state after it has been cloned, they will not be picked up by the
-            // clone but that is okay, as it is equivalent to postponing the state update
-            // by keeping the lock until the end of the function scope.
-            state.clone()
-        };
-
-        state_cloned.create_physical_plan(logical_plan).await
+        self.dataframe_without_ddl(logical_plan)?
+            .create_physical_plan()
+            .await
     }
 
     /// Executes a query and writes the results to a partitioned CSV file.

@@ -324,18 +324,17 @@ async fn execute_query(
     debug: bool,
     enable_scheduler: bool,
 ) -> Result<Vec<RecordBatch>> {
-    let plan = ctx.sql(sql).await?;
-    let plan = plan.into_unoptimized_plan();
+    let plan = ctx.sql(sql).await?.into_unoptimized_plan();
 
     if debug {
         println!("=== Logical plan ===\n{:?}\n", plan);
     }
 
-    let plan = ctx.optimize(&plan)?;
+    let plan = ctx.dataframe(plan).await?.into_optimized_plan()?;
     if debug {
         println!("=== Optimized logical plan ===\n{:?}\n", plan);
     }
-    let physical_plan = ctx.create_physical_plan(&plan).await?;
+    let physical_plan = ctx.dataframe(plan).await?.create_physical_plan().await?;
     if debug {
         println!(
             "=== Physical plan ===\n{}\n",

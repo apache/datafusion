@@ -212,7 +212,8 @@ async fn custom_source_dataframe() -> Result<()> {
         .project(vec![col("c2")])?
         .build()?;
 
-    let optimized_plan = ctx.optimize(&logical_plan)?;
+    let optimized_plan = ctx.dataframe(logical_plan).await?.into_optimized_plan()?;
+
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match &**input {
             LogicalPlan::TableScan(TableScan {
@@ -235,7 +236,11 @@ async fn custom_source_dataframe() -> Result<()> {
     );
     assert_eq!(format!("{:?}", optimized_plan), expected);
 
-    let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
+    let physical_plan = ctx
+        .dataframe(optimized_plan)
+        .await?
+        .create_physical_plan()
+        .await?;
 
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
@@ -261,10 +266,7 @@ async fn optimizers_catch_all_statistics() {
         .await
         .unwrap();
 
-    let physical_plan = ctx
-        .create_physical_plan(&df.into_optimized_plan().unwrap())
-        .await
-        .unwrap();
+    let physical_plan = df.create_physical_plan().await.unwrap();
 
     // when the optimization kicks in, the source is replaced by an EmptyExec
     assert!(

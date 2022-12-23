@@ -1069,7 +1069,7 @@ async fn regression_test(query_no: u8, create_physical: bool) -> Result<()> {
         let df = ctx.sql(sql).await?;
         let plan = df.into_optimized_plan()?;
         if create_physical {
-            let _ = ctx.create_physical_plan(&plan).await?;
+            let _ = ctx.dataframe(plan).await?.create_physical_plan().await?;
         }
     }
 

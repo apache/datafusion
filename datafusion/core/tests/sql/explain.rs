@@ -38,7 +38,11 @@ fn optimize_explain() {
     }
 
     // now optimize the plan and expect to see more plans
-    let optimized_plan = SessionContext::new().optimize(&plan).unwrap();
+    let optimized_plan = SessionContext::new()
+        .dataframe_without_ddl(plan.clone())
+        .unwrap()
+        .into_optimized_plan()
+        .unwrap();
     if let LogicalPlan::Explain(e) = &optimized_plan {
         // should have more than one plan
         assert!(

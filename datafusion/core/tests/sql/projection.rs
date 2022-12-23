@@ -172,7 +172,7 @@ async fn projection_on_table_scan() -> Result<()> {
         .project(vec![col("c2")])?
         .build()?;
 
-    let optimized_plan = ctx.optimize(&logical_plan)?;
+    let optimized_plan = ctx.dataframe(logical_plan).await?.into_optimized_plan()?;
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match &**input {
             LogicalPlan::TableScan(TableScan {
@@ -192,7 +192,11 @@ async fn projection_on_table_scan() -> Result<()> {
                     \n  TableScan: test projection=[c2]";
     assert_eq!(format!("{:?}", optimized_plan), expected);
 
-    let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
+    let physical_plan = ctx
+        .dataframe(optimized_plan)
+        .await?
+        .create_physical_plan()
+        .await?;
 
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
@@ -215,8 +219,8 @@ async fn preserve_nullability_on_projection() -> Result<()> {
         .project(vec![col("c1")])?
         .build()?;
 
-    let plan = ctx.optimize(&plan)?;
-    let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
+    let physical_plan = ctx.dataframe(plan).await?.create_physical_plan().await?;
+
     assert!(!physical_plan.schema().field_with_name("c1")?.is_nullable());
     Ok(())
 }
@@ -248,7 +252,14 @@ async fn project_cast_dictionary() {
 
     let logical_plan = builder.project(vec![expr]).unwrap().build().unwrap();
 
-    let physical_plan = ctx.create_physical_plan(&logical_plan).await.unwrap();
+    let physical_plan = ctx
+        .dataframe(logical_plan)
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+
     let actual = collect(physical_plan, ctx.task_ctx()).await.unwrap();
 
     let expected = vec![
@@ -289,7 +300,7 @@ async fn projection_on_memory_scan() -> Result<()> {
     assert_fields_eq(&plan, vec!["b"]);
 
     let ctx = SessionContext::new();
-    let optimized_plan = ctx.optimize(&plan)?;
+    let optimized_plan = ctx.dataframe(plan).await?.into_optimized_plan()?;
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match &**input {
             LogicalPlan::TableScan(TableScan {
@@ -312,7 +323,11 @@ async fn projection_on_memory_scan() -> Result<()> {
     );
     assert_eq!(format!("{:?}", optimized_plan), expected);
 
-    let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
+    let physical_plan = ctx
+        .dataframe(optimized_plan)
+        .await?
+        .create_physical_plan()
+        .await?;
 
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("b", physical_plan.schema().field(0).name().as_str());
