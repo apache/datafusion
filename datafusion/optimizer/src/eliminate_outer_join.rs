@@ -16,7 +16,7 @@
 // under the License.
 
 //! Optimizer rule to eliminate left/right/full join to inner join if possible.
-use crate::{utils, OptimizerConfig, OptimizerRule};
+use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::{
     logical_plan::{Join, JoinType, LogicalPlan},
@@ -24,6 +24,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{Expr, Operator};
 
+use crate::optimizer::ApplyOrder;
 use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
 use std::sync::Arc;
 
@@ -64,7 +65,7 @@ impl OptimizerRule for EliminateOuterJoin {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => match filter.input().as_ref() {
@@ -109,16 +110,20 @@ impl OptimizerRule for EliminateOuterJoin {
                         null_equals_null: join.null_equals_null,
                     });
                     let new_plan = from_plan(plan, &plan.expressions(), &[new_join])?;
-                    Ok(Some(utils::optimize_children(self, &new_plan, config)?))
+                    Ok(Some(new_plan))
                 }
-                _ => Ok(Some(utils::optimize_children(self, plan, config)?)),
+                _ => Ok(None),
             },
-            _ => Ok(Some(utils::optimize_children(self, plan, config)?)),
+            _ => Ok(None),
         }
     }
 
     fn name(&self) -> &str {
         "eliminate_outer_join"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
     }
 }
 
@@ -295,7 +300,6 @@ fn extract_non_nullable_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::optimizer::OptimizerContext;
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
@@ -305,16 +309,8 @@ mod tests {
         Operator::{And, Or},
     };
 
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
-        let rule = EliminateOuterJoin::new();
-        let optimized_plan = rule
-            .try_optimize(plan, &OptimizerContext::new())
-            .unwrap()
-            .expect("failed to optimize plan");
-        let formatted_plan = format!("{:?}", optimized_plan);
-        assert_eq!(formatted_plan, expected);
-        assert_eq!(plan.schema(), optimized_plan.schema());
-        Ok(())
+    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+        assert_optimized_plan_eq(Arc::new(EliminateOuterJoin::new()), plan, expected)
     }
 
     #[test]
@@ -337,7 +333,7 @@ mod tests {
         \n  Left Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -360,7 +356,7 @@ mod tests {
         \n  Inner Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -387,7 +383,7 @@ mod tests {
         \n  Inner Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -414,7 +410,7 @@ mod tests {
         \n  Inner Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -441,6 +437,6 @@ mod tests {
         \n  Inner Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 }

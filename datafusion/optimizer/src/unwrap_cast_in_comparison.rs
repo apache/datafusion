@@ -18,6 +18,7 @@
 //! Unwrap-cast binary comparison rule can be used to the binary/inlist comparison expr now, and other type
 //! of expr can be added if needed.
 //! This rule can reduce adding the `Expr::Cast` the expr instead of adding the `Expr::Cast` to literal expr.
+use crate::optimizer::ApplyOrder;
 use crate::utils::rewrite_preserving_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use arrow::datatypes::{
@@ -84,16 +85,9 @@ impl OptimizerRule for UnwrapCastInComparison {
         plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        let new_inputs = plan
-            .inputs()
-            .into_iter()
-            .map(|input| {
-                self.try_optimize(input, _config)
-                    .map(|o| o.unwrap_or_else(|| input.clone()))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let inputs: Vec<LogicalPlan> = plan.inputs().into_iter().cloned().collect();
 
-        let mut schema = new_inputs.iter().map(|input| input.schema()).fold(
+        let mut schema = inputs.iter().map(|input| input.schema()).fold(
             DFSchema::empty(),
             |mut lhs, rhs| {
                 lhs.merge(rhs);
@@ -116,12 +110,16 @@ impl OptimizerRule for UnwrapCastInComparison {
         Ok(Some(from_plan(
             plan,
             new_exprs.as_slice(),
-            new_inputs.as_slice(),
+            inputs.as_slice(),
         )?))
     }
 
     fn name(&self) -> &str {
         "unwrap_cast_in_comparison"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
     }
 }
 

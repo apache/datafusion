@@ -20,7 +20,8 @@
 //! and then insert an `IsNotNull` filter on the nullable side since null values
 //! can never match.
 
-use crate::{utils, OptimizerConfig, OptimizerRule};
+use crate::optimizer::ApplyOrder;
+use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::{
     and, logical_plan::Filter, logical_plan::JoinType, Expr, ExprSchemable, LogicalPlan,
@@ -42,20 +43,11 @@ impl OptimizerRule for FilterNullJoinKeys {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
-                // recurse down first and optimize inputs
                 let mut join = join.clone();
-                join.left = Arc::new(
-                    self.try_optimize(&join.left, config)?
-                        .unwrap_or_else(|| join.left.as_ref().clone()),
-                );
-                join.right = Arc::new(
-                    self.try_optimize(&join.right, config)?
-                        .unwrap_or_else(|| join.right.as_ref().clone()),
-                );
 
                 let left_schema = join.left.schema();
                 let right_schema = join.right.schema();
@@ -89,15 +81,16 @@ impl OptimizerRule for FilterNullJoinKeys {
                 }
                 Ok(Some(LogicalPlan::Join(join)))
             }
-            _ => {
-                // Apply the optimization to all inputs of the plan
-                Ok(Some(utils::optimize_children(self, plan, config)?))
-            }
+            _ => Ok(None),
         }
     }
 
     fn name(&self) -> &str {
         Self::NAME
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
     }
 }
 
@@ -115,27 +108,15 @@ fn create_not_null_predicate(filters: Vec<Expr>) -> Expr {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::test::assert_optimized_plan_eq;
     use arrow::datatypes::{DataType, Field, Schema};
-
     use datafusion_common::{Column, Result};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{col, lit, logical_plan::JoinType, LogicalPlanBuilder};
 
-    use crate::optimizer::OptimizerContext;
-
-    use super::*;
-
-    fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
-        let rule = FilterNullJoinKeys::default();
-        rule.try_optimize(plan, &OptimizerContext::new())
-            .unwrap()
-            .expect("failed to optimize plan")
-    }
-
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let optimized_plan = optimize_plan(plan);
-        let formatted_plan = format!("{:?}", optimized_plan);
-        assert_eq!(formatted_plan, expected);
+    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+        assert_optimized_plan_eq(Arc::new(FilterNullJoinKeys {}), plan, expected)
     }
 
     #[test]
@@ -146,8 +127,7 @@ mod tests {
         \n  Filter: t1.optional_id IS NOT NULL\
         \n    TableScan: t1\
         \n  TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -158,8 +138,7 @@ mod tests {
         \n  Filter: t1.optional_id IS NOT NULL\
         \n    TableScan: t1\
         \n  TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -196,8 +175,7 @@ mod tests {
         \n    Filter: t1.optional_id IS NOT NULL\
         \n      TableScan: t1\
         \n    TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -218,8 +196,7 @@ mod tests {
         \n  Filter: t1.optional_id + UInt32(1) IS NOT NULL\
         \n    TableScan: t1\
         \n  TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -240,8 +217,7 @@ mod tests {
         \n  TableScan: t1\
         \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
         \n    TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -264,8 +240,7 @@ mod tests {
         \n    TableScan: t1\
         \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
         \n    TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     fn build_plan(

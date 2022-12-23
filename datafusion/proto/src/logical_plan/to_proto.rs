@@ -35,12 +35,12 @@ use arrow::datatypes::{
 };
 use datafusion_common::{Column, DFField, DFSchemaRef, OwnedTableReference, ScalarValue};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, Sort,
+    self, Between, BinaryExpr, Cast, GetIndexedField, GroupingSet, Like, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
-    BuiltInWindowFunction, BuiltinScalarFunction, Expr, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunction,
+    BuiltInWindowFunction, BuiltinScalarFunction, Expr, JoinConstraint, JoinType,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
 };
 
 #[derive(Debug)]
@@ -533,13 +533,13 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::SimilarTo(pb)),
                 }
             }
-            Expr::WindowFunction {
+            Expr::WindowFunction(expr::WindowFunction {
                 ref fun,
                 ref args,
                 ref partition_by,
                 ref order_by,
                 ref window_frame,
-            } => {
+            }) => {
                 let window_function = match fun {
                     WindowFunction::AggregateFunction(fun) => {
                         protobuf::window_expr_node::WindowFunction::AggrFunction(
@@ -581,12 +581,12 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::WindowExpr(window_expr)),
                 }
             }
-            Expr::AggregateFunction {
+            Expr::AggregateFunction(expr::AggregateFunction {
                 ref fun,
                 ref args,
                 ref distinct,
                 ref filter
-            } => {
+            }) => {
                 let aggr_function = match fun {
                     AggregateFunction::ApproxDistinct => {
                         protobuf::AggregateFunction::ApproxDistinct
@@ -1328,6 +1328,30 @@ impl From<OwnedTableReference> for protobuf::OwnedTableReference {
 
         protobuf::OwnedTableReference {
             table_reference_enum: Some(table_reference_enum),
+        }
+    }
+}
+
+impl From<JoinType> for protobuf::JoinType {
+    fn from(t: JoinType) -> Self {
+        match t {
+            JoinType::Inner => protobuf::JoinType::Inner,
+            JoinType::Left => protobuf::JoinType::Left,
+            JoinType::Right => protobuf::JoinType::Right,
+            JoinType::Full => protobuf::JoinType::Full,
+            JoinType::LeftSemi => protobuf::JoinType::Leftsemi,
+            JoinType::RightSemi => protobuf::JoinType::Rightsemi,
+            JoinType::LeftAnti => protobuf::JoinType::Leftanti,
+            JoinType::RightAnti => protobuf::JoinType::Rightanti,
+        }
+    }
+}
+
+impl From<JoinConstraint> for protobuf::JoinConstraint {
+    fn from(t: JoinConstraint) -> Self {
+        match t {
+            JoinConstraint::On => protobuf::JoinConstraint::On,
+            JoinConstraint::Using => protobuf::JoinConstraint::Using,
         }
     }
 }

@@ -41,6 +41,7 @@ pub(crate) mod median;
 pub(crate) mod min_max;
 pub mod build_in;
 mod hyperloglog;
+pub mod moving_min_max;
 pub mod row_accumulator;
 pub(crate) mod stats;
 pub(crate) mod stddev;
@@ -98,6 +99,14 @@ pub trait AggregateExpr: Send + Sync + Debug {
     ) -> Result<Box<dyn RowAccumulator>> {
         Err(DataFusionError::NotImplemented(format!(
             "RowAccumulator hasn't been implemented for {:?} yet",
+            self
+        )))
+    }
+
+    /// Creates accumulator implementation that supports retract
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Err(DataFusionError::NotImplemented(format!(
+            "Retractable Accumulator hasn't been implemented for {:?} yet",
             self
         )))
     }

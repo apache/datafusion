@@ -524,6 +524,7 @@ mod tests {
     use crate::test::*;
     use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Schema};
+    use datafusion_expr::expr;
     use datafusion_expr::expr::Cast;
     use datafusion_expr::{
         col, count, lit,
@@ -985,12 +986,12 @@ mod tests {
     fn aggregate_filter_pushdown() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let aggr_with_filter = Expr::AggregateFunction {
-            fun: AggregateFunction::Count,
-            args: vec![col("b")],
-            distinct: false,
-            filter: Some(Box::new(col("c").gt(lit(42)))),
-        };
+        let aggr_with_filter = Expr::AggregateFunction(expr::AggregateFunction::new(
+            AggregateFunction::Count,
+            vec![col("b")],
+            false,
+            Some(Box::new(col("c").gt(lit(42)))),
+        ));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(

@@ -21,7 +21,7 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     aggregates,
     expressions::{
-        cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue,
+        cume_dist, dense_rank, lag, lead, percent_rank, rank, Literal, NthValue, Ntile,
         PhysicalSortExpr, RowNumber,
     },
     type_coercion::coerce,
@@ -33,7 +33,9 @@ use datafusion_expr::{
     window_function::{signature_for_built_in, BuiltInWindowFunction, WindowFunction},
     WindowFrame,
 };
-use datafusion_physical_expr::window::BuiltInWindowFunctionExpr;
+use datafusion_physical_expr::window::{
+    BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr,
+};
 use std::convert::TryInto;
 use std::sync::Arc;
 
@@ -55,12 +57,25 @@ pub fn create_window_expr(
     input_schema: &Schema,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
-        WindowFunction::AggregateFunction(fun) => Arc::new(AggregateWindowExpr::new(
-            aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?,
-            partition_by,
-            order_by,
-            window_frame,
-        )),
+        WindowFunction::AggregateFunction(fun) => {
+            let aggregate =
+                aggregates::create_aggregate_expr(fun, false, args, input_schema, name)?;
+            if !window_frame.start_bound.is_unbounded() {
+                Arc::new(SlidingAggregateWindowExpr::new(
+                    aggregate,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                ))
+            } else {
+                Arc::new(AggregateWindowExpr::new(
+                    aggregate,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                ))
+            }
+        }
         WindowFunction::BuiltInWindowFunction(fun) => Arc::new(BuiltInWindowExpr::new(
             create_built_in_window_expr(fun, args, input_schema, name)?,
             partition_by,
@@ -107,6 +122,18 @@ fn create_built_in_window_expr(
         BuiltInWindowFunction::DenseRank => Arc::new(dense_rank(name)),
         BuiltInWindowFunction::PercentRank => Arc::new(percent_rank(name)),
         BuiltInWindowFunction::CumeDist => Arc::new(cume_dist(name)),
+        BuiltInWindowFunction::Ntile => {
+            let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
+            let n: i64 = get_scalar_value_from_args(&coerced_args, 0)?
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "NTILE requires at least 1 argument".to_string(),
+                    )
+                })?
+                .try_into()?;
+            let n: u64 = n as u64;
+            Arc::new(Ntile::new(name, n))
+        }
         BuiltInWindowFunction::Lag => {
             let coerced_args = coerce(args, input_schema, &signature_for_built_in(fun))?;
             let arg = coerced_args[0].clone();
@@ -154,12 +181,6 @@ fn create_built_in_window_expr(
                 coerce(args, input_schema, &signature_for_built_in(fun))?[0].clone();
             let data_type = args[0].data_type(input_schema)?;
             Arc::new(NthValue::last(name, arg, data_type))
-        }
-        _ => {
-            return Err(DataFusionError::NotImplemented(format!(
-                "Window function with {:?} not yet implemented",
-                fun
-            )))
         }
     })
 }

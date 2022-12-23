@@ -74,7 +74,7 @@ impl TableProvider for StatisticsValidation {
 
     async fn scan(
         &self,
-        _ctx: &SessionState,
+        _state: &SessionState,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         // limit is ignored because it is not mandatory for a `TableProvider` to honor it
@@ -211,11 +211,7 @@ async fn sql_basic() -> Result<()> {
     let ctx = init_ctx(stats.clone(), schema)?;
 
     let df = ctx.sql("SELECT * from stats_table").await.unwrap();
-
-    let physical_plan = ctx
-        .create_physical_plan(&df.to_logical_plan()?)
-        .await
-        .unwrap();
+    let physical_plan = df.create_physical_plan().await.unwrap();
 
     // the statistics should be those of the source
     assert_eq!(stats, physical_plan.statistics());
@@ -233,10 +229,7 @@ async fn sql_filter() -> Result<()> {
         .await
         .unwrap();
 
-    let physical_plan = ctx
-        .create_physical_plan(&df.to_logical_plan()?)
-        .await
-        .unwrap();
+    let physical_plan = df.create_physical_plan().await.unwrap();
 
     let stats = physical_plan.statistics();
     assert!(!stats.is_exact);
@@ -251,10 +244,7 @@ async fn sql_limit() -> Result<()> {
     let ctx = init_ctx(stats.clone(), schema)?;
 
     let df = ctx.sql("SELECT * FROM stats_table LIMIT 5").await.unwrap();
-    let physical_plan = ctx
-        .create_physical_plan(&df.to_logical_plan()?)
-        .await
-        .unwrap();
+    let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is smaller than the original number of lines
     // we loose all statistics except the for number of rows which becomes the limit
     assert_eq!(
@@ -270,10 +260,7 @@ async fn sql_limit() -> Result<()> {
         .sql("SELECT * FROM stats_table LIMIT 100")
         .await
         .unwrap();
-    let physical_plan = ctx
-        .create_physical_plan(&df.to_logical_plan()?)
-        .await
-        .unwrap();
+    let physical_plan = df.create_physical_plan().await.unwrap();
     // when the limit is larger than the original number of lines, statistics remain unchanged
     assert_eq!(stats, physical_plan.statistics());
 
@@ -290,10 +277,7 @@ async fn sql_window() -> Result<()> {
         .await
         .unwrap();
 
-    let physical_plan = ctx
-        .create_physical_plan(&df.to_logical_plan()?)
-        .await
-        .unwrap();
+    let physical_plan = df.create_physical_plan().await.unwrap();
 
     let result = physical_plan.statistics();
 
