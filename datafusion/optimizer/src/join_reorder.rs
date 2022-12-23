@@ -362,12 +362,13 @@ fn build_join_tree(
 ) -> Result<LogicalPlan> {
     let mut b = LogicalPlanBuilder::from(fact.clone());
     for dim in dims {
+
         // find join keys between the fact and this dim
         let mut join_keys = vec![];
         for (l, r) in conds.iter() {
-            if (fact.schema().index_of_column(l).is_ok()
+            if (b.schema().index_of_column(l).is_ok()
                 && dim.schema().index_of_column(r).is_ok())
-                || fact.schema().index_of_column(r).is_ok()
+                || b.schema().index_of_column(r).is_ok()
                     && dim.schema().index_of_column(l).is_ok()
             {
                 join_keys.push((l.clone(), r.clone()));

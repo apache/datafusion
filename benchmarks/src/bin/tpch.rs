@@ -222,7 +222,7 @@ async fn benchmark_query(
         .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size)
         .with_collect_statistics(!opt.disable_statistics)
-        .set_bool(OPT_JOIN_REORDER_ENABLED, false);
+        .set_bool(OPT_JOIN_REORDER_ENABLED, true);
     let ctx = SessionContext::with_config(config);
 
     // register tables
@@ -427,7 +427,7 @@ async fn get_table(
     let (_, stats) = listing_table
         .list_files_for_scan(&ctx.state(), &[], None)
         .await?;
-    println!("list_files_for_scan: {:?}", stats);
+    // println!("list_files_for_scan: {:?}", stats);
 
     Ok(Arc::new(listing_table))
 }

@@ -130,8 +130,8 @@ impl OptimizerContext {
     }
 
     /// Specify whether to enable the join_reorder rule
-    pub fn reorder_joins(mut self, filter_null_keys: bool) -> Self {
-        self.reorder_joins = filter_null_keys;
+    pub fn reorder_joins(mut self, reorder_joins: bool) -> Self {
+        self.reorder_joins = reorder_joins;
         self
     }
 
@@ -172,11 +172,13 @@ impl OptimizerConfig for OptimizerContext {
     }
 
     fn rule_enabled(&self, name: &str) -> bool {
-        match name {
+        let enabled = match name {
             FilterNullJoinKeys::NAME => self.filter_null_keys,
             JoinReorder::NAME => self.reorder_joins,
             _ => true,
-        }
+        };
+        println!("rule_enabled({}) -> {}", name, enabled);
+        enabled
     }
 
     fn skip_failing_rules(&self) -> bool {
