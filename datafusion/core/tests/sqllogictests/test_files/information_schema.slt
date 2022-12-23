@@ -30,13 +30,13 @@ statement ok
 set datafusion.catalog.information_schema = true;
 
 # Verify the information schema now does exist and is empty
-query CCC
+query CCC rowsort
 SELECT * from information_schema.tables;
 ----
-datafusion information_schema tables VIEW
-datafusion information_schema views VIEW
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
 
 # Disable information_schema and verify it now errors again
 statement ok
@@ -58,28 +58,28 @@ set datafusion.catalog.information_schema = true
 statement ok
 create table t as values (1);
 
-query CCC
+query CCC rowsort
 SELECT * from information_schema.tables;
 ----
-datafusion public t BASE TABLE
-datafusion information_schema tables VIEW
-datafusion information_schema views VIEW
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+datafusion public t BASE TABLE
 
 # Another new  table should show up in information schema
 statement ok
 create table t2 as values (1);
 
-query CCC
+query CCC rowsort
 SELECT * from information_schema.tables;
 ----
-datafusion public t BASE TABLE
-datafusion public t2 BASE TABLE
-datafusion information_schema tables VIEW
-datafusion information_schema views VIEW
 datafusion information_schema columns VIEW
 datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+datafusion public t BASE TABLE
+datafusion public t2 BASE TABLE
 
 # Cleanup
 statement ok
