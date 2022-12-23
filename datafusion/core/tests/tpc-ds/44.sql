@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  asceding.rnk, i1.i_product_name best_performing, i2.i_product_name worst_performing
 from(select *

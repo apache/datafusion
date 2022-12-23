@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 with wscs as
  (select sold_date_sk

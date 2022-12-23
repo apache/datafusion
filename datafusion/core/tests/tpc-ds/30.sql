@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 with customer_total_return as
  (select wr_returning_customer_sk as ctr_customer_sk

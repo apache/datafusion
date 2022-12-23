@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  count(*) from (
     select distinct c_last_name, c_first_name, d_date

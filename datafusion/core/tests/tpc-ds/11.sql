@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 with year_total as (
  select c_customer_id customer_id

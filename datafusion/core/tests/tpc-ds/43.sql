@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  s_store_name, s_store_id,
         sum(case when (d_day_name='Sunday') then ss_sales_price else null end) sun_sales,

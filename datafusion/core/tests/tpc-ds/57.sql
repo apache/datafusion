@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 with v1 as(
  select i_category, i_brand,

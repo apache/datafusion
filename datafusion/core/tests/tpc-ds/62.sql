@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  
    substr(w_warehouse_name,1,20)

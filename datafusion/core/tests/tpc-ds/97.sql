@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 with ssci as (
 select ss_customer_sk customer_sk

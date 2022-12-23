@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  *
  from(select w_warehouse_name

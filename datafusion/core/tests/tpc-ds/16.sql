@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  
    count(distinct cs_order_number) as 'order count'

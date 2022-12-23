@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 WITH web_v1 as (
 select

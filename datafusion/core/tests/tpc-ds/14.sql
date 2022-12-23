@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 with  cross_items as
  (select i_item_sk ss_item_sk

@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  ca_zip
        ,sum(cs_sales_price)

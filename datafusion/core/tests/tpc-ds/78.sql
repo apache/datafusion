@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 with ws as
   (select d_year AS ws_sold_year, ws_item_sk,

@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  a.ca_state state, count(*) cnt
  from customer_address a

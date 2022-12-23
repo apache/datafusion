@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  i_item_id,
         s_state, grouping(s_state) g_state,

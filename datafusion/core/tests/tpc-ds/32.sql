@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  sum(cs_ext_discount_amt)  as 'excess discount amount'
 from 

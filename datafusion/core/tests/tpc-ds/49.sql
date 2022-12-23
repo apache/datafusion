@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  channel, item, return_ratio, return_rank, currency_rank from
  (select

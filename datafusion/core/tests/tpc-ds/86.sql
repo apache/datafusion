@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select   
     sum(ws_net_paid) as total_sum

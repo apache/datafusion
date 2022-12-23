@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 with my_customers as (
  select distinct c_customer_sk

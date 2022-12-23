@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  ss_customer_sk
             ,sum(act_sales) sumsales

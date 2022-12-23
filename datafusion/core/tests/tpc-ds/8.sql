@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  s_store_name
       ,sum(ss_net_profit)

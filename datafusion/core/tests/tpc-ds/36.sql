@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  
     sum(ss_net_profit)/sum(ss_ext_sales_price) as gross_margin

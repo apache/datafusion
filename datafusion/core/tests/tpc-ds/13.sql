@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select avg(ss_quantity)
        ,avg(ss_ext_sales_price)

@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  *
 from (select avg(ss_list_price) B1_LP

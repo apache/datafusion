@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 WITH all_sales AS (
  SELECT d_year

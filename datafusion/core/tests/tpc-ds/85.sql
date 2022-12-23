@@ -1,3 +1,4 @@
+-- Copyright 2015 Transaction Processing Performance Council
 
 select  substr(r_reason_desc,1,20)
        ,avg(ws_quantity)

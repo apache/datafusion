@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// TPC, TPC Benchmark, and TPC-DS and TPC-VMS are trademarks
+// of the Transaction Processing Performance Council.
+
+// Schema and queries used in these tests are copyright
+// 2015 Transaction Processing Performance Council
+
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::Result;
 use datafusion::datasource::MemTable;
