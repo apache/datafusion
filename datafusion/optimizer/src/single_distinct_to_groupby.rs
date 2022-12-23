@@ -99,6 +99,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 aggr_expr,
                 schema,
                 group_expr,
+                ..
             }) => {
                 if is_single_distinct_agg(plan)? && !contains_grouping_set(group_expr) {
                     // alias all original group_by exprs

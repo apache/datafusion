@@ -929,14 +929,14 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Filter(filter) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
-                        filter.input().as_ref(),
+                        filter.input.as_ref(),
                         extension_codec,
                     )?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
-                            expr: Some(filter.predicate().try_into()?),
+                            expr: Some((&filter.predicate).try_into()?),
                         },
                     ))),
                 })

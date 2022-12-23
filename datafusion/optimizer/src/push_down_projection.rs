@@ -93,6 +93,7 @@ fn optimize_plan(
             input,
             expr,
             schema,
+            ..
         }) => {
             // projection:
             // * remove any expression that is not required
