@@ -28,6 +28,7 @@ mod parquet;
 
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::CsvExec;
+pub(crate) use self::delimited_stream::newline_delimited_stream;
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
