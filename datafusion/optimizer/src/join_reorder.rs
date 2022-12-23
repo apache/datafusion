@@ -36,6 +36,10 @@ pub struct JoinReorder {
     filter_selectivity: f64,
 }
 
+impl JoinReorder {
+    pub const NAME: &'static str = "join_reorder";
+}
+
 impl Default for JoinReorder {
     fn default() -> Self {
         Self {
@@ -49,7 +53,7 @@ impl Default for JoinReorder {
 
 impl OptimizerRule for JoinReorder {
     fn name(&self) -> &str {
-        "join_reorder"
+        Self::NAME
     }
 
     fn try_optimize(
