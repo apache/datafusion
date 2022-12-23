@@ -15,6 +15,83 @@
 # specific language governing permissions and limitations
 # under the License.
 
+
+# Verify the information schema does not exit by default
+statement error Error during planning: failed to resolve schema: information_schema
+SELECT * from information_schema.tables
+
+statement error DataFusion error: Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
+show all
+
+# Turn it on
+
+# expect that the queries now work
+statement ok
+set datafusion.catalog.information_schema = true;
+
+# Verify the information schema now does exist and is empty
+query CCC
+SELECT * from information_schema.tables;
+----
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+
+# Disable information_schema and verify it now errors again
+statement ok
+set datafusion.catalog.information_schema = false
+
+statement error Error during planning: failed to resolve schema: information_schema
+SELECT * from information_schema.tables
+
+
+############
+## Enable information schema for the rest of the test
+############
+statement ok
+set datafusion.catalog.information_schema = true
+
+############
+# New tables should show up in information schema
+###########
+statement ok
+create table t as values (1);
+
+query CCC
+SELECT * from information_schema.tables;
+----
+datafusion public t BASE TABLE
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+
+# Another new  table should show up in information schema
+statement ok
+create table t2 as values (1);
+
+query CCC
+SELECT * from information_schema.tables;
+----
+datafusion public t BASE TABLE
+datafusion public t2 BASE TABLE
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+
+# Cleanup
+statement ok
+drop table t
+
+statement ok
+drop table t2
+
+############
+## SHOW VARIABLES should work
+###########
+
 # target_partitions defaults to num_cores, so set
 # to a known value that is unlikely to be
 # the real number of cores on a system
