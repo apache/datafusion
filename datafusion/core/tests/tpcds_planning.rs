@@ -23,503 +23,1023 @@ use std::fs;
 use std::sync::Arc;
 
 #[tokio::test]
-async fn q1() -> Result<()> {
-    regression_test(1).await
+async fn tpcds_logical_q1() -> Result<()> {
+    create_logical_plan(1).await
 }
 
 #[tokio::test]
-async fn q2() -> Result<()> {
-    regression_test(2).await
+async fn tpcds_logical_q2() -> Result<()> {
+    create_logical_plan(2).await
 }
 
 #[tokio::test]
-async fn q3() -> Result<()> {
-    regression_test(3).await
+async fn tpcds_logical_q3() -> Result<()> {
+    create_logical_plan(3).await
 }
 
-#[ignore] // https://github.com/apache/arrow-datafusion/issues/4065
+#[ignore] // thread 'q4' has overflowed its stack
 #[tokio::test]
-async fn q4() -> Result<()> {
-    regression_test(4).await
+async fn tpcds_logical_q4() -> Result<()> {
+    create_logical_plan(4).await
 }
 
 #[tokio::test]
-async fn q5() -> Result<()> {
-    regression_test(5).await
+async fn tpcds_logical_q5() -> Result<()> {
+    create_logical_plan(5).await
 }
 
 #[tokio::test]
-async fn q6() -> Result<()> {
-    regression_test(6).await
+async fn tpcds_logical_q6() -> Result<()> {
+    create_logical_plan(6).await
 }
 
 #[tokio::test]
-async fn q7() -> Result<()> {
-    regression_test(7).await
+async fn tpcds_logical_q7() -> Result<()> {
+    create_logical_plan(7).await
 }
 
 #[tokio::test]
-async fn q8() -> Result<()> {
-    regression_test(8).await
+async fn tpcds_logical_q8() -> Result<()> {
+    create_logical_plan(8).await
 }
 
 #[tokio::test]
-async fn q9() -> Result<()> {
-    regression_test(9).await
+async fn tpcds_logical_q9() -> Result<()> {
+    create_logical_plan(9).await
 }
 
 #[tokio::test]
-async fn q10() -> Result<()> {
-    regression_test(10).await
+async fn tpcds_logical_q10() -> Result<()> {
+    create_logical_plan(10).await
 }
 
 #[tokio::test]
-async fn q11() -> Result<()> {
-    regression_test(11).await
+async fn tpcds_logical_q11() -> Result<()> {
+    create_logical_plan(11).await
 }
 
 #[tokio::test]
-async fn q12() -> Result<()> {
-    regression_test(12).await
+async fn tpcds_logical_q12() -> Result<()> {
+    create_logical_plan(12).await
 }
 
 #[tokio::test]
-async fn q13() -> Result<()> {
-    regression_test(13).await
+async fn tpcds_logical_q13() -> Result<()> {
+    create_logical_plan(13).await
 }
 
 #[tokio::test]
-async fn q14() -> Result<()> {
-    regression_test(14).await
+async fn tpcds_logical_q14() -> Result<()> {
+    create_logical_plan(14).await
 }
 
 #[tokio::test]
-async fn q15() -> Result<()> {
-    regression_test(15).await
+async fn tpcds_logical_q15() -> Result<()> {
+    create_logical_plan(15).await
 }
 
 #[tokio::test]
-async fn q16() -> Result<()> {
-    regression_test(16).await
+async fn tpcds_logical_q16() -> Result<()> {
+    create_logical_plan(16).await
 }
 
 #[tokio::test]
-async fn q17() -> Result<()> {
-    regression_test(17).await
+async fn tpcds_logical_q17() -> Result<()> {
+    create_logical_plan(17).await
 }
 
 #[tokio::test]
-async fn q18() -> Result<()> {
-    regression_test(18).await
+async fn tpcds_logical_q18() -> Result<()> {
+    create_logical_plan(18).await
 }
 
 #[tokio::test]
-async fn q19() -> Result<()> {
-    regression_test(19).await
+async fn tpcds_logical_q19() -> Result<()> {
+    create_logical_plan(19).await
 }
 
 #[tokio::test]
-async fn q20() -> Result<()> {
-    regression_test(20).await
+async fn tpcds_logical_q20() -> Result<()> {
+    create_logical_plan(20).await
 }
 
 #[tokio::test]
-async fn q21() -> Result<()> {
-    regression_test(21).await
+async fn tpcds_logical_q21() -> Result<()> {
+    create_logical_plan(21).await
 }
 
 #[tokio::test]
-async fn q22() -> Result<()> {
-    regression_test(22).await
+async fn tpcds_logical_q22() -> Result<()> {
+    create_logical_plan(22).await
 }
 
 #[tokio::test]
-async fn q23() -> Result<()> {
-    regression_test(23).await
+async fn tpcds_logical_q23() -> Result<()> {
+    create_logical_plan(23).await
 }
 
 #[tokio::test]
-async fn q24() -> Result<()> {
-    regression_test(24).await
+async fn tpcds_logical_q24() -> Result<()> {
+    create_logical_plan(24).await
 }
 
 #[tokio::test]
-async fn q25() -> Result<()> {
-    regression_test(25).await
+async fn tpcds_logical_q25() -> Result<()> {
+    create_logical_plan(25).await
 }
 
 #[tokio::test]
-async fn q26() -> Result<()> {
-    regression_test(26).await
+async fn tpcds_logical_q26() -> Result<()> {
+    create_logical_plan(26).await
 }
 
 #[tokio::test]
-async fn q27() -> Result<()> {
-    regression_test(27).await
+async fn tpcds_logical_q27() -> Result<()> {
+    create_logical_plan(27).await
 }
 
 #[tokio::test]
-async fn q28() -> Result<()> {
-    regression_test(28).await
+async fn tpcds_logical_q28() -> Result<()> {
+    create_logical_plan(28).await
 }
 
 #[tokio::test]
-async fn q29() -> Result<()> {
-    regression_test(29).await
+async fn tpcds_logical_q29() -> Result<()> {
+    create_logical_plan(29).await
 }
 
 #[tokio::test]
-async fn q30() -> Result<()> {
-    regression_test(30).await
+async fn tpcds_logical_q30() -> Result<()> {
+    create_logical_plan(30).await
 }
 
+#[ignore] // thread 'q31' has overflowed its stack
 #[tokio::test]
-async fn q31() -> Result<()> {
-    regression_test(31).await
+async fn tpcds_logical_q31() -> Result<()> {
+    create_logical_plan(31).await
 }
 
 #[tokio::test]
-async fn q32() -> Result<()> {
-    regression_test(32).await
+async fn tpcds_logical_q32() -> Result<()> {
+    create_logical_plan(32).await
 }
 
 #[tokio::test]
-async fn q33() -> Result<()> {
-    regression_test(33).await
+async fn tpcds_logical_q33() -> Result<()> {
+    create_logical_plan(33).await
 }
 
 #[tokio::test]
-async fn q34() -> Result<()> {
-    regression_test(34).await
+async fn tpcds_logical_q34() -> Result<()> {
+    create_logical_plan(34).await
 }
 
 #[tokio::test]
-async fn q35() -> Result<()> {
-    regression_test(35).await
+async fn tpcds_logical_q35() -> Result<()> {
+    create_logical_plan(35).await
 }
 
 #[tokio::test]
-async fn q36() -> Result<()> {
-    regression_test(36).await
+async fn tpcds_logical_q36() -> Result<()> {
+    create_logical_plan(36).await
 }
 
 #[tokio::test]
-async fn q37() -> Result<()> {
-    regression_test(37).await
+async fn tpcds_logical_q37() -> Result<()> {
+    create_logical_plan(37).await
 }
 
 #[tokio::test]
-async fn q38() -> Result<()> {
-    regression_test(38).await
+async fn tpcds_logical_q38() -> Result<()> {
+    create_logical_plan(38).await
 }
 
 #[tokio::test]
-async fn q39() -> Result<()> {
-    regression_test(39).await
+async fn tpcds_logical_q39() -> Result<()> {
+    create_logical_plan(39).await
 }
 
 #[tokio::test]
-async fn q40() -> Result<()> {
-    regression_test(40).await
+async fn tpcds_logical_q40() -> Result<()> {
+    create_logical_plan(40).await
 }
 
 #[tokio::test]
-async fn q41() -> Result<()> {
-    regression_test(41).await
+async fn tpcds_logical_q41() -> Result<()> {
+    create_logical_plan(41).await
 }
 
 #[tokio::test]
-async fn q42() -> Result<()> {
-    regression_test(42).await
+async fn tpcds_logical_q42() -> Result<()> {
+    create_logical_plan(42).await
 }
 
 #[tokio::test]
-async fn q43() -> Result<()> {
-    regression_test(43).await
+async fn tpcds_logical_q43() -> Result<()> {
+    create_logical_plan(43).await
 }
 
 #[tokio::test]
-async fn q44() -> Result<()> {
-    regression_test(44).await
+async fn tpcds_logical_q44() -> Result<()> {
+    create_logical_plan(44).await
 }
 
 #[tokio::test]
-async fn q45() -> Result<()> {
-    regression_test(45).await
+async fn tpcds_logical_q45() -> Result<()> {
+    create_logical_plan(45).await
 }
 
 #[tokio::test]
-async fn q46() -> Result<()> {
-    regression_test(46).await
+async fn tpcds_logical_q46() -> Result<()> {
+    create_logical_plan(46).await
 }
 
 #[tokio::test]
-async fn q47() -> Result<()> {
-    regression_test(47).await
+async fn tpcds_logical_q47() -> Result<()> {
+    create_logical_plan(47).await
 }
 
 #[tokio::test]
-async fn q48() -> Result<()> {
-    regression_test(48).await
+async fn tpcds_logical_q48() -> Result<()> {
+    create_logical_plan(48).await
 }
 
 #[tokio::test]
-async fn q49() -> Result<()> {
-    regression_test(49).await
+async fn tpcds_logical_q49() -> Result<()> {
+    create_logical_plan(49).await
 }
 
 #[tokio::test]
-async fn q50() -> Result<()> {
-    regression_test(50).await
+async fn tpcds_logical_q50() -> Result<()> {
+    create_logical_plan(50).await
 }
 
 #[tokio::test]
-async fn q51() -> Result<()> {
-    regression_test(51).await
+async fn tpcds_logical_q51() -> Result<()> {
+    create_logical_plan(51).await
 }
 
 #[tokio::test]
-async fn q52() -> Result<()> {
-    regression_test(52).await
+async fn tpcds_logical_q52() -> Result<()> {
+    create_logical_plan(52).await
 }
 
 #[tokio::test]
-async fn q53() -> Result<()> {
-    regression_test(53).await
+async fn tpcds_logical_q53() -> Result<()> {
+    create_logical_plan(53).await
 }
 
 #[tokio::test]
-async fn q54() -> Result<()> {
-    regression_test(54).await
+async fn tpcds_logical_q54() -> Result<()> {
+    create_logical_plan(54).await
 }
 
 #[tokio::test]
-async fn q55() -> Result<()> {
-    regression_test(55).await
+async fn tpcds_logical_q55() -> Result<()> {
+    create_logical_plan(55).await
 }
 
 #[tokio::test]
-async fn q56() -> Result<()> {
-    regression_test(56).await
+async fn tpcds_logical_q56() -> Result<()> {
+    create_logical_plan(56).await
 }
 
 #[tokio::test]
-async fn q57() -> Result<()> {
-    regression_test(57).await
+async fn tpcds_logical_q57() -> Result<()> {
+    create_logical_plan(57).await
 }
 
 #[tokio::test]
-async fn q58() -> Result<()> {
-    regression_test(58).await
+async fn tpcds_logical_q58() -> Result<()> {
+    create_logical_plan(58).await
 }
 
 #[tokio::test]
-async fn q59() -> Result<()> {
-    regression_test(59).await
+async fn tpcds_logical_q59() -> Result<()> {
+    create_logical_plan(59).await
 }
 
 #[tokio::test]
-async fn q60() -> Result<()> {
-    regression_test(60).await
+async fn tpcds_logical_q60() -> Result<()> {
+    create_logical_plan(60).await
 }
 
 #[tokio::test]
-async fn q61() -> Result<()> {
-    regression_test(61).await
+async fn tpcds_logical_q61() -> Result<()> {
+    create_logical_plan(61).await
 }
 
 #[tokio::test]
-async fn q62() -> Result<()> {
-    regression_test(62).await
+async fn tpcds_logical_q62() -> Result<()> {
+    create_logical_plan(62).await
 }
 
 #[tokio::test]
-async fn q63() -> Result<()> {
-    regression_test(63).await
+async fn tpcds_logical_q63() -> Result<()> {
+    create_logical_plan(63).await
 }
 
-#[ignore] // https://github.com/apache/arrow-datafusion/issues/4065
+#[ignore] // thread 'q64' has overflowed its stack
 #[tokio::test]
-async fn q64() -> Result<()> {
-    regression_test(64).await
+async fn tpcds_logical_q64() -> Result<()> {
+    create_logical_plan(64).await
 }
 
 #[tokio::test]
-async fn q65() -> Result<()> {
-    regression_test(65).await
+async fn tpcds_logical_q65() -> Result<()> {
+    create_logical_plan(65).await
 }
 
 #[tokio::test]
-async fn q66() -> Result<()> {
-    regression_test(66).await
+async fn tpcds_logical_q66() -> Result<()> {
+    create_logical_plan(66).await
 }
 
 #[tokio::test]
-async fn q67() -> Result<()> {
-    regression_test(67).await
+async fn tpcds_logical_q67() -> Result<()> {
+    create_logical_plan(67).await
 }
 
 #[tokio::test]
-async fn q68() -> Result<()> {
-    regression_test(68).await
+async fn tpcds_logical_q68() -> Result<()> {
+    create_logical_plan(68).await
 }
 
 #[tokio::test]
-async fn q69() -> Result<()> {
-    regression_test(69).await
+async fn tpcds_logical_q69() -> Result<()> {
+    create_logical_plan(69).await
 }
 
 #[tokio::test]
-async fn q70() -> Result<()> {
-    regression_test(70).await
+async fn tpcds_logical_q70() -> Result<()> {
+    create_logical_plan(70).await
 }
 
 #[tokio::test]
-async fn q71() -> Result<()> {
-    regression_test(71).await
+async fn tpcds_logical_q71() -> Result<()> {
+    create_logical_plan(71).await
 }
 
 #[tokio::test]
-async fn q72() -> Result<()> {
-    regression_test(72).await
+async fn tpcds_logical_q72() -> Result<()> {
+    create_logical_plan(72).await
 }
 
 #[tokio::test]
-async fn q73() -> Result<()> {
-    regression_test(73).await
+async fn tpcds_logical_q73() -> Result<()> {
+    create_logical_plan(73).await
 }
 
 #[tokio::test]
-async fn q74() -> Result<()> {
-    regression_test(74).await
+async fn tpcds_logical_q74() -> Result<()> {
+    create_logical_plan(74).await
 }
 
 #[tokio::test]
-async fn q75() -> Result<()> {
-    regression_test(75).await
+async fn tpcds_logical_q75() -> Result<()> {
+    create_logical_plan(75).await
 }
 
 #[tokio::test]
-async fn q76() -> Result<()> {
-    regression_test(76).await
+async fn tpcds_logical_q76() -> Result<()> {
+    create_logical_plan(76).await
 }
 
 #[tokio::test]
-async fn q77() -> Result<()> {
-    regression_test(77).await
+async fn tpcds_logical_q77() -> Result<()> {
+    create_logical_plan(77).await
 }
 
 #[tokio::test]
-async fn q78() -> Result<()> {
-    regression_test(78).await
+async fn tpcds_logical_q78() -> Result<()> {
+    create_logical_plan(78).await
 }
 
 #[tokio::test]
-async fn q79() -> Result<()> {
-    regression_test(79).await
+async fn tpcds_logical_q79() -> Result<()> {
+    create_logical_plan(79).await
 }
 
 #[tokio::test]
-async fn q80() -> Result<()> {
-    regression_test(80).await
+async fn tpcds_logical_q80() -> Result<()> {
+    create_logical_plan(80).await
 }
 
 #[tokio::test]
-async fn q81() -> Result<()> {
-    regression_test(81).await
+async fn tpcds_logical_q81() -> Result<()> {
+    create_logical_plan(81).await
 }
 
 #[tokio::test]
-async fn q82() -> Result<()> {
-    regression_test(82).await
+async fn tpcds_logical_q82() -> Result<()> {
+    create_logical_plan(82).await
 }
 
 #[tokio::test]
-async fn q83() -> Result<()> {
-    regression_test(83).await
+async fn tpcds_logical_q83() -> Result<()> {
+    create_logical_plan(83).await
 }
 
 #[tokio::test]
-async fn q84() -> Result<()> {
-    regression_test(84).await
+async fn tpcds_logical_q84() -> Result<()> {
+    create_logical_plan(84).await
 }
 
 #[tokio::test]
-async fn q85() -> Result<()> {
-    regression_test(85).await
+async fn tpcds_logical_q85() -> Result<()> {
+    create_logical_plan(85).await
 }
 
 #[tokio::test]
-async fn q86() -> Result<()> {
-    regression_test(86).await
+async fn tpcds_logical_q86() -> Result<()> {
+    create_logical_plan(86).await
 }
 
 #[tokio::test]
-async fn q87() -> Result<()> {
-    regression_test(87).await
+async fn tpcds_logical_q87() -> Result<()> {
+    create_logical_plan(87).await
 }
 
 #[tokio::test]
-async fn q88() -> Result<()> {
-    regression_test(88).await
+async fn tpcds_logical_q88() -> Result<()> {
+    create_logical_plan(88).await
 }
 
 #[tokio::test]
-async fn q89() -> Result<()> {
-    regression_test(89).await
+async fn tpcds_logical_q89() -> Result<()> {
+    create_logical_plan(89).await
 }
 
 #[tokio::test]
-async fn q90() -> Result<()> {
-    regression_test(90).await
+async fn tpcds_logical_q90() -> Result<()> {
+    create_logical_plan(90).await
 }
 
 #[tokio::test]
-async fn q91() -> Result<()> {
-    regression_test(91).await
+async fn tpcds_logical_q91() -> Result<()> {
+    create_logical_plan(91).await
 }
 
 #[tokio::test]
-async fn q92() -> Result<()> {
-    regression_test(92).await
+async fn tpcds_logical_q92() -> Result<()> {
+    create_logical_plan(92).await
 }
 
 #[tokio::test]
-async fn q93() -> Result<()> {
-    regression_test(93).await
+async fn tpcds_logical_q93() -> Result<()> {
+    create_logical_plan(93).await
 }
 
 #[tokio::test]
-async fn q94() -> Result<()> {
-    regression_test(94).await
+async fn tpcds_logical_q94() -> Result<()> {
+    create_logical_plan(94).await
 }
 
 #[tokio::test]
-async fn q95() -> Result<()> {
-    regression_test(95).await
+async fn tpcds_logical_q95() -> Result<()> {
+    create_logical_plan(95).await
 }
 
 #[tokio::test]
-async fn q96() -> Result<()> {
-    regression_test(96).await
+async fn tpcds_logical_q96() -> Result<()> {
+    create_logical_plan(96).await
 }
 
 #[tokio::test]
-async fn q97() -> Result<()> {
-    regression_test(97).await
+async fn tpcds_logical_q97() -> Result<()> {
+    create_logical_plan(97).await
 }
 
 #[tokio::test]
-async fn q98() -> Result<()> {
-    regression_test(98).await
+async fn tpcds_logical_q98() -> Result<()> {
+    create_logical_plan(98).await
 }
 
 #[tokio::test]
-async fn q99() -> Result<()> {
-    regression_test(99).await
+async fn tpcds_logical_q99() -> Result<()> {
+    create_logical_plan(99).await
 }
 
-async fn regression_test(query_no: u8) -> Result<()> {
+#[tokio::test]
+async fn tpcds_physical_q1() -> Result<()> {
+    create_physical_plan(1).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q2() -> Result<()> {
+    create_physical_plan(2).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q3() -> Result<()> {
+    create_physical_plan(3).await
+}
+
+#[ignore] // thread 'q4' has overflowed its stack
+#[tokio::test]
+async fn tpcds_physical_q4() -> Result<()> {
+    create_physical_plan(4).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q5() -> Result<()> {
+    create_physical_plan(5).await
+}
+
+#[ignore] // Physical plan does not support logical expression (<subquery>)
+#[tokio::test]
+async fn tpcds_physical_q6() -> Result<()> {
+    create_physical_plan(6).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q7() -> Result<()> {
+    create_physical_plan(7).await
+}
+
+#[ignore] // The type of Int32 = Int64 of binary physical should be same
+#[tokio::test]
+async fn tpcds_physical_q8() -> Result<()> {
+    create_physical_plan(8).await
+}
+
+#[ignore] // Physical plan does not support logical expression (<subquery>)
+#[tokio::test]
+async fn tpcds_physical_q9() -> Result<()> {
+    create_physical_plan(9).await
+}
+
+#[ignore] // FieldNotFound
+#[tokio::test]
+async fn tpcds_physical_q10() -> Result<()> {
+    create_physical_plan(10).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q11() -> Result<()> {
+    create_physical_plan(11).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q12() -> Result<()> {
+    create_physical_plan(12).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q13() -> Result<()> {
+    create_physical_plan(13).await
+}
+
+#[ignore] // Physical plan does not support logical expression (<subquery>)
+#[tokio::test]
+async fn tpcds_physical_q14() -> Result<()> {
+    create_physical_plan(14).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q15() -> Result<()> {
+    create_physical_plan(15).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q16() -> Result<()> {
+    create_physical_plan(16).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q17() -> Result<()> {
+    create_physical_plan(17).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q18() -> Result<()> {
+    create_physical_plan(18).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q19() -> Result<()> {
+    create_physical_plan(19).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q20() -> Result<()> {
+    create_physical_plan(20).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q21() -> Result<()> {
+    create_physical_plan(21).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q22() -> Result<()> {
+    create_physical_plan(22).await
+}
+
+#[ignore] // Physical plan does not support logical expression (<subquery>)
+#[tokio::test]
+async fn tpcds_physical_q23() -> Result<()> {
+    create_physical_plan(23).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q24() -> Result<()> {
+    create_physical_plan(24).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q25() -> Result<()> {
+    create_physical_plan(25).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q26() -> Result<()> {
+    create_physical_plan(26).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q27() -> Result<()> {
+    create_physical_plan(27).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q28() -> Result<()> {
+    create_physical_plan(28).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q29() -> Result<()> {
+    create_physical_plan(29).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q30() -> Result<()> {
+    create_physical_plan(30).await
+}
+
+#[ignore] // thread 'q31' has overflowed its stack
+#[tokio::test]
+async fn tpcds_physical_q31() -> Result<()> {
+    create_physical_plan(31).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q32() -> Result<()> {
+    create_physical_plan(32).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q33() -> Result<()> {
+    create_physical_plan(33).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q34() -> Result<()> {
+    create_physical_plan(34).await
+}
+
+#[ignore] // FieldNotFound
+#[tokio::test]
+async fn tpcds_physical_q35() -> Result<()> {
+    create_physical_plan(35).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q36() -> Result<()> {
+    create_physical_plan(36).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q37() -> Result<()> {
+    create_physical_plan(37).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q38() -> Result<()> {
+    create_physical_plan(38).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q39() -> Result<()> {
+    create_physical_plan(39).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q40() -> Result<()> {
+    create_physical_plan(40).await
+}
+
+#[ignore] // Physical plan does not support logical expression (<subquery>)
+#[tokio::test]
+async fn tpcds_physical_q41() -> Result<()> {
+    create_physical_plan(41).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q42() -> Result<()> {
+    create_physical_plan(42).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q43() -> Result<()> {
+    create_physical_plan(43).await
+}
+
+#[ignore] // Physical plan does not support logical expression (<subquery>)
+#[tokio::test]
+async fn tpcds_physical_q44() -> Result<()> {
+    create_physical_plan(44).await
+}
+
+#[ignore] // Physical plan does not support logical expression (<subquery>)
+#[tokio::test]
+async fn tpcds_physical_q45() -> Result<()> {
+    create_physical_plan(45).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q46() -> Result<()> {
+    create_physical_plan(46).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q47() -> Result<()> {
+    create_physical_plan(47).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q48() -> Result<()> {
+    create_physical_plan(48).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q49() -> Result<()> {
+    create_physical_plan(49).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q50() -> Result<()> {
+    create_physical_plan(50).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q51() -> Result<()> {
+    create_physical_plan(51).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q52() -> Result<()> {
+    create_physical_plan(52).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q53() -> Result<()> {
+    create_physical_plan(53).await
+}
+
+#[ignore] // Physical plan does not support logical expression (<subquery>)
+#[tokio::test]
+async fn tpcds_physical_q54() -> Result<()> {
+    create_physical_plan(54).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q55() -> Result<()> {
+    create_physical_plan(55).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q56() -> Result<()> {
+    create_physical_plan(56).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q57() -> Result<()> {
+    create_physical_plan(57).await
+}
+
+#[ignore] // Physical plan does not support logical expression (<subquery>)
+#[tokio::test]
+async fn tpcds_physical_q58() -> Result<()> {
+    create_physical_plan(58).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q59() -> Result<()> {
+    create_physical_plan(59).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q60() -> Result<()> {
+    create_physical_plan(60).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q61() -> Result<()> {
+    create_physical_plan(61).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q62() -> Result<()> {
+    create_physical_plan(62).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q63() -> Result<()> {
+    create_physical_plan(63).await
+}
+
+#[ignore] // thread 'q64' has overflowed its stack
+#[tokio::test]
+async fn tpcds_physical_q64() -> Result<()> {
+    create_physical_plan(64).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q65() -> Result<()> {
+    create_physical_plan(65).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q66() -> Result<()> {
+    create_physical_plan(66).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q67() -> Result<()> {
+    create_physical_plan(67).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q68() -> Result<()> {
+    create_physical_plan(68).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q69() -> Result<()> {
+    create_physical_plan(69).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q70() -> Result<()> {
+    create_physical_plan(70).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q71() -> Result<()> {
+    create_physical_plan(71).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q72() -> Result<()> {
+    create_physical_plan(72).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q73() -> Result<()> {
+    create_physical_plan(73).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q74() -> Result<()> {
+    create_physical_plan(74).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q75() -> Result<()> {
+    create_physical_plan(75).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q76() -> Result<()> {
+    create_physical_plan(76).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q77() -> Result<()> {
+    create_physical_plan(77).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q78() -> Result<()> {
+    create_physical_plan(78).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q79() -> Result<()> {
+    create_physical_plan(79).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q80() -> Result<()> {
+    create_physical_plan(80).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q81() -> Result<()> {
+    create_physical_plan(81).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q82() -> Result<()> {
+    create_physical_plan(82).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q83() -> Result<()> {
+    create_physical_plan(83).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q84() -> Result<()> {
+    create_physical_plan(84).await
+}
+
+#[ignore] // Physical plan does not support logical expression (<subquery>)
+#[tokio::test]
+async fn tpcds_physical_q85() -> Result<()> {
+    create_physical_plan(85).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q86() -> Result<()> {
+    create_physical_plan(86).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q87() -> Result<()> {
+    create_physical_plan(87).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q88() -> Result<()> {
+    create_physical_plan(88).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q89() -> Result<()> {
+    create_physical_plan(89).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q90() -> Result<()> {
+    create_physical_plan(90).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q91() -> Result<()> {
+    create_physical_plan(91).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q92() -> Result<()> {
+    create_physical_plan(92).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q93() -> Result<()> {
+    create_physical_plan(93).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q94() -> Result<()> {
+    create_physical_plan(94).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q95() -> Result<()> {
+    create_physical_plan(95).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q96() -> Result<()> {
+    create_physical_plan(96).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q97() -> Result<()> {
+    create_physical_plan(97).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q98() -> Result<()> {
+    create_physical_plan(98).await
+}
+
+#[tokio::test]
+async fn tpcds_physical_q99() -> Result<()> {
+    create_physical_plan(99).await
+}
+
+async fn create_logical_plan(query_no: u8) -> Result<()> {
+    regression_test(query_no, false).await
+}
+
+async fn create_physical_plan(query_no: u8) -> Result<()> {
+    regression_test(query_no, true).await
+}
+
+async fn regression_test(query_no: u8, create_physical: bool) -> Result<()> {
     let filename = format!("tests/tpc-ds/{query_no}.sql");
     let sql = fs::read_to_string(filename).expect("Could not read query");
 
@@ -539,33 +1059,12 @@ async fn regression_test(query_no: u8) -> Result<()> {
         .filter(|s| !s.trim().is_empty())
         .collect::<Vec<_>>();
 
-    let debug = true;
     for sql in &sql {
-        if debug {
-            println!("Query {}: {}", query_no, sql);
-        }
-
-        // query parsing and planning using default DataFusion optimizer rules
         let df = ctx.sql(sql).await?;
         let plan = df.into_optimized_plan()?;
-        let formatted_query_plan = format!("{}", plan.display_indent());
-
-        if debug {
-            println!("{}", formatted_query_plan);
+        if create_physical {
+            let _ = ctx.create_physical_plan(&plan).await?;
         }
-
-        // let path = format!("tests/expected/{}.txt", query_no);
-        // let expected_plan_path = Path::new(&path);
-        // match fs::read_to_string(expected_plan_path) {
-        //     Ok(expected) => assert_eq!(expected, formatted_query_plan),
-        //     Err(_) => {
-        //         println!(
-        //             "Writing new expected output to {}",
-        //             expected_plan_path.display()
-        //         );
-        //         fs::write(expected_plan_path, &formatted_query_plan)?
-        //     }
-        // }
     }
 
     Ok(())
