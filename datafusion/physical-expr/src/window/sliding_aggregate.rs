@@ -32,7 +32,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::WindowFrame;
 
 use crate::window::window_expr::reverse_order_bys;
-use crate::window::SlidingAggregateWindowExpr;
+use crate::window::AggregateWindowExpr;
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use crate::{window::WindowExpr, AggregateExpr};
 
@@ -40,14 +40,14 @@ use super::window_frame_state::WindowFrameContext;
 
 /// A window expr that takes the form of an aggregate function
 #[derive(Debug)]
-pub struct AggregateWindowExpr {
+pub struct SlidingAggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
 }
 
-impl AggregateWindowExpr {
+impl SlidingAggregateWindowExpr {
     /// create a new aggregate window function expression
     pub fn new(
         aggregate: Arc<dyn AggregateExpr>,
@@ -73,7 +73,7 @@ impl AggregateWindowExpr {
 /// and then per partition point we'll evaluate the peer group (e.g. SUM or MAX gives the same
 /// results for peers) and concatenate the results.
 
-impl WindowExpr for AggregateWindowExpr {
+impl WindowExpr for SlidingAggregateWindowExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -96,7 +96,7 @@ impl WindowExpr for AggregateWindowExpr {
             self.order_by.iter().map(|o| o.options).collect();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
 
-        let mut accumulator = self.aggregate.create_accumulator()?;
+        let mut accumulator = self.aggregate.create_sliding_accumulator()?;
         let length = batch.num_rows();
         let (values, order_bys) = self.get_values_orderbys(batch)?;
 
@@ -108,7 +108,7 @@ impl WindowExpr for AggregateWindowExpr {
         for i in 0..length {
             let cur_range =
                 window_frame_ctx.calculate_range(&order_bys, &sort_options, length, i)?;
-            let value = if cur_range.end == cur_range.start {
+            let value = if cur_range.start == cur_range.end {
                 // We produce None if the window is empty.
                 ScalarValue::try_from(self.aggregate.field()?.data_type())?
             } else {
@@ -121,12 +121,20 @@ impl WindowExpr for AggregateWindowExpr {
                         .collect();
                     accumulator.update_batch(&update)?
                 }
+                // Remove rows that have now left the window:
+                let retract_bound = cur_range.start - last_range.start;
+                if retract_bound > 0 {
+                    let retract: Vec<ArrayRef> = values
+                        .iter()
+                        .map(|v| v.slice(last_range.start, retract_bound))
+                        .collect();
+                    accumulator.retract_batch(&retract)?
+                }
                 accumulator.evaluate()?
             };
             row_wise_results.push(value);
             last_range = cur_range;
         }
-
         ScalarValue::iter_to_array(row_wise_results.into_iter())
     }
 

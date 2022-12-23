@@ -411,5 +411,11 @@ SELECT * FROM aggregate_simple order by c1 LIMIT 1;
 ----
 0.00001 0.000000000001 true
 
+query CCC
+SELECT * FROM aggregate_simple order by c1 DESC LIMIT 1;
+----
+0.00005 0.000000000005 true
+
+
 statement ok
 DROP TABLE aggregate_simple
