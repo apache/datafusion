@@ -131,6 +131,10 @@ fn maybe_data_types(
 /// See the module level documentation for more detail on coercion.
 pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
     use self::DataType::*;
+
+    if type_into == type_from {
+        return true;
+    }
     // Null can convert to most of types
     match type_into {
         Int8 => matches!(type_from, Null | Int8),
@@ -171,6 +175,9 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
                 | Decimal128(_, _)
         ),
         Timestamp(TimeUnit::Nanosecond, None) => {
+            matches!(type_from, Null | Timestamp(_, None))
+        }
+        Date32 => {
             matches!(type_from, Null | Timestamp(_, None))
         }
         Utf8 | LargeUtf8 => true,

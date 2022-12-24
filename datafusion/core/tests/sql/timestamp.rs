@@ -1679,3 +1679,52 @@ async fn test_current_time() -> Result<()> {
     assert_batches_eq!(expected, &results);
     Ok(())
 }
+
+#[tokio::test]
+async fn test_ts_dt_binary_ops() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // where clause
+    let sql =
+        "select count(1) result from (select now() as n) a where n = '2000-01-01'::date";
+    //let sql = "select now() = '2000-01-01'::timestamp";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------+",
+        "| result |",
+        "+--------+",
+        "| 0      |",
+        "+--------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    let sql = "select now() = '2000-01-01'::date as result";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------+",
+        "| result |",
+        "+--------+",
+        "| false  |",
+        "+--------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    let sql = "select now() >= '2000-01-01'::date as result";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------+",
+        "| result |",
+        "+--------+",
+        "| true   |",
+        "+--------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
