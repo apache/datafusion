@@ -382,4 +382,39 @@ mod tests {
 
         assert_plan_eq(&plan, expected)
     }
+
+    #[test]
+    fn join_with_multiple_table_and_eq_filter() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let t3 = test_table_scan_with_name("t3")?;
+
+        let input = LogicalPlanBuilder::from(t2)
+            .join(
+                t3,
+                JoinType::Left,
+                (Vec::<Column>::new(), Vec::<Column>::new()),
+                Some(
+                    col("t2.a")
+                        .eq(col("t3.a"))
+                        .and((col("t2.a") + col("t3.b")).gt(lit(100u32))),
+                ),
+            )?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                input,
+                JoinType::Left,
+                (Vec::<Column>::new(), Vec::<Column>::new()),
+                Some(col("t1.a").eq(col("t2.a")).and(col("t2.c").eq(col("t3.c")))),
+            )?
+            .build()?;
+        let expected = "Left Join: t1.a = t2.a Filter: t2.c = t3.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+        \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
+        \n  Left Join: t2.a = t3.a Filter: t2.a + t3.b > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_plan_eq(&plan, expected)
+    }
 }
