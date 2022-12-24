@@ -1050,7 +1050,9 @@ async fn regression_test(query_no: u8, create_physical: bool) -> Result<()> {
     let filename = format!("tests/tpc-ds/{query_no}.sql");
     let sql = fs::read_to_string(filename).expect("Could not read query");
 
-    let config = SessionConfig::default().set_bool(OPT_JOIN_REORDER_ENABLED, false);
+    let config = SessionConfig::default()
+        .with_collect_statistics(true)
+        .set_bool(OPT_JOIN_REORDER_ENABLED, true);
     let ctx = SessionContext::with_config(config);
     let tables = get_table_definitions();
     for table in &tables {

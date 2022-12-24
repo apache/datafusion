@@ -70,7 +70,7 @@ impl OptimizerRule for JoinReorder {
 
         match &plan {
             LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
-                if !is_supported_join(&join) {
+                if !is_supported_join(join) {
                     println!("Not a supported join!:\n{}", plan.display_indent());
                     return Ok(Some(plan));
                 }
@@ -83,8 +83,7 @@ impl OptimizerRule for JoinReorder {
                 let (rels, conds) = extract_inner_joins(&plan);
 
                 // split rels into facts and dims
-                let rels: Vec<Relation> =
-                    rels.into_iter().map(|rel| Relation::new(rel)).collect();
+                let rels: Vec<Relation> = rels.into_iter().map(Relation::new).collect();
                 let largest_rel = rels.iter().map(|rel| rel.size).max().unwrap() as f64;
                 let mut facts = vec![];
                 let mut dims = vec![];
@@ -142,21 +141,22 @@ impl OptimizerRule for JoinReorder {
                 // the user order intact when unsure about reordering to make sure
                 // regressions are minimized.
                 let mut result = vec![];
-                while filtered_dimensions.len() > 0 || unfiltered_dimensions.len() > 0 {
-                    if filtered_dimensions.len() > 0 && unfiltered_dimensions.len() > 0 {
+                while !filtered_dimensions.is_empty() || !unfiltered_dimensions.is_empty()
+                {
+                    if !filtered_dimensions.is_empty()
+                        && !unfiltered_dimensions.is_empty()
+                    {
                         if filtered_dimensions[0].size < unfiltered_dimensions[0].size {
                             result.push(filtered_dimensions.remove(0));
                         } else {
                             result.push(unfiltered_dimensions.remove(0));
                         }
-                    } else if filtered_dimensions.len() > 0 {
+                    } else if !filtered_dimensions.is_empty() {
                         result.push(filtered_dimensions.remove(0));
                     } else {
                         result.push(unfiltered_dimensions.remove(0));
                     }
                 }
-                assert!(filtered_dimensions.is_empty());
-                assert!(unfiltered_dimensions.is_empty());
 
                 let dim_plans: Vec<LogicalPlan> =
                     result.iter().map(|rel| rel.plan.clone()).collect();
@@ -192,10 +192,10 @@ impl OptimizerRule for JoinReorder {
 
                 if join_conds.is_empty() {
                     println!("Optimized: {}", optimized.display_indent());
-                    return Ok(Some(optimized));
+                    Ok(Some(optimized))
                 } else {
                     println!("Did not use all join conditions: {:?}", join_conds);
-                    return Ok(Some(plan));
+                    Ok(Some(plan))
                 }
             }
             _ => {
@@ -235,10 +235,7 @@ fn has_filter(plan: &LogicalPlan) -> bool {
         let exprs = split_conjunction(predicate);
         let x = exprs
             .iter()
-            .filter(|e| match e {
-                Expr::IsNotNull(_) => false,
-                _ => true,
-            })
+            .filter(|e| !matches!(e, Expr::IsNotNull(_)))
             .count();
         x > 0
     }
@@ -334,11 +331,11 @@ fn find_join(plan: &LogicalPlan) -> Option<Join> {
     match plan {
         LogicalPlan::Join(join) => Some(join.clone()),
         other => {
-            if other.inputs().len() == 0 {
+            if other.inputs().is_empty() {
                 None
             } else {
                 for input in &other.inputs() {
-                    if let Some(join) = find_join(*input) {
+                    if let Some(join) = find_join(input) {
                         return Some(join);
                     }
                 }
@@ -400,7 +397,7 @@ fn get_table_size(plan: &LogicalPlan) -> Option<usize> {
                 Some(100)
             }
         }
-        _ => get_table_size(&plan.inputs()[0]),
+        _ => get_table_size(plan.inputs()[0]),
     }
 }
 

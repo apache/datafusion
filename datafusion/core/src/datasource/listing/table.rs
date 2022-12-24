@@ -619,9 +619,12 @@ impl TableProvider for ListingTable {
                 let (_, stats) = stats_entry.value();
                 row_count += stats.num_rows.unwrap_or(0);
             }
-            let mut stats = Statistics::default();
-            stats.num_rows = Some(row_count);
-            Some(stats)
+            Some(Statistics {
+                num_rows: Some(row_count),
+                total_byte_size: None,
+                column_statistics: None,
+                is_exact: false,
+            })
         }
     }
 }
