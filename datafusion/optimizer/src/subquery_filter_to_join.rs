@@ -95,10 +95,9 @@ impl OptimizerRule for SubqueryFilterToJoin {
                             subquery,
                             negated,
                         } => {
-                            let right_input = self.try_optimize(
-                                &subquery.subquery,
-                                _config
-                            )?.unwrap_or_else(||subquery.subquery.as_ref().clone());
+                            let right_input = self
+                                .try_optimize(&subquery.subquery, _config)?
+                                .unwrap_or_else(|| subquery.subquery.as_ref().clone());
                             let right_schema = right_input.schema();
                             if right_schema.fields().len() != 1 {
                                 return Err(DataFusionError::Plan(
@@ -108,13 +107,17 @@ impl OptimizerRule for SubqueryFilterToJoin {
                             };
 
                             let right_key = right_schema.field(0).qualified_column();
-                            let left_key = match *expr.clone() {
-                                Expr::Column(col) => col,
-                                _ => return Err(DataFusionError::NotImplemented(
-                                    "Filtering by expression not implemented for InSubquery"
-                                        .to_string(),
-                                )),
-                            };
+                            let left_key = *expr.clone();
+                            let (on, filter) =
+                                // When left is a constant expression, like 1, 
+                                // the join predicate will be `1 = right_key`, it is better to add it to filter.
+                                if left_key.to_columns()?.is_empty() {
+                                    let equi_expr =
+                                        Expr::eq(*expr.clone(), Expr::Column(right_key));
+                                    (vec![], Some(equi_expr))
+                                } else {
+                                    (vec![(left_key, Expr::Column(right_key))], None)
+                                };
 
                             let join_type = if *negated {
                                 JoinType::LeftAnti
@@ -131,8 +134,8 @@ impl OptimizerRule for SubqueryFilterToJoin {
                             Ok(LogicalPlan::Join(Join {
                                 left: Arc::new(input),
                                 right: Arc::new(right_input),
-                                on: vec![(Expr::Column(left_key), Expr::Column(right_key))],
-                                filter: None,
+                                on,
+                                filter,
                                 join_type,
                                 join_constraint: JoinConstraint::On,
                                 schema: Arc::new(schema),
@@ -143,7 +146,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                             "Unknown expression while rewriting subquery to joins"
                                 .to_string(),
                         )),
-                    }
+                    },
                 );
 
                 // In case of expressions which could not be rewritten
@@ -415,6 +418,45 @@ mod tests {
         \n          TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
         \n          Projection: sq_inner.c [c:UInt32]\
         \n            TableScan: sq_inner [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    /// Test for single IN subquery filter with expr equijoin
+    #[test]
+    fn in_subquery_to_expr_equijoin() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(in_subquery(
+                col("c") + lit(10i32),
+                test_subquery_with_name("sq")?,
+            ))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let expected = "Projection: test.b [b:UInt32]\
+            \n  LeftSemi Join: test.c + Int32(10) = sq.c [a:UInt32, b:UInt32, c:UInt32]\
+            \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+            \n    Projection: sq.c [c:UInt32]\
+            \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    /// Test for single IN subquery filter with none equijoin
+    #[test]
+    fn in_subquery_to_non_equijoin() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(in_subquery(lit(10i32), test_subquery_with_name("sq")?))?
+            .project(vec![col("test.b")])?
+            .build()?;
+            
+        let expected = "Projection: test.b [b:UInt32]\
+            \n  LeftSemi Join:  Filter: Int32(10) = sq.c [a:UInt32, b:UInt32, c:UInt32]\
+            \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+            \n    Projection: sq.c [c:UInt32]\
+            \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";    
 
         assert_optimized_plan_equal(&plan, expected)
     }
