@@ -1684,10 +1684,9 @@ async fn test_current_time() -> Result<()> {
 async fn test_ts_dt_binary_ops() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // where clause
+    // test cast in where clause
     let sql =
         "select count(1) result from (select now() as n) a where n = '2000-01-01'::date";
-    //let sql = "select now() = '2000-01-01'::timestamp";
     let results = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
@@ -1700,6 +1699,22 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
 
     assert_batches_eq!(expected, &results);
 
+    // test cast in where ge clause
+    let sql =
+        "select count(1) result from (select now() as n) a where n >= '2000-01-01'::date";
+    let results = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+--------+",
+        "| result |",
+        "+--------+",
+        "| 1      |",
+        "+--------+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    // test cast in equal select
     let sql = "select now() = '2000-01-01'::date as result";
     let results = execute_to_batches(&ctx, sql).await;
 
@@ -1713,6 +1728,7 @@ async fn test_ts_dt_binary_ops() -> Result<()> {
 
     assert_batches_eq!(expected, &results);
 
+    // test cast in gt select
     let sql = "select now() >= '2000-01-01'::date as result";
     let results = execute_to_batches(&ctx, sql).await;
 

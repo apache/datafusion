@@ -186,6 +186,25 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
     }
 }
 
+/// Returns a common coerced datatype between 2 given datatypes
+///
+/// See the module level documentation for more detail on coercion.
+pub fn get_common_coerced_type(
+    left_datatype: DataType,
+    right_datatype: DataType,
+) -> Result<DataType> {
+    if left_datatype == right_datatype || can_coerce_from(&left_datatype, &right_datatype) {
+        Ok(left_datatype)
+    } else if can_coerce_from(&right_datatype, &left_datatype) {
+        Ok(right_datatype)
+    } else {
+        Err(DataFusionError::Plan(format!(
+            "Datatypes cannot be casted into common type {:?} <-> {:?}",
+            left_datatype, right_datatype
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
