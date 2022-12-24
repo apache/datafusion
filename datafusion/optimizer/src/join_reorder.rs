@@ -64,15 +64,15 @@ impl OptimizerRule for JoinReorder {
         // TODO too many clones - use Box/Rc/Arc to reduce
 
         // recurse down first - we want the equivalent of Spark's transformUp here
-        utils::optimize_children(self, plan, _config)?;
+        let plan = utils::optimize_children(self, plan, _config)?;
 
         println!("JoinReorder::try_optimize():\n{}", plan.display_indent());
 
-        match plan {
+        match &plan {
             LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
-                if !is_supported_join(join) {
+                if !is_supported_join(&join) {
                     println!("Not a supported join!:\n{}", plan.display_indent());
-                    return Ok(None);
+                    return Ok(Some(plan));
                 }
                 println!(
                     "JoinReorder attempting to optimize join: {}",
@@ -80,7 +80,7 @@ impl OptimizerRule for JoinReorder {
                 );
 
                 // extract the relations and join conditions
-                let (rels, conds) = extract_inner_joins(plan);
+                let (rels, conds) = extract_inner_joins(&plan);
 
                 // split rels into facts and dims
                 let rels: Vec<Relation> =
@@ -98,11 +98,12 @@ impl OptimizerRule for JoinReorder {
                 }
                 println!("There are {} facts and {} dims", facts.len(), dims.len());
                 if facts.is_empty() {
-                    return Ok(None);
+                    println!("Too few fact tables");
+                    return Ok(Some(plan));
                 }
                 if facts.len() > self.max_fact_tables {
                     println!("Too many fact tables");
-                    return Ok(None);
+                    return Ok(Some(plan));
                 }
 
                 let mut unfiltered_dimensions = get_unfiltered_dimensions(&dims);
@@ -168,7 +169,7 @@ impl OptimizerRule for JoinReorder {
                         }
                         _ => {
                             println!("Only column expr are supported");
-                            return Ok(None);
+                            return Ok(Some(plan));
                         }
                     }
                 }
@@ -194,12 +195,12 @@ impl OptimizerRule for JoinReorder {
                     return Ok(Some(optimized));
                 } else {
                     println!("Did not use all join conditions: {:?}", join_conds);
-                    return Ok(None);
+                    return Ok(Some(plan));
                 }
             }
             _ => {
                 println!("not a join");
-                Ok(None)
+                Ok(Some(plan))
             }
         }
     }
@@ -362,7 +363,6 @@ fn build_join_tree(
 ) -> Result<LogicalPlan> {
     let mut b = LogicalPlanBuilder::from(fact.clone());
     for dim in dims {
-
         // find join keys between the fact and this dim
         let mut join_keys = vec![];
         for (l, r) in conds.iter() {

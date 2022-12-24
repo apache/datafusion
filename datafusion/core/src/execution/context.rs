@@ -778,11 +778,9 @@ impl SessionContext {
 
         // pre-populate stats so that they are available to logical plan optimizer rules
         // TODO is this the correct place for this? and need to only do this based on opt-in
-        //    let guard = self.state.read();
-        // let (_, stats) =            table
-        //    .list_files_for_scan(&guard, &[], None)
-        //    .await?;
-        //    println!("list_files_for_scan: {:?}", stats);
+        let guard = self.state.read();
+        let (_, stats) = table.list_files_for_scan(&guard, &[], None).await?;
+        println!("list_files_for_scan: {:?}", stats);
 
         self.register_table(TableReference::Bare { table: name }, Arc::new(table))?;
         Ok(())

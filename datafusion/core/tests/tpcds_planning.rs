@@ -23,8 +23,9 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::Result;
+use datafusion::config::OPT_JOIN_REORDER_ENABLED;
 use datafusion::datasource::MemTable;
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use std::fs;
 use std::sync::Arc;
 
@@ -1049,14 +1050,23 @@ async fn regression_test(query_no: u8, create_physical: bool) -> Result<()> {
     let filename = format!("tests/tpc-ds/{query_no}.sql");
     let sql = fs::read_to_string(filename).expect("Could not read query");
 
-    let config = SessionConfig::default();
+    let config = SessionConfig::default().set_bool(OPT_JOIN_REORDER_ENABLED, false);
     let ctx = SessionContext::with_config(config);
     let tables = get_table_definitions();
     for table in &tables {
-        ctx.register_table(
+        // ctx.register_table(
+        //     table.name.as_str(),
+        //     Arc::new(MemTable::try_new(Arc::new(table.schema.clone()), vec![])?),
+        // )?;
+        ctx.register_parquet(
             table.name.as_str(),
-            Arc::new(MemTable::try_new(Arc::new(table.schema.clone()), vec![])?),
-        )?;
+            &format!(
+                "/mnt/bigdata/tpcds/sf100-parquet/{}.parquet",
+                table.name.as_str()
+            ),
+            ParquetReadOptions::default(),
+        )
+        .await?;
     }
 
     // some queries have multiple statements
@@ -1068,6 +1078,7 @@ async fn regression_test(query_no: u8, create_physical: bool) -> Result<()> {
     for sql in &sql {
         let df = ctx.sql(sql).await?;
         let plan = df.into_optimized_plan()?;
+        println!("{}", plan.display_indent());
         if create_physical {
             let _ = ctx.create_physical_plan(&plan).await?;
         }

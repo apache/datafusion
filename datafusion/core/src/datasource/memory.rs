@@ -26,6 +26,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_common::Statistics;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
@@ -145,6 +146,18 @@ impl TableProvider for MemTable {
             self.schema(),
             projection.cloned(),
         )?))
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        let mut stats = Statistics::default();
+        let mut num_rows = 0;
+        for part in &self.batches {
+            for batch in part {
+                num_rows += batch.num_rows();
+            }
+        }
+        stats.num_rows = Some(num_rows);
+        Some(stats)
     }
 }
 
