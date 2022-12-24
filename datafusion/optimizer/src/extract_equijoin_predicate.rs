@@ -16,7 +16,7 @@
 // under the License.
 
 //! Optimizer rule to extract equijoin expr from filter
-use crate::utils::optimize_children;
+use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::DFSchema;
 use datafusion_common::Result;
@@ -39,7 +39,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Join(Join {
@@ -55,7 +55,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 let left_schema = left.schema();
                 let right_schema = right.schema();
 
-                let new_on_and_accumu_filter = if let Some(expr) = filter {
+                filter.as_ref().map_or(Result::Ok(None), |expr| {
                     let mut accum: Vec<(Expr, Expr)> = vec![];
                     let mut accum_filter: Vec<Expr> = vec![];
                     // TODO: avoding clone with split_conjunction
@@ -67,54 +67,36 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         right_schema,
                     )?;
 
-                    (!accum.is_empty()).then(|| {
+                    let optimized_plan = (!accum.is_empty()).then(|| {
                         let mut new_on = on.clone();
                         new_on.extend(accum);
-                        (new_on, accum_filter)
-                    })
-                } else {
-                    None
-                };
 
-                let optimized_left = self.try_optimize(left.as_ref(), config)?;
-                let optimized_right = self.try_optimize(right.as_ref(), config)?;
-                let plan_changed = new_on_and_accumu_filter.is_some()
-                    || optimized_left.is_some()
-                    || optimized_right.is_some();
-
-                let plan = plan_changed.then(|| {
-                    let left =
-                        optimized_left.map(Arc::new).unwrap_or_else(|| left.clone());
-                    let right = optimized_right
-                        .map(Arc::new)
-                        .unwrap_or_else(|| right.clone());
-                    let (new_on, new_filter) = new_on_and_accumu_filter
-                        .map(|(on, accumu_filter)| {
-                            let filter = accumu_filter.into_iter().reduce(Expr::and);
-                            (on, filter)
+                        let new_filter = accum_filter.into_iter().reduce(Expr::and);
+                        LogicalPlan::Join(Join {
+                            left: left.clone(),
+                            right: right.clone(),
+                            on: new_on,
+                            filter: new_filter,
+                            join_type: *join_type,
+                            join_constraint: *join_constraint,
+                            schema: schema.clone(),
+                            null_equals_null: *null_equals_null,
                         })
-                        .unwrap_or_else(|| (on.clone(), filter.clone()));
+                    });
 
-                    LogicalPlan::Join(Join {
-                        left,
-                        right,
-                        on: new_on,
-                        filter: new_filter,
-                        join_type: *join_type,
-                        join_constraint: *join_constraint,
-                        schema: schema.clone(),
-                        null_equals_null: *null_equals_null,
-                    })
-                });
-
-                Ok(plan)
+                    Ok(optimized_plan)
+                })
             }
-            _ => Ok(Some(optimize_children(self, plan, config)?)),
+            _ => Ok(None),
         }
     }
 
     fn name(&self) -> &str {
         "extract_equijoin_predicate"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
     }
 }
 
@@ -227,32 +209,21 @@ fn extract_join_keys(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::test::*;
     use datafusion_common::Column;
     use datafusion_expr::{
-        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, JoinType,
+        col, lit, logical_plan::builder::LogicalPlanBuilder, JoinType,
     };
 
-    use crate::optimizer::OptimizerContext;
-    use crate::test::*;
-
-    use super::*;
-
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: Vec<&str>) {
-        let rule = ExtractEquijoinPredicate::new();
-        let optimized_plan = rule
-            .try_optimize(plan, &OptimizerContext::new())
-            .unwrap()
-            .expect("failed to optimize plan");
-        let formatted = optimized_plan.display_indent_schema().to_string();
-        let actual: Vec<&str> = formatted.trim().lines().collect();
-
-        assert_eq!(
-            expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+    fn assert_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(ExtractEquijoinPredicate {}),
+            plan,
+            expected,
         );
 
-        assert_eq!(plan.schema(), optimized_plan.schema())
+        Ok(())
     }
 
     #[test]
@@ -268,14 +239,11 @@ mod tests {
                 Some(col("t1.a").eq(col("t2.a"))),
             )?
             .build()?;
-        let expected = vec![
-            "Left Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-            "  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
-        ];
-        assert_optimized_plan_eq(&plan, expected);
+        let expected = "Left Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+            \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
+            \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        Ok(())
+        assert_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -291,14 +259,11 @@ mod tests {
                 Some((col("t1.a") + lit(10i64)).eq(col("t2.a") * lit(2u32))),
             )?
             .build()?;
-        let expected = vec![
-            "Left Join: t1.a + Int64(10) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-            "  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
-        ];
-        assert_optimized_plan_eq(&plan, expected);
+        let expected = "Left Join: t1.a + Int64(10) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+            \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
+            \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        Ok(())
+        assert_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -311,21 +276,18 @@ mod tests {
                 t2,
                 JoinType::Left,
                 (Vec::<Column>::new(), Vec::<Column>::new()),
-                Some(binary_expr(
-                    (col("t1.a") + lit(10i64)).gt_eq(col("t2.a") * lit(2u32)),
-                    Operator::And,
-                    col("t1.b").lt(lit(100i32)),
-                )),
+                Some(
+                    (col("t1.a") + lit(10i64))
+                        .gt_eq(col("t2.a") * lit(2u32))
+                        .and(col("t1.b").lt(lit(100i32))),
+                ),
             )?
             .build()?;
-        let expected = vec![
-            "Left Join:  Filter: t1.a + Int64(10) >= t2.a * UInt32(2) AND t1.b < Int32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-            "  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
-        ];
-        assert_optimized_plan_eq(&plan, expected);
+        let expected = "Left Join:  Filter: t1.a + Int64(10) >= t2.a * UInt32(2) AND t1.b < Int32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+            \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
+            \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        Ok(())
+        assert_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -341,21 +303,18 @@ mod tests {
                     vec![col("t1.a") + lit(11u32)],
                     vec![col("t2.a") * lit(2u32)],
                 ),
-                Some(binary_expr(
-                    (col("t1.a") + lit(10i64)).eq(col("t2.a") * lit(2u32)),
-                    Operator::And,
-                    col("t1.b").lt(lit(100i32)),
-                )),
+                Some(
+                    (col("t1.a") + lit(10i64))
+                        .eq(col("t2.a") * lit(2u32))
+                        .and(col("t1.b").lt(lit(100i32))),
+                ),
             )?
             .build()?;
-        let expected = vec![
-            "Left Join: t1.a + UInt32(11) = t2.a * UInt32(2), t1.a + Int64(10) = t2.a * UInt32(2) Filter: t1.b < Int32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-            "  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
-        ];
-        assert_optimized_plan_eq(&plan, expected);
+        let expected = "Left Join: t1.a + UInt32(11) = t2.a * UInt32(2), t1.a + Int64(10) = t2.a * UInt32(2) Filter: t1.b < Int32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+            \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
+            \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        Ok(())
+        assert_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -368,29 +327,21 @@ mod tests {
                 t2,
                 JoinType::Left,
                 (Vec::<Column>::new(), Vec::<Column>::new()),
-                Some(binary_expr(
-                    binary_expr(
-                        col("t1.c").eq(col("t2.c")),
-                        Operator::Or,
-                        (col("t1.a") + col("t1.b")).gt(col("t2.b") + col("t2.c")),
-                    ),
-                    Operator::And,
-                    binary_expr(
-                        col("t1.a").eq(col("t2.a")),
-                        Operator::And,
-                        col("t1.b").eq(col("t2.b")),
-                    ),
-                )),
+                Some(
+                    col("t1.c")
+                        .eq(col("t2.c"))
+                        .or((col("t1.a") + col("t1.b")).gt(col("t2.b") + col("t2.c")))
+                        .and(
+                            col("t1.a").eq(col("t2.a")).and(col("t1.b").eq(col("t2.b"))),
+                        ),
+                ),
             )?
             .build()?;
-        let expected = vec![
-            "Left Join: t1.a = t2.a, t1.b = t2.b Filter: t1.c = t2.c OR t1.a + t1.b > t2.b + t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-            "  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
-        ];
-        assert_optimized_plan_eq(&plan, expected);
+        let expected = "Left Join: t1.a = t2.a, t1.b = t2.b Filter: t1.c = t2.c OR t1.a + t1.b > t2.b + t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+            \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
+            \n  TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]";
 
-        Ok(())
+        assert_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -404,35 +355,31 @@ mod tests {
                 t3,
                 JoinType::Left,
                 (Vec::<Column>::new(), Vec::<Column>::new()),
-                Some(binary_expr(
-                    col("t2.a").eq(col("t3.a")),
-                    Operator::And,
-                    (col("t2.a") + col("t3.b")).gt(lit(100u32)),
-                )),
+                Some(
+                    col("t2.a")
+                        .eq(col("t3.a"))
+                        .and((col("t2.a") + col("t3.b")).gt(lit(100u32))),
+                ),
             )?
             .build()?;
-
         let plan = LogicalPlanBuilder::from(t1)
             .join(
                 input,
                 JoinType::Left,
                 (Vec::<Column>::new(), Vec::<Column>::new()),
-                Some(binary_expr(
-                    col("t1.a").eq(col("t2.a")),
-                    Operator::And,
-                    (col("t1.c") + col("t2.c") + col("t3.c")).lt(lit(100u32)),
-                )),
+                Some(
+                    col("t1.a")
+                        .eq(col("t2.a"))
+                        .and((col("t1.c") + col("t2.c") + col("t3.c")).lt(lit(100u32))),
+                ),
             )?
             .build()?;
-        let expected = vec![
-            "Left Join: t1.a = t2.a Filter: t1.c + t2.c + t3.c < UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-            "  Left Join: t2.a = t3.a Filter: t2.a + t3.b > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-            "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
-            "    TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]",
-        ];
-        assert_optimized_plan_eq(&plan, expected);
+        let expected = "Left Join: t1.a = t2.a Filter: t1.c + t2.c + t3.c < UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+            \n  TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]\
+            \n  Left Join: t2.a = t3.a Filter: t2.a + t3.b > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]\
+            \n    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]\
+            \n    TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]";
 
-        Ok(())
+        assert_plan_eq(&plan, expected)
     }
 }

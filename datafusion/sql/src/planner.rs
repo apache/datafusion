@@ -805,7 +805,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         match constraint {
             JoinConstraint::On(sql_expr) => {
-                // let mut keys: Vec<(Expr, Expr)> = vec![];
                 let join_schema = left.schema().join(right.schema())?;
 
                 // parse ON expression
