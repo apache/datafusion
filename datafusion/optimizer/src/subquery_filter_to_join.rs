@@ -443,7 +443,7 @@ mod tests {
         assert_optimized_plan_equal(&plan, expected)
     }
 
-    /// Test for single IN subquery filter with none equijoin
+    /// Test for single IN subquery filter with non equijoin
     #[test]
     fn in_subquery_to_non_equijoin() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -451,12 +451,12 @@ mod tests {
             .filter(in_subquery(lit(10i32), test_subquery_with_name("sq")?))?
             .project(vec![col("test.b")])?
             .build()?;
-            
+
         let expected = "Projection: test.b [b:UInt32]\
             \n  LeftSemi Join:  Filter: Int32(10) = sq.c [a:UInt32, b:UInt32, c:UInt32]\
             \n    TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
             \n    Projection: sq.c [c:UInt32]\
-            \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";    
+            \n      TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_equal(&plan, expected)
     }
