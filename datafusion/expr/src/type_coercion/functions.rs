@@ -193,7 +193,8 @@ pub fn get_common_coerced_type(
     left_datatype: DataType,
     right_datatype: DataType,
 ) -> Result<DataType> {
-    if left_datatype == right_datatype || can_coerce_from(&left_datatype, &right_datatype) {
+    if left_datatype == right_datatype || can_coerce_from(&left_datatype, &right_datatype)
+    {
         Ok(left_datatype)
     } else if can_coerce_from(&right_datatype, &left_datatype) {
         Ok(right_datatype)
