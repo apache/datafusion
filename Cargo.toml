@@ -32,6 +32,7 @@ members = [
     "parquet-test-utils",
     "benchmarks",
 ]
+#trivial
 
 [profile.release]
 codegen-units = 1
