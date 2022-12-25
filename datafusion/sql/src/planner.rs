@@ -2275,6 +2275,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
 
                 // first, check SQL reserved words
+                // TODO: remove when https://github.com/sqlparser-rs/sqlparser-rs/pull/771
                 if name == "rollup" {
                     let args = self.function_args_to_expr(function.args, schema)?;
                     return Ok(Expr::GroupingSet(GroupingSet::Rollup(args)));
@@ -2385,6 +2386,35 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         ))),
                     },
                 }
+            }
+
+            SQLExpr::Rollup(exprs) => {
+                let args: Result<Vec<_>> = exprs.into_iter().map(|v| {
+                    if v.len() != 1 {
+                        Err(DataFusionError::Internal("Tuple expressions are not supported for Rollup expressions".to_string()))
+                    } else {
+                        self.sql_expr_to_logical_expr(v[0].clone(), schema, planner_context)
+                    }
+                }).collect();
+                Ok(Expr::GroupingSet(GroupingSet::Rollup(args?)))
+            }
+
+            SQLExpr::Cube(exprs) => {
+                let args: Result<Vec<_>> = exprs.into_iter().map(|v| {
+                    if v.len() != 1 {
+                        Err(DataFusionError::Internal("Tuple expressions not are supported for Cube expressions".to_string()))
+                    } else {
+                        self.sql_expr_to_logical_expr(v[0].clone(), schema, planner_context)
+                    }
+                }).collect();
+                Ok(Expr::GroupingSet(GroupingSet::Cube(args?)))
+            }
+
+            SQLExpr::GroupingSets(exprs) => {
+                let args: Result<Vec<Vec<_>>> = exprs.into_iter().map(|v| {
+                    v.into_iter().map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context)).collect()
+                }).collect();
+                Ok(Expr::GroupingSet(GroupingSet::GroupingSets(args?)))
             }
 
             SQLExpr::Floor { expr, field: _field } => {
@@ -3264,7 +3294,9 @@ fn ensure_any_column_reference_is_unambiguous(
 mod tests {
     use std::any::Any;
 
-    use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
+    use sqlparser::dialect::{
+        Dialect, GenericDialect, HiveDialect, MySqlDialect, PostgreSqlDialect,
+    };
 
     use datafusion_common::assert_contains;
 
@@ -5833,8 +5865,50 @@ mod tests {
     #[test]
     fn aggregate_with_grouping_sets() {
         let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
-        let expected = "TBD";
+        let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
+        \n  Aggregate: groupBy=[[person.id, GROUPING SETS ((person.state), (person.state, person.age), (person.id, person.state))]], aggr=[[COUNT(UInt8(1))]]\
+        \n    TableScan: person";
         quick_test(sql, expected);
+    }
+
+    #[test]
+    // TODO: remove when https://github.com/sqlparser-rs/sqlparser-rs/pull/771
+    fn postgres_aggregate_with_grouping_sets() -> Result<()> {
+        let dialect = &PostgreSqlDialect {};
+        let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
+        let plan = logical_plan_with_dialect(sql, dialect)?;
+        let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
+        \n  Aggregate: groupBy=[[person.id, GROUPING SETS ((person.state), (person.state, person.age), (person.id, person.state))]], aggr=[[COUNT(UInt8(1))]]\
+        \n    TableScan: person".to_string();
+        assert_eq!(plan.display_indent().to_string(), expected);
+        Ok(())
+    }
+
+    #[test]
+    // TODO: remove when https://github.com/sqlparser-rs/sqlparser-rs/pull/771
+    fn postgres_aggregate_with_cube() -> Result<()> {
+        let dialect = &PostgreSqlDialect {};
+        let sql =
+            "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
+        let plan = logical_plan_with_dialect(sql, dialect)?;
+        let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
+        \n  Aggregate: groupBy=[[person.id, CUBE (person.state, person.age)]], aggr=[[COUNT(UInt8(1))]]\
+        \n    TableScan: person".to_string();
+        assert_eq!(plan.display_indent().to_string(), expected);
+        Ok(())
+    }
+
+    #[test]
+    // TODO: remove when https://github.com/sqlparser-rs/sqlparser-rs/pull/771
+    fn postgres_aggregate_with_rollup() -> Result<()> {
+        let dialect = &PostgreSqlDialect {};
+        let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, ROLLUP (state, age)";
+        let plan = logical_plan_with_dialect(sql, dialect)?;
+        let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
+        \n  Aggregate: groupBy=[[person.id, ROLLUP (person.state, person.age)]], aggr=[[COUNT(UInt8(1))]]\
+        \n    TableScan: person";
+        assert_eq!(plan.display_indent().to_string(), expected);
+        Ok(())
     }
 
     #[test]
