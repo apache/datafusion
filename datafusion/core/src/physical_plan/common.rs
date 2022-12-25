@@ -273,7 +273,7 @@ mod tests {
     use arrow::{
         array::{Float32Array, Float64Array},
         datatypes::{DataType, Field, Schema},
-        record_batch::RecordBatch, ipc::CompressionType,
+        record_batch::RecordBatch,
     };
 
     #[test]
