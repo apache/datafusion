@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 
-use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{DFField, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::{
     col,
     expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
@@ -295,7 +295,6 @@ fn build_project_plan(
     expr_set: &ExprSet,
 ) -> Result<LogicalPlan> {
     let mut project_exprs = vec![];
-    let mut fields = vec![];
     let mut fields_set = BTreeSet::new();
 
     for id in affected_id {
@@ -304,7 +303,6 @@ fn build_project_plan(
                 // todo: check `nullable`
                 let field = DFField::new(None, &id, data_type.clone(), true);
                 fields_set.insert(field.name().to_owned());
-                fields.push(field);
                 project_exprs.push(expr.clone().alias(&id));
             }
             _ => {
@@ -317,17 +315,13 @@ fn build_project_plan(
 
     for field in input.schema().fields() {
         if fields_set.insert(field.qualified_name()) {
-            fields.push(field.clone());
             project_exprs.push(Expr::Column(field.qualified_column()));
         }
     }
 
-    let schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
-
-    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+    Ok(LogicalPlan::Projection(Projection::try_new(
         project_exprs,
         Arc::new(input),
-        Arc::new(schema),
     )?))
 }
 
@@ -567,6 +561,7 @@ mod test {
 
     use arrow::datatypes::{Field, Schema};
 
+    use datafusion_common::DFSchema;
     use datafusion_expr::logical_plan::{table_scan, JoinType};
     use datafusion_expr::{
         avg, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, sum,
@@ -762,16 +757,28 @@ mod test {
     fn redundant_project_fields() {
         let table_scan = test_table_scan().unwrap();
         let affected_id: BTreeSet<Identifier> =
-            ["c+a".to_string(), "d+a".to_string()].into_iter().collect();
-        let expr_set = [
+            ["c+a".to_string(), "b+a".to_string()].into_iter().collect();
+        let expr_set_1 = [
+            (
+                "c+a".to_string(),
+                (col("c") + col("a"), 1, DataType::UInt32),
+            ),
+            (
+                "b+a".to_string(),
+                (col("b") + col("a"), 1, DataType::UInt32),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let expr_set_2 = [
             ("c+a".to_string(), (col("c+a"), 1, DataType::UInt32)),
-            ("d+a".to_string(), (col("d+a"), 1, DataType::UInt32)),
+            ("b+a".to_string(), (col("b+a"), 1, DataType::UInt32)),
         ]
         .into_iter()
         .collect();
         let project =
-            build_project_plan(table_scan, affected_id.clone(), &expr_set).unwrap();
-        let project_2 = build_project_plan(project, affected_id, &expr_set).unwrap();
+            build_project_plan(table_scan, affected_id.clone(), &expr_set_1).unwrap();
+        let project_2 = build_project_plan(project, affected_id, &expr_set_2).unwrap();
 
         let mut field_set = BTreeSet::new();
         for field in project_2.schema().fields() {
@@ -789,15 +796,35 @@ mod test {
             .build()
             .unwrap();
         let affected_id: BTreeSet<Identifier> =
-            ["c+a".to_string(), "d+a".to_string()].into_iter().collect();
-        let expr_set = [
-            ("c+a".to_string(), (col("c+a"), 1, DataType::UInt32)),
-            ("d+a".to_string(), (col("d+a"), 1, DataType::UInt32)),
+            ["test1.c+test1.a".to_string(), "test1.b+test1.a".to_string()]
+                .into_iter()
+                .collect();
+        let expr_set_1 = [
+            (
+                "test1.c+test1.a".to_string(),
+                (col("test1.c") + col("test1.a"), 1, DataType::UInt32),
+            ),
+            (
+                "test1.b+test1.a".to_string(),
+                (col("test1.b") + col("test1.a"), 1, DataType::UInt32),
+            ),
         ]
         .into_iter()
         .collect();
-        let project = build_project_plan(join, affected_id.clone(), &expr_set).unwrap();
-        let project_2 = build_project_plan(project, affected_id, &expr_set).unwrap();
+        let expr_set_2 = [
+            (
+                "test1.c+test1.a".to_string(),
+                (col("test1.c+test1.a"), 1, DataType::UInt32),
+            ),
+            (
+                "test1.b+test1.a".to_string(),
+                (col("test1.b+test1.a"), 1, DataType::UInt32),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let project = build_project_plan(join, affected_id.clone(), &expr_set_1).unwrap();
+        let project_2 = build_project_plan(project, affected_id, &expr_set_2).unwrap();
 
         let mut field_set = BTreeSet::new();
         for field in project_2.schema().fields() {
@@ -857,5 +884,29 @@ mod test {
     ),
 ]"###;
         assert_eq!(expected, formatted_fields_with_datatype);
+    }
+
+    #[test]
+    fn cross_plans_subexpr_() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(binary_expr(
+                binary_expr(lit(1), Operator::Gt, col("a")),
+                Operator::And,
+                binary_expr(lit(1), Operator::Gt, col("a")),
+            ))?
+            .build()?;
+
+        let expected = "Filter: Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a AND Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a\
+        \n  Projection: Int32(1) > test.a AS Int32(1) > test.atest.aInt32(1), test.a, test.b, test.c\
+        \n    TableScan: test";
+
+        let output_schema = plan.schema();
+        println!("output schema: {:?}", output_schema);
+
+        assert_optimized_plan_eq(expected, &plan);
+
+        Ok(())
     }
 }
