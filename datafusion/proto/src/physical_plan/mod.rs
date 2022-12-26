@@ -1213,7 +1213,6 @@ mod roundtrip_tests {
     use crate::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
     use datafusion::arrow::array::ArrayRef;
     use datafusion::arrow::datatypes::IntervalUnit;
-    use datafusion::config::ConfigOptions;
     use datafusion::datasource::object_store::ObjectStoreUrl;
     use datafusion::execution::context::ExecutionProps;
     use datafusion::logical_expr::create_udf;
@@ -1247,7 +1246,6 @@ mod roundtrip_tests {
         scalar::ScalarValue,
     };
     use datafusion_common::Result;
-    use parking_lot::RwLock;
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
         let ctx = SessionContext::new();
@@ -1459,7 +1457,6 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         let scan_config = FileScanConfig {
-            config_options: Arc::new(RwLock::new(ConfigOptions::new())), // TODO add serde
             object_store_url: ObjectStoreUrl::local_filesystem(),
             file_schema: Arc::new(Schema::new(vec![Field::new(
                 "col",

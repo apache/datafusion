@@ -113,10 +113,7 @@ pub struct CsvFormat {
     pub delimiter: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ParquetFormat {
-    #[prost(bool, tag = "1")]
-    pub enable_pruning: bool,
-}
+pub struct ParquetFormat {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvroFormat {}
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1506,15 +1503,6 @@ pub struct FileScanExecConf {
     pub object_store_url: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "9")]
     pub output_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
-    #[prost(message, repeated, tag = "10")]
-    pub options: ::prost::alloc::vec::Vec<ConfigOption>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ConfigOption {
-    #[prost(string, tag = "1")]
-    pub key: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "2")]
-    pub value: ::core::option::Option<ScalarValue>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {

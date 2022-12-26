@@ -28,6 +28,7 @@ use object_store::{GetResult, ObjectMeta, ObjectStore};
 use super::FileFormat;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
 use crate::error::Result;
+use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
@@ -47,6 +48,7 @@ impl FileFormat for AvroFormat {
 
     async fn infer_schema(
         &self,
+        _state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -68,6 +70,7 @@ impl FileFormat for AvroFormat {
 
     async fn infer_stats(
         &self,
+        _state: &SessionState,
         _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
         _object: &ObjectMeta,
@@ -77,6 +80,7 @@ impl FileFormat for AvroFormat {
 
     async fn create_physical_plan(
         &self,
+        _state: &SessionState,
         conf: FileScanConfig,
         _filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -101,10 +105,11 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let ctx = SessionContext::with_config(config);
-        let task_ctx = ctx.task_ctx();
+        let session_ctx = SessionContext::with_config(config);
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = None;
-        let exec = get_exec("alltypes_plain.avro", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.avro", projection, None).await?;
         let stream = exec.execute(0, task_ctx)?;
 
         let tt_batches = stream
@@ -124,9 +129,10 @@ mod tests {
     #[tokio::test]
     async fn read_limit() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = None;
-        let exec = get_exec("alltypes_plain.avro", projection, Some(1)).await?;
+        let exec = get_exec(&state, "alltypes_plain.avro", projection, Some(1)).await?;
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(11, batches[0].num_columns());
@@ -138,9 +144,10 @@ mod tests {
     #[tokio::test]
     async fn read_alltypes_plain_avro() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = None;
-        let exec = get_exec("alltypes_plain.avro", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.avro", projection, None).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -190,9 +197,10 @@ mod tests {
     #[tokio::test]
     async fn read_bool_alltypes_plain_avro() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![1]);
-        let exec = get_exec("alltypes_plain.avro", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.avro", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
@@ -216,9 +224,10 @@ mod tests {
     #[tokio::test]
     async fn read_i32_alltypes_plain_avro() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![0]);
-        let exec = get_exec("alltypes_plain.avro", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.avro", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
@@ -239,9 +248,10 @@ mod tests {
     #[tokio::test]
     async fn read_i96_alltypes_plain_avro() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![10]);
-        let exec = get_exec("alltypes_plain.avro", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.avro", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
@@ -262,9 +272,10 @@ mod tests {
     #[tokio::test]
     async fn read_f32_alltypes_plain_avro() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![6]);
-        let exec = get_exec("alltypes_plain.avro", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.avro", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
@@ -288,9 +299,10 @@ mod tests {
     #[tokio::test]
     async fn read_f64_alltypes_plain_avro() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![7]);
-        let exec = get_exec("alltypes_plain.avro", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.avro", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
@@ -314,9 +326,10 @@ mod tests {
     #[tokio::test]
     async fn read_binary_alltypes_plain_avro() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![9]);
-        let exec = get_exec("alltypes_plain.avro", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.avro", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
@@ -338,6 +351,7 @@ mod tests {
     }
 
     async fn get_exec(
+        state: &SessionState,
         file_name: &str,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
@@ -345,7 +359,7 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let store_root = format!("{}/avro", testdata);
         let format = AvroFormat {};
-        scan_format(&format, &store_root, file_name, projection, limit).await
+        scan_format(state, &format, &store_root, file_name, projection, limit).await
     }
 }
 
@@ -356,13 +370,16 @@ mod tests {
 
     use super::super::test_util::scan_format;
     use crate::error::DataFusionError;
+    use crate::prelude::SessionContext;
 
     #[tokio::test]
     async fn test() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
         let format = AvroFormat {};
         let testdata = crate::test_util::arrow_test_data();
         let filename = "avro/alltypes_plain.avro";
-        let result = scan_format(&format, &testdata, filename, None, None).await;
+        let result = scan_format(&state, &format, &testdata, filename, None, None).await;
         assert!(matches!(
             result,
             Err(DataFusionError::NotImplemented(msg))

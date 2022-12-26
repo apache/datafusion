@@ -127,10 +127,7 @@ fn register_aggregate(ctx: &mut SessionContext) {
     );
 
     // register the selector as "first"
-    ctx.state
-        .write()
-        .aggregate_functions
-        .insert(name.to_string(), Arc::new(first));
+    ctx.register_udaf(first)
 }
 
 /// This structureg models a specialized timeseries aggregate function

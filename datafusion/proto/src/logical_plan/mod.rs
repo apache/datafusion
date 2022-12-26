@@ -353,12 +353,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                             self
                         ))
                     })? {
-                        &FileFormatType::Parquet(protobuf::ParquetFormat {
-                            enable_pruning,
-                        }) => Arc::new(
-                            ParquetFormat::new(ctx.config_options())
-                                .with_enable_pruning(Some(enable_pruning)),
-                        ),
+                        &FileFormatType::Parquet(protobuf::ParquetFormat {}) => {
+                            Arc::new(ParquetFormat::default())
+                        }
                         FileFormatType::Csv(protobuf::CsvFormat {
                             has_header,
                             delimiter,
@@ -502,7 +499,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 };
 
                 let file_type = create_extern_table.file_type.as_str();
-                let env = &ctx.state.as_ref().read().runtime_env;
+                let env = ctx.runtime_env();
                 if !env.table_factories.contains_key(file_type) {
                     Err(DataFusionError::Internal(format!(
                         "No TableProvider for file type: {}",
@@ -820,12 +817,8 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
                     let any = listing_table.options().format.as_any();
-                    let file_format_type = if let Some(parquet) =
-                        any.downcast_ref::<ParquetFormat>()
-                    {
-                        FileFormatType::Parquet(protobuf::ParquetFormat {
-                            enable_pruning: parquet.enable_pruning(),
-                        })
+                    let file_format_type = if any.is::<ParquetFormat>() {
+                        FileFormatType::Parquet(protobuf::ParquetFormat {})
                     } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
                         FileFormatType::Csv(protobuf::CsvFormat {
                             delimiter: byte_to_string(csv.delimiter())?,
@@ -936,14 +929,14 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Filter(filter) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
-                        filter.input().as_ref(),
+                        filter.input.as_ref(),
                         extension_codec,
                     )?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
-                            expr: Some(filter.predicate().try_into()?),
+                            expr: Some((&filter.predicate).try_into()?),
                         },
                     ))),
                 })
@@ -1443,7 +1436,7 @@ mod roundtrip_tests {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
-        let scan = ctx.table("t1")?.to_logical_plan()?;
+        let scan = ctx.table("t1")?.into_optimized_plan()?;
         let topk_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(TopKPlanNode::new(3, scan, col("revenue"))),
         });
@@ -1540,7 +1533,7 @@ mod roundtrip_tests {
         ctx.sql(sql).await.unwrap();
 
         let codec = TestTableProviderCodec {};
-        let scan = ctx.table("t")?.to_logical_plan()?;
+        let scan = ctx.table("t")?.into_optimized_plan()?;
         let bytes = logical_plan_to_bytes_with_extension_codec(&scan, &codec)?;
         let logical_round_trip =
             logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
@@ -1566,7 +1559,7 @@ mod roundtrip_tests {
 
         let query =
             "SELECT a, SUM(b + 1) as b_sum FROM t1 GROUP BY a ORDER BY b_sum DESC";
-        let plan = ctx.sql(query).await?.to_logical_plan()?;
+        let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
@@ -1592,7 +1585,7 @@ mod roundtrip_tests {
         .await?;
 
         let query = "SELECT a, COUNT(DISTINCT b) as b_cd FROM t1 GROUP BY a";
-        let plan = ctx.sql(query).await?.to_logical_plan()?;
+        let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
@@ -1606,7 +1599,7 @@ mod roundtrip_tests {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
-        let plan = ctx.table("t1")?.to_logical_plan()?;
+        let plan = ctx.table("t1")?.into_optimized_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
@@ -1620,7 +1613,10 @@ mod roundtrip_tests {
             .await?;
         ctx.sql("CREATE VIEW view_t1(a, b) AS SELECT a, b FROM t1")
             .await?;
-        let plan = ctx.sql("SELECT * FROM view_t1").await?.to_logical_plan()?;
+        let plan = ctx
+            .sql("SELECT * FROM view_t1")
+            .await?
+            .into_optimized_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));

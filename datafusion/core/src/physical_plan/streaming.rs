@@ -106,9 +106,9 @@ impl ExecutionPlan for StreamingTableExec {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = self.partitions[partition].execute();
+        let stream = self.partitions[partition].execute(ctx);
         Ok(match self.projection.clone() {
             Some(projection) => Box::pin(RecordBatchStreamAdapter::new(
                 self.projected_schema.clone(),

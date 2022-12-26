@@ -119,9 +119,8 @@ async fn equijoin_left_and_condition_from_right() -> Result<()> {
         let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
         let sql =
             "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
-        let res = ctx.create_logical_plan(sql);
-        assert!(res.is_ok());
-        let actual = execute_to_batches(&ctx, sql).await;
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let actual = dataframe.collect().await.unwrap();
         let expected = vec![
             "+-------+---------+---------+",
             "| t1_id | t1_name | t2_name |",
@@ -145,9 +144,8 @@ async fn equijoin_left_and_not_null_condition_from_right() -> Result<()> {
         let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
         let sql =
             "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name is not null ORDER BY t1_id";
-        let res = ctx.create_logical_plan(sql);
-        assert!(res.is_ok());
-        let actual = execute_to_batches(&ctx, sql).await;
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let actual = dataframe.collect().await.unwrap();
         let expected = vec![
             "+-------+---------+---------+",
             "| t1_id | t1_name | t2_name |",
@@ -172,9 +170,8 @@ async fn full_join_sub_query() -> Result<()> {
         let sql = "
         SELECT t1_id, t1_name, t2_name FROM (SELECT * from (t1) AS t1) FULL JOIN (SELECT * from (t2) AS t2) ON t1_id = t2_id AND t2_name >= 'y'
          ORDER BY t1_id, t2_name";
-        let res = ctx.create_logical_plan(sql);
-        assert!(res.is_ok());
-        let actual = execute_to_batches(&ctx, sql).await;
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let actual = dataframe.collect().await.unwrap();
         let expected = vec![
             "+-------+---------+---------+",
             "| t1_id | t1_name | t2_name |",
@@ -200,9 +197,8 @@ async fn equijoin_right_and_condition_from_left() -> Result<()> {
         let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
         let sql =
             "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t1_id >= 22 ORDER BY t2_name";
-        let res = ctx.create_logical_plan(sql);
-        assert!(res.is_ok());
-        let actual = execute_to_batches(&ctx, sql).await;
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let actual = dataframe.collect().await.unwrap();
         let expected = vec![
             "+-------+---------+---------+",
             "| t1_id | t1_name | t2_name |",
@@ -272,9 +268,8 @@ async fn equijoin_right_and_condition_from_right() -> Result<()> {
         let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
         let sql =
             "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_id >= 22 ORDER BY t2_name";
-        let res = ctx.create_logical_plan(sql);
-        assert!(res.is_ok());
-        let actual = execute_to_batches(&ctx, sql).await;
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let actual = dataframe.collect().await.unwrap();
         let expected = vec![
             "+-------+---------+---------+",
             "| t1_id | t1_name | t2_name |",
@@ -297,9 +292,8 @@ async fn equijoin_right_and_condition_from_both() -> Result<()> {
         let ctx = create_join_context("t1_id", "t2_id", repartition_joins)?;
         let sql =
             "SELECT t1_int, t2_int, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_int <= t1_int ORDER BY t2_id";
-        let res = ctx.create_logical_plan(sql);
-        assert!(res.is_ok());
-        let actual = execute_to_batches(&ctx, sql).await;
+        let dataframe = ctx.sql(sql).await.unwrap();
+        let actual = dataframe.collect().await.unwrap();
         let expected = vec![
             "+--------+--------+-------+",
             "| t1_int | t2_int | t2_id |",
@@ -1356,11 +1350,8 @@ async fn hash_join_with_date32() -> Result<()> {
     // inner join on hash supported data type (Date32)
     let sql = "select * from t1 join t2 on t1.c1 = t2.c1";
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
@@ -1398,11 +1389,8 @@ async fn hash_join_with_date64() -> Result<()> {
     // left join on hash supported data type (Date64)
     let sql = "select * from t1 left join t2 on t1.c2 = t2.c2";
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
@@ -1442,11 +1430,8 @@ async fn hash_join_with_decimal() -> Result<()> {
     // right join on hash supported data type (Decimal)
     let sql = "select * from t1 right join t2 on t1.c3 = t2.c3";
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
@@ -1486,11 +1471,8 @@ async fn hash_join_with_dictionary() -> Result<()> {
     // inner join on hash supported data type (Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)))
     let sql = "select * from t1 join t2 on t1.c4 = t2.c4";
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: t1.c1, t1.c2, t1.c3, t1.c4, t2.c1, t2.c2, t2.c3, t2.c4 [c1:Date32;N, c2:Date64;N, c3:Decimal128(5, 2);N, c4:Dictionary(Int32, Utf8);N, c1:Date32;N, c2:Date64;N, c3:Decimal128(10, 2);N, c4:Dictionary(Int32, Utf8);N]",
@@ -1530,11 +1512,8 @@ async fn reduce_left_join_1() -> Result<()> {
         let sql =
             "select * from t1 left join t2 on t1.t1_id = t2.t2_id where t2.t2_id < 100";
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx
-            .create_logical_plan(&("explain ".to_owned() + sql))
-            .expect(&msg);
-        let state = ctx.state();
-        let plan = state.optimize(&plan)?;
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
             "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
@@ -1577,11 +1556,8 @@ async fn reduce_left_join_2() -> Result<()> {
         // reduce to inner join
         let sql = "select * from t1 left join t2 on t1.t1_id = t2.t2_id where t2.t2_int < 10 or (t1.t1_int > 2 and t2.t2_name != 'w')";
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx
-            .create_logical_plan(&("explain ".to_owned() + sql))
-            .expect(&msg);
-        let state = ctx.state();
-        let plan = state.optimize(&plan)?;
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
 
         // filter expr:  `t2.t2_int < 10 or (t1.t1_int > 2 and t2.t2_name != 'w')`
         // could be write to: `(t1.t1_int > 2 or t2.t2_int < 10) and (t2.t2_name != 'w' or t2.t2_int < 10)`
@@ -1629,11 +1605,8 @@ async fn reduce_left_join_3() -> Result<()> {
         // reduce subquery to inner join
         let sql = "select * from (select t1.* from t1 left join t2 on t1.t1_id = t2.t2_id where t2.t2_int < 3) t3 left join t2 on t3.t1_int = t2.t2_int where t3.t1_id < 100";
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx
-            .create_logical_plan(&("explain ".to_owned() + sql))
-            .expect(&msg);
-        let state = ctx.state();
-        let plan = state.optimize(&plan)?;
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
             "  Projection: t3.t1_id, t3.t1_name, t3.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
@@ -1678,11 +1651,8 @@ async fn reduce_right_join_1() -> Result<()> {
         // reduce to inner join
         let sql = "select * from t1 right join t2 on t1.t1_id = t2.t2_id where t1.t1_int is not null";
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx
-            .create_logical_plan(&("explain ".to_owned() + sql))
-            .expect(&msg);
-        let state = ctx.state();
-        let plan = state.optimize(&plan)?;
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
             "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
@@ -1724,11 +1694,8 @@ async fn reduce_right_join_2() -> Result<()> {
         // reduce to inner join
         let sql = "select * from t1 right join t2 on t1.t1_id = t2.t2_id where not(t1.t1_int = t2.t2_int)";
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx
-            .create_logical_plan(&("explain ".to_owned() + sql))
-            .expect(&msg);
-        let state = ctx.state();
-        let plan = state.optimize(&plan)?;
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
             "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
@@ -1770,11 +1737,8 @@ async fn reduce_full_join_to_right_join() -> Result<()> {
         // reduce to right join
         let sql = "select * from t1 full join t2 on t1.t1_id = t2.t2_id where t2.t2_name is not null";
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx
-            .create_logical_plan(&("explain ".to_owned() + sql))
-            .expect(&msg);
-        let state = ctx.state();
-        let plan = state.optimize(&plan)?;
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
             "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
@@ -1818,11 +1782,8 @@ async fn reduce_full_join_to_left_join() -> Result<()> {
         let sql =
             "select * from t1 full join t2 on t1.t1_id = t2.t2_id where t1.t1_name != 'b'";
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx
-            .create_logical_plan(&("explain ".to_owned() + sql))
-            .expect(&msg);
-        let state = ctx.state();
-        let plan = state.optimize(&plan)?;
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
             "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
@@ -1863,11 +1824,8 @@ async fn reduce_full_join_to_inner_join() -> Result<()> {
         // reduce to inner join
         let sql = "select * from t1 full join t2 on t1.t1_id = t2.t2_id where t1.t1_name != 'b' and t2.t2_name = 'x'";
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx
-            .create_logical_plan(&("explain ".to_owned() + sql))
-            .expect(&msg);
-        let state = ctx.state();
-        let plan = state.optimize(&plan)?;
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
             "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
@@ -1930,10 +1888,8 @@ async fn sort_merge_join_on_date32() -> Result<()> {
     // inner sort merge join on data type (Date32)
     let sql = "select * from t1 join t2 on t1.c1 = t2.c1";
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let expected = vec![
         "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@4 as c1, c2@5 as c2, c3@6 as c3, c4@7 as c4]",
         "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c1\", index: 0 })]",
@@ -1978,11 +1934,8 @@ async fn sort_merge_join_on_decimal() -> Result<()> {
     // right join on data type (Decimal)
     let sql = "select * from t1 right join t2 on t1.c3 = t2.c3";
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let state = ctx.state();
-    let logical_plan = state.optimize(&plan)?;
-    let physical_plan = state.create_physical_plan(&logical_plan).await?;
-
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let physical_plan = dataframe.create_physical_plan().await?;
     let expected = vec![
         "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@4 as c1, c2@5 as c2, c3@6 as c3, c4@7 as c4]",
         "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@5 as c1, c2@6 as c2, c3@7 as c3, c4@8 as c4]",
@@ -2037,10 +1990,8 @@ async fn left_semi_join() -> Result<()> {
 
         let sql = "SELECT t1_id, t1_name FROM t1 WHERE t1_id IN (SELECT t2_id FROM t2) ORDER BY t1_id";
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx.create_logical_plan(sql).expect(&msg);
-        let state = ctx.state();
-        let logical_plan = state.optimize(&plan)?;
-        let physical_plan = state.create_physical_plan(&logical_plan).await?;
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
             vec![
                 "SortExec: [t1_id@0 ASC NULLS LAST]",
@@ -2228,10 +2179,8 @@ async fn right_semi_join() -> Result<()> {
 
         let sql = "SELECT t1_id, t1_name, t1_int FROM t1 WHERE EXISTS (SELECT * FROM t2 where t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id";
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx.create_logical_plan(sql).expect(&msg);
-        let state = ctx.state();
-        let logical_plan = state.optimize(&plan)?;
-        let physical_plan = state.create_physical_plan(&logical_plan).await?;
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
             vec![ "SortExec: [t1_id@0 ASC NULLS LAST]",
                   "  CoalescePartitionsExec",
@@ -2315,11 +2264,8 @@ async fn reduce_cross_join_with_expr_join_key_all() -> Result<()> {
         // reduce to inner join
         let sql = "select * from t1 cross join t2 where t1.t1_id + 12 = t2.t2_id + 1";
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx
-            .create_logical_plan(&("explain ".to_owned() + sql))
-            .expect(&msg);
-        let state = ctx.state();
-        let plan = state.optimize(&plan)?;
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
             "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
@@ -2361,11 +2307,8 @@ async fn reduce_cross_join_with_cast_expr_join_key() -> Result<()> {
         let sql =
             "select t1.t1_id, t2.t2_id, t1.t1_name from t1 cross join t2 where t1.t1_id + 11 = cast(t2.t2_id as BIGINT)";
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx
-            .create_logical_plan(&("explain ".to_owned() + sql))
-            .expect(&msg);
-        let state = ctx.state();
-        let plan = state.optimize(&plan)?;
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
            "Explain [plan_type:Utf8, plan:Utf8]",
            "  Projection: t1.t1_id, t2.t2_id, t1.t1_name [t1_id:UInt32;N, t2_id:UInt32;N, t1_name:Utf8;N]",
@@ -2408,11 +2351,8 @@ async fn reduce_cross_join_with_wildcard_and_expr() -> Result<()> {
 
         // assert logical plan
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx
-            .create_logical_plan(&("explain ".to_owned() + sql))
-            .expect(&msg);
-        let state = ctx.state();
-        let plan = state.optimize(&plan)?;
+        let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+        let plan = dataframe.into_optimized_plan()?;
 
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
@@ -2432,10 +2372,8 @@ async fn reduce_cross_join_with_wildcard_and_expr() -> Result<()> {
 
         // assert physical plan
         let msg = format!("Creating physical plan for '{}'", sql);
-        let plan = ctx.create_logical_plan(sql).expect(&msg);
-        let state = ctx.state();
-        let logical_plan = state.optimize(&plan)?;
-        let physical_plan = state.create_physical_plan(&logical_plan).await?;
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
             vec![
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int, CAST(t1_id@0 AS Int64) + 11 as t1.t1_id + Int64(11)]",
@@ -2506,10 +2444,8 @@ async fn both_side_expr_key_inner_join() -> Result<()> {
                          ON t1.t1_id + cast(12 as INT UNSIGNED)  = t2.t2_id + cast(1 as INT UNSIGNED)";
 
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx.create_logical_plan(sql).expect(&msg);
-        let state = ctx.state();
-        let logical_plan = state.optimize(&plan)?;
-        let physical_plan = state.create_physical_plan(&logical_plan).await?;
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
 
         let expected = if repartition_joins {
             vec![
@@ -2580,10 +2516,8 @@ async fn left_side_expr_key_inner_join() -> Result<()> {
                          ON t1.t1_id + cast(11 as INT UNSIGNED)  = t2.t2_id";
 
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx.create_logical_plan(sql).expect(&msg);
-        let state = ctx.state();
-        let logical_plan = state.optimize(&plan)?;
-        let physical_plan = state.create_physical_plan(&logical_plan).await?;
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
 
         let expected = if repartition_joins {
             vec![
@@ -2652,10 +2586,8 @@ async fn right_side_expr_key_inner_join() -> Result<()> {
                          ON t1.t1_id = t2.t2_id - cast(11 as INT UNSIGNED)";
 
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx.create_logical_plan(sql).expect(&msg);
-        let state = ctx.state();
-        let logical_plan = state.optimize(&plan)?;
-        let physical_plan = state.create_physical_plan(&logical_plan).await?;
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
 
         let expected = if repartition_joins {
             vec![
@@ -2722,10 +2654,8 @@ async fn select_wildcard_with_expr_key_inner_join() -> Result<()> {
                          ON t1.t1_id = t2.t2_id - cast(11 as INT UNSIGNED)";
 
         let msg = format!("Creating logical plan for '{}'", sql);
-        let plan = ctx.create_logical_plan(sql).expect(&msg);
-        let state = ctx.state();
-        let logical_plan = state.optimize(&plan)?;
-        let physical_plan = state.create_physical_plan(&logical_plan).await?;
+        let dataframe = ctx.sql(sql).await.expect(&msg);
+        let physical_plan = dataframe.create_physical_plan().await?;
 
         let expected = if repartition_joins {
             vec![
@@ -2788,11 +2718,8 @@ async fn join_with_type_coercion_for_equi_expr() -> Result<()> {
 
     // assert logical plan
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
 
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
@@ -2834,11 +2761,8 @@ async fn join_only_with_filter() -> Result<()> {
 
     // assert logical plan
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
 
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
@@ -2881,11 +2805,8 @@ async fn type_coercion_join_with_filter_and_equi_expr() -> Result<()> {
 
     // assert logical plan
     let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(&("explain ".to_owned() + sql))
-        .expect(&msg);
-    let state = ctx.state();
-    let plan = state.optimize(&plan)?;
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
 
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",

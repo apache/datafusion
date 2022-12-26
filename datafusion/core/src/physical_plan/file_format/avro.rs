@@ -205,7 +205,6 @@ mod private {
 #[cfg(test)]
 #[cfg(feature = "avro")]
 mod tests {
-    use crate::config::ConfigOptions;
     use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
@@ -240,15 +239,20 @@ mod tests {
     }
 
     async fn test_with_stores(store: Arc<dyn ObjectStore>) -> Result<()> {
-        let ctx = SessionContext::new();
-        ctx.runtime_env()
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        state
+            .runtime_env
             .register_object_store("file", "", store.clone());
 
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let meta = local_unpartitioned_file(filename);
 
-        let file_schema = AvroFormat {}.infer_schema(&store, &[meta.clone()]).await?;
+        let file_schema = AvroFormat {}
+            .infer_schema(&state, &store, &[meta.clone()])
+            .await?;
 
         let avro_exec = AvroExec::new(FileScanConfig {
             object_store_url: ObjectStoreUrl::local_filesystem(),
@@ -258,13 +262,12 @@ mod tests {
             projection: Some(vec![0, 1, 2]),
             limit: None,
             table_partition_cols: vec![],
-            config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
             infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
         let mut results = avro_exec
-            .execute(0, ctx.task_ctx())
+            .execute(0, state.task_ctx())
             .expect("plan execution failed");
 
         let batch = results
@@ -304,13 +307,16 @@ mod tests {
 
     #[tokio::test]
     async fn avro_exec_missing_column() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let object_store = Arc::new(LocalFileSystem::new()) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let actual_schema = AvroFormat {}
-            .infer_schema(&object_store, &[meta.clone()])
+            .infer_schema(&state, &object_store, &[meta.clone()])
             .await?;
 
         let mut fields = actual_schema.fields().clone();
@@ -328,15 +334,13 @@ mod tests {
             projection,
             limit: None,
             table_partition_cols: vec![],
-            config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
             infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        let ctx = SessionContext::new();
         let mut results = avro_exec
-            .execute(0, ctx.task_ctx())
+            .execute(0, state.task_ctx())
             .expect("plan execution failed");
 
         let batch = results
@@ -376,13 +380,16 @@ mod tests {
 
     #[tokio::test]
     async fn avro_exec_with_partition() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let object_store = Arc::new(LocalFileSystem::new()) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();
         let meta = local_unpartitioned_file(filename);
         let file_schema = AvroFormat {}
-            .infer_schema(&object_store, &[meta.clone()])
+            .infer_schema(&state, &object_store, &[meta.clone()])
             .await?;
 
         let mut partitioned_file = PartitionedFile::from(meta);
@@ -402,15 +409,13 @@ mod tests {
                 "date".to_owned(),
                 partition_type_wrap(DataType::Utf8),
             )],
-            config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
             infinite_source: false,
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        let ctx = SessionContext::new();
         let mut results = avro_exec
-            .execute(0, ctx.task_ctx())
+            .execute(0, state.task_ctx())
             .expect("plan execution failed");
 
         let batch = results

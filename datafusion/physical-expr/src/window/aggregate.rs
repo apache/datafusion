@@ -126,15 +126,6 @@ impl WindowExpr for AggregateWindowExpr {
                             .collect();
                         accumulator.update_batch(&update)?
                     }
-                    // Remove rows that have now left the window:
-                    let retract_bound = cur_range.0 - last_range.0;
-                    if retract_bound > 0 {
-                        let retract: Vec<ArrayRef> = values
-                            .iter()
-                            .map(|v| v.slice(last_range.0, retract_bound))
-                            .collect();
-                        accumulator.retract_batch(&retract)?
-                    }
                     accumulator.evaluate()?
                 };
                 row_wise_results.push(value);

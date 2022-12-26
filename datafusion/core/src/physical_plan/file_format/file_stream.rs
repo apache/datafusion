@@ -309,7 +309,6 @@ mod tests {
     use futures::StreamExt;
 
     use super::*;
-    use crate::config::ConfigOptions;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
     use crate::prelude::SessionContext;
@@ -351,7 +350,6 @@ mod tests {
             projection: None,
             limit,
             table_partition_cols: vec![],
-            config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
             infinite_source: false,
         };

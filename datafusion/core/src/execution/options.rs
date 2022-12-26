@@ -229,7 +229,7 @@ impl<'a> ParquetReadOptions<'a> {
 
     /// Helper to convert these user facing options to `ListingTable` options
     pub fn to_listing_options(&self, config: &SessionConfig) -> ListingOptions {
-        let file_format = ParquetFormat::new(config.config_options())
+        let file_format = ParquetFormat::new()
             .with_enable_pruning(self.parquet_pruning)
             .with_skip_metadata(self.skip_metadata);
 

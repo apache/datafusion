@@ -23,7 +23,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use parquet::file::properties::WriterProperties;
 
-use datafusion_common::{Column, DFSchema};
+use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::TableProviderFilterPushDown;
 
 use crate::arrow::datatypes::Schema;
@@ -505,15 +505,38 @@ impl DataFrame {
         self.plan.schema()
     }
 
-    /// Return the unoptimized logical plan represented by this DataFrame.
-    pub fn to_unoptimized_plan(self) -> LogicalPlan {
+    /// Return the unoptimized logical plan
+    pub fn logical_plan(&self) -> &LogicalPlan {
+        &self.plan
+    }
+
+    /// Return the logical plan represented by this DataFrame without running the optimizers
+    ///
+    /// Note: This method should not be used outside testing, as it loses the snapshot
+    /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
+    /// operations may take place against a different state
+    pub fn into_unoptimized_plan(self) -> LogicalPlan {
         self.plan
     }
 
     /// Return the optimized logical plan represented by this DataFrame.
-    pub fn to_logical_plan(self) -> Result<LogicalPlan> {
+    ///
+    /// Note: This method should not be used outside testing, as it loses the snapshot
+    /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
+    /// operations may take place against a different state
+    pub fn into_optimized_plan(self) -> Result<LogicalPlan> {
         // Optimize the plan first for better UX
         self.session_state.optimize(&self.plan)
+    }
+
+    /// Return the optimized logical plan represented by this DataFrame.
+    ///
+    /// Note: This method should not be used outside testing, as it loses the snapshot
+    /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
+    /// operations may take place against a different state
+    #[deprecated(note = "Use DataFrame::into_optimized_plan")]
+    pub fn to_logical_plan(self) -> Result<LogicalPlan> {
+        self.into_optimized_plan()
     }
 
     /// Return a DataFrame with the explanation of its plan so far.
@@ -714,6 +737,12 @@ impl DataFrame {
         }
     }
 
+    /// Convert a prepare logical plan into its inner logical plan with all params replaced with their corresponding values
+    pub fn with_param_values(self, param_values: Vec<ScalarValue>) -> Result<Self> {
+        let plan = self.plan.with_param_values(param_values)?;
+        Ok(Self::new(self.session_state, plan))
+    }
+
     /// Cache DataFrame as a memory table.
     ///
     /// ```
@@ -768,7 +797,7 @@ impl TableProvider for DataFrame {
 
     async fn scan(
         &self,
-        _ctx: &SessionState,
+        _state: &SessionState,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -1014,11 +1043,10 @@ mod tests {
         let df = df.select(vec![expr])?;
 
         // build query using SQL
-        let sql_plan =
-            ctx.create_logical_plan("SELECT my_fn(c12) FROM aggregate_test_100")?;
+        let sql_plan = ctx.sql("SELECT my_fn(c12) FROM aggregate_test_100").await?;
 
         // the two plans should be identical
-        assert_same_plan(&df.plan, &sql_plan);
+        assert_same_plan(&df.plan, &sql_plan.plan);
 
         Ok(())
     }
@@ -1128,7 +1156,7 @@ mod tests {
     async fn create_plan(sql: &str) -> Result<LogicalPlan> {
         let mut ctx = SessionContext::new();
         register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
-        ctx.create_logical_plan(sql)
+        Ok(ctx.sql(sql).await?.into_unoptimized_plan())
     }
 
     async fn test_table_with_name(name: &str) -> Result<DataFrame> {
@@ -1308,7 +1336,7 @@ mod tests {
         \n      Inner Join: t1.c1 = t2.c1\
         \n        TableScan: t1\
         \n        TableScan: t2",
-                   format!("{:?}", df_renamed.clone().to_unoptimized_plan())
+                   format!("{:?}", df_renamed.logical_plan())
         );
 
         assert_eq!("\
@@ -1322,7 +1350,7 @@ mod tests {
         \n        SubqueryAlias: t2\
         \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
         \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]",
-                   format!("{:?}", df_renamed.clone().to_logical_plan()?)
+                   format!("{:?}", df_renamed.clone().into_optimized_plan()?)
         );
 
         let df_results = df_renamed.collect().await?;
@@ -1469,7 +1497,7 @@ mod tests {
 
         assert_eq!(
             "TableScan: ?table? projection=[c2, c3, sum]",
-            format!("{:?}", cached_df.clone().to_logical_plan()?)
+            format!("{:?}", cached_df.clone().into_optimized_plan()?)
         );
 
         let df_results = df.collect().await?;

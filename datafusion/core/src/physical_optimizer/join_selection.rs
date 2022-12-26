@@ -217,7 +217,6 @@ impl PhysicalOptimizerRule for JoinSelection {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let collect_left_threshold: usize = session_config
             .config_options()
-            .read()
             .get_u64(OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD)
             .unwrap_or_default()
             .try_into()

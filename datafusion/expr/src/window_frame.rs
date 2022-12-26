@@ -147,6 +147,16 @@ pub enum WindowFrameBound {
     Following(ScalarValue),
 }
 
+impl WindowFrameBound {
+    pub fn is_unbounded(&self) -> bool {
+        match self {
+            WindowFrameBound::Preceding(elem) => elem.is_null(),
+            WindowFrameBound::CurrentRow => false,
+            WindowFrameBound::Following(elem) => elem.is_null(),
+        }
+    }
+}
+
 impl TryFrom<ast::WindowFrameBound> for WindowFrameBound {
     type Error = DataFusionError;
 

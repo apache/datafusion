@@ -132,13 +132,16 @@ impl ContextWithParquet {
         Self::with_config(scenario, unit, SessionConfig::new()).await
     }
 
-    async fn with_config(scenario: Scenario, unit: Unit, config: SessionConfig) -> Self {
+    async fn with_config(
+        scenario: Scenario,
+        unit: Unit,
+        mut config: SessionConfig,
+    ) -> Self {
         let file = match unit {
             Unit::RowGroup => make_test_file_rg(scenario).await,
             Unit::Page => {
                 config
-                    .config_options
-                    .write()
+                    .config_options_mut()
                     .set_bool(OPT_PARQUET_ENABLE_PAGE_INDEX, true);
                 make_test_file_page(scenario).await
             }
@@ -187,7 +190,7 @@ impl ContextWithParquet {
             .sql(sql)
             .await
             .expect("planning")
-            .to_unoptimized_plan();
+            .into_unoptimized_plan();
         self.run_test(logical_plan, sql).await
     }
 

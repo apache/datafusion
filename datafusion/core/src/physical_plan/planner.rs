@@ -761,12 +761,12 @@ impl DefaultPhysicalPlanner {
                     )?))
                 }
                 LogicalPlan::Filter(filter) => {
-                    let physical_input = self.create_initial_plan(filter.input(), session_state).await?;
+                    let physical_input = self.create_initial_plan(&filter.input, session_state).await?;
                     let input_schema = physical_input.as_ref().schema();
-                    let input_dfschema = filter.input().schema();
+                    let input_dfschema = filter.input.schema();
 
                     let runtime_expr = self.create_physical_expr(
-                        filter.predicate(),
+                        &filter.predicate,
                         input_dfschema,
                         &input_schema,
                         session_state,
@@ -996,7 +996,6 @@ impl DefaultPhysicalPlanner {
                     };
 
                     let prefer_hash_join = session_state.config.config_options()
-                        .read()
                         .get_bool(OPT_PREFER_HASH_JOIN)
                         .unwrap_or_default();
                     if join_on.is_empty() {
@@ -1718,8 +1717,7 @@ impl DefaultPhysicalPlanner {
 
             if !session_state
                 .config
-                .config_options
-                .read()
+                .config_options()
                 .get_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY)
                 .unwrap_or_default()
             {
@@ -1730,8 +1728,7 @@ impl DefaultPhysicalPlanner {
 
             if !session_state
                 .config
-                .config_options
-                .read()
+                .config_options()
                 .get_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY)
                 .unwrap_or_default()
             {
@@ -2234,10 +2231,11 @@ mod tests {
         let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
         let ctx = SessionContext::new();
 
-        let logical_plan =
-            LogicalPlanBuilder::from(ctx.read_table(Arc::new(table))?.to_logical_plan()?)
-                .aggregate(vec![col("d1")], vec![sum(col("d2"))])?
-                .build()?;
+        let logical_plan = LogicalPlanBuilder::from(
+            ctx.read_table(Arc::new(table))?.into_optimized_plan()?,
+        )
+        .aggregate(vec![col("d1")], vec![sum(col("d2"))])?
+        .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
         let formatted = format!("{:?}", execution_plan);
@@ -2445,20 +2443,21 @@ mod tests {
         let testdata = crate::test_util::arrow_test_data();
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
         let options = CsvReadOptions::new().schema_infer_max_records(100);
-        let logical_plan = match ctx.read_csv(path, options).await?.to_logical_plan()? {
-            LogicalPlan::TableScan(ref scan) => {
-                let mut scan = scan.clone();
-                scan.table_name = name.to_string();
-                let new_schema = scan
-                    .projected_schema
-                    .as_ref()
-                    .clone()
-                    .replace_qualifier(name);
-                scan.projected_schema = Arc::new(new_schema);
-                LogicalPlan::TableScan(scan)
-            }
-            _ => unimplemented!(),
-        };
+        let logical_plan =
+            match ctx.read_csv(path, options).await?.into_optimized_plan()? {
+                LogicalPlan::TableScan(ref scan) => {
+                    let mut scan = scan.clone();
+                    scan.table_name = name.to_string();
+                    let new_schema = scan
+                        .projected_schema
+                        .as_ref()
+                        .clone()
+                        .replace_qualifier(name);
+                    scan.projected_schema = Arc::new(new_schema);
+                    LogicalPlan::TableScan(scan)
+                }
+                _ => unimplemented!(),
+            };
         Ok(LogicalPlanBuilder::from(logical_plan))
     }
 
@@ -2468,7 +2467,7 @@ mod tests {
         let path = format!("{}/csv/aggregate_test_100.csv", testdata);
         let options = CsvReadOptions::new().schema_infer_max_records(100);
         Ok(LogicalPlanBuilder::from(
-            ctx.read_csv(path, options).await?.to_logical_plan()?,
+            ctx.read_csv(path, options).await?.into_optimized_plan()?,
         ))
     }
 }

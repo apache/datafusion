@@ -354,8 +354,8 @@ mod tests {
         let partition = create_vec_batches(&schema, 10);
         let table = MemTable::try_new(schema, vec![partition])?;
         ctx.register_table("a", Arc::new(table))?;
-        let plan = ctx.create_logical_plan("SELECT * FROM a WHERE c0 < 1")?;
-        ctx.create_physical_plan(&plan).await
+        let dataframe = ctx.sql("SELECT * FROM a WHERE c0 < 1").await?;
+        dataframe.create_physical_plan().await
     }
 
     #[tokio::test(flavor = "multi_thread")]

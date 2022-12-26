@@ -83,11 +83,11 @@ impl OptimizerRule for MyRule {
         match plan {
             LogicalPlan::Filter(filter) => {
                 let mut expr_rewriter = MyExprRewriter {};
-                let predicate = filter.predicate().clone();
+                let predicate = filter.predicate.clone();
                 let predicate = predicate.rewrite(&mut expr_rewriter)?;
                 Ok(Some(LogicalPlan::Filter(Filter::try_new(
                     predicate,
-                    filter.input().clone(),
+                    filter.input,
                 )?)))
             }
             _ => Ok(Some(plan.clone())),
