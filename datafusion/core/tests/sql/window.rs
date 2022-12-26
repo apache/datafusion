@@ -2347,73 +2347,38 @@ fn write_test_data_to_parquet(tmpdir: &TempDir, n_file: usize) -> Result<()> {
     let ts_field = Field::new("ts", DataType::Int32, false);
     let inc_field = Field::new("inc_col", DataType::Int32, false);
     let desc_field = Field::new("desc_col", DataType::Int32, false);
-    let equal_field = Field::new("equal", DataType::Int32, false);
-    let nonmonothonic_inc_field = Field::new("nonmonothonic_inc", DataType::Int32, false);
 
-    let unsorted_non_unique_field =
-        Field::new("unsorted_non_unique_field", DataType::Int32, false);
-
-    let schema = Arc::new(Schema::new(vec![
-        ts_field,
-        inc_field,
-        desc_field,
-        equal_field,
-        nonmonothonic_inc_field,
-        unsorted_non_unique_field,
-    ]));
+    let schema = Arc::new(Schema::new(vec![ts_field, inc_field, desc_field]));
 
     let batch = RecordBatch::try_new(
         schema,
         vec![
             Arc::new(Int32Array::from_slice([
-                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-                21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
-                39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56,
-                57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
-                75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92,
-                93, 94, 95, 96, 97, 98, 99, 100,
+                1, 1, 5, 9, 10, 11, 16, 21, 22, 26, 26, 28, 31, 33, 38, 42, 47, 51, 53,
+                53, 58, 63, 67, 68, 70, 72, 72, 76, 81, 85, 86, 88, 91, 96, 97, 98, 100,
+                101, 102, 104, 104, 108, 112, 113, 113, 114, 114, 117, 122, 126, 131,
+                131, 136, 136, 136, 139, 141, 146, 147, 147, 152, 154, 159, 161, 163,
+                164, 167, 172, 173, 177, 180, 185, 186, 191, 195, 195, 199, 203, 207,
+                210, 213, 218, 221, 224, 226, 230, 232, 235, 238, 238, 239, 244, 245,
+                247, 250, 254, 258, 262, 264, 264,
             ])),
             Arc::new(Int32Array::from_slice([
-                1, 2, 6, 10, 14, 15, 19, 20, 21, 22, 24, 29, 34, 38, 41, 45, 48, 50, 51,
-                56, 61, 63, 65, 67, 71, 72, 75, 76, 80, 84, 88, 93, 96, 97, 98, 101, 105,
-                110, 115, 118, 123, 124, 129, 132, 137, 141, 144, 149, 151, 152, 153,
-                155, 157, 161, 165, 169, 173, 178, 180, 184, 187, 188, 189, 191, 193,
-                197, 200, 203, 208, 210, 215, 218, 222, 227, 228, 232, 234, 236, 240,
-                242, 244, 245, 249, 252, 253, 254, 259, 260, 261, 265, 267, 271, 276,
-                277, 279, 284, 287, 290, 293, 296,
+                1, 5, 10, 15, 20, 21, 26, 29, 30, 33, 37, 40, 43, 44, 45, 49, 51, 53, 58,
+                61, 65, 70, 75, 78, 83, 88, 90, 91, 95, 97, 100, 105, 109, 111, 115, 119,
+                120, 124, 126, 129, 131, 135, 140, 143, 144, 147, 148, 149, 151, 155,
+                156, 159, 160, 163, 165, 170, 172, 177, 181, 182, 186, 187, 192, 196,
+                197, 199, 203, 207, 209, 213, 214, 216, 219, 221, 222, 225, 226, 231,
+                236, 237, 242, 245, 247, 248, 253, 254, 259, 261, 266, 269, 272, 275,
+                278, 283, 286, 289, 291, 296, 301, 305,
             ])),
             Arc::new(Int32Array::from_slice([
-                100, 99, 95, 91, 86, 83, 81, 78, 75, 70, 65, 63, 59, 56, 53, 49, 48, 45,
-                43, 42, 38, 35, 30, 25, 22, 21, 16, 11, 9, 5, 0, -5, -6, -9, -10, -15,
-                -20, -24, -27, -28, -31, -32, -34, -36, -39, -42, -46, -49, -54, -56,
-                -61, -64, -69, -70, -75, -78, -79, -84, -86, -87, -90, -93, -96, -97,
-                -99, -100, -104, -105, -109, -112, -117, -118, -119, -121, -122, -126,
-                -130, -132, -133, -134, -138, -139, -142, -143, -147, -149, -153, -155,
-                -160, -162, -163, -165, -168, -171, -172, -174, -178, -183, -187, -191,
-            ])),
-            Arc::new(Int32Array::from_slice([
-                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
-                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
-                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
-                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
-                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
-                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
-                100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
-                100, 100,
-            ])),
-            Arc::new(Int32Array::from_slice([
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2,
-                2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,
-                4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7,
-                7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9,
-                9, 9, 9, 9,
-            ])),
-            Arc::new(Int32Array::from_slice([
-                2, 1, 3, 1, 2, 5, 5, 3, 3, 3, 5, 1, 4, 2, 2, 5, 0, 3, 5, 2, 5, 3, 5, 5,
-                3, 1, 0, 0, 5, 1, 2, 4, 5, 2, 4, 1, 0, 5, 2, 2, 4, 3, 5, 3, 4, 4, 1, 1,
-                5, 3, 3, 5, 4, 1, 1, 2, 5, 4, 0, 2, 0, 4, 4, 3, 5, 4, 4, 4, 2, 5, 0, 3,
-                0, 5, 1, 4, 5, 4, 5, 5, 2, 4, 5, 3, 2, 0, 1, 1, 1, 0, 2, 5, 1, 2, 5, 4,
-                4, 2, 0, 4,
+                100, 98, 93, 91, 86, 84, 81, 77, 75, 71, 70, 69, 64, 62, 59, 55, 50, 45,
+                41, 40, 39, 36, 31, 28, 23, 22, 17, 13, 10, 6, 5, 2, 1, -1, -4, -5, -6,
+                -8, -12, -16, -17, -19, -24, -25, -29, -34, -37, -42, -47, -48, -49, -53,
+                -57, -58, -61, -65, -67, -68, -71, -73, -75, -76, -78, -83, -87, -91,
+                -95, -98, -101, -105, -106, -111, -114, -116, -120, -125, -128, -129,
+                -134, -139, -142, -143, -146, -150, -154, -158, -163, -168, -172, -176,
+                -181, -184, -189, -193, -196, -201, -203, -208, -210, -213,
             ])),
         ],
     )?;
@@ -2493,7 +2458,7 @@ mod tests {
             SUM(desc_col) OVER(ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING) as sum4,
             COUNT(*) OVER(ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING) as cnt3
             FROM annotated_data
-            ORDER BY ts DESC
+            ORDER BY inc_col DESC
             LIMIT 5
             ";
 
@@ -2505,8 +2470,8 @@ mod tests {
             vec![
                 "ProjectionExec: expr=[sum1@0 as sum1, sum2@1 as sum2, sum3@2 as sum3, cnt1@3 as cnt1, cnt2@4 as cnt2, sumr1@5 as sumr1, sumr2@6 as sumr2, sumr3@7 as sumr3, cntr1@8 as cntr1, cntr2@9 as cntr2, sum4@10 as sum4, cnt3@11 as cnt3]",
                 "  GlobalLimitExec: skip=0, fetch=5",
-                "    SortExec: [ts@12 DESC]",
-                "      ProjectionExec: expr=[SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING@2 as sum1, SUM(annotated_data.desc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND 1 FOLLOWING@3 as sum2, SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 10 FOLLOWING@4 as sum3, COUNT(UInt8(1)) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 4 PRECEDING AND 8 FOLLOWING@5 as cnt1, COUNT(UInt8(1)) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING@6 as cnt2, SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 1 PRECEDING AND 4 FOLLOWING@7 as sumr1, SUM(annotated_data.desc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 1 PRECEDING AND 8 FOLLOWING@8 as sumr2, SUM(annotated_data.desc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@9 as sumr3, COUNT(UInt8(1)) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING@10 as cntr1, COUNT(UInt8(1)) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING@11 as cntr2, SUM(annotated_data.desc_col) ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING@0 as sum4, COUNT(UInt8(1)) ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING@1 as cnt3, ts@12 as ts]",
+                "    SortExec: [inc_col@12 DESC]",
+                "      ProjectionExec: expr=[SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND 1 FOLLOWING@2 as sum1, SUM(annotated_data.desc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 5 PRECEDING AND 1 FOLLOWING@3 as sum2, SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 10 FOLLOWING@4 as sum3, COUNT(UInt8(1)) ORDER BY [annotated_data.ts ASC NULLS LAST] RANGE BETWEEN 4 PRECEDING AND 8 FOLLOWING@5 as cnt1, COUNT(UInt8(1)) ORDER BY [annotated_data.ts ASC NULLS LAST] ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING@6 as cnt2, SUM(annotated_data.inc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 1 PRECEDING AND 4 FOLLOWING@7 as sumr1, SUM(annotated_data.desc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 1 PRECEDING AND 8 FOLLOWING@8 as sumr2, SUM(annotated_data.desc_col) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 5 FOLLOWING@9 as sumr3, COUNT(UInt8(1)) ORDER BY [annotated_data.ts DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING@10 as cntr1, COUNT(UInt8(1)) ORDER BY [annotated_data.ts DESC NULLS FIRST] ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING@11 as cntr2, SUM(annotated_data.desc_col) ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING@0 as sum4, COUNT(UInt8(1)) ROWS BETWEEN 8 PRECEDING AND 1 FOLLOWING@1 as cnt3, inc_col@13 as inc_col]",
                 "        BoundedWindowAggExec: wdw=[SUM(annotated_data.desc_col): Ok(Field { name: \"SUM(annotated_data.desc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(8)), end_bound: Following(UInt64(1)) }, COUNT(UInt8(1)): Ok(Field { name: \"COUNT(UInt8(1))\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(8)), end_bound: Following(UInt64(1)) }]",
                 "          BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: Following(Int32(1)) }, SUM(annotated_data.desc_col): Ok(Field { name: \"SUM(annotated_data.desc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(5)), end_bound: Following(Int32(1)) }, SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(10)) }, COUNT(UInt8(1)): Ok(Field { name: \"COUNT(UInt8(1))\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(4)), end_bound: Following(Int32(8)) }, COUNT(UInt8(1)): Ok(Field { name: \"COUNT(UInt8(1))\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(8)), end_bound: Following(UInt64(1)) }]",
                 "            BoundedWindowAggExec: wdw=[SUM(annotated_data.inc_col): Ok(Field { name: \"SUM(annotated_data.inc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(4)), end_bound: Following(Int32(1)) }, SUM(annotated_data.desc_col): Ok(Field { name: \"SUM(annotated_data.desc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(8)), end_bound: Following(Int32(1)) }, SUM(annotated_data.desc_col): Ok(Field { name: \"SUM(annotated_data.desc_col)\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(5)), end_bound: Following(UInt64(1)) }, COUNT(UInt8(1)): Ok(Field { name: \"COUNT(UInt8(1))\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(2)), end_bound: Following(Int32(6)) }, COUNT(UInt8(1)): Ok(Field { name: \"COUNT(UInt8(1))\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(1)), end_bound: Following(UInt64(8)) }]",
@@ -2524,15 +2489,15 @@ mod tests {
 
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
-            "+------+-------+------+------+------+-------+-------+-------+-------+-------+-------+------+",
-            "| sum1 | sum2  | sum3 | cnt1 | cnt2 | sumr1 | sumr2 | sumr3 | cntr1 | cntr2 | sum4  | cnt3 |",
-            "+------+-------+------+------+------+-------+-------+-------+-------+-------+-------+------+",
-            "| 3085 | -1085 | 589  | 5    | 9    | 1450  | -1589 | -1085 | 3     | 2     | -1589 | 9    |",
-            "| 3346 | -1256 | 879  | 6    | 10   | 1729  | -1752 | -1256 | 4     | 3     | -1752 | 10   |",
-            "| 3310 | -1233 | 1166 | 7    | 10   | 1710  | -1723 | -1233 | 5     | 4     | -1723 | 10   |",
-            "| 3276 | -1211 | 1450 | 8    | 10   | 1693  | -1696 | -1211 | 6     | 5     | -1696 | 10   |",
-            "| 3240 | -1191 | 1729 | 9    | 10   | 1674  | -1668 | -1191 | 7     | 6     | -1668 | 10   |",
-            "+------+-------+------+------+------+-------+-------+-------+-------+-------+-------+------+",
+            "+------+------+------+------+------+-------+-------+-------+-------+-------+-------+------+",
+            "| sum1 | sum2 | sum3 | cnt1 | cnt2 | sumr1 | sumr2 | sumr3 | cntr1 | cntr2 | sum4  | cnt3 |",
+            "+------+------+------+------+------+-------+-------+-------+-------+-------+-------+------+",
+            "| 1482 | -631 | 606  | 3    | 9    | 902   | -834  | -1231 | 3     | 2     | -1797 | 9    |",
+            "| 1482 | -631 | 902  | 3    | 10   | 902   | -834  | -1424 | 3     | 3     | -1978 | 10   |",
+            "| 876  | -411 | 1193 | 4    | 10   | 587   | -612  | -1400 | 3     | 4     | -1941 | 10   |",
+            "| 866  | -404 | 1482 | 5    | 10   | 580   | -600  | -1374 | 4     | 5     | -1903 | 10   |",
+            "| 1411 | -397 | 1768 | 4    | 10   | 575   | -590  | -1347 | 2     | 6     | -1863 | 10   |",
+            "+------+------+------+------+------+-------+-------+-------+-------+-------+-------+------+",
         ];
         assert_batches_eq!(expected, &actual);
         Ok(())
@@ -2602,11 +2567,11 @@ mod tests {
             "+-----+-----+-----+-----+-----+-----+-----+-----+-------+-------+-------------+-------------+------+------+-------+-------+------+------+------+------+-------+-------+--------+--------+",
             "| fv1 | fv2 | lv1 | lv2 | nv1 | nv2 | rn1 | rn2 | rank1 | rank2 | dense_rank1 | dense_rank2 | lag1 | lag2 | lead1 | lead2 | fvr1 | fvr2 | lvr1 | lvr2 | lagr1 | lagr2 | leadr1 | leadr2 |",
             "+-----+-----+-----+-----+-----+-----+-----+-----+-------+-------+-------------+-------------+------+------+-------+-------+------+------+------+------+-------+-------+--------+--------+",
-            "| 265 | 265 | 296 | 296 | 277 | 277 | 100 | 100 | 100   | 100   | 100         | 100         | 293  | 290  | 293   | 1004  | 296  | 296  | 293  | 293  | 1001  | 1002  | 1001   | 284    |",
-            "| 261 | 261 | 296 | 296 | 276 | 276 | 99  | 99  | 99    | 99    | 99          | 99          | 290  | 287  | 290   | 1004  | 296  | 296  | 290  | 290  | 296   | 1002  | 296    | 279    |",
-            "| 260 | 260 | 293 | 293 | 271 | 271 | 98  | 98  | 98    | 98    | 98          | 98          | 287  | 284  | 287   | 1004  | 296  | 296  | 287  | 287  | 293   | 296   | 293    | 277    |",
-            "| 259 | 259 | 290 | 290 | 267 | 267 | 97  | 97  | 97    | 97    | 97          | 97          | 284  | 279  | 284   | 1004  | 296  | 296  | 284  | 284  | 290   | 293   | 290    | 276    |",
-            "| 254 | 254 | 287 | 287 | 265 | 265 | 96  | 96  | 96    | 96    | 96          | 96          | 279  | 277  | 279   | 296   | 296  | 296  | 279  | 279  | 287   | 290   | 287    | 271    |",
+            "| 289 | 266 | 305 | 305 | 305 | 278 | 99  | 99  | 99    | 99    | 86          | 86          | 296  | 291  | 296   | 1004  | 305  | 305  | 301  | 296  | 305   | 1002  | 305    | 286    |",
+            "| 289 | 269 | 305 | 305 | 305 | 283 | 100 | 100 | 99    | 99    | 86          | 86          | 301  | 296  | 301   | 1004  | 305  | 305  | 301  | 301  | 1001  | 1002  | 1001   | 289    |",
+            "| 289 | 261 | 296 | 301 |     | 275 | 98  | 98  | 98    | 98    | 85          | 85          | 291  | 289  | 291   | 1004  | 305  | 305  | 296  | 291  | 301   | 305   | 301    | 283    |",
+            "| 286 | 259 | 291 | 296 |     | 272 | 97  | 97  | 97    | 97    | 84          | 84          | 289  | 286  | 289   | 1004  | 305  | 305  | 291  | 289  | 296   | 301   | 296    | 278    |",
+            "| 275 | 254 | 289 | 291 | 289 | 269 | 96  | 96  | 96    | 96    | 83          | 83          | 286  | 283  | 286   | 305   | 305  | 305  | 289  | 286  | 291   | 296   | 291    | 275    |",
             "+-----+-----+-----+-----+-----+-----+-----+-----+-------+-------+-------------+-------------+------+------+-------+-------+------+------+------+------+-------+-------+--------+--------+",
         ];
         assert_batches_eq!(expected, &actual);
