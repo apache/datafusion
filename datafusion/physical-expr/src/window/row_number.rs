@@ -24,7 +24,6 @@ use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::Result;
 use std::any::Any;
-use std::ops::Range;
 use std::sync::Arc;
 
 /// row_number expression
@@ -69,12 +68,7 @@ impl BuiltInWindowFunctionExpr for RowNumber {
 pub(crate) struct NumRowsEvaluator {}
 
 impl PartitionEvaluator for NumRowsEvaluator {
-    fn evaluate_partition(
-        &self,
-        _values: &[ArrayRef],
-        partition: Range<usize>,
-    ) -> Result<ArrayRef> {
-        let num_rows = partition.end - partition.start;
+    fn evaluate(&self, _values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
         Ok(Arc::new(UInt64Array::from_iter_values(
             1..(num_rows as u64) + 1,
         )))
@@ -99,9 +93,8 @@ mod tests {
         let values = row_number.evaluate_args(&batch)?;
         let result = row_number
             .create_evaluator()?
-            .evaluate(&values, vec![0..8])?;
-        assert_eq!(1, result.len());
-        let result = as_uint64_array(&result[0])?;
+            .evaluate(&values, batch.num_rows())?;
+        let result = as_uint64_array(&result)?;
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
         Ok(())
@@ -118,9 +111,8 @@ mod tests {
         let values = row_number.evaluate_args(&batch)?;
         let result = row_number
             .create_evaluator()?
-            .evaluate(&values, vec![0..8])?;
-        assert_eq!(1, result.len());
-        let result = as_uint64_array(&result[0])?;
+            .evaluate(&values, batch.num_rows())?;
+        let result = as_uint64_array(&result)?;
         let result = result.values();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
         Ok(())

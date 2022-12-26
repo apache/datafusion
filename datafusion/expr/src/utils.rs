@@ -204,7 +204,9 @@ pub fn expand_qualified_wildcard(
     expand_wildcard(&qualifier_schema, plan)
 }
 
-type WindowSortKey = Vec<Expr>;
+/// (expr, "is the SortExpr for window (either comes from PARTITION BY or ORDER BY columns)")
+/// if bool is true SortExpr comes from `PARTITION BY` column, if false comes from `ORDER BY` column
+type WindowSortKey = Vec<(Expr, bool)>;
 
 /// Generate a sort key for a given window expr's partition_by and order_bu expr
 pub fn generate_sort_key(
@@ -224,6 +226,7 @@ pub fn generate_sort_key(
         .collect::<Result<Vec<_>>>()?;
 
     let mut final_sort_keys = vec![];
+    let mut is_partition_flag = vec![];
     partition_by.iter().for_each(|e| {
         // By default, create sort key with ASC is true and NULLS LAST to be consistent with
         // PostgreSQL's rule: https://www.postgresql.org/docs/current/queries-order.html
@@ -232,18 +235,26 @@ pub fn generate_sort_key(
             let order_by_key = &order_by[pos];
             if !final_sort_keys.contains(order_by_key) {
                 final_sort_keys.push(order_by_key.clone());
+                is_partition_flag.push(true);
             }
         } else if !final_sort_keys.contains(&e) {
             final_sort_keys.push(e);
+            is_partition_flag.push(true);
         }
     });
 
     order_by.iter().for_each(|e| {
         if !final_sort_keys.contains(e) {
             final_sort_keys.push(e.clone());
+            is_partition_flag.push(false);
         }
     });
-    Ok(final_sort_keys)
+    let res = final_sort_keys
+        .into_iter()
+        .zip(is_partition_flag)
+        .map(|(lhs, rhs)| (lhs, rhs))
+        .collect::<Vec<_>>();
+    Ok(res)
 }
 
 /// Compare the sort expr as PostgreSQL's common_prefix_cmp():
@@ -1043,9 +1054,13 @@ mod tests {
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
         let result = group_window_expr_by_sort_keys(exprs)?;
 
-        let key1 = vec![age_asc.clone(), name_desc.clone()];
+        let key1 = vec![(age_asc.clone(), false), (name_desc.clone(), false)];
         let key2 = vec![];
-        let key3 = vec![name_desc, age_asc, created_at_desc];
+        let key3 = vec![
+            (name_desc, false),
+            (age_asc, false),
+            (created_at_desc, false),
+        ];
 
         let expected: Vec<(WindowSortKey, Vec<&Expr>)> = vec![
             (key1, vec![&max1, &min3]),
@@ -1112,21 +1127,30 @@ mod tests {
                 ];
 
                 let expected = vec![
-                    Expr::Sort(Sort {
-                        expr: Box::new(col("age")),
-                        asc: asc_,
-                        nulls_first: nulls_first_,
-                    }),
-                    Expr::Sort(Sort {
-                        expr: Box::new(col("name")),
-                        asc: asc_,
-                        nulls_first: nulls_first_,
-                    }),
-                    Expr::Sort(Sort {
-                        expr: Box::new(col("created_at")),
-                        asc: true,
-                        nulls_first: false,
-                    }),
+                    (
+                        Expr::Sort(Sort {
+                            expr: Box::new(col("age")),
+                            asc: asc_,
+                            nulls_first: nulls_first_,
+                        }),
+                        true,
+                    ),
+                    (
+                        Expr::Sort(Sort {
+                            expr: Box::new(col("name")),
+                            asc: asc_,
+                            nulls_first: nulls_first_,
+                        }),
+                        true,
+                    ),
+                    (
+                        Expr::Sort(Sort {
+                            expr: Box::new(col("created_at")),
+                            asc: true,
+                            nulls_first: false,
+                        }),
+                        true,
+                    ),
                 ];
                 let result = generate_sort_key(partition_by, order_by)?;
                 assert_eq!(expected, result);
