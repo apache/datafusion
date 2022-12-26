@@ -21,11 +21,9 @@ use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use itertools::Itertools;
 use log::warn;
-use parking_lot::RwLock;
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 
 /*-************************************
 *  Catalog related
@@ -482,11 +480,6 @@ impl ConfigOptions {
             options.insert(config_def.key.clone(), config_def.default_value.clone());
         }
         Self { options }
-    }
-
-    /// Create a new [`ConfigOptions`] wrapped in an RwLock and Arc
-    pub fn into_shareable(self) -> Arc<RwLock<Self>> {
-        Arc::new(RwLock::new(self))
     }
 
     /// Create new ConfigOptions struct, taking values from

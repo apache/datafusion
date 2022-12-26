@@ -353,12 +353,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                             self
                         ))
                     })? {
-                        &FileFormatType::Parquet(protobuf::ParquetFormat {
-                            enable_pruning,
-                        }) => Arc::new(
-                            ParquetFormat::new(ctx.config_options())
-                                .with_enable_pruning(Some(enable_pruning)),
-                        ),
+                        &FileFormatType::Parquet(protobuf::ParquetFormat {}) => {
+                            Arc::new(ParquetFormat::default())
+                        }
                         FileFormatType::Csv(protobuf::CsvFormat {
                             has_header,
                             delimiter,
@@ -820,12 +817,8 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
                     let any = listing_table.options().format.as_any();
-                    let file_format_type = if let Some(parquet) =
-                        any.downcast_ref::<ParquetFormat>()
-                    {
-                        FileFormatType::Parquet(protobuf::ParquetFormat {
-                            enable_pruning: parquet.enable_pruning(),
-                        })
+                    let file_format_type = if any.is::<ParquetFormat>() {
+                        FileFormatType::Parquet(protobuf::ParquetFormat {})
                     } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
                         FileFormatType::Csv(protobuf::CsvFormat {
                             delimiter: byte_to_string(csv.delimiter())?,
@@ -936,14 +929,14 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Filter(filter) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
-                        filter.input().as_ref(),
+                        filter.input.as_ref(),
                         extension_codec,
                     )?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
                         protobuf::SelectionNode {
                             input: Some(Box::new(input)),
-                            expr: Some(filter.predicate().try_into()?),
+                            expr: Some((&filter.predicate).try_into()?),
                         },
                     ))),
                 })

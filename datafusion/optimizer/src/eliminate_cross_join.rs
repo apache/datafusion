@@ -56,7 +56,7 @@ impl OptimizerRule for EliminateCrossJoin {
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
-                let input = (**filter.input()).clone();
+                let input = filter.input.as_ref().clone();
 
                 let mut possible_join_keys: Vec<(Expr, Expr)> = vec![];
                 let mut all_inputs: Vec<LogicalPlan> = vec![];
@@ -80,7 +80,7 @@ impl OptimizerRule for EliminateCrossJoin {
                     }
                 }
 
-                let predicate = filter.predicate();
+                let predicate = &filter.predicate;
                 // join keys are handled locally
                 let mut all_join_keys: HashSet<(Expr, Expr)> = HashSet::new();
 

@@ -87,11 +87,20 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
 
 #[cfg(test)]
 pub(crate) mod test_util {
+    use std::ops::Range;
+    use std::sync::Mutex;
+
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::test::object_store::local_unpartitioned_file;
+    use bytes::Bytes;
+    use futures::stream::BoxStream;
+    use futures::StreamExt;
     use object_store::local::LocalFileSystem;
+    use object_store::path::Path;
+    use object_store::{GetResult, ListResult, MultipartId};
+    use tokio::io::AsyncWrite;
 
     pub async fn scan_format(
         state: &SessionState,
@@ -128,12 +137,128 @@ pub(crate) mod test_util {
                     projection,
                     limit,
                     table_partition_cols: vec![],
-                    config_options: state.config_options(),
                     output_ordering: None,
                 },
                 &[],
             )
             .await?;
         Ok(exec)
+    }
+
+    /// Mock ObjectStore to provide an variable stream of bytes on get
+    /// Able to keep track of how many iterations of the provided bytes were repeated
+    #[derive(Debug)]
+    pub struct VariableStream {
+        bytes_to_repeat: Bytes,
+        max_iterations: usize,
+        iterations_detected: Arc<Mutex<usize>>,
+    }
+
+    impl std::fmt::Display for VariableStream {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "VariableStream")
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for VariableStream {
+        async fn put(&self, _location: &Path, _bytes: Bytes) -> object_store::Result<()> {
+            unimplemented!()
+        }
+
+        async fn put_multipart(
+            &self,
+            _location: &Path,
+        ) -> object_store::Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)>
+        {
+            unimplemented!()
+        }
+
+        async fn abort_multipart(
+            &self,
+            _location: &Path,
+            _multipart_id: &MultipartId,
+        ) -> object_store::Result<()> {
+            unimplemented!()
+        }
+
+        async fn get(&self, _location: &Path) -> object_store::Result<GetResult> {
+            let bytes = self.bytes_to_repeat.clone();
+            let arc = self.iterations_detected.clone();
+            Ok(GetResult::Stream(
+                futures::stream::repeat_with(move || {
+                    let arc_inner = arc.clone();
+                    *arc_inner.lock().unwrap() += 1;
+                    Ok(bytes.clone())
+                })
+                .take(self.max_iterations)
+                .boxed(),
+            ))
+        }
+
+        async fn get_range(
+            &self,
+            _location: &Path,
+            _range: Range<usize>,
+        ) -> object_store::Result<Bytes> {
+            unimplemented!()
+        }
+
+        async fn get_ranges(
+            &self,
+            _location: &Path,
+            _ranges: &[Range<usize>],
+        ) -> object_store::Result<Vec<Bytes>> {
+            unimplemented!()
+        }
+
+        async fn head(&self, _location: &Path) -> object_store::Result<ObjectMeta> {
+            unimplemented!()
+        }
+
+        async fn delete(&self, _location: &Path) -> object_store::Result<()> {
+            unimplemented!()
+        }
+
+        async fn list(
+            &self,
+            _prefix: Option<&Path>,
+        ) -> object_store::Result<BoxStream<'_, object_store::Result<ObjectMeta>>>
+        {
+            unimplemented!()
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            _prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            unimplemented!()
+        }
+
+        async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
+            unimplemented!()
+        }
+
+        async fn copy_if_not_exists(
+            &self,
+            _from: &Path,
+            _to: &Path,
+        ) -> object_store::Result<()> {
+            unimplemented!()
+        }
+    }
+
+    impl VariableStream {
+        pub fn new(bytes_to_repeat: Bytes, max_iterations: usize) -> Self {
+            Self {
+                bytes_to_repeat,
+                max_iterations,
+                iterations_detected: Arc::new(Mutex::new(0)),
+            }
+        }
+
+        pub fn get_iterations_detected(&self) -> usize {
+            *self.iterations_detected.lock().unwrap()
+        }
     }
 }

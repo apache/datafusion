@@ -535,14 +535,14 @@ impl OptimizerRule for PushDownFilter {
             _ => return Ok(Some(utils::optimize_children(self, plan, config)?)),
         };
 
-        let child_plan = &**filter.input();
+        let child_plan = filter.input.as_ref();
         let new_plan = match child_plan {
             LogicalPlan::Filter(child_filter) => {
                 let new_predicate =
-                    and(filter.predicate().clone(), child_filter.predicate().clone());
+                    and(filter.predicate.clone(), child_filter.predicate.clone());
                 let new_plan = LogicalPlan::Filter(Filter::try_new(
                     new_predicate,
-                    child_filter.input().clone(),
+                    child_filter.input.clone(),
                 )?);
                 return self.try_optimize(&new_plan, config);
             }
@@ -572,7 +572,7 @@ impl OptimizerRule for PushDownFilter {
                     );
                 }
                 let new_predicate =
-                    replace_cols_by_name(filter.predicate().clone(), &replace_map)?;
+                    replace_cols_by_name(filter.predicate.clone(), &replace_map)?;
                 let new_filter = LogicalPlan::Filter(Filter::try_new(
                     new_predicate,
                     subquery_alias.input.clone(),
@@ -601,7 +601,7 @@ impl OptimizerRule for PushDownFilter {
                 // re-write all filters based on this projection
                 // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
                 let new_filter = LogicalPlan::Filter(Filter::try_new(
-                    replace_cols_by_name(filter.predicate().clone(), &replace_map)?,
+                    replace_cols_by_name(filter.predicate.clone(), &replace_map)?,
                     projection.input.clone(),
                 )?);
 
@@ -619,7 +619,7 @@ impl OptimizerRule for PushDownFilter {
                     }
 
                     let push_predicate =
-                        replace_cols_by_name(filter.predicate().clone(), &replace_map)?;
+                        replace_cols_by_name(filter.predicate.clone(), &replace_map)?;
                     inputs.push(Arc::new(LogicalPlan::Filter(Filter::try_new(
                         push_predicate,
                         input.clone(),
@@ -639,7 +639,7 @@ impl OptimizerRule for PushDownFilter {
                     .collect::<Result<HashSet<_>>>()?;
 
                 let predicates = utils::split_conjunction_owned(utils::cnf_rewrite(
-                    filter.predicate().clone(),
+                    filter.predicate.clone(),
                 ));
 
                 let mut keep_predicates = vec![];
@@ -672,11 +672,8 @@ impl OptimizerRule for PushDownFilter {
                     )?),
                     None => (*agg.input).clone(),
                 };
-                let new_agg = from_plan(
-                    filter.input(),
-                    &filter.input().expressions(),
-                    &vec![child],
-                )?;
+                let new_agg =
+                    from_plan(&filter.input, &filter.input.expressions(), &vec![child])?;
                 match conjunction(keep_predicates) {
                     Some(predicate) => LogicalPlan::Filter(Filter::try_new(
                         predicate,
@@ -686,24 +683,24 @@ impl OptimizerRule for PushDownFilter {
                 }
             }
             LogicalPlan::Join(join) => {
-                match push_down_join(filter.input(), join, Some(filter.predicate()))? {
+                match push_down_join(&filter.input, join, Some(&filter.predicate))? {
                     Some(optimized_plan) => optimized_plan,
                     None => plan.clone(),
                 }
             }
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 let predicates = utils::split_conjunction_owned(utils::cnf_rewrite(
-                    filter.predicate().clone(),
+                    filter.predicate.clone(),
                 ));
 
-                push_down_all_join(predicates, filter.input(), left, right, vec![])?
+                push_down_all_join(predicates, &filter.input, left, right, vec![])?
             }
             LogicalPlan::TableScan(scan) => {
                 let mut new_scan_filters = scan.filters.clone();
                 let mut new_predicate = vec![];
 
                 let filter_predicates = utils::split_conjunction_owned(
-                    utils::cnf_rewrite(filter.predicate().clone()),
+                    utils::cnf_rewrite(filter.predicate.clone()),
                 );
 
                 for filter_expr in &filter_predicates {
