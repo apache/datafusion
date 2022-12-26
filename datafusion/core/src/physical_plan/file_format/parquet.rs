@@ -65,6 +65,7 @@ mod page_filter;
 mod row_filter;
 mod row_groups;
 
+use crate::physical_plan::file_format::parquet::page_filter::PagePruningPredicate;
 pub use metrics::ParquetFileMetrics;
 
 use super::get_output_ordering;
@@ -91,6 +92,8 @@ pub struct ParquetExec {
     predicate: Option<Arc<Expr>>,
     /// Optional predicate for pruning row groups
     pruning_predicate: Option<Arc<PruningPredicate>>,
+    /// Optional predicate for pruning pages
+    page_pruning_predicate: Option<Arc<PagePruningPredicate>>,
     /// Optional hint for the size of the parquet metadata
     metadata_size_hint: Option<usize>,
     /// Optional user defined parquet file reader factory
@@ -111,13 +114,11 @@ impl ParquetExec {
         let predicate_creation_errors =
             MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
 
+        let file_schema = &base_config.file_schema;
         let pruning_predicate = predicate
             .clone()
             .and_then(|predicate_expr| {
-                match PruningPredicate::try_new(
-                    predicate_expr,
-                    base_config.file_schema.clone(),
-                ) {
+                match PruningPredicate::try_new(predicate_expr, file_schema.clone()) {
                     Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
                     Err(e) => {
                         debug!("Could not create pruning predicate for: {}", e);
@@ -126,14 +127,18 @@ impl ParquetExec {
                     }
                 }
             })
-            .and_then(|pruning_predicate| {
-                // If the pruning predicate can't prune anything, don't try
-                if pruning_predicate.allways_true() {
+            .filter(|p| !p.allways_true());
+
+        let page_pruning_predicate = predicate.as_ref().and_then(|predicate_expr| {
+            match PagePruningPredicate::try_new(predicate_expr, file_schema.clone()) {
+                Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
+                Err(e) => {
+                    debug!("Could not create page pruning predicate for: {}", e);
+                    predicate_creation_errors.add(1);
                     None
-                } else {
-                    Some(pruning_predicate)
                 }
-            });
+            }
+        });
 
         // Save original predicate
         let predicate = predicate.map(Arc::new);
@@ -150,6 +155,7 @@ impl ParquetExec {
             metrics,
             predicate,
             pruning_predicate,
+            page_pruning_predicate,
             metadata_size_hint,
             parquet_file_reader_factory: None,
         }
@@ -295,6 +301,7 @@ impl ExecutionPlan for ParquetExec {
             batch_size: ctx.session_config().batch_size(),
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
+            page_pruning_predicate: self.page_pruning_predicate.clone(),
             table_schema: self.base_config.file_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
@@ -382,6 +389,7 @@ struct ParquetOpener {
     batch_size: usize,
     predicate: Option<Arc<Expr>>,
     pruning_predicate: Option<Arc<PruningPredicate>>,
+    page_pruning_predicate: Option<Arc<PagePruningPredicate>>,
     table_schema: SchemaRef,
     metadata_size_hint: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
@@ -414,6 +422,7 @@ impl FileOpener for ParquetOpener {
         let projection = self.projection.clone();
         let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
+        let page_pruning_predicate = self.page_pruning_predicate.clone();
         let table_schema = self.table_schema.clone();
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
@@ -470,20 +479,14 @@ impl FileOpener for ParquetOpener {
             // page index pruning: if all data on individual pages can
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
-            if let Some(row_selection) = (enable_page_index && !row_groups.is_empty())
-                .then(|| {
-                    page_filter::build_page_filter(
-                        pruning_predicate.as_ref().map(|p| p.as_ref()),
-                        builder.schema().clone(),
-                        &row_groups,
-                        file_metadata.as_ref(),
-                        &file_metrics,
-                    )
-                })
-                .transpose()?
-                .flatten()
-            {
-                builder = builder.with_row_selection(row_selection);
+            if enable_page_index && !row_groups.is_empty() {
+                if let Some(p) = page_pruning_predicate {
+                    let pruned =
+                        p.prune(&row_groups, file_metadata.as_ref(), &file_metrics)?;
+                    if let Some(row_selection) = pruned {
+                        builder = builder.with_row_selection(row_selection);
+                    }
+                }
             }
 
             let stream = builder
