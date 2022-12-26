@@ -108,6 +108,8 @@ impl OptimizerRule for SubqueryFilterToJoin {
 
                             let right_key = right_schema.field(0).qualified_column();
                             let left_key = *expr.clone();
+                            // TODO: save the predicate to join-filter and let the other rule decide it is
+                            // a equi or non-equi predicate.
                             let (on, filter) =
                                 // When left is a constant expression, like 1, 
                                 // the join predicate will be `1 = right_key`, it is better to add it to filter.
