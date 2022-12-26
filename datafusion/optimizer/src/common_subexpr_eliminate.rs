@@ -913,7 +913,7 @@ mod test {
     }
 
     #[test]
-    fn cross_plans_subexpr_() -> Result<()> {
+    fn filter_schema_changed() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -924,16 +924,10 @@ mod test {
             ))?
             .build()?;
 
-        // let expected = "Filter: Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a AND Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a\
-        // \n  Projection: Int32(1) > test.a AS Int32(1) > test.atest.aInt32(1), test.a, test.b, test.c\
-        // \n    TableScan: test";
         let expected = "Projection: test.a, test.b, test.c\
         \n  Filter: Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a AND Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a\
-        \n    Projection: Int32(1) > test.a AS Int32(1) > test.atest.aInt32(1), test.a, test.b, test.c
+        \n    Projection: Int32(1) > test.a AS Int32(1) > test.atest.aInt32(1), test.a, test.b, test.c\
         \n      TableScan: test";
-
-        let output_schema = plan.schema();
-        println!("output schema: {:?}", output_schema);
 
         assert_optimized_plan_eq(expected, &plan);
 

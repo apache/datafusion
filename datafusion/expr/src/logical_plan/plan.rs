@@ -1256,7 +1256,6 @@ impl Projection {
             exprlist_to_fields(&expr, &input)?,
             input.schema().metadata().clone(),
         )?);
-        println!("generated schema: {schema:?}");
         Self::try_new_with_schema(expr, input, schema)
     }
 

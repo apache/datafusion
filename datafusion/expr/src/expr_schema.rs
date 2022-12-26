@@ -235,7 +235,6 @@ impl ExprSchemable for Expr {
 
     /// Returns a [arrow::datatypes::Field] compatible with this expression.
     fn to_field(&self, input_schema: &DFSchema) -> Result<DFField> {
-        println!("to_field: {:?}", self);
         match self {
             Expr::Column(c) => Ok(DFField::new(
                 c.relation.as_deref(),
@@ -243,20 +242,12 @@ impl ExprSchemable for Expr {
                 self.get_type(input_schema)?,
                 self.nullable(input_schema)?,
             )),
-            _ => {
-                let name = &self.display_name()?;
-                println!("name: {:?}", name);
-                let data_type = self.get_type(input_schema)?;
-                println!("data type: {:?}", data_type);
-                let nullable = self.nullable(input_schema)?;
-                println!("nullable: {:?}", nullable);
-                Ok(DFField::new(
-                    None,
-                    &self.display_name()?,
-                    self.get_type(input_schema)?,
-                    self.nullable(input_schema)?,
-                ))
-            }
+            _ => Ok(DFField::new(
+                None,
+                &self.display_name()?,
+                self.get_type(input_schema)?,
+                self.nullable(input_schema)?,
+            )),
         }
     }
 
