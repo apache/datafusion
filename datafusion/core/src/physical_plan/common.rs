@@ -25,7 +25,7 @@ use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statist
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
-use arrow::ipc::writer::FileWriter;
+use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use futures::{Future, Stream, StreamExt, TryStreamExt};
 use log::debug;
@@ -391,6 +391,26 @@ impl IPCWriter {
         })
     }
 
+    /// Create new writer with IPC write options
+    pub fn new_with_options(
+        path: &Path,
+        schema: &Schema,
+        write_options: IpcWriteOptions,
+    ) -> Result<Self> {
+        let file = File::create(path).map_err(|e| {
+            DataFusionError::Execution(format!(
+                "Failed to create partition file at {:?}: {:?}",
+                path, e
+            ))
+        })?;
+        Ok(Self {
+            num_batches: 0,
+            num_rows: 0,
+            num_bytes: 0,
+            path: path.into(),
+            writer: FileWriter::try_new_with_options(file, schema, write_options)?,
+        })
+    }
     /// Write one single batch
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         self.writer.write(batch)?;
