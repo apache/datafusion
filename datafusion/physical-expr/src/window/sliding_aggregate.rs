@@ -148,7 +148,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     ) -> Result<()> {
         for (partition_row, partition_batch_state) in partition_batches.iter() {
             if !window_agg_state.contains_key(partition_row) {
-                let accumulator = self.aggregate.create_accumulator()?;
+                let accumulator = self.aggregate.create_sliding_accumulator()?;
                 let field = self.aggregate.field()?;
                 let out_type = field.data_type();
                 window_agg_state.insert(
