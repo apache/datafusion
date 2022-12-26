@@ -62,8 +62,8 @@ pub fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Array(array))
         }
         (ColumnarValue::Scalar(lhs), ColumnarValue::Scalar(rhs)) => {
-            let val = match lhs.eq(rhs) {
-                true => ScalarValue::Null,
+            let val: ScalarValue = match lhs.eq(rhs) {
+                true => lhs.get_datatype().try_into()?,
                 false => lhs.clone(),
             };
 
@@ -210,7 +210,7 @@ mod tests {
         let result_eq = nullif_func(&[a_eq, b_eq])?;
         let result_eq = result_eq.into_array(1);
 
-        let expected_eq = Arc::new(NullArray::new(1)) as ArrayRef;
+        let expected_eq = Arc::new(Int32Array::from(vec![None])) as ArrayRef;
 
         assert_eq!(expected_eq.as_ref(), result_eq.as_ref());
 
