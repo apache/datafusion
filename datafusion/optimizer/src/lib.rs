@@ -32,7 +32,6 @@ pub mod push_down_projection;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
-pub mod subquery_filter_to_join;
 pub mod type_coercion;
 pub mod utils;
 
