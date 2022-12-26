@@ -113,10 +113,8 @@ impl QueryCase {
         Ok(())
     }
     async fn run_case(&self, ctx: SessionContext, error: Option<&String>) -> Result<()> {
-        let plan = ctx.create_logical_plan(self.sql.as_str()).unwrap();
-        let state = ctx.state();
-        let logical_plan = state.optimize(&plan)?;
-        let plan = state.create_physical_plan(&logical_plan).await;
+        let dataframe = ctx.sql(self.sql.as_str()).await?;
+        let plan = dataframe.create_physical_plan().await;
         if error.is_some() {
             let plan_error = plan.unwrap_err();
             let initial = error.unwrap().to_string();
