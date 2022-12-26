@@ -66,13 +66,13 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef>;
 
     /// evaluate the window function values against the batch
-    fn evaluate_bounded(
+    fn evaluate_stateful(
         &self,
         _partition_batches: &PartitionBatches,
         _window_agg_state: &mut PartitionWindowAggStates,
     ) -> Result<()> {
         Err(DataFusionError::Internal(
-            "evaluate_bounded is not implemented".to_string(),
+            "evaluate_stateful is not implemented".to_string(),
         ))
     }
 

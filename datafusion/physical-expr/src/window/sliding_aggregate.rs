@@ -141,7 +141,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         ScalarValue::iter_to_array(row_wise_results.into_iter())
     }
 
-    fn evaluate_bounded(
+    fn evaluate_stateful(
         &self,
         partition_batches: &PartitionBatches,
         window_agg_state: &mut PartitionWindowAggStates,

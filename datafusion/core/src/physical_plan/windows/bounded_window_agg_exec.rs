@@ -468,7 +468,7 @@ impl SortedPartitionByBoundedWindowStream {
     fn compute_aggregates(&mut self) -> ArrowResult<RecordBatch> {
         // calculate window cols
         for (idx, cur_window_expr) in self.window_expr.iter().enumerate() {
-            cur_window_expr.evaluate_bounded(
+            cur_window_expr.evaluate_stateful(
                 &self.partition_batches,
                 &mut self.window_agg_states[idx],
             )?;

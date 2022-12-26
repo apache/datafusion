@@ -128,7 +128,7 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     /// evaluate the window function values against the batch
-    fn evaluate_bounded(
+    fn evaluate_stateful(
         &self,
         partition_batches: &PartitionBatches,
         window_agg_state: &mut PartitionWindowAggStates,

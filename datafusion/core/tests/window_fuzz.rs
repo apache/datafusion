@@ -21,6 +21,7 @@ use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::{concat_batches, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
+use hashbrown::HashMap;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::runtime::Builder;
@@ -31,7 +32,8 @@ use datafusion::physical_plan::windows::{
     create_window_expr, BoundedWindowAggExec, WindowAggExec,
 };
 use datafusion_expr::{
-    AggregateFunction, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunction,
+    AggregateFunction, BuiltInWindowFunction, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowFunction,
 };
 
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -123,10 +125,35 @@ async fn run_window_test(
     orderby_columns: Vec<&str>,
     partition_by_columns: Vec<&str>,
 ) {
+    let mut func_name_to_window_fn = HashMap::new();
+    func_name_to_window_fn.insert(
+        "sum",
+        WindowFunction::AggregateFunction(AggregateFunction::Sum),
+    );
+    func_name_to_window_fn.insert(
+        "count",
+        WindowFunction::AggregateFunction(AggregateFunction::Count),
+    );
+    func_name_to_window_fn.insert(
+        "min",
+        WindowFunction::AggregateFunction(AggregateFunction::Min),
+    );
+    func_name_to_window_fn.insert(
+        "max",
+        WindowFunction::AggregateFunction(AggregateFunction::Max),
+    );
+    func_name_to_window_fn.insert(
+        "row_number",
+        WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::RowNumber),
+    );
+
     let mut rng = StdRng::seed_from_u64(random_seed);
     let session_config = SessionConfig::new().with_batch_size(50);
     let ctx = SessionContext::with_config(session_config);
     let schema = input1[0].schema();
+    let rand_fn_idx = rng.gen_range(0..func_name_to_window_fn.len());
+    let fn_name = func_name_to_window_fn.keys().collect::<Vec<_>>()[rand_fn_idx];
+    let window_fn = func_name_to_window_fn.values().collect::<Vec<_>>()[rand_fn_idx];
     let preceding = rng.gen_range(0..50);
     let following = rng.gen_range(0..50);
     let rand_num = rng.gen_range(0..3);
@@ -188,8 +215,8 @@ async fn run_window_test(
     let usual_window_exec = Arc::new(
         WindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunction::AggregateFunction(AggregateFunction::Sum),
-                "sum".to_owned(),
+                window_fn,
+                fn_name.to_string(),
                 &[col("x", &schema).unwrap()],
                 &partitionby_exprs,
                 &orderby_exprs,
@@ -209,8 +236,8 @@ async fn run_window_test(
     let running_window_exec = Arc::new(
         BoundedWindowAggExec::try_new(
             vec![create_window_expr(
-                &WindowFunction::AggregateFunction(AggregateFunction::Sum),
-                "sum".to_owned(),
+                window_fn,
+                fn_name.to_string(),
                 &[col("x", &schema).unwrap()],
                 &partitionby_exprs,
                 &orderby_exprs,
