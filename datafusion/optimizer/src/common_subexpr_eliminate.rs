@@ -86,7 +86,7 @@ impl CommonSubexprEliminate {
             .try_optimize(input, config)?
             .unwrap_or_else(|| input.clone());
         if !affected_id.is_empty() {
-            new_input = build_project_plan(new_input, affected_id, expr_set)?;
+            new_input = build_common_expr_project_plan(new_input, affected_id, expr_set)?;
         }
 
         Ok((rewrite_exprs, new_input))
@@ -143,15 +143,15 @@ impl OptimizerRule for CommonSubexprEliminate {
                 )?;
 
                 if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
-                    // Ok(Some(LogicalPlan::Filter(Filter::try_new(
-                    //     predicate,
-                    //     Arc::new(new_input),
-                    // )?)))
-                    let filter = Arc::new(LogicalPlan::Filter(Filter::try_new(
+                    let filter = LogicalPlan::Filter(Filter::try_new(
                         predicate,
                         Arc::new(new_input),
-                    )?));
-                    Ok(Some(build_recover_project_plan(&input_schema, filter)))
+                    )?);
+                    if filter.schema() == &input_schema {
+                        Ok(Some(filter))
+                    } else {
+                        Ok(Some(build_recover_project_plan(&input_schema, filter)))
+                    }
                 } else {
                     Err(DataFusionError::Internal(
                         "Failed to pop predicate expr".to_string(),
@@ -219,12 +219,16 @@ impl OptimizerRule for CommonSubexprEliminate {
                 let (mut new_expr, new_input) =
                     self.rewrite_expr(&[expr], &[&arrays], input, &mut expr_set, config)?;
 
-                let sort = Arc::new(LogicalPlan::Sort(Sort {
+                let sort = LogicalPlan::Sort(Sort {
                     expr: pop_expr(&mut new_expr)?,
                     input: Arc::new(new_input),
                     fetch: *fetch,
-                }));
-                Ok(Some(build_recover_project_plan(&input_schema, sort)))
+                });
+                if sort.schema() == &input_schema {
+                    Ok(Some(sort))
+                } else {
+                    Ok(Some(build_recover_project_plan(&input_schema, sort)))
+                }
             }
             LogicalPlan::Join(_)
             | LogicalPlan::CrossJoin(_)
@@ -295,7 +299,7 @@ fn to_arrays(
 }
 
 /// Build the "intermediate" projection plan that evaluates the extracted common expressions.
-fn build_project_plan(
+fn build_common_expr_project_plan(
     input: LogicalPlan,
     affected_id: BTreeSet<Identifier>,
     expr_set: &ExprSet,
@@ -331,14 +335,18 @@ fn build_project_plan(
     )?))
 }
 
-fn build_recover_project_plan(schema: &DFSchema, input: Arc<LogicalPlan>) -> LogicalPlan {
+/// Build the projection plan to eliminate unexpected columns produced by
+/// the "intermediate" projection plan built in [build_common_expr_project_plan].
+///
+/// This is for those plans who don't keep its own output schema like `Filter` or `Sort`.
+fn build_recover_project_plan(schema: &DFSchema, input: LogicalPlan) -> LogicalPlan {
     let col_exprs = schema
         .fields()
         .iter()
         .map(|field| Expr::Column(field.qualified_column()))
         .collect();
     LogicalPlan::Projection(
-        Projection::try_new(col_exprs, input)
+        Projection::try_new(col_exprs, Arc::new(input))
             .expect("Cannot build projection plan from an invalid schema"),
     )
 }
@@ -767,7 +775,6 @@ mod test {
         \n    TableScan: test";
 
         assert_optimized_plan_eq(expected, &plan);
-
         Ok(())
     }
 
@@ -795,8 +802,10 @@ mod test {
         .into_iter()
         .collect();
         let project =
-            build_project_plan(table_scan, affected_id.clone(), &expr_set_1).unwrap();
-        let project_2 = build_project_plan(project, affected_id, &expr_set_2).unwrap();
+            build_common_expr_project_plan(table_scan, affected_id.clone(), &expr_set_1)
+                .unwrap();
+        let project_2 =
+            build_common_expr_project_plan(project, affected_id, &expr_set_2).unwrap();
 
         let mut field_set = BTreeSet::new();
         for field in project_2.schema().fields() {
@@ -841,8 +850,11 @@ mod test {
         ]
         .into_iter()
         .collect();
-        let project = build_project_plan(join, affected_id.clone(), &expr_set_1).unwrap();
-        let project_2 = build_project_plan(project, affected_id, &expr_set_2).unwrap();
+        let project =
+            build_common_expr_project_plan(join, affected_id.clone(), &expr_set_1)
+                .unwrap();
+        let project_2 =
+            build_common_expr_project_plan(project, affected_id, &expr_set_2).unwrap();
 
         let mut field_set = BTreeSet::new();
         for field in project_2.schema().fields() {
