@@ -111,23 +111,26 @@ impl BoundedWindowAggExec {
         self.input_schema.clone()
     }
 
-    /// Get Partition Columns
+    /// Return the output sort order of partition keys: For example
+    /// OVER(PARTITION BY a, ORDER BY b) -> would give sorting of the column a
+    // We are sure that partition by columns are always at the beginning of sort_keys
+    // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
+    // to calculate partition separation points
     pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
-        // All window exprs have same partition by hance we just use first one
+        let mut result = vec![];
+        // All window exprs have the same partition by, so we just use the first one:
         let partition_by = self.window_expr()[0].partition_by();
-        let mut partition_columns = vec![];
-        for elem in partition_by {
-            if let Some(sort_keys) = &self.sort_keys {
-                for a in sort_keys {
-                    if a.expr.eq(elem) {
-                        partition_columns.push(a.clone());
-                        break;
-                    }
-                }
+        let sort_keys = self.sort_keys.as_deref().unwrap_or(&[]);
+        for item in partition_by {
+            if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
+                result.push(a.clone());
+            } else {
+                return Err(DataFusionError::Execution(
+                    "Partition key not found in sort keys".to_string(),
+                ));
             }
         }
-        assert_eq!(partition_by.len(), partition_columns.len());
-        Ok(partition_columns)
+        Ok(result)
     }
 }
 
@@ -343,12 +346,17 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
         }
     }
 
-    /// prunes sections in the state that are no longer needed
+    /// Prunes sections in the state that are no longer needed
+    /// for calculating result. Determined by window frame boundaries
+    // For instance if `n_out` number of rows are calculated, we can remove first `n_out` rows from
+    // the `self.input_buffer_record_batch`
     fn prune_state(&mut self, n_out: usize) -> Result<()> {
+        // Prunes `self.partition_batches`
         self.prune_partition_batches()?;
+        // Prunes `self.input_buffer_record_batch`
         self.prune_input_batch(n_out)?;
+        // Prunes `self.window_agg_states`
         self.prune_out_columns(n_out)?;
-
         Ok(())
     }
 
@@ -552,14 +560,12 @@ impl SortedPartitionByBoundedWindowStream {
             window_agg_state.retain(|_, WindowState { state, .. }| !state.is_end);
             for (partition_row, WindowState { state: value, .. }) in window_agg_state {
                 if let Some(state) = n_prune_each_partition.get_mut(partition_row) {
-                    if value.current_range_of_sliding_window.start < *state {
-                        *state = value.current_range_of_sliding_window.start;
+                    if value.window_frame_range.start < *state {
+                        *state = value.window_frame_range.start;
                     }
                 } else {
-                    n_prune_each_partition.insert(
-                        partition_row.clone(),
-                        value.current_range_of_sliding_window.start,
-                    );
+                    n_prune_each_partition
+                        .insert(partition_row.clone(), value.window_frame_range.start);
                 }
             }
         }
@@ -582,9 +588,9 @@ impl SortedPartitionByBoundedWindowStream {
                 let window_state =
                     window_agg_state.get_mut(partition_row).ok_or_else(err)?;
                 let mut state = &mut window_state.state;
-                state.current_range_of_sliding_window = Range {
-                    start: state.current_range_of_sliding_window.start - n_prune,
-                    end: state.current_range_of_sliding_window.end - n_prune,
+                state.window_frame_range = Range {
+                    start: state.window_frame_range.start - n_prune,
+                    end: state.window_frame_range.end - n_prune,
                 };
                 state.last_calculated_index -= n_prune;
                 state.offset_pruned_rows += n_prune;
@@ -700,6 +706,11 @@ fn get_aggregate_result_out_column(
             break;
         }
     }
-    assert_eq!(running_length, len_to_show);
+    if running_length != len_to_show {
+        return Err(DataFusionError::Execution(format!(
+            "Generated row number should be {}, it is {}",
+            len_to_show, running_length
+        )));
+    }
     ret.ok_or_else(|| DataFusionError::Execution("Should contain something".to_string()))
 }

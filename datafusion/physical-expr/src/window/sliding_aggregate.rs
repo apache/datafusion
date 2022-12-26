@@ -176,7 +176,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
             let num_rows = partition_batch_state.record_batch.num_rows();
 
             let mut idx = state.last_calculated_index;
-            let mut last_range = state.current_range_of_sliding_window.clone();
+            let mut last_range = state.window_frame_range.clone();
             let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
             let out_col = self.get_result_column(
                 accumulator,
@@ -187,7 +187,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
                 state.is_end,
             )?;
             state.last_calculated_index = idx;
-            state.current_range_of_sliding_window = last_range.clone();
+            state.window_frame_range = last_range.clone();
 
             state.out_col = concat(&[&state.out_col, &out_col])?;
             state.n_row_result_missing = num_rows - state.last_calculated_index;
@@ -278,8 +278,6 @@ impl SlidingAggregateWindowExpr {
     fn get_result_column(
         &self,
         accumulator: &mut Box<dyn Accumulator>,
-        // values: &[ArrayRef],
-        // order_bys: &[ArrayRef],
         record_batch: &RecordBatch,
         window_frame_ctx: &mut WindowFrameContext,
         last_range: &mut Range<usize>,
@@ -288,7 +286,6 @@ impl SlidingAggregateWindowExpr {
     ) -> Result<ArrayRef> {
         let (values, order_bys) = self.get_values_orderbys(record_batch)?;
         // We iterate on each row to perform a running calculation.
-        // First, current_range_of_sliding_window is calculated, then it is compared with last_range.
         let length = values[0].len();
         let sort_options: Vec<SortOptions> =
             self.order_by.iter().map(|o| o.options).collect();

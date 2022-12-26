@@ -136,10 +136,10 @@ impl WindowExpr for BuiltInWindowExpr {
         let sort_options: Vec<SortOptions> =
             self.order_by.iter().map(|o| o.options).collect();
         for (partition_row, partition_batch_state) in partition_batches.iter() {
+            let field = self.expr.field()?;
+            let out_type = field.data_type();
             if !window_agg_state.contains_key(partition_row) {
                 let evaluator = self.expr.create_evaluator()?;
-                let field = self.expr.field()?;
-                let out_type = field.data_type();
                 window_agg_state.insert(
                     partition_row.clone(),
                     WindowState {
@@ -172,13 +172,11 @@ impl WindowExpr for BuiltInWindowExpr {
                 self.get_values_orderbys(&partition_batch_state.record_batch)?;
 
             // We iterate on each row to perform a running calculation.
-            // First, current_range_of_sliding_window is calculated, then it is compared with last_range.
             let mut row_wise_results: Vec<ScalarValue> = vec![];
-            let mut last_range = state.current_range_of_sliding_window.clone();
+            let mut last_range = state.window_frame_range.clone();
             let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
             for idx in state.last_calculated_index..num_rows {
-                state.current_range_of_sliding_window = if !self.expr.uses_window_frame()
-                {
+                state.window_frame_range = if !self.expr.uses_window_frame() {
                     evaluator.get_range(state, num_rows)?
                 } else {
                     window_frame_ctx.calculate_range(
@@ -190,15 +188,13 @@ impl WindowExpr for BuiltInWindowExpr {
                 };
                 evaluator.update_state(state, &order_bys, &sort_partition_points)?;
                 // exit if range end index is length, need kind of flag to stop
-                if state.current_range_of_sliding_window.end == num_rows
+                if state.window_frame_range.end == num_rows
                     && !partition_batch_state.is_end
                 {
-                    state.current_range_of_sliding_window = last_range.clone();
+                    state.window_frame_range = last_range.clone();
                     break;
                 }
-                if state.current_range_of_sliding_window.start
-                    == state.current_range_of_sliding_window.end
-                {
+                if state.window_frame_range.start == state.window_frame_range.end {
                     // We produce None if the window is empty.
                     row_wise_results
                         .push(ScalarValue::try_from(self.expr.field()?.data_type())?)
@@ -206,15 +202,14 @@ impl WindowExpr for BuiltInWindowExpr {
                     let res = evaluator.evaluate_bounded(&values)?;
                     row_wise_results.push(res);
                 }
-                last_range = state.current_range_of_sliding_window.clone();
+                last_range = state.window_frame_range.clone();
                 state.last_calculated_index = idx + 1;
             }
-            state.current_range_of_sliding_window = last_range;
-            let out_col = if !row_wise_results.is_empty() {
-                ScalarValue::iter_to_array(row_wise_results.into_iter())?
+            state.window_frame_range = last_range;
+            let out_col = if row_wise_results.is_empty() {
+                ScalarValue::try_from(out_type)?.to_array_of_size(0)
             } else {
-                let a = ScalarValue::try_from(self.expr.field()?.data_type())?;
-                a.to_array_of_size(0)
+                ScalarValue::iter_to_array(row_wise_results.into_iter())?
             };
 
             state.out_col = concat(&[&state.out_col, &out_col])?;
@@ -241,12 +236,9 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     fn can_run_bounded(&self) -> bool {
-        if self.expr.uses_window_frame() {
-            self.expr.supports_bounded_execution()
-                && !self.window_frame.start_bound.is_unbounded()
-                && !self.window_frame.end_bound.is_unbounded()
-        } else {
-            self.expr.supports_bounded_execution()
-        }
+        self.expr.supports_bounded_execution()
+            && (!self.expr.uses_window_frame()
+                || !(self.window_frame.start_bound.is_unbounded()
+                    || self.window_frame.end_bound.is_unbounded()))
     }
 }

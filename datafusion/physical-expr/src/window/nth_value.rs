@@ -171,7 +171,7 @@ impl PartitionEvaluator for NthValueEvaluator {
         _sort_partition_points: &[Range<usize>],
     ) -> Result<()> {
         // If we do not use state, update_state does nothing
-        self.state.range = state.current_range_of_sliding_window.clone();
+        self.state.range = state.window_frame_range.clone();
         Ok(())
     }
 

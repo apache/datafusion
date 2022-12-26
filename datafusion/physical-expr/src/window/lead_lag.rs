@@ -240,13 +240,12 @@ fn get_default_value(
     dtype: &DataType,
 ) -> Result<ScalarValue> {
     if let Some(val) = default_value {
-        match val {
-            ScalarValue::Int64(Some(val)) => {
-                ScalarValue::try_from_string(val.to_string(), dtype)
-            }
-            _ => Err(DataFusionError::Internal(
+        if let ScalarValue::Int64(Some(val)) = val {
+            ScalarValue::try_from_string(val.to_string(), dtype)
+        } else {
+            Err(DataFusionError::Internal(
                 "Expects default value to have Int64 type".to_string(),
-            )),
+            ))
         }
     } else {
         Ok(ScalarValue::try_from(dtype)?)

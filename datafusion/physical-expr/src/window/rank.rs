@@ -168,7 +168,7 @@ impl PartitionEvaluator for RankEvaluator {
             ))),
             RankType::Dense => Ok(ScalarValue::UInt64(Some(self.state.n_rank as u64))),
             RankType::Percent => Err(DataFusionError::Execution(
-                "Cannot Run Percent_RANK in streaming case".to_string(),
+                "Can not execute Percent_RANK in a streaming fashion".to_string(),
             )),
         }
     }

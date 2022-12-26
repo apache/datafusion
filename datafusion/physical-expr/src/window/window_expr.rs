@@ -230,15 +230,17 @@ pub enum WindowFunctionState {
 #[derive(Debug, Clone)]
 pub struct WindowAggState {
     /// The range that we calculate the window function
-    pub current_range_of_sliding_window: Range<usize>,
+    pub window_frame_range: Range<usize>,
     /// The index of the last row that its result is calculated inside the partition record batch buffer.
     pub last_calculated_index: usize,
     /// The offset of the deleted row number
     pub offset_pruned_rows: usize,
     ///
     pub window_function_state: WindowFunctionState,
-    // Keeps the results
+    /// Stores the results calculated by window frame
     pub out_col: ArrayRef,
+    /// Keeps track of how many rows should be generated to be in sync with input record_batch.
+    // (For each row in the input record batch we need to generate a window result).
     pub n_row_result_missing: usize,
     /// flag indicating whether we have received all data for this partition
     pub is_end: bool,
@@ -275,7 +277,7 @@ impl WindowAggState {
     ) -> Result<Self> {
         let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0);
         Ok(Self {
-            current_range_of_sliding_window: Range { start: 0, end: 0 },
+            window_frame_range: Range { start: 0, end: 0 },
             last_calculated_index: 0,
             offset_pruned_rows: 0,
             window_function_state,
