@@ -44,7 +44,7 @@ use arrow::compute::cast;
 use datafusion_row::accessor::RowAccessor;
 
 /// SUM aggregate expression
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sum {
     name: String,
     data_type: DataType,
@@ -121,6 +121,10 @@ impl AggregateExpr for Sum {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        Some(Arc::new(self.clone()))
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {

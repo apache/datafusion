@@ -63,11 +63,6 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "SortExec: [c1@0 ASC NULLS LAST]",
-        "metrics=[output_rows=5, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
         "FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434",
         "metrics=[output_rows=99, elapsed_compute="
     );

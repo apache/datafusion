@@ -20,15 +20,15 @@
 use super::window_frame_state::WindowFrameContext;
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
+use crate::window::window_expr::reverse_order_bys;
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
-use arrow::compute::{concat, SortOptions};
+use arrow::compute::SortOptions;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+use datafusion_common::ScalarValue;
 use datafusion_expr::WindowFrame;
 use std::any::Any;
-use std::ops::Range;
 use std::sync::Arc;
 
 /// A window expr that takes the form of a built in window function
@@ -91,50 +91,49 @@ impl WindowExpr for BuiltInWindowExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let evaluator = self.expr.create_evaluator()?;
         let num_rows = batch.num_rows();
-        let partition_columns = self.partition_columns(batch)?;
-        let partition_points =
-            self.evaluate_partition_points(num_rows, &partition_columns)?;
-
-        let results = if evaluator.uses_window_frame() {
+        if evaluator.uses_window_frame() {
             let sort_options: Vec<SortOptions> =
                 self.order_by.iter().map(|o| o.options).collect();
             let mut row_wise_results = vec![];
-            for partition_range in &partition_points {
-                let length = partition_range.end - partition_range.start;
-                let (values, order_bys) = self
-                    .get_values_orderbys(&batch.slice(partition_range.start, length))?;
-                let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
-                // We iterate on each row to calculate window frame range and and window function result
-                for idx in 0..length {
-                    let range = window_frame_ctx.calculate_range(
-                        &order_bys,
-                        &sort_options,
-                        num_rows,
-                        idx,
-                    )?;
-                    let range = Range {
-                        start: range.0,
-                        end: range.1,
-                    };
-                    let value = evaluator.evaluate_inside_range(&values, range)?;
-                    row_wise_results.push(value.to_array());
-                }
+
+            let length = batch.num_rows();
+            let (values, order_bys) = self.get_values_orderbys(batch)?;
+            let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
+            // We iterate on each row to calculate window frame range and and window function result
+            for idx in 0..length {
+                let range = window_frame_ctx.calculate_range(
+                    &order_bys,
+                    &sort_options,
+                    num_rows,
+                    idx,
+                )?;
+                let value = evaluator.evaluate_inside_range(&values, range)?;
+                row_wise_results.push(value);
             }
-            row_wise_results
+            ScalarValue::iter_to_array(row_wise_results.into_iter())
         } else if evaluator.include_rank() {
             let columns = self.sort_columns(batch)?;
             let sort_partition_points =
                 self.evaluate_partition_points(num_rows, &columns)?;
-            evaluator.evaluate_with_rank(partition_points, sort_partition_points)?
+            evaluator.evaluate_with_rank(num_rows, &sort_partition_points)
         } else {
             let (values, _) = self.get_values_orderbys(batch)?;
-            evaluator.evaluate(&values, partition_points)?
-        };
-        let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        concat(&results).map_err(DataFusionError::ArrowError)
+            evaluator.evaluate(&values, num_rows)
+        }
     }
 
     fn get_window_frame(&self) -> &Arc<WindowFrame> {
         &self.window_frame
+    }
+
+    fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>> {
+        self.expr.reverse_expr().map(|reverse_expr| {
+            Arc::new(BuiltInWindowExpr::new(
+                reverse_expr,
+                &self.partition_by.clone(),
+                &reverse_order_bys(&self.order_by),
+                Arc::new(self.window_frame.reverse()),
+            )) as _
+        })
     }
 }

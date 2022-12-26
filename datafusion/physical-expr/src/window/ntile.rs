@@ -26,7 +26,6 @@ use arrow::datatypes::Field;
 use arrow_schema::DataType;
 use datafusion_common::Result;
 use std::any::Any;
-use std::ops::Range;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -70,12 +69,8 @@ pub(crate) struct NtileEvaluator {
 }
 
 impl PartitionEvaluator for NtileEvaluator {
-    fn evaluate_partition(
-        &self,
-        _values: &[ArrayRef],
-        partition: Range<usize>,
-    ) -> Result<ArrayRef> {
-        let num_rows = (partition.end - partition.start) as u64;
+    fn evaluate(&self, _values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+        let num_rows = num_rows as u64;
         let mut vec: Vec<u64> = Vec::new();
         for i in 0..num_rows {
             let res = i * self.n / num_rows;
