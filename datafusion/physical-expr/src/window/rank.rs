@@ -151,7 +151,7 @@ impl PartitionEvaluator for RankEvaluator {
         if self.state.last_rank_data.is_empty() {
             self.state.last_rank_data = last_rank_data;
             self.state.last_rank_boundary = state.offset_pruned_rows + cur_chunk.start;
-            self.state.n_rank = sort_partition_points.len();
+            self.state.n_rank = chunk_idx + 1;
         } else if self.state.last_rank_data != last_rank_data {
             self.state.last_rank_data = last_rank_data;
             self.state.last_rank_boundary = state.offset_pruned_rows + cur_chunk.start;
