@@ -100,7 +100,7 @@ use url::Url;
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::memory_pool::MemoryPool;
-use crate::physical_optimizer::remove_unnecessary_sorts::RemoveUnnecessarySorts;
+use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
 use uuid::Uuid;
 
 use super::options::{
@@ -1585,7 +1585,7 @@ impl SessionState {
         // However, a deeper analysis may sometimes reveal that such a `SortExec` is actually unnecessary.
         // These cases typically arise when we have reversible `WindowAggExec`s or deep subqueries. The
         // rule below performs this analysis and removes unnecessary `SortExec`s.
-        physical_optimizers.push(Arc::new(RemoveUnnecessarySorts::new()));
+        physical_optimizers.push(Arc::new(OptimizeSorts::new()));
 
         let mut this = SessionState {
             session_id,

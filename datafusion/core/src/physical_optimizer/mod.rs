@@ -22,9 +22,9 @@ pub mod aggregate_statistics;
 pub mod coalesce_batches;
 pub mod enforcement;
 pub mod join_selection;
+pub mod optimize_sorts;
 pub mod optimizer;
 pub mod pruning;
-pub mod remove_unnecessary_sorts;
 pub mod repartition;
 mod utils;
 
