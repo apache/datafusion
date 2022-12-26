@@ -17,7 +17,7 @@
 
 use async_trait::async_trait;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::prelude::SessionContext;
 use datafusion_sql::parser::{DFParser, Statement};
 use log::info;
 use normalize::convert_batches;
@@ -129,12 +129,6 @@ async fn context_for_test_file(file_name: &str) -> SessionContext {
             let ctx = SessionContext::new();
             setup::register_aggregate_tables(&ctx).await;
             ctx
-        }
-        "information_schema.slt" => {
-            info!("Enabling information schema");
-            SessionContext::with_config(
-                SessionConfig::new().with_information_schema(true),
-            )
         }
         _ => {
             info!("Using default SessionContext");
