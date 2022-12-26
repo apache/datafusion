@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 
-use datafusion_common::{DFField, DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{DFField, DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::{
     col,
     expr_rewriter::{ExprRewritable, ExprRewriter, RewriteRecursion},
@@ -131,7 +131,7 @@ impl OptimizerRule for CommonSubexprEliminate {
                     predicate,
                     &mut expr_set,
                     &mut id_array,
-                    input_schema,
+                    input_schema.clone(),
                 )?;
 
                 let (mut new_expr, new_input) = self.rewrite_expr(
@@ -143,10 +143,15 @@ impl OptimizerRule for CommonSubexprEliminate {
                 )?;
 
                 if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
-                    Ok(Some(LogicalPlan::Filter(Filter::try_new(
+                    // Ok(Some(LogicalPlan::Filter(Filter::try_new(
+                    //     predicate,
+                    //     Arc::new(new_input),
+                    // )?)))
+                    let filter = Arc::new(LogicalPlan::Filter(Filter::try_new(
                         predicate,
                         Arc::new(new_input),
-                    )?)))
+                    )?));
+                    Ok(Some(build_recover_project_plan(&input_schema, filter)))
                 } else {
                     Err(DataFusionError::Internal(
                         "Failed to pop predicate expr".to_string(),
@@ -209,16 +214,17 @@ impl OptimizerRule for CommonSubexprEliminate {
             }
             LogicalPlan::Sort(Sort { expr, input, fetch }) => {
                 let input_schema = Arc::clone(input.schema());
-                let arrays = to_arrays(expr, input_schema, &mut expr_set)?;
+                let arrays = to_arrays(expr, input_schema.clone(), &mut expr_set)?;
 
                 let (mut new_expr, new_input) =
                     self.rewrite_expr(&[expr], &[&arrays], input, &mut expr_set, config)?;
 
-                Ok(Some(LogicalPlan::Sort(Sort {
+                let sort = Arc::new(LogicalPlan::Sort(Sort {
                     expr: pop_expr(&mut new_expr)?,
                     input: Arc::new(new_input),
                     fetch: *fetch,
-                })))
+                }));
+                Ok(Some(build_recover_project_plan(&input_schema, sort)))
             }
             LogicalPlan::Join(_)
             | LogicalPlan::CrossJoin(_)
@@ -323,6 +329,18 @@ fn build_project_plan(
         project_exprs,
         Arc::new(input),
     )?))
+}
+
+fn build_recover_project_plan(schema: &DFSchema, input: Arc<LogicalPlan>) -> LogicalPlan {
+    let col_exprs = schema
+        .fields()
+        .iter()
+        .map(|field| Expr::Column(field.qualified_column()))
+        .collect();
+    LogicalPlan::Projection(
+        Projection::try_new(col_exprs, input)
+            .expect("Cannot build projection plan from an invalid schema"),
+    )
 }
 
 /// Go through an expression tree and generate identifier.
@@ -867,10 +885,6 @@ mod test {
         let formatted_fields_with_datatype = format!("{fields_with_datatypes:#?}");
         let expected = r###"[
     (
-        "CAST(table.a AS Int64)table.a",
-        Int64,
-    ),
-    (
         "a",
         UInt64,
     ),
@@ -898,9 +912,13 @@ mod test {
             ))?
             .build()?;
 
-        let expected = "Filter: Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a AND Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a\
-        \n  Projection: Int32(1) > test.a AS Int32(1) > test.atest.aInt32(1), test.a, test.b, test.c\
-        \n    TableScan: test";
+        // let expected = "Filter: Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a AND Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a\
+        // \n  Projection: Int32(1) > test.a AS Int32(1) > test.atest.aInt32(1), test.a, test.b, test.c\
+        // \n    TableScan: test";
+        let expected = "Projection: test.a, test.b, test.c\
+        \n  Filter: Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a AND Int32(1) > test.atest.aInt32(1) AS Int32(1) > test.a\
+        \n    Projection: Int32(1) > test.a AS Int32(1) > test.atest.aInt32(1), test.a, test.b, test.c
+        \n      TableScan: test";
 
         let output_schema = plan.schema();
         println!("output schema: {:?}", output_schema);
