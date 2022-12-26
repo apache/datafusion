@@ -69,6 +69,11 @@ impl CatalogWithInformationSchema {
             inner,
         }
     }
+
+    /// Return a reference to the wrapped provider
+    pub(crate) fn inner(&self) -> Arc<dyn CatalogProvider> {
+        self.inner.clone()
+    }
 }
 
 impl CatalogProvider for CatalogWithInformationSchema {

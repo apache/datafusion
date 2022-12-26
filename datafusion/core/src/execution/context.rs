@@ -421,6 +421,10 @@ impl SessionContext {
                         ))
                     }
                 }
+                // Since information_schema config may have changed, revalidate
+                if variable == OPT_INFORMATION_SCHEMA {
+                    state.update_information_schema();
+                }
                 drop(state);
 
                 self.return_empty_dataframe()
@@ -1546,17 +1550,10 @@ impl SessionState {
 
             Self::register_default_schema(&config, &runtime, &default_catalog);
 
-            let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema()
-            {
-                Arc::new(CatalogWithInformationSchema::new(
-                    Arc::downgrade(&catalog_list),
-                    Arc::new(default_catalog),
-                ))
-            } else {
-                Arc::new(default_catalog)
-            };
-            catalog_list
-                .register_catalog(config.default_catalog.clone(), default_catalog);
+            catalog_list.register_catalog(
+                config.default_catalog.clone(),
+                Arc::new(default_catalog),
+            );
         }
 
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
@@ -1583,7 +1580,7 @@ impl SessionState {
         // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
 
-        SessionState {
+        let mut this = SessionState {
             session_id,
             optimizer: Optimizer::new(),
             physical_optimizers,
@@ -1594,6 +1591,60 @@ impl SessionState {
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
+        };
+        this.update_information_schema();
+        this
+    }
+
+    /// Enables/Disables information_schema support based on the value of
+    /// config.information_schema()
+    ///
+    /// When enabled, all catalog providers are wrapped with
+    /// [`CatalogWithInformationSchema`] if needed
+    ///
+    /// When disabled, any [`CatalogWithInformationSchema`] is unwrapped
+    fn update_information_schema(&mut self) {
+        let enabled = self.config.information_schema();
+        let catalog_list = &self.catalog_list;
+
+        let new_catalogs: Vec<_> = self
+            .catalog_list
+            .catalog_names()
+            .into_iter()
+            .map(|catalog_name| {
+                // unwrap because the list of names came from catalog
+                // list so it should still be there
+                let catalog = catalog_list.catalog(&catalog_name).unwrap();
+
+                let unwrapped = catalog
+                    .as_any()
+                    .downcast_ref::<CatalogWithInformationSchema>()
+                    .map(|wrapped| wrapped.inner());
+
+                let new_catalog = match (enabled, unwrapped) {
+                    // already wrapped, no thing needed
+                    (true, Some(_)) => catalog,
+                    (true, None) => {
+                        // wrap the catalog in information schema
+                        Arc::new(CatalogWithInformationSchema::new(
+                            Arc::downgrade(catalog_list),
+                            catalog,
+                        ))
+                    }
+                    // disabling, currently wrapped
+                    (false, Some(unwrapped)) => unwrapped,
+                    // disabling, currently unwrapped
+                    (false, None) => catalog,
+                };
+
+                (catalog_name, new_catalog)
+            })
+            // collect to avoid concurrent modification
+            .collect();
+
+        // replace all catalogs
+        for (catalog_name, new_catalog) in new_catalogs {
+            catalog_list.register_catalog(catalog_name, new_catalog);
         }
     }
 
