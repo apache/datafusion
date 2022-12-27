@@ -43,6 +43,7 @@ use test_utils::AccessLogGenerator;
 
 /// how many rows of generated data to write to our parquet file (arbitrary)
 const NUM_ROWS: usize = 53819;
+const ROW_LIMIT: usize = 4096;
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -59,7 +60,9 @@ async fn single_file() {
 
     let tempdir = TempDir::new().unwrap();
 
-    let generator = AccessLogGenerator::new().with_row_limit(NUM_ROWS);
+    let generator = AccessLogGenerator::new()
+        .with_row_limit(NUM_ROWS)
+        .with_max_batch_size(ROW_LIMIT);
 
     // default properties
     let props = WriterProperties::builder().build();
@@ -81,7 +84,7 @@ async fn single_file() {
         // request_method = 'GET'
         .with_filter(col("request_method").eq(lit("GET")))
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(8886);
+        .with_expected_rows(8875);
     set.spawn(async move { case.run().await });
 
     let case = TestCase::new(test_parquet_file.clone())
@@ -89,7 +92,7 @@ async fn single_file() {
         // request_method != 'GET'
         .with_filter(col("request_method").not_eq(lit("GET")))
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(44933);
+        .with_expected_rows(44944);
     set.spawn(async move { case.run().await });
 
     let case = TestCase::new(test_parquet_file.clone())
@@ -104,7 +107,7 @@ async fn single_file() {
             .unwrap(),
         )
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(1729);
+        .with_expected_rows(1731);
     set.spawn(async move { case.run().await });
 
     let case = TestCase::new(test_parquet_file.clone())
@@ -130,7 +133,7 @@ async fn single_file() {
         // container = 'backend_container_0'
         .with_filter(col("container").eq(lit("backend_container_0")))
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(37856);
+        .with_expected_rows(15911);
     set.spawn(async move { case.run().await });
 
     let case = TestCase::new(test_parquet_file.clone())
@@ -138,7 +141,7 @@ async fn single_file() {
         // container != 'backend_container_0'
         .with_filter(col("container").not_eq(lit("backend_container_0")))
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(15963);
+        .with_expected_rows(37908);
     set.spawn(async move { case.run().await });
 
     let case = TestCase::new(test_parquet_file.clone())
@@ -202,8 +205,8 @@ async fn single_file() {
             ])
             .unwrap(),
         )
-        .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(39982);
+        .with_pushdown_expected(PushdownExpected::None)
+        .with_expected_rows(16955);
     set.spawn(async move { case.run().await });
 
     let case = TestCase::new(test_parquet_file.clone())
@@ -219,8 +222,8 @@ async fn single_file() {
             ])
             .unwrap(),
         )
-        .with_pushdown_expected(PushdownExpected::None)
-        .with_expected_rows(NUM_ROWS);
+        .with_pushdown_expected(PushdownExpected::Some)
+        .with_expected_rows(48919);
     set.spawn(async move { case.run().await });
 
     // Join all the cases.
@@ -532,12 +535,13 @@ impl TestCase {
 
         match pushdown_expected {
             PushdownExpected::None => {
-                assert_eq!(pushdown_rows_filtered, 0);
+                assert_eq!(pushdown_rows_filtered, 0, "{}", self.name);
             }
             PushdownExpected::Some => {
                 assert!(
                     pushdown_rows_filtered > 0,
-                    "Expected to filter rows via pushdown, but none were"
+                    "{}: Expected to filter rows via pushdown, but none were",
+                    self.name
                 );
             }
         };
