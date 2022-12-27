@@ -199,7 +199,7 @@ impl WindowExpr for BuiltInWindowExpr {
                     row_wise_results
                         .push(ScalarValue::try_from(self.expr.field()?.data_type())?)
                 } else {
-                    let res = evaluator.evaluate_bounded(&values)?;
+                    let res = evaluator.evaluate_stateful(&values)?;
                     row_wise_results.push(res);
                 }
                 last_range = state.window_frame_range.clone();

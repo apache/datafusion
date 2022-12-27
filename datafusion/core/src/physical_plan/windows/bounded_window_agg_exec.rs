@@ -325,20 +325,20 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
         let n_out = self.calculate_n_out_row();
         if n_out > 0 {
             let mut out_columns = vec![];
-            for partition_window_agg_states in self.window_agg_states.iter() {
-                out_columns.push(get_aggregate_result_out_column(
-                    partition_window_agg_states,
-                    n_out,
-                )?);
-            }
-
-            let batch_to_show = self
-                .input_buffer_record_batch
-                .columns()
+            self.window_agg_states
                 .iter()
-                .map(|elem| elem.slice(0, n_out))
-                .collect::<Vec<_>>();
-            out_columns.extend_from_slice(&batch_to_show);
+                .map(|elem| get_aggregate_result_out_column(elem, n_out))
+                .chain(
+                    self.input_buffer_record_batch
+                        .columns()
+                        .iter()
+                        .map(|elem| Ok(elem.slice(0, n_out))),
+                )
+                .map(|elem| {
+                    out_columns.push(elem?);
+                    Ok(())
+                })
+                .collect::<Result<Vec<_>>>()?;
 
             Ok(Some(out_columns))
         } else {

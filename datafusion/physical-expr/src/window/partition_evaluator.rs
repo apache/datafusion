@@ -62,9 +62,9 @@ pub trait PartitionEvaluator: Debug + Send + Sync {
     }
 
     /// evaluate window function result inside given range
-    fn evaluate_bounded(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
+    fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
         Err(DataFusionError::NotImplemented(
-            "evaluate_bounded is not implemented by default".into(),
+            "evaluate_stateful is not implemented by default".into(),
         ))
     }
 

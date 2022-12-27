@@ -95,50 +95,19 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        let sort_options: Vec<SortOptions> =
-            self.order_by.iter().map(|o| o.options).collect();
-        let mut row_wise_results: Vec<ScalarValue> = vec![];
-
         let mut accumulator = self.aggregate.create_sliding_accumulator()?;
-        let length = batch.num_rows();
-        let (values, order_bys) = self.get_values_orderbys(batch)?;
 
         let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
         let mut last_range = Range { start: 0, end: 0 };
-
-        // We iterate on each row to perform a running calculation.
-        // First, cur_range is calculated, then it is compared with last_range.
-        for i in 0..length {
-            let cur_range =
-                window_frame_ctx.calculate_range(&order_bys, &sort_options, length, i)?;
-            let value = if cur_range.start == cur_range.end {
-                // We produce None if the window is empty.
-                ScalarValue::try_from(self.aggregate.field()?.data_type())?
-            } else {
-                // Accumulate any new rows that have entered the window:
-                let update_bound = cur_range.end - last_range.end;
-                if update_bound > 0 {
-                    let update: Vec<ArrayRef> = values
-                        .iter()
-                        .map(|v| v.slice(last_range.end, update_bound))
-                        .collect();
-                    accumulator.update_batch(&update)?
-                }
-                // Remove rows that have now left the window:
-                let retract_bound = cur_range.start - last_range.start;
-                if retract_bound > 0 {
-                    let retract: Vec<ArrayRef> = values
-                        .iter()
-                        .map(|v| v.slice(last_range.start, retract_bound))
-                        .collect();
-                    accumulator.retract_batch(&retract)?
-                }
-                accumulator.evaluate()?
-            };
-            row_wise_results.push(value);
-            last_range = cur_range;
-        }
-        ScalarValue::iter_to_array(row_wise_results.into_iter())
+        let mut idx = 0;
+        self.get_result_column(
+            &mut accumulator,
+            batch,
+            &mut window_frame_ctx,
+            &mut last_range,
+            &mut idx,
+            true,
+        )
     }
 
     fn evaluate_stateful(

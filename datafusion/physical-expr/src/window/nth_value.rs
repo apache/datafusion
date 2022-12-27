@@ -175,7 +175,7 @@ impl PartitionEvaluator for NthValueEvaluator {
         Ok(())
     }
 
-    fn evaluate_bounded(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
+    fn evaluate_stateful(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
         self.evaluate_inside_range(values, self.state.range.clone())
     }
 

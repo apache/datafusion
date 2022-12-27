@@ -218,7 +218,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         }
     }
 
-    fn evaluate_bounded(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
+    fn evaluate_stateful(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
         let dtype = values[0].data_type();
         let idx = self.state.idx as i64 - self.shift_offset;
         if idx < 0 || idx as usize >= values[0].len() {
