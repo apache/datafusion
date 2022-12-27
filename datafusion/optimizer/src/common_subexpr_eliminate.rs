@@ -908,9 +908,7 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(lit(1).gt(col("a"))).and(
-                      lit(1).gt(col("a"))),
-            ))?
+            .filter(lit(1).gt(col("a")).and(lit(1).gt(col("a"))))?
             .build()?;
 
         let expected = "Projection: test.a, test.b, test.c\
