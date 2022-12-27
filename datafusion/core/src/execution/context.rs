@@ -17,10 +17,7 @@
 
 //! SessionContext contains methods for registering data sources and executing queries
 use crate::{
-    catalog::{
-        catalog::{CatalogList, MemoryCatalogList},
-        information_schema::CatalogWithInformationSchema,
-    },
+    catalog::catalog::{CatalogList, MemoryCatalogList},
     config::{
         OPT_COLLECT_STATISTICS, OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA,
         OPT_INFORMATION_SCHEMA, OPT_PARQUET_ENABLE_PRUNING, OPT_REPARTITION_AGGREGATIONS,
@@ -97,6 +94,7 @@ use datafusion_sql::{
 use parquet::file::properties::WriterProperties;
 use url::Url;
 
+use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::memory_pool::MemoryPool;
@@ -421,10 +419,6 @@ impl SessionContext {
                             "Unsupported Scalar Value Type".to_string(),
                         ))
                     }
-                }
-                // Since information_schema config may have changed, revalidate
-                if variable == OPT_INFORMATION_SCHEMA {
-                    state.update_information_schema();
                 }
                 drop(state);
 
@@ -877,18 +871,10 @@ impl SessionContext {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         let name = name.into();
-        let information_schema = self.copied_config().information_schema();
-        let state = self.state.read();
-        let catalog = if information_schema {
-            Arc::new(CatalogWithInformationSchema::new(
-                Arc::downgrade(&state.catalog_list),
-                catalog,
-            ))
-        } else {
-            catalog
-        };
-
-        state.catalog_list.register_catalog(name, catalog)
+        self.state
+            .read()
+            .catalog_list
+            .register_catalog(name, catalog)
     }
 
     /// Retrieves the list of available catalog names.
@@ -1587,7 +1573,7 @@ impl SessionState {
         // rule below performs this analysis and removes unnecessary `SortExec`s.
         physical_optimizers.push(Arc::new(OptimizeSorts::new()));
 
-        let mut this = SessionState {
+        SessionState {
             session_id,
             optimizer: Optimizer::new(),
             physical_optimizers,
@@ -1598,60 +1584,6 @@ impl SessionState {
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
-        };
-        this.update_information_schema();
-        this
-    }
-
-    /// Enables/Disables information_schema support based on the value of
-    /// config.information_schema()
-    ///
-    /// When enabled, all catalog providers are wrapped with
-    /// [`CatalogWithInformationSchema`] if needed
-    ///
-    /// When disabled, any [`CatalogWithInformationSchema`] is unwrapped
-    fn update_information_schema(&mut self) {
-        let enabled = self.config.information_schema();
-        let catalog_list = &self.catalog_list;
-
-        let new_catalogs: Vec<_> = self
-            .catalog_list
-            .catalog_names()
-            .into_iter()
-            .map(|catalog_name| {
-                // unwrap because the list of names came from catalog
-                // list so it should still be there
-                let catalog = catalog_list.catalog(&catalog_name).unwrap();
-
-                let unwrapped = catalog
-                    .as_any()
-                    .downcast_ref::<CatalogWithInformationSchema>()
-                    .map(|wrapped| wrapped.inner());
-
-                let new_catalog = match (enabled, unwrapped) {
-                    // already wrapped, no thing needed
-                    (true, Some(_)) => catalog,
-                    (true, None) => {
-                        // wrap the catalog in information schema
-                        Arc::new(CatalogWithInformationSchema::new(
-                            Arc::downgrade(catalog_list),
-                            catalog,
-                        ))
-                    }
-                    // disabling, currently wrapped
-                    (false, Some(unwrapped)) => unwrapped,
-                    // disabling, currently unwrapped
-                    (false, None) => catalog,
-                };
-
-                (catalog_name, new_catalog)
-            })
-            // collect to avoid concurrent modification
-            .collect();
-
-        // replace all catalogs
-        for (catalog_name, new_catalog) in new_catalogs {
-            catalog_list.register_catalog(catalog_name, new_catalog);
         }
     }
 
@@ -1721,6 +1653,12 @@ impl SessionState {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
+        if self.config.information_schema() && resolved_ref.schema == INFORMATION_SCHEMA {
+            return Ok(Arc::new(InformationSchemaProvider::new(
+                self.catalog_list.clone(),
+            )));
+        }
+
         self.catalog_list
             .catalog(resolved_ref.catalog)
             .ok_or_else(|| {

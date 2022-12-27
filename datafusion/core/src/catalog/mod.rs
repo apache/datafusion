@@ -20,7 +20,7 @@
 
 #![allow(clippy::module_inception)]
 pub mod catalog;
-pub mod information_schema;
+pub(crate) mod information_schema;
 pub mod listing_schema;
 pub mod schema;
 
