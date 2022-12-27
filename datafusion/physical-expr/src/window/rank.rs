@@ -114,9 +114,9 @@ impl PartitionEvaluator for RankEvaluator {
         true
     }
 
-    fn evaluate_partition_with_rank(
+    fn evaluate_with_rank(
         &self,
-        partition: Range<usize>,
+        num_rows: usize,
         ranks_in_partition: &[Range<usize>],
     ) -> Result<ArrayRef> {
         // see https://www.postgresql.org/docs/current/functions-window.html
@@ -132,7 +132,7 @@ impl PartitionEvaluator for RankEvaluator {
             )),
             RankType::Percent => {
                 // Returns the relative rank of the current row, that is (rank - 1) / (total partition rows - 1). The value thus ranges from 0 to 1 inclusive.
-                let denominator = (partition.end - partition.start) as f64;
+                let denominator = num_rows as f64;
                 Arc::new(Float64Array::from_iter_values(
                     ranks_in_partition
                         .iter()
@@ -177,15 +177,14 @@ mod tests {
 
     fn test_f64_result(
         expr: &Rank,
-        range: Range<usize>,
+        num_rows: usize,
         ranks: Vec<Range<usize>>,
         expected: Vec<f64>,
     ) -> Result<()> {
         let result = expr
             .create_evaluator()?
-            .evaluate_with_rank(vec![range], ranks)?;
-        assert_eq!(1, result.len());
-        let result = as_float64_array(&result[0])?;
+            .evaluate_with_rank(num_rows, &ranks)?;
+        let result = as_float64_array(&result)?;
         let result = result.values();
         assert_eq!(expected, result);
         Ok(())
@@ -196,11 +195,8 @@ mod tests {
         ranks: Vec<Range<usize>>,
         expected: Vec<u64>,
     ) -> Result<()> {
-        let result = expr
-            .create_evaluator()?
-            .evaluate_with_rank(vec![0..8], ranks)?;
-        assert_eq!(1, result.len());
-        let result = as_uint64_array(&result[0])?;
+        let result = expr.create_evaluator()?.evaluate_with_rank(8, &ranks)?;
+        let result = as_uint64_array(&result)?;
         let result = result.values();
         assert_eq!(expected, result);
         Ok(())
@@ -228,19 +224,19 @@ mod tests {
 
         // empty case
         let expected = vec![0.0; 0];
-        test_f64_result(&r, 0..0, vec![0..0; 0], expected)?;
+        test_f64_result(&r, 0, vec![0..0; 0], expected)?;
 
         // singleton case
         let expected = vec![0.0];
-        test_f64_result(&r, 0..1, vec![0..1], expected)?;
+        test_f64_result(&r, 1, vec![0..1], expected)?;
 
         // uniform case
         let expected = vec![0.0; 7];
-        test_f64_result(&r, 0..7, vec![0..7], expected)?;
+        test_f64_result(&r, 7, vec![0..7], expected)?;
 
         // non-trivial case
         let expected = vec![0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 0.5];
-        test_f64_result(&r, 0..7, vec![0..3, 3..7], expected)?;
+        test_f64_result(&r, 7, vec![0..3, 3..7], expected)?;
 
         Ok(())
     }

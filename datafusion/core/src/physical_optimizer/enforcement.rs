@@ -20,6 +20,7 @@
 //!
 use crate::config::OPT_TOP_DOWN_JOIN_KEY_REORDERING;
 use crate::error::Result;
+use crate::physical_optimizer::utils::{add_sort_above_child, ordering_satisfy};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -29,7 +30,6 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
-use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort::SortOptions;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
@@ -41,9 +41,8 @@ use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::expressions::NoOp;
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
-    normalize_sort_expr_with_equivalence_properties, AggregateExpr, PhysicalExpr,
-    PhysicalSortExpr,
+    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, AggregateExpr,
+    PhysicalExpr,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -75,7 +74,6 @@ impl PhysicalOptimizerRule for BasicEnforcement {
         let target_partitions = config.target_partitions();
         let top_down_join_key_reordering = config
             .config_options()
-            .read()
             .get_bool(OPT_TOP_DOWN_JOIN_KEY_REORDERING)
             .unwrap_or_default();
         let new_plan = if top_down_join_key_reordering {
@@ -889,69 +887,12 @@ fn ensure_distribution_and_ordering(
                 Ok(child)
             } else {
                 let sort_expr = required.unwrap().to_vec();
-                Ok(Arc::new(SortExec::new_with_partitioning(
-                    sort_expr, child, true, None,
-                )) as Arc<dyn ExecutionPlan>)
+                add_sort_above_child(&child, sort_expr)
             }
         })
         .collect();
 
     with_new_children_if_necessary(plan, new_children?)
-}
-
-/// Check the required ordering requirements are satisfied by the provided PhysicalSortExprs.
-fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
-    provided: Option<&[PhysicalSortExpr]>,
-    required: Option<&[PhysicalSortExpr]>,
-    equal_properties: F,
-) -> bool {
-    match (provided, required) {
-        (_, None) => true,
-        (None, Some(_)) => false,
-        (Some(provided), Some(required)) => {
-            if required.len() > provided.len() {
-                false
-            } else {
-                let fast_match = required
-                    .iter()
-                    .zip(provided.iter())
-                    .all(|(order1, order2)| order1.eq(order2));
-
-                if !fast_match {
-                    let eq_properties = equal_properties();
-                    let eq_classes = eq_properties.classes();
-                    if !eq_classes.is_empty() {
-                        let normalized_required_exprs = required
-                            .iter()
-                            .map(|e| {
-                                normalize_sort_expr_with_equivalence_properties(
-                                    e.clone(),
-                                    eq_classes,
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        let normalized_provided_exprs = provided
-                            .iter()
-                            .map(|e| {
-                                normalize_sort_expr_with_equivalence_properties(
-                                    e.clone(),
-                                    eq_classes,
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        normalized_required_exprs
-                            .iter()
-                            .zip(normalized_provided_exprs.iter())
-                            .all(|(order1, order2)| order1.eq(order2))
-                    } else {
-                        fast_match
-                    }
-                } else {
-                    fast_match
-                }
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -1033,14 +974,13 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_expr::logical_plan::JoinType;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::binary;
-    use datafusion_physical_expr::expressions::lit;
-    use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_expr::{expressions, PhysicalExpr};
+    use datafusion_physical_expr::{
+        expressions, expressions::binary, expressions::lit, expressions::Column,
+        PhysicalExpr, PhysicalSortExpr,
+    };
     use std::ops::Deref;
 
     use super::*;
-    use crate::config::ConfigOptions;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::physical_plan::aggregates::{
@@ -1080,7 +1020,6 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
                 output_ordering,
             },
             None,

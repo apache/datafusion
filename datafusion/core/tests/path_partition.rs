@@ -557,7 +557,7 @@ async fn register_partitioned_alltypes_parquet(
         MirroringObjectStore::new_arc(parquet_file_path.clone(), store_paths),
     );
 
-    let options = ListingOptions::new(Arc::new(ParquetFormat::new(ctx.config_options())))
+    let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
         .with_table_partition_cols(
             partition_cols
                 .iter()

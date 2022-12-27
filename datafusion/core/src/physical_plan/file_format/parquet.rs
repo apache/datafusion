@@ -25,9 +25,9 @@ use std::fs;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::config::OPT_PARQUET_ENABLE_PAGE_INDEX;
 use crate::config::OPT_PARQUET_PUSHDOWN_FILTERS;
 use crate::config::OPT_PARQUET_REORDER_FILTERS;
+use crate::config::{ConfigOptions, OPT_PARQUET_ENABLE_PAGE_INDEX};
 use crate::datasource::file_format::parquet::fetch_parquet_metadata;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -65,6 +65,7 @@ mod page_filter;
 mod row_filter;
 mod row_groups;
 
+use crate::physical_plan::file_format::parquet::page_filter::PagePruningPredicate;
 pub use metrics::ParquetFileMetrics;
 
 use super::get_output_ordering;
@@ -91,6 +92,8 @@ pub struct ParquetExec {
     predicate: Option<Arc<Expr>>,
     /// Optional predicate for pruning row groups
     pruning_predicate: Option<Arc<PruningPredicate>>,
+    /// Optional predicate for pruning pages
+    page_pruning_predicate: Option<Arc<PagePruningPredicate>>,
     /// Optional hint for the size of the parquet metadata
     metadata_size_hint: Option<usize>,
     /// Optional user defined parquet file reader factory
@@ -111,13 +114,11 @@ impl ParquetExec {
         let predicate_creation_errors =
             MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
 
+        let file_schema = &base_config.file_schema;
         let pruning_predicate = predicate
             .clone()
             .and_then(|predicate_expr| {
-                match PruningPredicate::try_new(
-                    predicate_expr,
-                    base_config.file_schema.clone(),
-                ) {
+                match PruningPredicate::try_new(predicate_expr, file_schema.clone()) {
                     Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
                     Err(e) => {
                         debug!("Could not create pruning predicate for: {}", e);
@@ -126,14 +127,18 @@ impl ParquetExec {
                     }
                 }
             })
-            .and_then(|pruning_predicate| {
-                // If the pruning predicate can't prune anything, don't try
-                if pruning_predicate.allways_true() {
+            .filter(|p| !p.allways_true());
+
+        let page_pruning_predicate = predicate.as_ref().and_then(|predicate_expr| {
+            match PagePruningPredicate::try_new(predicate_expr, file_schema.clone()) {
+                Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
+                Err(e) => {
+                    debug!("Could not create page pruning predicate for: {}", e);
+                    predicate_creation_errors.add(1);
                     None
-                } else {
-                    Some(pruning_predicate)
                 }
-            });
+            }
+        });
 
         // Save original predicate
         let predicate = predicate.map(Arc::new);
@@ -150,6 +155,7 @@ impl ParquetExec {
             metrics,
             predicate,
             pruning_predicate,
+            page_pruning_predicate,
             metadata_size_hint,
             parquet_file_reader_factory: None,
         }
@@ -191,14 +197,9 @@ impl ParquetExec {
     }
 
     /// Return the value described in [`Self::with_pushdown_filters`]
-    pub fn pushdown_filters(&self) -> bool {
+    fn pushdown_filters(&self, config_options: &ConfigOptions) -> bool {
         self.pushdown_filters
-            .or_else(|| {
-                self.base_config
-                    .config_options
-                    .read()
-                    .get_bool(OPT_PARQUET_PUSHDOWN_FILTERS)
-            })
+            .or_else(|| config_options.get_bool(OPT_PARQUET_PUSHDOWN_FILTERS))
             // default to false
             .unwrap_or_default()
     }
@@ -213,14 +214,9 @@ impl ParquetExec {
     }
 
     /// Return the value described in [`Self::with_reorder_filters`]
-    pub fn reorder_filters(&self) -> bool {
+    fn reorder_filters(&self, config_options: &ConfigOptions) -> bool {
         self.reorder_filters
-            .or_else(|| {
-                self.base_config
-                    .config_options
-                    .read()
-                    .get_bool(OPT_PARQUET_REORDER_FILTERS)
-            })
+            .or_else(|| config_options.get_bool(OPT_PARQUET_REORDER_FILTERS))
             // default to false
             .unwrap_or_default()
     }
@@ -235,14 +231,9 @@ impl ParquetExec {
     }
 
     /// Return the value described in [`Self::with_enable_page_index`]
-    pub fn enable_page_index(&self) -> bool {
+    fn enable_page_index(&self, config_options: &ConfigOptions) -> bool {
         self.enable_page_index
-            .or_else(|| {
-                self.base_config
-                    .config_options
-                    .read()
-                    .get_bool(OPT_PARQUET_ENABLE_PAGE_INDEX)
-            })
+            .or_else(|| config_options.get_bool(OPT_PARQUET_ENABLE_PAGE_INDEX))
             // default to false
             .unwrap_or_default()
     }
@@ -302,19 +293,22 @@ impl ExecutionPlan for ParquetExec {
                     })
             })?;
 
+        let config_options = ctx.session_config().config_options();
+
         let opener = ParquetOpener {
             partition_index,
             projection: Arc::from(projection),
             batch_size: ctx.session_config().batch_size(),
             predicate: self.predicate.clone(),
             pruning_predicate: self.pruning_predicate.clone(),
+            page_pruning_predicate: self.page_pruning_predicate.clone(),
             table_schema: self.base_config.file_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics.clone(),
             parquet_file_reader_factory,
-            pushdown_filters: self.pushdown_filters(),
-            reorder_filters: self.reorder_filters(),
-            enable_page_index: self.enable_page_index(),
+            pushdown_filters: self.pushdown_filters(config_options),
+            reorder_filters: self.reorder_filters(config_options),
+            enable_page_index: self.enable_page_index(config_options),
         };
 
         let stream = FileStream::new(
@@ -395,6 +389,7 @@ struct ParquetOpener {
     batch_size: usize,
     predicate: Option<Arc<Expr>>,
     pruning_predicate: Option<Arc<PruningPredicate>>,
+    page_pruning_predicate: Option<Arc<PagePruningPredicate>>,
     table_schema: SchemaRef,
     metadata_size_hint: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
@@ -427,6 +422,7 @@ impl FileOpener for ParquetOpener {
         let projection = self.projection.clone();
         let predicate = self.predicate.clone();
         let pruning_predicate = self.pruning_predicate.clone();
+        let page_pruning_predicate = self.page_pruning_predicate.clone();
         let table_schema = self.table_schema.clone();
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
@@ -483,20 +479,14 @@ impl FileOpener for ParquetOpener {
             // page index pruning: if all data on individual pages can
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
-            if let Some(row_selection) = (enable_page_index && !row_groups.is_empty())
-                .then(|| {
-                    page_filter::build_page_filter(
-                        pruning_predicate.as_ref().map(|p| p.as_ref()),
-                        builder.schema().clone(),
-                        &row_groups,
-                        file_metadata.as_ref(),
-                        &file_metrics,
-                    )
-                })
-                .transpose()?
-                .flatten()
-            {
-                builder = builder.with_row_selection(row_selection);
+            if enable_page_index && !row_groups.is_empty() {
+                if let Some(p) = page_pruning_predicate {
+                    let pruned =
+                        p.prune(&row_groups, file_metadata.as_ref(), &file_metrics)?;
+                    if let Some(row_selection) = pruned {
+                        builder = builder.with_row_selection(row_selection);
+                    }
+                }
             }
 
             let stream = builder
@@ -726,7 +716,6 @@ mod tests {
     // See also `parquet_exec` integration test
 
     use super::*;
-    use crate::config::ConfigOptions;
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::datasource::file_format::test_util::scan_format;
     use crate::datasource::listing::{FileRange, PartitionedFile};
@@ -820,7 +809,6 @@ mod tests {
                 projection,
                 limit: None,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
             },
             predicate,
@@ -1294,15 +1282,21 @@ mod tests {
     async fn parquet_exec_with_projection() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = "alltypes_plain.parquet";
-        let ctx = SessionContext::new();
-        let format = ParquetFormat::new(ctx.config_options());
-        let parquet_exec =
-            scan_format(&format, &testdata, filename, Some(vec![0, 1, 2]), None)
-                .await
-                .unwrap();
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
+        let parquet_exec = scan_format(
+            &state,
+            &ParquetFormat::default(),
+            &testdata,
+            filename,
+            Some(vec![0, 1, 2]),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let task_ctx = SessionContext::new().task_ctx();
         let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap()?;
 
@@ -1338,9 +1332,9 @@ mod tests {
         }
 
         async fn assert_parquet_read(
+            state: &SessionState,
             file_groups: Vec<Vec<PartitionedFile>>,
             expected_row_num: Option<usize>,
-            task_ctx: Arc<TaskContext>,
             file_schema: SchemaRef,
         ) -> Result<()> {
             let parquet_exec = ParquetExec::new(
@@ -1352,14 +1346,13 @@ mod tests {
                     projection: None,
                     limit: None,
                     table_partition_cols: vec![],
-                    config_options: ConfigOptions::new().into_shareable(),
                     output_ordering: None,
                 },
                 None,
                 None,
             );
             assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
-            let results = parquet_exec.execute(0, task_ctx)?.next().await;
+            let results = parquet_exec.execute(0, state.task_ctx())?.next().await;
 
             if let Some(expected_row_num) = expected_row_num {
                 let batch = results.unwrap()?;
@@ -1372,14 +1365,16 @@ mod tests {
         }
 
         let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
 
         let meta = local_unpartitioned_file(filename);
 
         let store = Arc::new(LocalFileSystem::new()) as _;
-        let file_schema = ParquetFormat::new(session_ctx.config_options())
-            .infer_schema(&store, &[meta.clone()])
+        let file_schema = ParquetFormat::default()
+            .infer_schema(&state, &store, &[meta.clone()])
             .await?;
 
         let group_empty = vec![vec![file_range(&meta, 0, 5)]];
@@ -1389,22 +1384,9 @@ mod tests {
             file_range(&meta, 5, i64::MAX),
         ]];
 
-        assert_parquet_read(
-            group_empty,
-            None,
-            session_ctx.task_ctx(),
-            file_schema.clone(),
-        )
-        .await?;
-        assert_parquet_read(
-            group_contain,
-            Some(8),
-            session_ctx.task_ctx(),
-            file_schema.clone(),
-        )
-        .await?;
-        assert_parquet_read(group_all, Some(8), session_ctx.task_ctx(), file_schema)
-            .await?;
+        assert_parquet_read(&state, group_empty, None, file_schema.clone()).await?;
+        assert_parquet_read(&state, group_contain, Some(8), file_schema.clone()).await?;
+        assert_parquet_read(&state, group_all, Some(8), file_schema).await?;
 
         Ok(())
     }
@@ -1412,21 +1394,19 @@ mod tests {
     #[tokio::test]
     async fn parquet_exec_with_partition() -> Result<()> {
         let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
 
         let object_store_url = ObjectStoreUrl::local_filesystem();
-        let store = session_ctx
-            .runtime_env()
-            .object_store(&object_store_url)
-            .unwrap();
+        let store = state.runtime_env.object_store(&object_store_url).unwrap();
 
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
 
         let meta = local_unpartitioned_file(filename);
 
-        let schema = ParquetFormat::new(session_ctx.config_options())
-            .infer_schema(&store, &[meta.clone()])
+        let schema = ParquetFormat::default()
+            .infer_schema(&state, &store, &[meta.clone()])
             .await
             .unwrap();
 
@@ -1455,7 +1435,6 @@ mod tests {
                     ("month".to_owned(), partition_type_wrap(DataType::Utf8)),
                     ("day".to_owned(), partition_type_wrap(DataType::Utf8)),
                 ],
-                config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
             },
             None,
@@ -1490,7 +1469,7 @@ mod tests {
     #[tokio::test]
     async fn parquet_exec_with_error() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
         let location = Path::from_filesystem_path(".")
             .unwrap()
             .child("invalid.parquet");
@@ -1515,14 +1494,13 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
             },
             None,
             None,
         );
 
-        let mut results = parquet_exec.execute(0, task_ctx)?;
+        let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();
         // invalid file should produce an error to that effect
         assert_contains!(batch.unwrap_err().to_string(), "invalid.parquet not found");

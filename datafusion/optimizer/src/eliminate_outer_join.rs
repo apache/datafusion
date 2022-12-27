@@ -68,12 +68,12 @@ impl OptimizerRule for EliminateOuterJoin {
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         match plan {
-            LogicalPlan::Filter(filter) => match filter.input().as_ref() {
+            LogicalPlan::Filter(filter) => match filter.input.as_ref() {
                 LogicalPlan::Join(join) => {
                     let mut non_nullable_cols: Vec<Column> = vec![];
 
                     extract_non_nullable_columns(
-                        filter.predicate(),
+                        &filter.predicate,
                         &mut non_nullable_cols,
                         join.left.schema(),
                         join.right.schema(),
@@ -309,7 +309,7 @@ mod tests {
         Operator::{And, Or},
     };
 
-    fn assert_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
+    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
         assert_optimized_plan_eq(Arc::new(EliminateOuterJoin::new()), plan, expected)
     }
 
@@ -333,7 +333,7 @@ mod tests {
         \n  Left Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
-        assert_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -356,7 +356,7 @@ mod tests {
         \n  Inner Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
-        assert_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -383,7 +383,7 @@ mod tests {
         \n  Inner Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
-        assert_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -410,7 +410,7 @@ mod tests {
         \n  Inner Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
-        assert_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -437,6 +437,6 @@ mod tests {
         \n  Inner Join: t1.a = t2.a\
         \n    TableScan: t1\
         \n    TableScan: t2";
-        assert_eq(&plan, expected)
+        assert_optimized_plan_equal(&plan, expected)
     }
 }

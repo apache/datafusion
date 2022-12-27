@@ -1235,6 +1235,8 @@ pub struct Values {
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
 #[derive(Clone)]
+// mark non_exhaustive to encourage use of try_new/new()
+#[non_exhaustive]
 pub struct Projection {
     /// The list of expressions
     pub expr: Vec<Expr>,
@@ -1298,6 +1300,8 @@ impl Projection {
 
 /// Aliased subquery
 #[derive(Clone)]
+// mark non_exhaustive to encourage use of try_new/new()
+#[non_exhaustive]
 pub struct SubqueryAlias {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -1381,16 +1385,6 @@ impl Filter {
             LogicalPlan::Filter(it) => Ok(it),
             _ => plan_err!("Could not coerce into Filter!"),
         }
-    }
-
-    /// Access the filter predicate expression
-    pub fn predicate(&self) -> &Expr {
-        &self.predicate
-    }
-
-    /// Access the filter input plan
-    pub fn input(&self) -> &Arc<LogicalPlan> {
-        &self.input
     }
 }
 
@@ -1571,6 +1565,8 @@ pub struct Distinct {
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
 #[derive(Clone)]
+// mark non_exhaustive to encourage use of try_new/new()
+#[non_exhaustive]
 pub struct Aggregate {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
