@@ -90,7 +90,8 @@ message CsvFormat {
 }
 
 message ParquetFormat {
-  bool enable_pruning = 1;
+  // Used to be bool enable_pruning = 1;
+  reserved 1;
 }
 
 message AvroFormat {}
@@ -186,7 +187,7 @@ message PrepareNode {
   string name = 1;
   repeated ArrowType data_types = 2;
   LogicalPlanNode input = 3;
- }
+}
 
 message CreateCatalogSchemaNode {
   string schema_name = 1;
@@ -445,79 +446,79 @@ message InListNode {
 }
 
 enum ScalarFunction {
-  Abs=0;
-  Acos=1;
-  Asin=2;
-  Atan=3;
-  Ascii=4;
-  Ceil=5;
-  Cos=6;
-  Digest=7;
-  Exp=8;
-  Floor=9;
-  Ln=10;
-  Log=11;
-  Log10=12;
-  Log2=13;
-  Round=14;
-  Signum=15;
-  Sin=16;
-  Sqrt=17;
-  Tan=18;
-  Trunc=19;
-  Array=20;
-  RegexpMatch=21;
-  BitLength=22;
-  Btrim=23;
-  CharacterLength=24;
-  Chr=25;
-  Concat=26;
-  ConcatWithSeparator=27;
-  DatePart=28;
-  DateTrunc=29;
-  InitCap=30;
-  Left=31;
-  Lpad=32;
-  Lower=33;
-  Ltrim=34;
-  MD5=35;
-  NullIf=36;
-  OctetLength=37;
-  Random=38;
-  RegexpReplace=39;
-  Repeat=40;
-  Replace=41;
-  Reverse=42;
-  Right=43;
-  Rpad=44;
-  Rtrim=45;
-  SHA224=46;
-  SHA256=47;
-  SHA384=48;
-  SHA512=49;
-  SplitPart=50;
-  StartsWith=51;
-  Strpos=52;
-  Substr=53;
-  ToHex=54;
-  ToTimestamp=55;
-  ToTimestampMillis=56;
-  ToTimestampMicros=57;
-  ToTimestampSeconds=58;
-  Now=59;
-  Translate=60;
-  Trim=61;
-  Upper=62;
-  Coalesce=63;
-  Power=64;
-  StructFun=65;
-  FromUnixtime=66;
-  Atan2=67;
-  DateBin=68;
-  ArrowTypeof=69;
-  CurrentDate=70;
-  CurrentTime=71;
-  Uuid=72;
+  Abs = 0;
+  Acos = 1;
+  Asin = 2;
+  Atan = 3;
+  Ascii = 4;
+  Ceil = 5;
+  Cos = 6;
+  Digest = 7;
+  Exp = 8;
+  Floor = 9;
+  Ln = 10;
+  Log = 11;
+  Log10 = 12;
+  Log2 = 13;
+  Round = 14;
+  Signum = 15;
+  Sin = 16;
+  Sqrt = 17;
+  Tan = 18;
+  Trunc = 19;
+  Array = 20;
+  RegexpMatch = 21;
+  BitLength = 22;
+  Btrim = 23;
+  CharacterLength = 24;
+  Chr = 25;
+  Concat = 26;
+  ConcatWithSeparator = 27;
+  DatePart = 28;
+  DateTrunc = 29;
+  InitCap = 30;
+  Left = 31;
+  Lpad = 32;
+  Lower = 33;
+  Ltrim = 34;
+  MD5 = 35;
+  NullIf = 36;
+  OctetLength = 37;
+  Random = 38;
+  RegexpReplace = 39;
+  Repeat = 40;
+  Replace = 41;
+  Reverse = 42;
+  Right = 43;
+  Rpad = 44;
+  Rtrim = 45;
+  SHA224 = 46;
+  SHA256 = 47;
+  SHA384 = 48;
+  SHA512 = 49;
+  SplitPart = 50;
+  StartsWith = 51;
+  Strpos = 52;
+  Substr = 53;
+  ToHex = 54;
+  ToTimestamp = 55;
+  ToTimestampMillis = 56;
+  ToTimestampMicros = 57;
+  ToTimestampSeconds = 58;
+  Now = 59;
+  Translate = 60;
+  Trim = 61;
+  Upper = 62;
+  Coalesce = 63;
+  Power = 64;
+  StructFun = 65;
+  FromUnixtime = 66;
+  Atan2 = 67;
+  DateBin = 68;
+  ArrowTypeof = 69;
+  CurrentDate = 70;
+  CurrentTime = 71;
+  Uuid = 72;
 }
 
 message ScalarFunctionNode {
@@ -533,18 +534,18 @@ enum AggregateFunction {
   COUNT = 4;
   APPROX_DISTINCT = 5;
   ARRAY_AGG = 6;
-  VARIANCE=7;
-  VARIANCE_POP=8;
-  COVARIANCE=9;
-  COVARIANCE_POP=10;
-  STDDEV=11;
-  STDDEV_POP=12;
-  CORRELATION=13;
+  VARIANCE = 7;
+  VARIANCE_POP = 8;
+  COVARIANCE = 9;
+  COVARIANCE_POP = 10;
+  STDDEV = 11;
+  STDDEV_POP = 12;
+  CORRELATION = 13;
   APPROX_PERCENTILE_CONT = 14;
-  APPROX_MEDIAN=15;
+  APPROX_MEDIAN = 15;
   APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
   GROUPING = 17;
-  MEDIAN=18;
+  MEDIAN = 18;
 }
 
 message AggregateExprNode {
@@ -692,30 +693,30 @@ message Field {
 }
 
 message FixedSizeBinary{
-    int32 length = 1;
+  int32 length = 1;
 }
 
 message Timestamp{
-    TimeUnit time_unit = 1;
-    string timezone = 2;
+  TimeUnit time_unit = 1;
+  string timezone = 2;
 }
 
 enum DateUnit{
-    Day = 0;
-    DateMillisecond = 1;
+  Day = 0;
+  DateMillisecond = 1;
 }
 
 enum TimeUnit{
-    Second = 0;
-    Millisecond = 1;
-    Microsecond = 2;
-    Nanosecond = 3;
+  Second = 0;
+  Millisecond = 1;
+  Microsecond = 2;
+  Nanosecond = 3;
 }
 
 enum IntervalUnit{
-    YearMonth = 0;
-    DayTime = 1;
-    MonthDayNano = 2;
+  YearMonth = 0;
+  DayTime = 1;
+  MonthDayNano = 2;
 }
 
 message Decimal{
@@ -725,21 +726,21 @@ message Decimal{
 }
 
 message List{
-    Field field_type = 1;
+  Field field_type = 1;
 }
 
 message FixedSizeList{
-    Field field_type = 1;
-    int32 list_size = 2;
+  Field field_type = 1;
+  int32 list_size = 2;
 }
 
 message Dictionary{
-    ArrowType key = 1;
-    ArrowType value = 2;
+  ArrowType key = 1;
+  ArrowType value = 2;
 }
 
 message Struct{
-    repeated Field sub_field_types = 1;
+  repeated Field sub_field_types = 1;
 }
 
 enum UnionMode{
@@ -748,17 +749,17 @@ enum UnionMode{
 }
 
 message Union{
-    repeated Field union_types = 1;
-    UnionMode union_mode = 2;
-    repeated int32 type_ids = 3;
+  repeated Field union_types = 1;
+  UnionMode union_mode = 2;
+  repeated int32 type_ids = 3;
 }
 
 message ScalarListValue{
-    // encode null explicitly to distinguish a list with a null value
-    // from a list with no values)
-    bool is_null = 3;
-    Field field = 1;
-    repeated ScalarValue values = 2;
+  // encode null explicitly to distinguish a list with a null value
+  // from a list with no values)
+  bool is_null = 3;
+  Field field = 1;
+  repeated ScalarValue values = 2;
 }
 
 message ScalarTime32Value {
@@ -805,8 +806,8 @@ message StructValue {
 }
 
 message ScalarFixedSizeBinary{
-    bytes values =  1;
-    int32 length = 2;
+  bytes values = 1;
+  int32 length = 2;
 }
 
 message ScalarValue{
@@ -814,42 +815,42 @@ message ScalarValue{
   reserved 19;
 
   oneof value {
-        // was PrimitiveScalarType null_value = 19;
-        // Null value of any type
-        ArrowType null_value = 33;
+    // was PrimitiveScalarType null_value = 19;
+    // Null value of any type
+    ArrowType null_value = 33;
 
-        bool   bool_value = 1;
-        string utf8_value = 2;
-        string large_utf8_value = 3;
-        int32  int8_value = 4;
-        int32  int16_value = 5;
-        int32  int32_value = 6;
-        int64  int64_value = 7;
-        uint32 uint8_value = 8;
-        uint32 uint16_value = 9;
-        uint32 uint32_value = 10;
-        uint64 uint64_value = 11;
-        float  float32_value = 12;
-        double float64_value = 13;
-        // Literal Date32 value always has a unit of day
-        int32  date_32_value = 14;
-        ScalarTime32Value time32_value = 15;
-        ScalarListValue list_value = 17;
-        //WAS: ScalarType null_list_value = 18;
+    bool   bool_value = 1;
+    string utf8_value = 2;
+    string large_utf8_value = 3;
+    int32  int8_value = 4;
+    int32  int16_value = 5;
+    int32  int32_value = 6;
+    int64  int64_value = 7;
+    uint32 uint8_value = 8;
+    uint32 uint16_value = 9;
+    uint32 uint32_value = 10;
+    uint64 uint64_value = 11;
+    float  float32_value = 12;
+    double float64_value = 13;
+    // Literal Date32 value always has a unit of day
+    int32  date_32_value = 14;
+    ScalarTime32Value time32_value = 15;
+    ScalarListValue list_value = 17;
+    //WAS: ScalarType null_list_value = 18;
 
-        Decimal128 decimal128_value = 20;
-        int64 date_64_value = 21;
-        int32 interval_yearmonth_value = 24;
-        int64 interval_daytime_value = 25;
-        ScalarTimestampValue timestamp_value = 26;
-        ScalarDictionaryValue dictionary_value = 27;
-        bytes binary_value = 28;
-        bytes large_binary_value = 29;
-        ScalarTime64Value time64_value = 30;
-        IntervalMonthDayNanoValue interval_month_day_nano = 31;
-        StructValue struct_value = 32;
-        ScalarFixedSizeBinary fixed_size_binary_value = 34;
-    }
+    Decimal128 decimal128_value = 20;
+    int64 date_64_value = 21;
+    int32 interval_yearmonth_value = 24;
+    int64 interval_daytime_value = 25;
+    ScalarTimestampValue timestamp_value = 26;
+    ScalarDictionaryValue dictionary_value = 27;
+    bytes binary_value = 28;
+    bytes large_binary_value = 29;
+    ScalarTime64Value time64_value = 30;
+    IntervalMonthDayNanoValue interval_month_day_nano = 31;
+    StructValue struct_value = 32;
+    ScalarFixedSizeBinary fixed_size_binary_value = 34;
+  }
 }
 
 message Decimal128{
@@ -860,40 +861,40 @@ message Decimal128{
 
 // Serialized data type
 message ArrowType{
-    oneof arrow_type_enum {
-        EmptyMessage NONE = 1;     // arrow::Type::NA
-        EmptyMessage BOOL =  2;     // arrow::Type::BOOL
-        EmptyMessage UINT8 = 3;    // arrow::Type::UINT8
-        EmptyMessage INT8 =  4;     // arrow::Type::INT8
-        EmptyMessage UINT16 =5;   // represents arrow::Type fields in src/arrow/type.h
-        EmptyMessage INT16 = 6;
-        EmptyMessage UINT32 =7;
-        EmptyMessage INT32 = 8;
-        EmptyMessage UINT64 =9;
-        EmptyMessage INT64 =10 ;
-        EmptyMessage FLOAT16 =11 ;
-        EmptyMessage FLOAT32 =12 ;
-        EmptyMessage FLOAT64 =13 ;
-        EmptyMessage UTF8 =14 ;
-        EmptyMessage LARGE_UTF8 = 32;
-        EmptyMessage BINARY =15 ;
-        int32 FIXED_SIZE_BINARY =16 ;
-        EmptyMessage LARGE_BINARY = 31;
-        EmptyMessage DATE32 =17 ;
-        EmptyMessage DATE64 =18 ;
-        TimeUnit DURATION = 19;
-        Timestamp TIMESTAMP =20 ;
-        TimeUnit TIME32 =21 ;
-        TimeUnit TIME64 =22 ;
-        IntervalUnit INTERVAL =23 ;
-        Decimal DECIMAL =24 ;
-        List LIST =25;
-        List LARGE_LIST = 26;
-        FixedSizeList FIXED_SIZE_LIST = 27;
-        Struct STRUCT =28;
-        Union UNION =29;
-        Dictionary DICTIONARY =30;
-    }
+  oneof arrow_type_enum {
+    EmptyMessage NONE = 1;     // arrow::Type::NA
+    EmptyMessage BOOL = 2;     // arrow::Type::BOOL
+    EmptyMessage UINT8 = 3;    // arrow::Type::UINT8
+    EmptyMessage INT8 = 4;     // arrow::Type::INT8
+    EmptyMessage UINT16 = 5;   // represents arrow::Type fields in src/arrow/type.h
+    EmptyMessage INT16 = 6;
+    EmptyMessage UINT32 = 7;
+    EmptyMessage INT32 = 8;
+    EmptyMessage UINT64 = 9;
+    EmptyMessage INT64 = 10 ;
+    EmptyMessage FLOAT16 = 11 ;
+    EmptyMessage FLOAT32 = 12 ;
+    EmptyMessage FLOAT64 = 13 ;
+    EmptyMessage UTF8 = 14 ;
+    EmptyMessage LARGE_UTF8 = 32;
+    EmptyMessage BINARY = 15 ;
+    int32 FIXED_SIZE_BINARY = 16 ;
+    EmptyMessage LARGE_BINARY = 31;
+    EmptyMessage DATE32 = 17 ;
+    EmptyMessage DATE64 = 18 ;
+    TimeUnit DURATION = 19;
+    Timestamp TIMESTAMP = 20 ;
+    TimeUnit TIME32 = 21 ;
+    TimeUnit TIME64 = 22 ;
+    IntervalUnit INTERVAL = 23 ;
+    Decimal DECIMAL = 24 ;
+    List LIST = 25;
+    List LARGE_LIST = 26;
+    FixedSizeList FIXED_SIZE_LIST = 27;
+    Struct STRUCT = 28;
+    Union UNION = 29;
+    Dictionary DICTIONARY = 30;
+  }
 }
 
 //Useful for representing an empty enum variant in rust
@@ -1132,6 +1133,9 @@ message ScanLimit {
 }
 
 message FileScanExecConf {
+  // Was repeated ConfigOption options = 10;
+  reserved 10;
+
   repeated FileGroup file_groups = 1;
   Schema schema = 2;
   repeated uint32 projection = 4;
@@ -1140,12 +1144,6 @@ message FileScanExecConf {
   repeated string table_partition_cols = 7;
   string object_store_url = 8;
   repeated PhysicalSortExprNode output_ordering = 9;
-  repeated ConfigOption options = 10;
-}
-
-message ConfigOption {
-  string key = 1;
-  ScalarValue value = 2;
 }
 
 message ParquetScanExecNode {

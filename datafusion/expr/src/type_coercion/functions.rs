@@ -131,6 +131,10 @@ fn maybe_data_types(
 /// See the module level documentation for more detail on coercion.
 pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
     use self::DataType::*;
+
+    if type_into == type_from {
+        return true;
+    }
     // Null can convert to most of types
     match type_into {
         Int8 => matches!(type_from, Null | Int8),
@@ -173,9 +177,32 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
         Timestamp(TimeUnit::Nanosecond, None) => {
             matches!(type_from, Null | Timestamp(_, None))
         }
+        Date32 => {
+            matches!(type_from, Null | Timestamp(_, None))
+        }
         Utf8 | LargeUtf8 => true,
         Null => can_cast_types(type_from, type_into),
         _ => false,
+    }
+}
+
+/// Returns a common coerced datatype between 2 given datatypes
+///
+/// See the module level documentation for more detail on coercion.
+pub fn get_common_coerced_type(
+    left_datatype: DataType,
+    right_datatype: DataType,
+) -> Result<DataType> {
+    if left_datatype == right_datatype || can_coerce_from(&left_datatype, &right_datatype)
+    {
+        Ok(left_datatype)
+    } else if can_coerce_from(&right_datatype, &left_datatype) {
+        Ok(right_datatype)
+    } else {
+        Err(DataFusionError::Plan(format!(
+            "Datatypes cannot be casted into common type {:?} <-> {:?}",
+            left_datatype, right_datatype
+        )))
     }
 }
 

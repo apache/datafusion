@@ -99,7 +99,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
         match plan {
             LogicalPlan::Filter(filter) => {
                 let (subqueries, other_exprs) =
-                    self.extract_subquery_exprs(filter.predicate(), config)?;
+                    self.extract_subquery_exprs(&filter.predicate, config)?;
 
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
@@ -107,7 +107,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 }
 
                 // iterate through all subqueries in predicate, turning each into a join
-                let mut cur_input = filter.input().as_ref().clone();
+                let mut cur_input = filter.input.as_ref().clone();
                 for subquery in subqueries {
                     if let Some(optimized_subquery) =
                         optimize_scalar(&subquery, &cur_input, &other_exprs, config)?
@@ -219,14 +219,14 @@ fn optimize_scalar(
 
     // if there were filters, we use that logical plan, otherwise the plan from the aggregate
     let input = if let Some(filter) = filter {
-        filter.input()
+        &filter.input
     } else {
         &aggr.input
     };
 
     // if there were filters, split and capture them
     let subqry_filter_exprs = if let Some(filter) = filter {
-        split_conjunction(filter.predicate())
+        split_conjunction(&filter.predicate)
     } else {
         vec![]
     };

@@ -75,7 +75,6 @@ impl PhysicalOptimizerRule for BasicEnforcement {
         let target_partitions = config.target_partitions();
         let top_down_join_key_reordering = config
             .config_options()
-            .read()
             .get_bool(OPT_TOP_DOWN_JOIN_KEY_REORDERING)
             .unwrap_or_default();
         let new_plan = if top_down_join_key_reordering {
@@ -1013,7 +1012,6 @@ mod tests {
     use std::ops::Deref;
 
     use super::*;
-    use crate::config::ConfigOptions;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::physical_plan::aggregates::{
@@ -1053,7 +1051,6 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
                 output_ordering,
             },
             None,

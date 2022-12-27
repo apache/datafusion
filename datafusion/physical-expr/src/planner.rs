@@ -28,6 +28,7 @@ use crate::{
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::Cast;
+use datafusion_expr::type_coercion::functions::get_common_coerced_type;
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
 };
@@ -198,9 +199,16 @@ pub fn create_physical_expr(
                     input_schema,
                 )?)),
                 _ => {
-                    // assume that we can coerce both sides into a common type
-                    // and then perform a binary operation
-                    binary(lhs, *op, rhs, input_schema)
+                    let target_datatype = get_common_coerced_type(
+                        lhs.data_type(input_schema)?,
+                        rhs.data_type(input_schema)?,
+                    )?;
+                    binary(
+                        expressions::cast(lhs, input_schema, target_datatype.clone())?,
+                        *op,
+                        expressions::cast(rhs, input_schema, target_datatype)?,
+                        input_schema,
+                    )
                 }
             }
         }
