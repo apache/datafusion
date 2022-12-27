@@ -52,6 +52,7 @@ fn init() {
 }
 
 #[cfg(not(target_family = "windows"))]
+// Use multi-threaded executor as this test consumes CPU
 #[tokio::test(flavor = "multi_thread")]
 async fn single_file() {
     // Only create the parquet file once as it is fairly large
@@ -223,7 +224,9 @@ async fn single_file() {
     set.spawn(async move { case.run().await });
 
     // Join all the cases.
-    while let Some(_) = set.join_next().await {}
+    while let Some(result) = set.join_next().await {
+      result.unwrap()
+    }
 }
 
 #[cfg(not(target_family = "windows"))]
