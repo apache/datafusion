@@ -198,8 +198,13 @@ pub fn create_physical_expr(
                     input_schema,
                 )?)),
                 _ => {
-                    // we have coerced both sides into a common type in the logical phase,
-                    // and then perform a binary operation
+                    // Note that the logical planner is responsible
+                    // for type coercion on the arguments (e.g. if one
+                    // argument was originally Int32 and one was
+                    // Int64 they will both be coerced to Int64).
+                    //
+                    // There should be no coercion during physical
+                    // planning.
                     binary(lhs, *op, rhs, input_schema)
                 }
             }
