@@ -443,10 +443,15 @@ impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
             Index::DOUBLE(index) => Some(Arc::new(Int64Array::from_iter(
                 index.indexes.iter().map(|x| x.null_count),
             ))),
-            Index::INT96(_) | Index::BYTE_ARRAY(_) | Index::FIXED_LEN_BYTE_ARRAY(_) => {
-                // Todo support these types
-                None
-            }
+            Index::INT96(index) => Some(Arc::new(Int64Array::from_iter(
+                index.indexes.iter().map(|x| x.null_count),
+            ))),
+            Index::BYTE_ARRAY(index) => Some(Arc::new(Int64Array::from_iter(
+                index.indexes.iter().map(|x| x.null_count),
+            ))),
+            Index::FIXED_LEN_BYTE_ARRAY(index) => Some(Arc::new(Int64Array::from_iter(
+                index.indexes.iter().map(|x| x.null_count),
+            ))),
         }
     }
 }
