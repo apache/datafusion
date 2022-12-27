@@ -269,7 +269,6 @@ async fn single_file_small_data_pages() {
     //     page 3:                    DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: nxihlfujkdzymexwpqurhawwchvkdrntixjs, max: xacatvakpxztzuucoxhjiofxykryoxc, num_nulls not defined] CRC:[none] SZ:9 VC:84
     // ```
 
-
     TestCase::new(&test_parquet_file)
         .with_name("selective")
         // predicate is chosen carefully to prune all bar 0-2 and 1-0
