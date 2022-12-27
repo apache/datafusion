@@ -24,6 +24,7 @@ use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
+use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::inline_table_scan::InlineTableScan;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
@@ -237,6 +238,7 @@ impl Optimizer {
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
             Arc::new(InlineTableScan::new()),
             Arc::new(TypeCoercion::new()),
+            Arc::new(ExtractEquijoinPredicate::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(DecorrelateWhereExists::new()),
@@ -502,26 +504,27 @@ mod tests {
     }
 
     #[test]
-    fn generate_same_schema_different_metadata() {
+    fn generate_same_schema_different_metadata() -> Result<()> {
         // if the plan creates more metadata than previously (because
         // some wrapping functions are removed, etc) do not error
         let opt = Optimizer::with_rules(vec![Arc::new(GetTableScanRule {})]);
         let config = OptimizerContext::new().with_skip_failing_rules(false);
 
-        let input = Arc::new(test_table_scan().unwrap());
+        let input = Arc::new(test_table_scan()?);
         let input_schema = input.schema().clone();
 
-        let plan = LogicalPlan::Projection(Projection {
-            expr: vec![col("a"), col("b"), col("c")],
+        let plan = LogicalPlan::Projection(Projection::try_new_with_schema(
+            vec![col("a"), col("b"), col("c")],
             input,
-            schema: add_metadata_to_fields(input_schema.as_ref()),
-        });
+            add_metadata_to_fields(input_schema.as_ref()),
+        )?);
 
         // optimizing should be ok, but the schema will have changed  (no metadata)
         assert_ne!(plan.schema().as_ref(), input_schema.as_ref());
-        let optimized_plan = opt.optimize(&plan, &config, &observe).unwrap();
+        let optimized_plan = opt.optimize(&plan, &config, &observe)?;
         // metadata was removed
         assert_eq!(optimized_plan.schema().as_ref(), input_schema.as_ref());
+        Ok(())
     }
 
     fn add_metadata_to_fields(schema: &DFSchema) -> DFSchemaRef {

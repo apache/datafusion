@@ -43,7 +43,7 @@ use datafusion_common::{
 };
 use datafusion_common::{OwnedTableReference, TableReference};
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort, TryCast,
+    self, Between, BinaryExpr, Case, Cast, GroupingSet, Like, Sort, TryCast,
 };
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
@@ -58,9 +58,8 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::logical_plan::{Filter, Prepare, Subquery};
 use datafusion_expr::utils::{
-    can_hash, check_all_column_from_schema, expand_qualified_wildcard, expand_wildcard,
-    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_column_exprs,
-    find_window_exprs, COUNT_STAR_EXPANSION,
+    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
+    find_aggregate_exprs, find_column_exprs, find_window_exprs, COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::Expr::Alias;
 use datafusion_expr::{
@@ -806,7 +805,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         match constraint {
             JoinConstraint::On(sql_expr) => {
-                let mut keys: Vec<(Expr, Expr)> = vec![];
                 let join_schema = left.schema().join(right.schema())?;
 
                 // parse ON expression
@@ -820,47 +818,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 // normalize all columns in expression
                 let using_columns = expr.to_columns()?;
-                let normalized_expr = normalize_col_with_schemas(
+                let filter = normalize_col_with_schemas(
                     expr,
                     &[left.schema(), right.schema()],
                     &[using_columns],
                 )?;
 
-                // expression that didn't match equi-join pattern
-                let mut filter = vec![];
-
-                // extract join keys
-                extract_join_keys(
-                    normalized_expr,
-                    &mut keys,
-                    &mut filter,
-                    left.schema(),
-                    right.schema(),
-                )?;
-
-                let (left_keys, right_keys): (Vec<Expr>, Vec<Expr>) =
-                    keys.into_iter().unzip();
-
-                let join_filter = filter.into_iter().reduce(Expr::and);
-
-                if left_keys.is_empty() {
-                    // TODO should not use cross join when the join_filter exists
-                    // https://github.com/apache/arrow-datafusion/issues/4363
-                    let mut join = LogicalPlanBuilder::from(left).cross_join(right)?;
-                    if let Some(filter) = join_filter {
-                        join = join.filter(filter)?;
-                    }
-                    join.build()
-                } else {
-                    LogicalPlanBuilder::from(left)
-                        .join_with_expr_keys(
-                            right,
-                            join_type,
-                            (left_keys, right_keys),
-                            join_filter,
-                        )?
-                        .build()
-                }
+                LogicalPlanBuilder::from(left)
+                    .join(
+                        right,
+                        join_type,
+                        (Vec::<Column>::new(), Vec::<Column>::new()),
+                        Some(filter),
+                    )?
+                    .build()
             }
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
@@ -1171,10 +1142,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )?
         } else {
             match having_expr_opt {
-                    Some(having_expr) => return Err(DataFusionError::Plan(
-                        format!("HAVING clause references: {} must appear in the GROUP BY clause or be used in an aggregate function", having_expr))),
-                    None => (plan, select_exprs, having_expr_opt)
-                }
+                Some(having_expr) => return Err(DataFusionError::Plan(
+                    format!("HAVING clause references: {} must appear in the GROUP BY clause or be used in an aggregate function", having_expr))),
+                None => (plan, select_exprs, having_expr_opt)
+            }
         };
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
@@ -1846,7 +1817,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 return Err(DataFusionError::Internal(format!(
                     "Invalid placeholder, not a number: {}",
                     param
-                )))
+                )));
             }
         };
         // Check if the placeholder is in the parameter list
@@ -1966,8 +1937,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         r @ OwnedTableReference::Bare { .. } |
                         r @ OwnedTableReference::Full { .. } => {
                             return Err(DataFusionError::Plan(format!(
-                            "Unsupported compound identifier '{:?}'", r,
-                            )))
+                                "Unsupported compound identifier '{:?}'", r,
+                            )));
                         }
                     };
 
@@ -2166,7 +2137,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     negated,
                     Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
                     Box::new(pattern),
-                    escape_char
+                    escape_char,
                 )))
             }
 
@@ -2260,9 +2231,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::AggregateExpressionWithFilter { expr, filter } => {
                 match self.sql_expr_to_logical_expr(*expr, schema, planner_context)? {
-                    Expr::AggregateFunction {
+                    Expr::AggregateFunction(expr::AggregateFunction {
                         fun, args, distinct, ..
-                    } => Ok(Expr::AggregateFunction { fun, args, distinct, filter: Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, planner_context)?)) }),
+                    }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new( fun, args, distinct, Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, planner_context)?)) ))),
                     _ => Err(DataFusionError::Internal("AggregateExpressionWithFilter expression was not an AggregateFunction".to_string()))
                 }
             }
@@ -2334,24 +2305,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 schema,
                             )?;
 
-                            Expr::WindowFunction {
-                                fun: WindowFunction::AggregateFunction(
+                            Expr::WindowFunction(expr::WindowFunction::new(
+                                 WindowFunction::AggregateFunction(
                                     aggregate_fun,
                                 ),
                                 args,
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            }
+                            ))
                         }
                         _ => {
-                            Expr::WindowFunction {
+                            Expr::WindowFunction(expr::WindowFunction::new(
                                 fun,
-                                args: self.function_args_to_expr(function.args, schema)?,
+                                self.function_args_to_expr(function.args, schema)?,
                                 partition_by,
                                 order_by,
                                 window_frame,
-                            }
+                            ))
                         }
                     };
                     return Ok(expr);
@@ -2361,12 +2332,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if let Ok(fun) = AggregateFunction::from_str(&name) {
                     let distinct = function.distinct;
                     let (fun, args) = self.aggregate_fn_to_expr(fun, function.args, schema)?;
-                    return Ok(Expr::AggregateFunction {
+                    return Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
                         fun,
-                        distinct,
                         args,
-                        filter: None,
-                    });
+                        distinct,
+                        None,
+                    )));
                 };
 
                 // finally, user-defined functions (UDF) and UDAF
@@ -2389,13 +2360,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
 
-            SQLExpr::Floor{expr, field: _field} => {
+            SQLExpr::Floor { expr, field: _field } => {
                 let fun = BuiltinScalarFunction::Floor;
                 let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
                 Ok(Expr::ScalarFunction { fun, args })
             }
 
-            SQLExpr::Ceil{expr, field: _field} => {
+            SQLExpr::Ceil { expr, field: _field } => {
                 let fun = BuiltinScalarFunction::Ceil;
                 let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
                 Ok(Expr::ScalarFunction { fun, args })
@@ -2528,12 +2499,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // next, aggregate built-ins
         let fun = AggregateFunction::ArrayAgg;
 
-        Ok(Expr::AggregateFunction {
-            fun,
-            distinct,
-            args,
-            filter: None,
-        })
+        Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
+            fun, args, distinct, None,
+        )))
     }
 
     fn function_args_to_expr(
@@ -2701,7 +2669,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported Value {}",
                         value[0]
-                    )))
+                    )));
                 }
             },
             // for capture signed number e.g. +8, -8
@@ -2712,14 +2680,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     return Err(DataFusionError::Plan(format!(
                         "Unsupported Value {}",
                         value[0]
-                    )))
+                    )));
                 }
             },
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "Unsupported Value {}",
                     value[0]
-                )))
+                )));
             }
         };
 
@@ -2951,7 +2919,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             return Err(DataFusionError::Internal(format!(
                                 "Incorrect data type for time_zone: {}",
                                 v.get_datatype(),
-                            )))
+                            )));
                         }
                         None => return Err(DataFusionError::Internal(
                             "Config Option datafusion.execution.time_zone doesn't exist"
@@ -2979,7 +2947,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             SQLDataType::Numeric(exact_number_info)
-            |SQLDataType::Decimal(exact_number_info) => {
+            | SQLDataType::Decimal(exact_number_info) => {
                 let (precision, scale) = match *exact_number_info {
                     ExactNumberInfo::None => (None, None),
                     ExactNumberInfo::Precision(precision) => (Some(precision), None),
@@ -3011,12 +2979,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharacterVarying(_)
             | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
-                | SQLDataType::CharLargeObject(_)
+            | SQLDataType::CharLargeObject(_)
             // precision is not supported
-                | SQLDataType::Timestamp(Some(_), _)
+            | SQLDataType::Timestamp(Some(_), _)
             // precision is not supported
-                | SQLDataType::Time(Some(_), _)
-                | SQLDataType::Dec(_)
+            | SQLDataType::Time(Some(_), _)
+            | SQLDataType::Dec(_)
             | SQLDataType::Clob(_) => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL type {:?}",
                 sql_type
@@ -3098,113 +3066,6 @@ pub fn object_name_to_qualifier(sql_table_name: &ObjectName) -> String {
         })
         .collect::<Vec<_>>()
         .join(" AND ")
-}
-
-/// Extracts equijoin ON condition be a single Eq or multiple conjunctive Eqs
-/// Filters matching this pattern are added to `accum`
-/// Filters that don't match this pattern are added to `accum_filter`
-/// Examples:
-/// ```text
-/// foo = bar => accum=[(foo, bar)] accum_filter=[]
-/// foo = bar AND bar = baz => accum=[(foo, bar), (bar, baz)] accum_filter=[]
-/// foo = bar AND baz > 1 => accum=[(foo, bar)] accum_filter=[baz > 1]
-///
-/// For equijoin join key, assume we have tables -- a(c0, c1 c2) and b(c0, c1, c2):
-/// (a.c0 = 10) => accum=[], accum_filter=[a.c0 = 10]
-/// (a.c0 + 1 = b.c0 * 2) => accum=[(a.c0 + 1, b.c0 * 2)],  accum_filter=[]
-/// (a.c0 + b.c0 = 10) =>  accum=[], accum_filter=[a.c0 + b.c0 = 10]
-/// ```
-fn extract_join_keys(
-    expr: Expr,
-    accum: &mut Vec<(Expr, Expr)>,
-    accum_filter: &mut Vec<Expr>,
-    left_schema: &Arc<DFSchema>,
-    right_schema: &Arc<DFSchema>,
-) -> Result<()> {
-    match &expr {
-        Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
-            Operator::Eq => {
-                let left = *left.clone();
-                let right = *right.clone();
-                let left_using_columns = left.to_columns()?;
-                let right_using_columns = right.to_columns()?;
-
-                // When one side key does not contain columns, we need move this expression to filter.
-                // For example: a = 1, a = now() + 10.
-                if left_using_columns.is_empty() || right_using_columns.is_empty() {
-                    accum_filter.push(expr);
-                    return Ok(());
-                }
-
-                // Checking left join key is from left schema, right join key is from right schema, or the opposite.
-                let l_is_left = check_all_column_from_schema(
-                    &left_using_columns,
-                    left_schema.clone(),
-                )?;
-                let r_is_right = check_all_column_from_schema(
-                    &right_using_columns,
-                    right_schema.clone(),
-                )?;
-
-                let r_is_left_and_l_is_right = || {
-                    let result = check_all_column_from_schema(
-                        &right_using_columns,
-                        left_schema.clone(),
-                    )? && check_all_column_from_schema(
-                        &left_using_columns,
-                        right_schema.clone(),
-                    )?;
-
-                    Result::Ok(result)
-                };
-
-                let join_key_pair = match (l_is_left, r_is_right) {
-                    (true, true) => Some((left, right)),
-                    (_, _) if r_is_left_and_l_is_right()? => Some((right, left)),
-                    _ => None,
-                };
-
-                if let Some((left_expr, right_expr)) = join_key_pair {
-                    let left_expr_type = left_expr.get_type(left_schema)?;
-                    let right_expr_type = right_expr.get_type(right_schema)?;
-
-                    if can_hash(&left_expr_type) && can_hash(&right_expr_type) {
-                        accum.push((left_expr, right_expr));
-                    } else {
-                        accum_filter.push(expr);
-                    }
-                } else {
-                    accum_filter.push(expr);
-                }
-            }
-            Operator::And => {
-                if let Expr::BinaryExpr(BinaryExpr { left, op: _, right }) = expr {
-                    extract_join_keys(
-                        *left,
-                        accum,
-                        accum_filter,
-                        left_schema,
-                        right_schema,
-                    )?;
-                    extract_join_keys(
-                        *right,
-                        accum,
-                        accum_filter,
-                        left_schema,
-                        right_schema,
-                    )?;
-                }
-            }
-            _other => {
-                accum_filter.push(expr);
-            }
-        },
-        _other => {
-            accum_filter.push(expr);
-        }
-    }
-
-    Ok(())
 }
 
 /// Ensure any column reference of the expression is unambiguous.
@@ -4040,7 +3901,7 @@ mod tests {
             "Projection: col1, col2\
             \n  Projection: t.column1 AS col1, t.column2 AS col2\
             \n    SubqueryAlias: t\
-            \n      Values: (CAST(Utf8(\"2021-06-10 17:01:00Z\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2004-04-09\") AS Date32))"
+            \n      Values: (CAST(Utf8(\"2021-06-10 17:01:00Z\") AS Timestamp(Nanosecond, None)), CAST(Utf8(\"2004-04-09\") AS Date32))",
         );
     }
 
@@ -4288,7 +4149,7 @@ mod tests {
         let sql = "SELECT age, MIN(first_name) FROM person GROUP BY age + 1";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!("Plan(\"Projection references non-aggregate values: Expression person.age could not be resolved from available columns: person.age + Int64(1), MIN(person.first_name)\")",
-            format!("{:?}", err)
+                   format!("{:?}", err)
         );
     }
 
@@ -4625,9 +4486,9 @@ mod tests {
             JOIN orders \
             ON id = customer_id";
         let expected = "Projection: person.id, orders.order_id\
-        \n  Inner Join: person.id = orders.customer_id\
-        \n    TableScan: person\
-        \n    TableScan: orders";
+            \n  Inner Join:  Filter: person.id = orders.customer_id\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -4638,7 +4499,7 @@ mod tests {
             JOIN orders \
             ON id = customer_id AND order_id > 1 ";
         let expected = "Projection: person.id, orders.order_id\
-            \n  Inner Join: person.id = orders.customer_id Filter: orders.order_id > Int64(1)\
+            \n  Inner Join:  Filter: person.id = orders.customer_id AND orders.order_id > Int64(1)\
             \n    TableScan: person\
             \n    TableScan: orders";
 
@@ -4652,7 +4513,7 @@ mod tests {
             LEFT JOIN orders \
             ON id = customer_id AND order_id > 1 AND age < 30";
         let expected = "Projection: person.id, orders.order_id\
-            \n  Left Join: person.id = orders.customer_id Filter: orders.order_id > Int64(1) AND person.age < Int64(30)\
+            \n  Left Join:  Filter: person.id = orders.customer_id AND orders.order_id > Int64(1) AND person.age < Int64(30)\
             \n    TableScan: person\
             \n    TableScan: orders";
         quick_test(sql, expected);
@@ -4664,8 +4525,9 @@ mod tests {
             FROM person \
             RIGHT JOIN orders \
             ON id = customer_id AND id > 1 AND order_id < 100";
+
         let expected = "Projection: person.id, orders.order_id\
-            \n  Right Join: person.id = orders.customer_id Filter: person.id > Int64(1) AND orders.order_id < Int64(100)\
+            \n  Right Join:  Filter: person.id = orders.customer_id AND person.id > Int64(1) AND orders.order_id < Int64(100)\
             \n    TableScan: person\
             \n    TableScan: orders";
         quick_test(sql, expected);
@@ -4678,9 +4540,9 @@ mod tests {
             FULL JOIN orders \
             ON id = customer_id AND id > 1 AND order_id < 100";
         let expected = "Projection: person.id, orders.order_id\
-        \n  Full Join: person.id = orders.customer_id Filter: person.id > Int64(1) AND orders.order_id < Int64(100)\
-        \n    TableScan: person\
-        \n    TableScan: orders";
+            \n  Full Join:  Filter: person.id = orders.customer_id AND person.id > Int64(1) AND orders.order_id < Int64(100)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -4691,9 +4553,9 @@ mod tests {
             JOIN orders \
             ON person.id = orders.customer_id";
         let expected = "Projection: person.id, orders.order_id\
-        \n  Inner Join: person.id = orders.customer_id\
-        \n    TableScan: person\
-        \n    TableScan: orders";
+            \n  Inner Join:  Filter: person.id = orders.customer_id\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -4732,8 +4594,8 @@ mod tests {
             JOIN orders ON id = customer_id \
             JOIN lineitem ON o_item_id = l_item_id";
         let expected = "Projection: person.id, orders.order_id, lineitem.l_description\
-            \n  Inner Join: orders.o_item_id = lineitem.l_item_id\
-            \n    Inner Join: person.id = orders.customer_id\
+            \n  Inner Join:  Filter: orders.o_item_id = lineitem.l_item_id\
+            \n    Inner Join:  Filter: person.id = orders.customer_id\
             \n      TableScan: person\
             \n      TableScan: orders\
             \n    TableScan: lineitem";
@@ -5522,11 +5384,11 @@ mod tests {
     fn join_with_aliases() {
         let sql = "select peeps.id, folks.first_name from person as peeps join person as folks on peeps.id = folks.id";
         let expected = "Projection: peeps.id, folks.first_name\
-                                    \n  Inner Join: peeps.id = folks.id\
-                                    \n    SubqueryAlias: peeps\
-                                    \n      TableScan: person\
-                                    \n    SubqueryAlias: folks\
-                                    \n      TableScan: person";
+            \n  Inner Join:  Filter: peeps.id = folks.id\
+            \n    SubqueryAlias: peeps\
+            \n      TableScan: person\
+            \n    SubqueryAlias: folks\
+            \n      TableScan: person";
         quick_test(sql, expected);
     }
 
@@ -5848,10 +5710,9 @@ mod tests {
             FROM person \
             JOIN orders ON id = customer_id OR person.age > 30";
         let expected = "Projection: person.id, orders.order_id\
-            \n  Filter: person.id = orders.customer_id OR person.age > Int64(30)\
-            \n    CrossJoin:\
-            \n      TableScan: person\
-            \n      TableScan: orders";
+            \n  Inner Join:  Filter: person.id = orders.customer_id OR person.age > Int64(30)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -5861,7 +5722,7 @@ mod tests {
             FROM person \
             JOIN orders ON id = customer_id AND (person.age > 30 OR person.last_name = 'X')";
         let expected = "Projection: person.id, orders.order_id\
-            \n  Inner Join: person.id = orders.customer_id Filter: person.age > Int64(30) OR person.last_name = Utf8(\"X\")\
+            \n  Inner Join:  Filter: person.id = orders.customer_id AND (person.age > Int64(30) OR person.last_name = Utf8(\"X\"))\
             \n    TableScan: person\
             \n    TableScan: orders";
         quick_test(sql, expected);
@@ -5973,10 +5834,9 @@ mod tests {
             ON person.id = 10";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Filter: person.id = Int64(10)\
-        \n    CrossJoin:\
-        \n      TableScan: person\
-        \n      TableScan: orders";
+        \n  Inner Join:  Filter: person.id = Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -5988,9 +5848,9 @@ mod tests {
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n    TableScan: person\
-        \n    TableScan: orders";
+            \n  Inner Join:  Filter: orders.customer_id * Int64(2) = person.id + Int64(10)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
 
         quick_test(sql, expected);
     }
@@ -6003,9 +5863,9 @@ mod tests {
             ON person.id + 10 = orders.customer_id * 2";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n    TableScan: person\
-        \n    TableScan: orders";
+            \n  Inner Join:  Filter: person.id + Int64(10) = orders.customer_id * Int64(2)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6017,37 +5877,77 @@ mod tests {
             ON person.id + person.age + 10 = orders.customer_id * 2 - orders.price";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Inner Join: person.id + person.age + Int64(10) = orders.customer_id * Int64(2) - orders.price\
-        \n    TableScan: person\
-        \n    TableScan: orders";
+            \n  Inner Join:  Filter: person.id + person.age + Int64(10) = orders.customer_id * Int64(2) - orders.price\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
     #[test]
-    fn test_left_projection_expr_eq_join() {
+    fn test_left_expr_eq_join() {
         let sql = "SELECT id, order_id \
             FROM person \
             INNER JOIN orders \
             ON person.id + person.age + 10 = orders.customer_id";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Inner Join: person.id + person.age + Int64(10) = orders.customer_id\
-        \n    TableScan: person\
-        \n    TableScan: orders";
+            \n  Inner Join:  Filter: person.id + person.age + Int64(10) = orders.customer_id\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
     #[test]
-    fn test_right_projection_expr_eq_join() {
+    fn test_right_expr_eq_join() {
         let sql = "SELECT id, order_id \
             FROM person \
             INNER JOIN orders \
             ON person.id = orders.customer_id * 2 - orders.price";
 
         let expected = "Projection: person.id, orders.order_id\
-       \n  Inner Join: person.id = orders.customer_id * Int64(2) - orders.price\
-       \n    TableScan: person\
-       \n    TableScan: orders";
+            \n  Inner Join:  Filter: person.id = orders.customer_id * Int64(2) - orders.price\
+            \n    TableScan: person\
+            \n    TableScan: orders";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn test_noneq_with_filter_join() {
+        // inner join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person INNER JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Inner Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+        quick_test(sql, expected);
+        // left join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person LEFT JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Left Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+        quick_test(sql, expected);
+        // right join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person RIGHT JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Right Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
+        quick_test(sql, expected);
+        // full join
+        let sql = "SELECT person.id, person.first_name \
+        FROM person FULL JOIN orders \
+        ON person.age > 10";
+        let expected = "Projection: person.id, person.first_name\
+        \n  Full Join:  Filter: person.age > Int64(10)\
+        \n    TableScan: person\
+        \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6061,10 +5961,9 @@ mod tests {
             ON person.id = 10";
 
         let expected = "Projection: person.id, orders.order_id\
-        \n  Filter: person.id = Int64(10)\
-        \n    CrossJoin:\
-        \n      TableScan: person\
-        \n      TableScan: orders";
+            \n  Full Join:  Filter: person.id = Int64(10)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6076,9 +5975,9 @@ mod tests {
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀, orders.order_id, orders.customer_id, orders.o_item_id, orders.qty, orders.price, orders.delivered\
-        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n    TableScan: person\
-        \n    TableScan: orders";
+            \n  Inner Join:  Filter: orders.customer_id * Int64(2) = person.id + Int64(10)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6090,24 +5989,9 @@ mod tests {
             ON orders.customer_id * 2 = person.id + 10";
 
         let expected = "Projection: orders.customer_id * Int64(2), person.id + Int64(10)\
-        \n  Inner Join: person.id + Int64(10) = orders.customer_id * Int64(2)\
-        \n    TableScan: person\
-        \n    TableScan: orders";
-        quick_test(sql, expected);
-    }
-
-    #[test]
-    fn test_non_projetion_after_inner_join() {
-        // There's no need to add projection for left and right, so does adding projection after join.
-        let sql = "SELECT  person.id, person.age
-            FROM person
-            INNER JOIN orders
-            ON orders.customer_id = person.id";
-
-        let expected = "Projection: person.id, person.age\
-        \n  Inner Join: person.id = orders.customer_id\
-        \n    TableScan: person\
-        \n    TableScan: orders";
+            \n  Inner Join:  Filter: orders.customer_id * Int64(2) = person.id + Int64(10)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6120,9 +6004,9 @@ mod tests {
             ON person.id * 2 = orders.customer_id + 10 and person.id * 2 = orders.order_id";
 
         let expected = "Projection: person.id, person.age\
-        \n  Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id * Int64(2) = orders.order_id\
-        \n    TableScan: person\
-        \n    TableScan: orders";
+            \n  Inner Join:  Filter: person.id * Int64(2) = orders.customer_id + Int64(10) AND person.id * Int64(2) = orders.order_id\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6135,9 +6019,9 @@ mod tests {
             ON person.id * 2 = orders.customer_id + 10 and person.id =  orders.customer_id + 10";
 
         let expected = "Projection: person.id, person.age\
-        \n  Inner Join: person.id * Int64(2) = orders.customer_id + Int64(10), person.id = orders.customer_id + Int64(10)\
-        \n    TableScan: person\
-        \n    TableScan: orders";
+            \n  Inner Join:  Filter: person.id * Int64(2) = orders.customer_id + Int64(10) AND person.id = orders.customer_id + Int64(10)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 
@@ -6435,7 +6319,7 @@ mod tests {
             ScalarValue::Utf8(Some("xyz".to_string())),
         ];
         let expected_plan =
-        "Projection: person.id, person.age, Utf8(\"xyz\")\
+            "Projection: person.id, person.age, Utf8(\"xyz\")\
         \n  Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8(\"abc\")\
         \n    TableScan: person";
 
@@ -6472,7 +6356,7 @@ mod tests {
             ScalarValue::Float64(Some(300.0)),
         ];
         let expected_plan =
-        "Projection: person.id, SUM(person.age)\
+            "Projection: person.id, SUM(person.age)\
         \n  Filter: SUM(person.age) < Int32(10) AND SUM(person.age) > Int64(10) OR SUM(person.age) IN ([Float64(200), Float64(300)])\
         \n    Aggregate: groupBy=[[person.id]], aggr=[[SUM(person.age)]]\
         \n      Filter: person.salary > Float64(100)\
@@ -6555,9 +6439,9 @@ mod tests {
             ON cast(person.id as Int) = cast(orders.customer_id as Int)";
 
         let expected = "Projection: person.id, person.age\
-        \n  Inner Join: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
-        \n    TableScan: person\
-        \n    TableScan: orders";
+            \n  Inner Join:  Filter: CAST(person.id AS Int32) = CAST(orders.customer_id AS Int32)\
+            \n    TableScan: person\
+            \n    TableScan: orders";
         quick_test(sql, expected);
     }
 

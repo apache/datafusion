@@ -29,13 +29,13 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use parking_lot::RwLock;
 
 use datafusion_common::Result;
 
 use crate::config::ConfigOptions;
 use crate::datasource::streaming::{PartitionStream, StreamingTable};
 use crate::datasource::TableProvider;
+use crate::execution::context::TaskContext;
 use crate::logical_expr::TableType;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::SendableRecordBatchStream;
@@ -55,7 +55,6 @@ const DF_SETTINGS: &str = "df_settings";
 /// schema that can introspect on tables in the catalog_list
 pub(crate) struct CatalogWithInformationSchema {
     catalog_list: Weak<dyn CatalogList>,
-    config_options: Weak<RwLock<ConfigOptions>>,
     /// wrapped provider
     inner: Arc<dyn CatalogProvider>,
 }
@@ -63,14 +62,17 @@ pub(crate) struct CatalogWithInformationSchema {
 impl CatalogWithInformationSchema {
     pub(crate) fn new(
         catalog_list: Weak<dyn CatalogList>,
-        config_options: Weak<RwLock<ConfigOptions>>,
         inner: Arc<dyn CatalogProvider>,
     ) -> Self {
         Self {
             catalog_list,
-            config_options,
             inner,
         }
+    }
+
+    /// Return a reference to the wrapped provider
+    pub(crate) fn inner(&self) -> Arc<dyn CatalogProvider> {
+        self.inner.clone()
     }
 }
 
@@ -89,15 +91,10 @@ impl CatalogProvider for CatalogWithInformationSchema {
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
         if name.eq_ignore_ascii_case(INFORMATION_SCHEMA) {
-            Weak::upgrade(&self.catalog_list).and_then(|catalog_list| {
-                Weak::upgrade(&self.config_options).map(|config_options| {
-                    Arc::new(InformationSchemaProvider {
-                        config: InformationSchemaConfig {
-                            catalog_list,
-                            config_options,
-                        },
-                    }) as Arc<dyn SchemaProvider>
-                })
+            Weak::upgrade(&self.catalog_list).map(|catalog_list| {
+                Arc::new(InformationSchemaProvider {
+                    config: InformationSchemaConfig { catalog_list },
+                }) as Arc<dyn SchemaProvider>
             })
         } else {
             self.inner.schema(name)
@@ -127,7 +124,6 @@ struct InformationSchemaProvider {
 #[derive(Clone)]
 struct InformationSchemaConfig {
     catalog_list: Arc<dyn CatalogList>,
-    config_options: Arc<RwLock<ConfigOptions>>,
 }
 
 impl InformationSchemaConfig {
@@ -220,8 +216,12 @@ impl InformationSchemaConfig {
     }
 
     /// Construct the `information_schema.df_settings` virtual table
-    fn make_df_settings(&self, builder: &mut InformationSchemaDfSettingsBuilder) {
-        for (name, setting) in self.config_options.read().options() {
+    fn make_df_settings(
+        &self,
+        config_options: &ConfigOptions,
+        builder: &mut InformationSchemaDfSettingsBuilder,
+    ) {
+        for (name, setting) in config_options.options() {
             builder.add_setting(name, setting.to_string());
         }
     }
@@ -298,7 +298,7 @@ impl PartitionStream for InformationSchemaTables {
         &self.schema
     }
 
-    fn execute(&self) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
@@ -389,7 +389,7 @@ impl PartitionStream for InformationSchemaViews {
         &self.schema
     }
 
-    fn execute(&self) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
@@ -503,7 +503,7 @@ impl PartitionStream for InformationSchemaColumns {
         &self.schema
     }
 
-    fn execute(&self) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
@@ -690,15 +690,18 @@ impl PartitionStream for InformationSchemaDfSettings {
         &self.schema
     }
 
-    fn execute(&self) -> SendableRecordBatchStream {
-        let mut builder = self.builder();
+    fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
         let config = self.config.clone();
+        let mut builder = self.builder();
         Box::pin(RecordBatchStreamAdapter::new(
             self.schema.clone(),
             // TODO: Stream this
             futures::stream::once(async move {
                 // create a mem table with the names of tables
-                config.make_df_settings(&mut builder);
+                config.make_df_settings(
+                    ctx.session_config().config_options(),
+                    &mut builder,
+                );
                 Ok(builder.finish())
             }),
         ))

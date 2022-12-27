@@ -1077,3 +1077,17 @@ b 5
 c 4
 d 4
 e 4
+
+
+
+# array_agg_zero
+query U
+SELECT ARRAY_AGG([]);
+----
+[]
+
+# array_agg_one
+query U
+SELECT ARRAY_AGG([1]);
+----
+[[1]]

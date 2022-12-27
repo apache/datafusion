@@ -31,91 +31,6 @@ use rstest::rstest;
 use super::*;
 
 #[tokio::test]
-async fn information_schema_tables_not_exist_by_default() {
-    let ctx = SessionContext::new();
-
-    let err = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
-        .await
-        .unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        // Error propagates from SessionState::schema_for_ref
-        "Error during planning: failed to resolve schema: information_schema"
-    );
-}
-
-#[tokio::test]
-async fn information_schema_tables_no_tables() {
-    let ctx =
-        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
-
-    let result = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
-        .await
-        .unwrap();
-
-    let expected = vec![
-        "+---------------+--------------------+-------------+------------+",
-        "| table_catalog | table_schema       | table_name  | table_type |",
-        "+---------------+--------------------+-------------+------------+",
-        "| datafusion    | information_schema | columns     | VIEW       |",
-        "| datafusion    | information_schema | df_settings | VIEW       |",
-        "| datafusion    | information_schema | tables      | VIEW       |",
-        "| datafusion    | information_schema | views       | VIEW       |",
-        "+---------------+--------------------+-------------+------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
-}
-
-#[tokio::test]
-async fn information_schema_tables_tables_default_catalog() {
-    let ctx =
-        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
-
-    // Now, register an empty table
-    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
-        .unwrap();
-
-    let result = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
-        .await
-        .unwrap();
-
-    let expected = vec![
-        "+---------------+--------------------+-------------+------------+",
-        "| table_catalog | table_schema       | table_name  | table_type |",
-        "+---------------+--------------------+-------------+------------+",
-        "| datafusion    | information_schema | columns     | VIEW       |",
-        "| datafusion    | information_schema | df_settings | VIEW       |",
-        "| datafusion    | information_schema | tables      | VIEW       |",
-        "| datafusion    | information_schema | views       | VIEW       |",
-        "| datafusion    | public             | t           | BASE TABLE |",
-        "+---------------+--------------------+-------------+------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
-
-    // Newly added tables should appear
-    ctx.register_table("t2", table_with_sequence(1, 1).unwrap())
-        .unwrap();
-
-    let result = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
-        .await
-        .unwrap();
-
-    let expected = vec![
-        "+---------------+--------------------+-------------+------------+",
-        "| table_catalog | table_schema       | table_name  | table_type |",
-        "+---------------+--------------------+-------------+------------+",
-        "| datafusion    | information_schema | columns     | VIEW       |",
-        "| datafusion    | information_schema | df_settings | VIEW       |",
-        "| datafusion    | information_schema | tables      | VIEW       |",
-        "| datafusion    | information_schema | views       | VIEW       |",
-        "| datafusion    | public             | t           | BASE TABLE |",
-        "| datafusion    | public             | t2          | BASE TABLE |",
-        "+---------------+--------------------+-------------+------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
-}
-
-#[tokio::test]
 async fn information_schema_tables_tables_with_multiple_catalogs() {
     let ctx =
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));
@@ -190,7 +105,7 @@ async fn information_schema_tables_table_types() {
 
         async fn scan(
             &self,
-            _ctx: &SessionState,
+            _state: &SessionState,
             _: Option<&Vec<usize>>,
             _: &[Expr],
             _: Option<usize>,

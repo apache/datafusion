@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_flight::SchemaAsIpc;
 use datafusion::arrow::error::ArrowError;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
-use futures::Stream;
+use futures::stream::BoxStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -39,27 +38,13 @@ pub struct FlightServiceImpl {}
 
 #[tonic::async_trait]
 impl FlightService for FlightServiceImpl {
-    type HandshakeStream = Pin<
-        Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + Sync + 'static>,
-    >;
-    type ListFlightsStream =
-        Pin<Box<dyn Stream<Item = Result<FlightInfo, Status>> + Send + Sync + 'static>>;
-    type DoGetStream =
-        Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + Sync + 'static>>;
-    type DoPutStream =
-        Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + Sync + 'static>>;
-    type DoActionStream = Pin<
-        Box<
-            dyn Stream<Item = Result<arrow_flight::Result, Status>>
-                + Send
-                + Sync
-                + 'static,
-        >,
-    >;
-    type ListActionsStream =
-        Pin<Box<dyn Stream<Item = Result<ActionType, Status>> + Send + Sync + 'static>>;
-    type DoExchangeStream =
-        Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + Sync + 'static>>;
+    type HandshakeStream = BoxStream<'static, Result<HandshakeResponse, Status>>;
+    type ListFlightsStream = BoxStream<'static, Result<FlightInfo, Status>>;
+    type DoGetStream = BoxStream<'static, Result<FlightData, Status>>;
+    type DoPutStream = BoxStream<'static, Result<PutResult, Status>>;
+    type DoActionStream = BoxStream<'static, Result<arrow_flight::Result, Status>>;
+    type ListActionsStream = BoxStream<'static, Result<ActionType, Status>>;
+    type DoExchangeStream = BoxStream<'static, Result<FlightData, Status>>;
 
     async fn get_schema(
         &self,
@@ -67,9 +52,7 @@ impl FlightService for FlightServiceImpl {
     ) -> Result<Response<SchemaResult>, Status> {
         let request = request.into_inner();
 
-        let config = SessionConfig::new();
-        let listing_options =
-            ListingOptions::new(Arc::new(ParquetFormat::new(config.config_options())));
+        let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()));
         let table_path =
             ListingTableUrl::parse(&request.path[0]).map_err(to_tonic_err)?;
 
@@ -79,10 +62,10 @@ impl FlightService for FlightServiceImpl {
             .await
             .unwrap();
 
-        let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
+        let options = arrow::ipc::writer::IpcWriteOptions::default();
         let schema_result = SchemaAsIpc::new(&schema, &options)
             .try_into()
-            .map_err(|e: ArrowError| tonic::Status::internal(e.to_string()))?;
+            .map_err(|e: ArrowError| Status::internal(e.to_string()))?;
 
         Ok(Response::new(schema_result))
     }

@@ -15,13 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::optimizer::ApplyOrder;
 use crate::utils::{
     alias_cols, conjunction, exprs_to_join_cols, find_join_exprs, merge_cols,
     only_or_err, split_conjunction, swap_table, verify_not_disjunction,
 };
-use crate::{utils, OptimizerConfig, OptimizerRule};
+use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::{context, Result};
-use datafusion_expr::logical_plan::{Filter, JoinType, Projection, Subquery};
+use datafusion_expr::logical_plan::{JoinType, Projection, Subquery};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use log::debug;
 use std::sync::Arc;
@@ -85,42 +86,31 @@ impl OptimizerRule for DecorrelateWhereIn {
     ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
-                let predicate = filter.predicate();
-                let filter_input = filter.input().as_ref();
-
-                // Apply optimizer rule to current input
-                let optimized_input = self
-                    .try_optimize(filter_input, config)?
-                    .unwrap_or_else(|| filter_input.clone());
-
                 let (subqueries, other_exprs) =
-                    self.extract_subquery_exprs(predicate, config)?;
-                let optimized_plan = LogicalPlan::Filter(Filter::try_new(
-                    predicate.clone(),
-                    Arc::new(optimized_input),
-                )?);
+                    self.extract_subquery_exprs(&filter.predicate, config)?;
                 if subqueries.is_empty() {
                     // regular filter, no subquery exists clause here
-                    return Ok(Some(optimized_plan));
+                    return Ok(None);
                 }
 
                 // iterate through all exists clauses in predicate, turning each into a join
-                let mut cur_input = filter_input.clone();
+                let mut cur_input = filter.input.as_ref().clone();
                 for subquery in subqueries {
                     cur_input =
                         optimize_where_in(&subquery, &cur_input, &other_exprs, config)?;
                 }
                 Ok(Some(cur_input))
             }
-            _ => {
-                // Apply the optimization to all inputs of the plan
-                Ok(Some(utils::optimize_children(self, plan, config)?))
-            }
+            _ => Ok(None),
         }
     }
 
     fn name(&self) -> &str {
         "decorrelate_where_in"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
     }
 }
 
@@ -150,18 +140,18 @@ fn optimize_where_in(
     let mut other_subqry_exprs = vec![];
     if let LogicalPlan::Filter(subqry_filter) = (*subqry_input).clone() {
         // split into filters
-        let subqry_filter_exprs = split_conjunction(subqry_filter.predicate());
+        let subqry_filter_exprs = split_conjunction(&subqry_filter.predicate);
         verify_not_disjunction(&subqry_filter_exprs)?;
 
         // Grab column names to join on
         let (col_exprs, other_exprs) =
-            find_join_exprs(subqry_filter_exprs, subqry_filter.input().schema())
+            find_join_exprs(subqry_filter_exprs, subqry_filter.input.schema())
                 .map_err(|e| context!("column correlation not found", e))?;
         if !col_exprs.is_empty() {
             // it's correlated
-            subqry_input = subqry_filter.input().clone();
+            subqry_input = subqry_filter.input.clone();
             (outer_cols, subqry_cols, join_filters) =
-                exprs_to_join_cols(&col_exprs, subqry_filter.input().schema(), false)
+                exprs_to_join_cols(&col_exprs, subqry_filter.input.schema(), false)
                     .map_err(|e| context!("column correlation not found", e))?;
             other_subqry_exprs = other_exprs;
         }
@@ -268,7 +258,11 @@ mod tests {
         \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
         \n    SubqueryAlias: __sq_2 [o_custkey:Int64]\n      Projection: orders.o_custkey AS o_custkey [o_custkey:Int64]\
         \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
-        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -299,17 +293,21 @@ mod tests {
             .build()?;
 
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
-        \n  LeftSemi Join: customer.c_custkey = __sq_2.o_custkey [c_custkey:Int64, c_name:Utf8]\
+        \n  LeftSemi Join: customer.c_custkey = __sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]\
         \n    TableScan: customer [c_custkey:Int64, c_name:Utf8]\
-        \n    SubqueryAlias: __sq_2 [o_custkey:Int64]\
+        \n    SubqueryAlias: __sq_1 [o_custkey:Int64]\
         \n      Projection: orders.o_custkey AS o_custkey [o_custkey:Int64]\
-        \n        LeftSemi Join: orders.o_orderkey = __sq_1.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
+        \n        LeftSemi Join: orders.o_orderkey = __sq_2.l_orderkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
         \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
-        \n          SubqueryAlias: __sq_1 [l_orderkey:Int64]\
+        \n          SubqueryAlias: __sq_2 [l_orderkey:Int64]\
         \n            Projection: lineitem.l_orderkey AS l_orderkey [l_orderkey:Int64]\
         \n              TableScan: lineitem [l_orderkey:Int64, l_partkey:Int64, l_suppkey:Int64, l_linenumber:Int32, l_quantity:Float64, l_extendedprice:Float64]";
 
-        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -340,7 +338,11 @@ mod tests {
         \n        Filter: orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
         \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -368,7 +370,11 @@ mod tests {
         \n        Filter: customer.c_custkey = customer.c_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
         \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -395,7 +401,11 @@ mod tests {
         \n        Filter: orders.o_custkey = orders.o_custkey [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]\
         \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -421,7 +431,11 @@ mod tests {
         \n      Projection: orders.o_custkey AS o_custkey [o_custkey:Int64]\
         \n        TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -442,7 +456,7 @@ mod tests {
 
         // can't optimize on arbitrary expressions (yet)
         assert_optimizer_err(
-            &DecorrelateWhereIn::new(),
+            Arc::new(DecorrelateWhereIn::new()),
             &plan,
             "column correlation not found",
         );
@@ -469,7 +483,7 @@ mod tests {
             .build()?;
 
         assert_optimizer_err(
-            &DecorrelateWhereIn::new(),
+            Arc::new(DecorrelateWhereIn::new()),
             &plan,
             "Optimizing disjunctions not supported!",
         );
@@ -492,7 +506,7 @@ mod tests {
 
         // Maybe okay if the table only has a single column?
         assert_optimizer_err(
-            &DecorrelateWhereIn::new(),
+            Arc::new(DecorrelateWhereIn::new()),
             &plan,
             "a projection is required",
         );
@@ -516,7 +530,7 @@ mod tests {
 
         // TODO: support join on expression
         assert_optimizer_err(
-            &DecorrelateWhereIn::new(),
+            Arc::new(DecorrelateWhereIn::new()),
             &plan,
             "column comparison required",
         );
@@ -540,7 +554,7 @@ mod tests {
 
         // TODO: support join on expressions?
         assert_optimizer_err(
-            &DecorrelateWhereIn::new(),
+            Arc::new(DecorrelateWhereIn::new()),
             &plan,
             "single column projection required",
         );
@@ -566,7 +580,7 @@ mod tests {
             .build()?;
 
         assert_optimizer_err(
-            &DecorrelateWhereIn::new(),
+            Arc::new(DecorrelateWhereIn::new()),
             &plan,
             "single expression projection required",
         );
@@ -599,7 +613,11 @@ mod tests {
         \n        Projection: orders.o_custkey AS o_custkey [o_custkey:Int64]\
         \n          TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]";
 
-        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -630,7 +648,11 @@ mod tests {
           TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
     TableScan: customer [c_custkey:Int64, c_name:Utf8]"#;
 
-        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -656,7 +678,11 @@ mod tests {
         \n      Projection: sq.c AS c, sq.a AS a [c:UInt32, a:UInt32]\
         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -676,7 +702,11 @@ mod tests {
         \n      Projection: sq.c AS c [c:UInt32]\
         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
         Ok(())
     }
 
@@ -696,7 +726,11 @@ mod tests {
         \n      Projection: sq.c AS c [c:UInt32]\
         \n        TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
 
-        assert_optimized_plan_eq(&DecorrelateWhereIn::new(), &plan, expected);
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
         Ok(())
     }
 }

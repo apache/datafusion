@@ -17,10 +17,10 @@
 
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::compute::kernels::partition::lexicographical_partition_ranges;
-use arrow::compute::kernels::sort::{SortColumn, SortOptions};
+use arrow::compute::kernels::sort::SortColumn;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{reverse_sort_options, DataFusionError, Result};
 use datafusion_expr::WindowFrame;
 use std::any::Any;
 use std::fmt::Debug;
@@ -86,31 +86,6 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// expressions that's from the window function's order by clause, empty if absent
     fn order_by(&self) -> &[PhysicalSortExpr];
 
-    /// get partition columns that can be used for partitioning, empty if absent
-    fn partition_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        self.partition_by()
-            .iter()
-            .map(|expr| {
-                if let Some(idx) =
-                    self.order_by().iter().position(|key| key.expr.eq(expr))
-                {
-                    self.order_by()[idx].clone()
-                } else {
-                    // When ASC is true, by default NULLS LAST to be consistent with PostgreSQL's rule:
-                    // https://www.postgresql.org/docs/current/queries-order.html
-                    PhysicalSortExpr {
-                        expr: expr.clone(),
-                        options: SortOptions {
-                            descending: false,
-                            nulls_first: false,
-                        },
-                    }
-                }
-                .evaluate_to_sort_column(batch)
-            })
-            .collect()
-    }
-
     /// get order by columns, empty if absent
     fn order_by_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
         self.order_by()
@@ -121,10 +96,8 @@ pub trait WindowExpr: Send + Sync + Debug {
 
     /// get sort columns that can be used for peer evaluation, empty if absent
     fn sort_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        let mut sort_columns = self.partition_columns(batch)?;
         let order_by_columns = self.order_by_columns(batch)?;
-        sort_columns.extend(order_by_columns);
-        Ok(sort_columns)
+        Ok(order_by_columns)
     }
 
     /// Get values columns(argument of Window Function)
@@ -140,6 +113,22 @@ pub trait WindowExpr: Send + Sync + Debug {
         Ok((values, order_bys))
     }
 
-    // Get window frame of this WindowExpr, None if absent
+    /// Get the window frame of this [WindowExpr].
     fn get_window_frame(&self) -> &Arc<WindowFrame>;
+
+    /// Get the reverse expression of this [WindowExpr].
+    fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
+}
+
+/// Reverses the ORDER BY expression, which is useful during equivalent window
+/// expression construction. For instance, 'ORDER BY a ASC, NULLS LAST' turns into
+/// 'ORDER BY a DESC, NULLS FIRST'.
+pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr> {
+    order_bys
+        .iter()
+        .map(|e| PhysicalSortExpr {
+            expr: e.expr.clone(),
+            options: reverse_sort_options(e.options),
+        })
+        .collect()
 }

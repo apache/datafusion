@@ -64,7 +64,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
 
     // referring to the unquoted column is an error
     let sql = r#"SELECT f1.c1 from test"#;
-    let error = ctx.create_logical_plan(sql).unwrap_err();
+    let error = ctx.sql(sql).await.unwrap_err();
     assert_contains!(
         error.to_string(),
         "No field named 'f1'.'c1'. Valid fields are 'test'.'f.c1', 'test'.'test.c2'"

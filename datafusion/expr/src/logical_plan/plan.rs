@@ -253,9 +253,12 @@ impl LogicalPlan {
                 aggr_expr,
                 ..
             }) => group_expr.iter().chain(aggr_expr.iter()).cloned().collect(),
+            // There are two part of expression for join, equijoin(on) and non-equijoin(filter).
+            // 1. the first part is `on.len()` equijoin expressions, and the struct of each expr is `left-on = right-on`.
+            // 2. the second part is non-equijoin(filter).
             LogicalPlan::Join(Join { on, filter, .. }) => on
                 .iter()
-                .flat_map(|(l, r)| vec![l.clone(), r.clone()])
+                .map(|(l, r)| Expr::eq(l.clone(), r.clone()))
                 .chain(
                     filter
                         .as_ref()
@@ -1232,6 +1235,8 @@ pub struct Values {
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
 #[derive(Clone)]
+// mark non_exhaustive to encourage use of try_new/new()
+#[non_exhaustive]
 pub struct Projection {
     /// The list of expressions
     pub expr: Vec<Expr>,
@@ -1295,6 +1300,8 @@ impl Projection {
 
 /// Aliased subquery
 #[derive(Clone)]
+// mark non_exhaustive to encourage use of try_new/new()
+#[non_exhaustive]
 pub struct SubqueryAlias {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -1329,12 +1336,16 @@ impl SubqueryAlias {
 /// If the value of `<predicate>` is true, the input row is passed to
 /// the output. If the value of `<predicate>` is false, the row is
 /// discarded.
+///
+/// Filter should not be created directly but instead use `try_new()`
+/// and that these fields are only pub to support pattern matching
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
-    predicate: Expr,
+    pub predicate: Expr,
     /// The incoming logical plan
-    input: Arc<LogicalPlan>,
+    pub input: Arc<LogicalPlan>,
 }
 
 impl Filter {
@@ -1374,16 +1385,6 @@ impl Filter {
             LogicalPlan::Filter(it) => Ok(it),
             _ => plan_err!("Could not coerce into Filter!"),
         }
-    }
-
-    /// Access the filter predicate expression
-    pub fn predicate(&self) -> &Expr {
-        &self.predicate
-    }
-
-    /// Access the filter input plan
-    pub fn input(&self) -> &Arc<LogicalPlan> {
-        &self.input
     }
 }
 
@@ -1564,6 +1565,8 @@ pub struct Distinct {
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
 #[derive(Clone)]
+// mark non_exhaustive to encourage use of try_new/new()
+#[non_exhaustive]
 pub struct Aggregate {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,

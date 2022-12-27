@@ -136,14 +136,8 @@ async fn select_wrong_qualified_wildcard() -> Result<()> {
     register_aggregate_simple_csv(&ctx).await?;
 
     let sql = "SELECT agg.* FROM aggregate_simple order by c1";
-    let result = ctx.create_logical_plan(sql);
-    match result {
-        Ok(_) => panic!("unexpected OK"),
-        Err(err) => assert_eq!(
-            err.to_string(),
-            "Error during planning: Invalid qualifier agg"
-        ),
-    };
+    let err = ctx.sql(sql).await.unwrap_err().to_string();
+    assert_eq!(err, "Error during planning: Invalid qualifier agg");
 
     Ok(())
 }

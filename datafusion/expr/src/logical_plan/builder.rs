@@ -257,7 +257,7 @@ impl LogicalPlanBuilder {
         // The sort_by() implementation here is a stable sort.
         // Note that by this rule if there's an empty over, it'll be at the top level
         groups.sort_by(|(key_a, _), (key_b, _)| {
-            for (first, second) in key_a.iter().zip(key_b.iter()) {
+            for ((first, _), (second, _)) in key_a.iter().zip(key_b.iter()) {
                 let key_ordering = compare_sort_expr(first, second, plan.schema());
                 match key_ordering {
                     Ordering::Less => {

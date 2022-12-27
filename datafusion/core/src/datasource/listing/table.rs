@@ -29,9 +29,7 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use parking_lot::RwLock;
 
-use crate::config::ConfigOptions;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::{
     file_format::{
@@ -110,10 +108,7 @@ impl ListingTableConfig {
         }
     }
 
-    fn infer_format(
-        config_options: Arc<RwLock<ConfigOptions>>,
-        path: &str,
-    ) -> Result<(Arc<dyn FileFormat>, String)> {
+    fn infer_format(path: &str) -> Result<(Arc<dyn FileFormat>, String)> {
         let err_msg = format!("Unable to infer file type from path: {}", path);
 
         let mut exts = path.rsplit('.');
@@ -142,7 +137,7 @@ impl ListingTableConfig {
             FileType::JSON => Arc::new(
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
-            FileType::PARQUET => Arc::new(ParquetFormat::new(config_options)),
+            FileType::PARQUET => Arc::new(ParquetFormat::default()),
         };
 
         Ok((file_format, ext))
@@ -163,10 +158,8 @@ impl ListingTableConfig {
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
 
-        let (format, file_extension) = ListingTableConfig::infer_format(
-            state.config_options(),
-            file.location.as_ref(),
-        )?;
+        let (format, file_extension) =
+            ListingTableConfig::infer_format(file.location.as_ref())?;
 
         let listing_options = ListingOptions::new(format)
             .with_file_extension(file_extension)
@@ -180,11 +173,11 @@ impl ListingTableConfig {
     }
 
     /// Infer `SchemaRef` based on `table_path` suffix.  Requires `self.options` to be set prior to using.
-    pub async fn infer_schema(self, ctx: &SessionState) -> Result<Self> {
+    pub async fn infer_schema(self, state: &SessionState) -> Result<Self> {
         match self.options {
             Some(options) => {
                 let schema = options
-                    .infer_schema(ctx, self.table_paths.get(0).unwrap())
+                    .infer_schema(state, self.table_paths.get(0).unwrap())
                     .await?;
 
                 Ok(Self {
@@ -200,8 +193,8 @@ impl ListingTableConfig {
     }
 
     /// Convenience wrapper for calling `infer_options` and `infer_schema`
-    pub async fn infer(self, ctx: &SessionState) -> Result<Self> {
-        self.infer_options(ctx).await?.infer_schema(ctx).await
+    pub async fn infer(self, state: &SessionState) -> Result<Self> {
+        self.infer_options(state).await?.infer_schema(state).await
     }
 }
 
@@ -263,9 +256,8 @@ impl ListingOptions {
     /// # use datafusion::prelude::SessionContext;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let ctx = SessionContext::new();
     /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::new(ctx.config_options())
+    ///     ParquetFormat::default()
     ///   ))
     ///   .with_file_extension(".parquet");
     ///
@@ -281,12 +273,11 @@ impl ListingOptions {
     /// ```
     /// # use std::sync::Arc;
     /// # use arrow::datatypes::DataType;
-    /// # use datafusion::prelude::{col, SessionContext};
+    /// # use datafusion::prelude::col;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let ctx = SessionContext::new();
     /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::new(ctx.config_options())
+    ///     ParquetFormat::default()
     ///   ))
     ///   .with_table_partition_cols(vec![("col_a".to_string(), DataType::Utf8),
     ///       ("col_b".to_string(), DataType::Utf8)]);
@@ -306,12 +297,10 @@ impl ListingOptions {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::prelude::SessionContext;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let ctx = SessionContext::new();
     /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::new(ctx.config_options())
+    ///     ParquetFormat::default()
     ///   ))
     ///   .with_collect_stat(true);
     ///
@@ -326,12 +315,10 @@ impl ListingOptions {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::prelude::SessionContext;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let ctx = SessionContext::new();
     /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::new(ctx.config_options())
+    ///     ParquetFormat::default()
     ///   ))
     ///   .with_target_partitions(8);
     ///
@@ -346,7 +333,7 @@ impl ListingOptions {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::prelude::{col, SessionContext};
+    /// # use datafusion::prelude::col;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     ///  // Tell datafusion that the files are sorted by column "a"
@@ -354,9 +341,8 @@ impl ListingOptions {
     ///    col("a").sort(true, true)
     ///  ]);
     ///
-    /// let ctx = SessionContext::new();
     /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::new(ctx.config_options())
+    ///     ParquetFormat::default()
     ///   ))
     ///   .with_file_sort_order(file_sort_order.clone());
     ///
@@ -375,17 +361,17 @@ impl ListingOptions {
     /// locally or ask a remote service to do it (e.g a scheduler).
     pub async fn infer_schema<'a>(
         &'a self,
-        ctx: &SessionState,
+        state: &SessionState,
         table_path: &'a ListingTableUrl,
     ) -> Result<SchemaRef> {
-        let store = ctx.runtime_env.object_store(table_path)?;
+        let store = state.runtime_env.object_store(table_path)?;
 
         let files: Vec<_> = table_path
             .list_all_files(store.as_ref(), &self.file_extension)
             .try_collect()
             .await?;
 
-        self.format.infer_schema(&store, &files).await
+        self.format.infer_schema(state, &store, &files).await
     }
 }
 
@@ -547,13 +533,13 @@ impl TableProvider for ListingTable {
 
     async fn scan(
         &self,
-        ctx: &SessionState,
+        state: &SessionState,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let (partitioned_file_lists, statistics) =
-            self.list_files_for_scan(ctx, filters, limit).await?;
+            self.list_files_for_scan(state, filters, limit).await?;
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
@@ -582,6 +568,7 @@ impl TableProvider for ListingTable {
         self.options
             .format
             .create_physical_plan(
+                state,
                 FileScanConfig {
                     object_store_url: self.table_paths.get(0).unwrap().object_store(),
                     file_schema: Arc::clone(&self.file_schema),
@@ -591,7 +578,6 @@ impl TableProvider for ListingTable {
                     limit,
                     output_ordering: self.try_create_output_ordering()?,
                     table_partition_cols,
-                    config_options: ctx.config.config_options(),
                 },
                 filters,
             )
@@ -663,6 +649,7 @@ impl ListingTable {
                             .options
                             .format
                             .infer_stats(
+                                ctx,
                                 &store,
                                 self.file_schema.clone(),
                                 &part_file.object_meta,
@@ -734,7 +721,7 @@ mod tests {
         let ctx = SessionContext::new();
         let state = ctx.state();
 
-        let opt = ListingOptions::new(Arc::new(ParquetFormat::new(ctx.config_options())));
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
         let schema = opt.infer_schema(&state, &table_path).await?;
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
@@ -757,7 +744,7 @@ mod tests {
         let ctx = SessionContext::new();
         let state = ctx.state();
 
-        let opt = ListingOptions::new(Arc::new(ParquetFormat::new(ctx.config_options())))
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()))
             .with_collect_stat(false);
         let schema = opt.infer_schema(&state, &table_path).await?;
         let config = ListingTableConfig::new(table_path)
@@ -780,8 +767,7 @@ mod tests {
 
         let ctx = SessionContext::new();
         let state = ctx.state();
-        let options =
-            ListingOptions::new(Arc::new(ParquetFormat::new(ctx.config_options())));
+        let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
         let schema = options.infer_schema(&state, &table_path).await.unwrap();
 
         use physical_plan::expressions::col as physical_col;
