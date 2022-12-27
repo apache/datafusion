@@ -133,7 +133,10 @@ impl ParquetExec {
             match PagePruningPredicate::try_new(predicate_expr, file_schema.clone()) {
                 Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
                 Err(e) => {
-                    debug!("Could not create page pruning predicate for: {}", e);
+                    debug!(
+                        "Could not create page pruning predicate for '{:?}': {}",
+                        pruning_predicate, e
+                    );
                     predicate_creation_errors.add(1);
                     None
                 }
