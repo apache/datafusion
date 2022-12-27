@@ -125,11 +125,22 @@ macro_rules! get_statistic {
             ParquetStatistics::Float(s) => Some(ScalarValue::Float32(Some(*s.$func()))),
             ParquetStatistics::Double(s) => Some(ScalarValue::Float64(Some(*s.$func()))),
             ParquetStatistics::ByteArray(s) => {
-                // TODO support decimal type for byte array type
-                let s = std::str::from_utf8(s.$bytes_func())
-                    .map(|s| s.to_string())
-                    .ok();
-                Some(ScalarValue::Utf8(s))
+                match $target_arrow_type {
+                    // decimal data type
+                    Some(DataType::Decimal128(precision, scale)) => {
+                        Some(ScalarValue::Decimal128(
+                            Some(from_bytes_to_i128(s.$bytes_func())),
+                            precision,
+                            scale,
+                        ))
+                    }
+                    _ => {
+                        let s = std::str::from_utf8(s.$bytes_func())
+                            .map(|s| s.to_string())
+                            .ok();
+                        Some(ScalarValue::Utf8(s))
+                    }
+                }
             }
             // type not supported yet
             ParquetStatistics::FixedLenByteArray(s) => {
@@ -627,6 +638,64 @@ mod tests {
         );
 
         // TODO: BYTE_ARRAY support read decimal from parquet, after the 20.0.0 arrow-rs release
+        // BYTE_ARRAY: c1 = decimal128(100000, 28, 3), the c1 is decimal(18,2)
+        // the type of parquet is decimal(18,2)
+        let schema =
+            Schema::new(vec![Field::new("c1", DataType::Decimal128(18, 2), false)]);
+        // cast the type of c1 to decimal(28,3)
+        let left = cast(col("c1"), DataType::Decimal128(28, 3));
+        let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
+        let schema_descr = get_test_schema_descr(vec![(
+            "c1",
+            PhysicalType::BYTE_ARRAY,
+            Some(LogicalType::Decimal {
+                scale: 2,
+                precision: 18,
+            }),
+            Some(18),
+            Some(2),
+            Some(16),
+        )]);
+        let pruning_predicate =
+            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+        // we must use the big-endian when encode the i128 to bytes or vec[u8].
+        let rgm1 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::byte_array(
+                // 5.00
+                Some(ByteArray::from(
+                    500i128.to_be_bytes().to_vec(),
+                )),
+                // 80.00
+                Some(ByteArray::from(
+                    8000i128.to_be_bytes().to_vec(),
+                )),
+                None,
+                0,
+                false,
+            )],
+        );
+        let rgm2 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::byte_array(
+                // 5.00
+                Some(ByteArray::from(
+                    500i128.to_be_bytes().to_vec(),
+                )),
+                // 200.00
+                Some(ByteArray::from(
+                    20000i128.to_be_bytes().to_vec(),
+                )),
+                None,
+                0,
+                false,
+            )],
+        );
+        let metrics = parquet_file_metrics();
+        assert_eq!(
+            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
+            vec![1]
+        );
     }
 
     fn get_row_group_meta_data(
