@@ -26,7 +26,6 @@
 //! select * from data limit 10;
 //! ```
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use arrow::compute::concat_batches;
