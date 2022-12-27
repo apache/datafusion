@@ -73,7 +73,8 @@ use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
-    OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
+    OPT_ENABLE_ROUND_ROBIN_REPARTITION, OPT_FILTER_NULL_JOIN_KEYS,
+    OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_optimizer::enforcement::BasicEnforcement;
@@ -98,6 +99,7 @@ use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::memory_pool::MemoryPool;
+use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
 use uuid::Uuid;
 
@@ -1530,11 +1532,47 @@ impl SessionState {
             );
         }
 
-        let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
-            Arc::new(AggregateStatistics::new()),
-            Arc::new(JoinSelection::new()),
-        ];
+        // We need to take care of the rule ordering. They may influence each other.
+        let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> =
+            vec![Arc::new(AggregateStatistics::new())];
+        // - In order to increase the parallelism, it will change the output partitioning
+        // of some operators in the plan tree, which will influence other rules.
+        // Therefore, it should be run as soon as possible.
+        // - The reason to make it optional is
+        //      - it's not used for the distributed engine, Ballista.
+        //      - it's conflicted with some parts of the BasicEnforcement, since it will
+        //      introduce additional repartitioning while the BasicEnforcement aims at
+        //      reducing unnecessary repartitioning.
+        if config
+            .config_options
+            .get_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION)
+            .unwrap_or_default()
+        {
+            physical_optimizers.push(Arc::new(Repartition::new()));
+        }
+        //- Currently it will depend on the partition number to decide whether to change the
+        // single node sort to parallel local sort and merge. Therefore, it should be run
+        // after the Repartition.
+        // - Since it will change the output ordering of some operators, it should be run
+        // before JoinSelection and BasicEnforcement, which may depend on that.
+        physical_optimizers.push(Arc::new(GlobalSortSelection::new()));
+        // Statistics-base join selection will change the Auto mode to real join implementation,
+        // like collect left, or hash join, or future sort merge join, which will
+        // influence the BasicEnforcement to decide whether to add additional repartition
+        // and local sort to meet the distribution and ordering requirements.
+        // Therefore, it should be run before BasicEnforcement
+        physical_optimizers.push(Arc::new(JoinSelection::new()));
+        // It's for adding essential repartition and local sorting operator to satisfy the
+        // required distribution and local sort.
+        // Please make sure that the whole plan tree is determined.
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
+        // `BasicEnforcement` stage conservatively inserts `SortExec`s to satisfy ordering requirements.
+        // However, a deeper analysis may sometimes reveal that such a `SortExec` is actually unnecessary.
+        // These cases typically arise when we have reversible `WindowAggExec`s or deep subqueries. The
+        // rule below performs this analysis and removes unnecessary `SortExec`s.
+        physical_optimizers.push(Arc::new(OptimizeSorts::new()));
+        // It will not influence the distribution and ordering of the whole plan tree.
+        // Therefore, to avoid influencing other rules, it should be run at last.
         if config
             .config_options
             .get_bool(OPT_COALESCE_BATCHES)
@@ -1549,16 +1587,6 @@ impl SessionState {
                     .unwrap(),
             )));
         }
-        physical_optimizers.push(Arc::new(Repartition::new()));
-        // Repartition rule could introduce additional RepartitionExec with RoundRobin partitioning.
-        // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
-        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
-
-        // `BasicEnforcement` stage conservatively inserts `SortExec`s to satisfy ordering requirements.
-        // However, a deeper analysis may sometimes reveal that such a `SortExec` is actually unnecessary.
-        // These cases typically arise when we have reversible `WindowAggExec`s or deep subqueries. The
-        // rule below performs this analysis and removes unnecessary `SortExec`s.
-        physical_optimizers.push(Arc::new(OptimizeSorts::new()));
 
         SessionState {
             session_id,
