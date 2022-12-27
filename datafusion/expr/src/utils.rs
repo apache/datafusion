@@ -956,12 +956,54 @@ pub fn can_hash(data_type: &DataType) -> bool {
 pub fn check_all_column_from_schema(
     columns: &HashSet<Column>,
     schema: DFSchemaRef,
-) -> Result<bool> {
-    let result = columns
+) -> bool {
+    columns
         .iter()
-        .all(|column| schema.index_of_column(column).is_ok());
+        .all(|column| schema.index_of_column(column).is_ok())
+}
 
-    Ok(result)
+/// Give two sides of the equijoin predicate, return a valid join key pair.
+/// If there is no valid join key pair, return None.
+///
+/// A valid join means:
+/// 1. All referenced column of the left side is from the left schema, and
+///    all referenced column of the right side is from the right schema.
+/// 2. Or opposite. All referenced column of the left side is from the right schema,
+///    and the right side is from the left schema.
+///
+pub fn find_valid_equijoin_key_pair(
+    left_key: &Expr,
+    right_key: &Expr,
+    left_schema: DFSchemaRef,
+    right_schema: DFSchemaRef,
+) -> Result<Option<(Expr, Expr)>> {
+    let left_using_columns = left_key.to_columns()?;
+    let right_using_columns = right_key.to_columns()?;
+
+    // Conditions like a = 10, will be added to non-equijoin.
+    if left_using_columns.is_empty() || right_using_columns.is_empty() {
+        return Ok(None);
+    }
+
+    let l_is_left =
+        check_all_column_from_schema(&left_using_columns, left_schema.clone());
+    let r_is_right =
+        check_all_column_from_schema(&right_using_columns, right_schema.clone());
+
+    let r_is_left_and_l_is_right = || {
+        check_all_column_from_schema(&right_using_columns, left_schema.clone())
+            && check_all_column_from_schema(&left_using_columns, right_schema.clone())
+    };
+
+    let join_key_pair = match (l_is_left, r_is_right) {
+        (true, true) => Some((left_key.clone(), right_key.clone())),
+        (_, _) if r_is_left_and_l_is_right() => {
+            Some((right_key.clone(), left_key.clone()))
+        }
+        _ => None,
+    };
+
+    Ok(join_key_pair)
 }
 
 #[cfg(test)]
