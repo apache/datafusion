@@ -165,9 +165,6 @@ impl WindowExpr for BuiltInWindowExpr {
             state.is_end = partition_batch_state.is_end;
             let num_rows = partition_batch_state.record_batch.num_rows();
 
-            let columns = self.sort_columns(&partition_batch_state.record_batch)?;
-            let sort_partition_points =
-                self.evaluate_partition_points(num_rows, &columns)?;
             let (values, order_bys) =
                 self.get_values_orderbys(&partition_batch_state.record_batch)?;
 
@@ -175,18 +172,25 @@ impl WindowExpr for BuiltInWindowExpr {
             let mut row_wise_results: Vec<ScalarValue> = vec![];
             let mut last_range = state.window_frame_range.clone();
             let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
+            let sort_partition_points = if evaluator.include_rank() {
+                let columns = self.sort_columns(&partition_batch_state.record_batch)?;
+                self.evaluate_partition_points(num_rows, &columns)?
+            } else {
+                vec![]
+            };
             for idx in state.last_calculated_index..num_rows {
-                state.window_frame_range = if !self.expr.uses_window_frame() {
-                    evaluator.get_range(state, num_rows)?
-                } else {
+                state.window_frame_range = if self.expr.uses_window_frame() {
                     window_frame_ctx.calculate_range(
                         &order_bys,
                         &sort_options,
                         num_rows,
                         idx,
                     )?
+                } else {
+                    evaluator.get_range(state, num_rows)?
                 };
                 evaluator.update_state(state, &order_bys, &sort_partition_points)?;
+
                 // exit if range end index is length, need kind of flag to stop
                 if state.window_frame_range.end == num_rows
                     && !partition_batch_state.is_end
@@ -197,7 +201,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 if state.window_frame_range.start == state.window_frame_range.end {
                     // We produce None if the window is empty.
                     row_wise_results
-                        .push(ScalarValue::try_from(self.expr.field()?.data_type())?)
+                        .push(ScalarValue::try_from(self.expr.field()?.data_type())?);
                 } else {
                     let res = evaluator.evaluate_stateful(&values)?;
                     row_wise_results.push(res);

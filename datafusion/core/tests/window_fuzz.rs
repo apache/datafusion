@@ -38,7 +38,7 @@ use datafusion_expr::{
 
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::ScalarValue;
-use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr::expressions::{col, lit};
 use datafusion_physical_expr::PhysicalSortExpr;
 use test_utils::add_empty_batches;
 
@@ -118,42 +118,111 @@ mod tests {
 }
 
 /// Perform batch and running window same input
-/// and verify two outputs are equal
+/// and verify outputs of `WindowAggExec` and `BoundedWindowAggExec` are equal
 async fn run_window_test(
     input1: Vec<RecordBatch>,
     random_seed: u64,
     orderby_columns: Vec<&str>,
     partition_by_columns: Vec<&str>,
 ) {
-    let mut func_name_to_window_fn = HashMap::new();
-    func_name_to_window_fn.insert(
+    let mut rng = StdRng::seed_from_u64(random_seed);
+    let schema = input1[0].schema();
+    let mut args = vec![col("x", &schema).unwrap()];
+    let mut window_fn_map = HashMap::new();
+    // HashMap values consists of tuple first element is WindowFunction, second is additional argument
+    // window function requires if any. For most of the window functions additional argument is empty
+    window_fn_map.insert(
         "sum",
-        WindowFunction::AggregateFunction(AggregateFunction::Sum),
+        (
+            WindowFunction::AggregateFunction(AggregateFunction::Sum),
+            vec![],
+        ),
     );
-    func_name_to_window_fn.insert(
+    window_fn_map.insert(
         "count",
-        WindowFunction::AggregateFunction(AggregateFunction::Count),
+        (
+            WindowFunction::AggregateFunction(AggregateFunction::Count),
+            vec![],
+        ),
     );
-    func_name_to_window_fn.insert(
+    window_fn_map.insert(
         "min",
-        WindowFunction::AggregateFunction(AggregateFunction::Min),
+        (
+            WindowFunction::AggregateFunction(AggregateFunction::Min),
+            vec![],
+        ),
     );
-    func_name_to_window_fn.insert(
+    window_fn_map.insert(
         "max",
-        WindowFunction::AggregateFunction(AggregateFunction::Max),
+        (
+            WindowFunction::AggregateFunction(AggregateFunction::Max),
+            vec![],
+        ),
     );
-    func_name_to_window_fn.insert(
+    window_fn_map.insert(
         "row_number",
-        WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::RowNumber),
+        (
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::RowNumber),
+            vec![],
+        ),
+    );
+    window_fn_map.insert(
+        "rank",
+        (
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Rank),
+            vec![],
+        ),
+    );
+    window_fn_map.insert(
+        "first_value",
+        (
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::FirstValue),
+            vec![],
+        ),
+    );
+    window_fn_map.insert(
+        "last_value",
+        (
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::LastValue),
+            vec![],
+        ),
+    );
+    window_fn_map.insert(
+        "nth_value",
+        (
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::NthValue),
+            vec![lit(ScalarValue::Int64(Some(rng.gen_range(1..10))))],
+        ),
+    );
+    window_fn_map.insert(
+        "lead",
+        (
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Lead),
+            vec![
+                lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
+                lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
+            ],
+        ),
+    );
+    window_fn_map.insert(
+        "lag",
+        (
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::Lag),
+            vec![
+                lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
+                lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
+            ],
+        ),
     );
 
-    let mut rng = StdRng::seed_from_u64(random_seed);
     let session_config = SessionConfig::new().with_batch_size(50);
     let ctx = SessionContext::with_config(session_config);
-    let schema = input1[0].schema();
-    let rand_fn_idx = rng.gen_range(0..func_name_to_window_fn.len());
-    let fn_name = func_name_to_window_fn.keys().collect::<Vec<_>>()[rand_fn_idx];
-    let window_fn = func_name_to_window_fn.values().collect::<Vec<_>>()[rand_fn_idx];
+    let rand_fn_idx = rng.gen_range(0..window_fn_map.len());
+    let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];
+    let (window_fn, new_args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
+    for new_arg in new_args {
+        args.push(new_arg.clone());
+    }
     let preceding = rng.gen_range(0..50);
     let following = rng.gen_range(0..50);
     let rand_num = rng.gen_range(0..3);
@@ -217,7 +286,7 @@ async fn run_window_test(
             vec![create_window_expr(
                 window_fn,
                 fn_name.to_string(),
-                &[col("x", &schema).unwrap()],
+                &args,
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
@@ -238,7 +307,7 @@ async fn run_window_test(
             vec![create_window_expr(
                 window_fn,
                 fn_name.to_string(),
-                &[col("x", &schema).unwrap()],
+                &args,
                 &partitionby_exprs,
                 &orderby_exprs,
                 Arc::new(window_frame.clone()),
@@ -276,7 +345,13 @@ async fn run_window_test(
         .zip(&running_formatted_sorted)
         .enumerate()
     {
-        assert_eq!((i, usual_line), (i, running_line));
+        assert_eq!(
+            (i, usual_line),
+            (i, running_line),
+            "Inconsistent result for window_fn: {:?}, args:{:?}",
+            window_fn,
+            args
+        );
     }
 }
 
