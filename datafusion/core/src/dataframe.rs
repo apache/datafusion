@@ -93,7 +93,6 @@ impl DataFrame {
 
     /// Temporary pending #4626
     async fn create_physical_plan_impl(&mut self) -> Result<Arc<dyn ExecutionPlan>> {
-        self.session_state.execution_props.start_execution();
         self.session_state.create_physical_plan(&self.plan).await
     }
 
