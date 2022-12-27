@@ -20,7 +20,7 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::DFSchema;
 use datafusion_common::Result;
-use datafusion_expr::utils::{can_hash, check_all_column_from_schema};
+use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, Join, LogicalPlan, Operator};
 use std::sync::Arc;
 
@@ -124,45 +124,15 @@ fn extract_join_keys(
     match &expr {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
             Operator::Eq => {
-                let left = *left.clone();
-                let right = *right.clone();
-                let left_using_columns = left.to_columns()?;
-                let right_using_columns = right.to_columns()?;
+                let left = left.as_ref();
+                let right = right.as_ref();
 
-                // When one side key does not contain columns, we need move this expression to filter.
-                // For example: a = 1, a = now() + 10.
-                if left_using_columns.is_empty() || right_using_columns.is_empty() {
-                    accum_filter.push(expr);
-                    return Ok(());
-                }
-
-                // Checking left join key is from left schema, right join key is from right schema, or the opposite.
-                let l_is_left = check_all_column_from_schema(
-                    &left_using_columns,
+                let join_key_pair = find_valid_equijoin_key_pair(
+                    left,
+                    right,
                     left_schema.clone(),
-                )?;
-                let r_is_right = check_all_column_from_schema(
-                    &right_using_columns,
                     right_schema.clone(),
                 )?;
-
-                let r_is_left_and_l_is_right = || {
-                    let result = check_all_column_from_schema(
-                        &right_using_columns,
-                        left_schema.clone(),
-                    )? && check_all_column_from_schema(
-                        &left_using_columns,
-                        right_schema.clone(),
-                    )?;
-
-                    Result::Ok(result)
-                };
-
-                let join_key_pair = match (l_is_left, r_is_right) {
-                    (true, true) => Some((left, right)),
-                    (_, _) if r_is_left_and_l_is_right()? => Some((right, left)),
-                    _ => None,
-                };
 
                 if let Some((left_expr, right_expr)) = join_key_pair {
                     let left_expr_type = left_expr.get_type(left_schema)?;
