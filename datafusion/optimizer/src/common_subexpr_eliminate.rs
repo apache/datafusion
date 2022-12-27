@@ -908,10 +908,8 @@ mod test {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(binary_expr(
-                binary_expr(lit(1), Operator::Gt, col("a")),
-                Operator::And,
-                binary_expr(lit(1), Operator::Gt, col("a")),
+            .filter(lit(1).gt(col("a"))).and(
+                      lit(1).gt(col("a"))),
             ))?
             .build()?;
 
