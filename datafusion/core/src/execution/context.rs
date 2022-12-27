@@ -1000,23 +1000,7 @@ impl SessionContext {
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let state_cloned = {
-            let mut state = self.state.write();
-            state.execution_props.start_execution();
-
-            // We need to clone `state` to release the lock that is not `Send`. We could
-            // make the lock `Send` by using `tokio::sync::Mutex`, but that would require to
-            // propagate async even to the `LogicalPlan` building methods.
-            // Cloning `state` here is fine as we then pass it as immutable `&state`, which
-            // means that we avoid write consistency issues as the cloned version will not
-            // be written to. As for eventual modifications that would be applied to the
-            // original state after it has been cloned, they will not be picked up by the
-            // clone but that is okay, as it is equivalent to postponing the state update
-            // by keeping the lock until the end of the function scope.
-            state.clone()
-        };
-
-        state_cloned.create_physical_plan(logical_plan).await
+        self.state().create_physical_plan(logical_plan).await
     }
 
     /// Executes a query and writes the results to a partitioned CSV file.
@@ -1055,9 +1039,12 @@ impl SessionContext {
         Arc::new(TaskContext::from(self))
     }
 
-    /// Get a copy of the [`SessionState`] of this [`SessionContext`]
+    /// Snapshots the [`SessionState`] of this [`SessionContext`] setting the
+    /// `query_execution_start_time` to the current time
     pub fn state(&self) -> SessionState {
-        self.state.read().clone()
+        let mut state = self.state.read().clone();
+        state.execution_props.start_execution();
+        state
     }
 }
 
