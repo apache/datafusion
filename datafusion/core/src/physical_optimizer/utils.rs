@@ -18,8 +18,8 @@
 //! Collection of utility functions that are leveraged by the query optimizer rules
 
 use super::optimizer::PhysicalOptimizerRule;
-use crate::execution::context::SessionConfig;
 
+use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
@@ -36,12 +36,12 @@ use std::sync::Arc;
 pub fn optimize_children(
     optimizer: &impl PhysicalOptimizerRule,
     plan: Arc<dyn ExecutionPlan>,
-    session_config: &SessionConfig,
+    config: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let children = plan
         .children()
         .iter()
-        .map(|child| optimizer.optimize(Arc::clone(child), session_config))
+        .map(|child| optimizer.optimize(Arc::clone(child), config))
         .collect::<Result<Vec<_>>>()?;
 
     if children.is_empty() {

@@ -25,6 +25,7 @@
 //! "  SortExec: [non_nullable_col@1 ASC]",
 //! in the physical plan. The first sort is unnecessary since its result is overwritten
 //! by another SortExec. Therefore, this rule removes it from the physical plan.
+use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
     add_sort_above_child, ordering_satisfy, ordering_satisfy_concrete,
@@ -34,7 +35,6 @@ use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
-use crate::prelude::SessionConfig;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{reverse_sort_options, DataFusionError};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
@@ -122,7 +122,7 @@ impl PhysicalOptimizerRule for OptimizeSorts {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &SessionConfig,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Execute a post-order traversal to adjust input key ordering:
         let plan_requirements = PlanWithCorrespondingSort::new(plan);
@@ -557,7 +557,7 @@ mod tests {
     #[tokio::test]
     async fn test_remove_unnecessary_sort() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -589,7 +589,7 @@ mod tests {
             expected, actual
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -608,7 +608,7 @@ mod tests {
     #[tokio::test]
     async fn test_remove_unnecessary_sort_window_multilayer() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -690,7 +690,7 @@ mod tests {
             expected, actual
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -715,7 +715,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_required_sort() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -736,7 +736,7 @@ mod tests {
             expected, actual
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -760,7 +760,7 @@ mod tests {
     #[tokio::test]
     async fn test_remove_unnecessary_sort1() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -803,7 +803,7 @@ mod tests {
             expected, actual
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -827,7 +827,7 @@ mod tests {
     #[tokio::test]
     async fn test_change_wrong_sorting() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -865,7 +865,7 @@ mod tests {
             expected, actual
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();

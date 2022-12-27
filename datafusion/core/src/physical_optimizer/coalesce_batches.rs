@@ -18,6 +18,7 @@
 //! CoalesceBatches optimizer that groups batches together rows
 //! in bigger batches to avoid overhead with small batches
 
+use crate::config::ConfigOptions;
 use crate::{
     error::Result,
     physical_optimizer::PhysicalOptimizerRule,
@@ -46,7 +47,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
     fn optimize(
         &self,
         plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
-        _config: &crate::execution::context::SessionConfig,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
         let target_batch_size = self.target_batch_size;
         plan.transform_up(&|plan| {
