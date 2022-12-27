@@ -575,6 +575,7 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         },
         (Timestamp(_, tz), Utf8) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
         (Utf8, Timestamp(_, tz)) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
+        // TODO: need to investigate the result type for the comparison between timestamp and date
         (Timestamp(_, _), Date32) => Some(Date32),
         (Timestamp(_, _), Date64) => Some(Date64),
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
