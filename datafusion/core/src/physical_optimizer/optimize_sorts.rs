@@ -45,16 +45,16 @@ use std::sync::Arc;
 /// This rule inspects SortExec's in the given physical plan and removes the
 /// ones it can prove unnecessary.
 #[derive(Default)]
-pub struct RemoveUnnecessarySorts {}
+pub struct OptimizeSorts {}
 
-impl RemoveUnnecessarySorts {
+impl OptimizeSorts {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-/// This is a "data class" we use within the [RemoveUnnecessarySorts] rule
+/// This is a "data class" we use within the [OptimizeSorts] rule
 /// that tracks the closest `SortExec` descendant for every child of a plan.
 #[derive(Debug, Clone)]
 struct PlanWithCorrespondingSort {
@@ -118,7 +118,7 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
     }
 }
 
-impl PhysicalOptimizerRule for RemoveUnnecessarySorts {
+impl PhysicalOptimizerRule for OptimizeSorts {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -589,7 +589,7 @@ mod tests {
             expected, actual
         );
         let optimized_physical_plan =
-            RemoveUnnecessarySorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, &conf)?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -690,7 +690,7 @@ mod tests {
             expected, actual
         );
         let optimized_physical_plan =
-            RemoveUnnecessarySorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, &conf)?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -736,7 +736,7 @@ mod tests {
             expected, actual
         );
         let optimized_physical_plan =
-            RemoveUnnecessarySorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, &conf)?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -803,7 +803,7 @@ mod tests {
             expected, actual
         );
         let optimized_physical_plan =
-            RemoveUnnecessarySorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, &conf)?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -865,7 +865,7 @@ mod tests {
             expected, actual
         );
         let optimized_physical_plan =
-            RemoveUnnecessarySorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, &conf)?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
