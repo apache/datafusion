@@ -87,7 +87,7 @@ impl DataFrame {
     }
 
     /// Create a physical plan
-    pub async fn create_physical_plan(mut self) -> Result<Arc<dyn ExecutionPlan>> {
+    pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
         self.session_state.create_physical_plan(&self.plan).await
     }
 
@@ -621,14 +621,14 @@ impl DataFrame {
     }
 
     /// Write a `DataFrame` to a CSV file.
-    pub async fn write_csv(mut self, path: &str) -> Result<()> {
+    pub async fn write_csv(self, path: &str) -> Result<()> {
         let plan = self.session_state.create_physical_plan(&self.plan).await?;
         plan_to_csv(&self.session_state, plan, path).await
     }
 
     /// Write a `DataFrame` to a Parquet file.
     pub async fn write_parquet(
-        mut self,
+        self,
         path: &str,
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
@@ -637,7 +637,7 @@ impl DataFrame {
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.
-    pub async fn write_json(mut self, path: impl AsRef<str>) -> Result<()> {
+    pub async fn write_json(self, path: impl AsRef<str>) -> Result<()> {
         let plan = self.session_state.create_physical_plan(&self.plan).await?;
         plan_to_json(&self.session_state, plan, path).await
     }
