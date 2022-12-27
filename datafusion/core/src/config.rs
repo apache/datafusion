@@ -131,6 +131,10 @@ pub const OPT_PREFER_HASH_JOIN: &str = "datafusion.optimizer.prefer_hash_join";
 pub const OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD: &str =
     "datafusion.optimizer.hash_join_single_partition_threshold";
 
+/// Configuration option "datafusion.execution.round_robin_repartition"
+pub const OPT_ENABLE_ROUND_ROBIN_REPARTITION: &str =
+    "datafusion.optimizer.enable_round_robin_repartition";
+
 /// Definition of a configuration option
 pub struct ConfigDefinition {
     /// key used to identifier this configuration option
@@ -408,6 +412,11 @@ impl BuiltInConfigs {
                  OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD,
                  "The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition",
                  1024 * 1024,
+             ),
+             ConfigDefinition::new_bool(
+                 OPT_ENABLE_ROUND_ROBIN_REPARTITION,
+                 "When set to true, the physical plan optimizer will try to add round robin repartition to increase parallelism to leverage more CPU cores",
+                 true,
              ),
             ]
         }

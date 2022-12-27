@@ -557,7 +557,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+---------------------------+-------------------------------+-------------------------+",
@@ -584,7 +584,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+---------------------+----------------------------+-------------------------+",
@@ -612,7 +612,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+---------------------+----------------------------+-------------------------+",
@@ -639,7 +639,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+-------------------------+---------------------+-------------------------+",
@@ -666,7 +666,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+-------------------------+----------------------------+-------------------------+",
@@ -693,7 +693,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+-------------------------+----------------------------+-------------------------+",
@@ -720,7 +720,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+----------------------------+---------------------+-------------------------+",
@@ -747,7 +747,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+----------------------------+-------------------------+-------------------------+",
@@ -774,7 +774,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+----------------------------+----------------------------+-------------------------+",
@@ -801,7 +801,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+----------------------------+---------------------+-------------------------+",
@@ -828,7 +828,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+----------------------------+-------------------------+-------------------------+",
@@ -855,7 +855,7 @@ async fn timestamp_coercion() -> Result<()> {
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
-        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b";
+        let sql = "SELECT table_a.ts, table_b.ts, table_a.ts = table_b.ts FROM table_a, table_b order by table_a.ts desc, table_b.ts desc";
         let actual = execute_to_batches(&ctx, sql).await;
         let expected = vec![
             "+----------------------------+----------------------------+-------------------------+",
