@@ -25,6 +25,7 @@ use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Result, ScalarValue};
 use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// row_number expression

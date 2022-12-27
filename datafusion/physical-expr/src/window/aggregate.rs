@@ -168,5 +168,4 @@ impl WindowExpr for AggregateWindowExpr {
             && !self.window_frame.start_bound.is_unbounded()
             && !self.window_frame.end_bound.is_unbounded()
     }
-
 }

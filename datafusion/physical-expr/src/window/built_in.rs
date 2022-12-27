@@ -27,7 +27,7 @@ use crate::window::{
     PartitionBatches, PartitionWindowAggStates, WindowAggState, WindowState,
 };
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
-use arrow::compute::SortOptions;
+use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::ScalarValue;
@@ -241,5 +241,4 @@ impl WindowExpr for BuiltInWindowExpr {
                 || !(self.window_frame.start_bound.is_unbounded()
                     || self.window_frame.end_bound.is_unbounded()))
     }
-
 }

@@ -1591,7 +1591,7 @@ impl SessionState {
         // Replace WindowAggExec with BoundedWindowAggExec if conditions are met
         physical_optimizers.push(Arc::new(ReplaceWindowWithBoundedImpl::new()));
 
-        SessionState {
+        let mut this = SessionState {
             session_id,
             optimizer: Optimizer::new(),
             physical_optimizers,

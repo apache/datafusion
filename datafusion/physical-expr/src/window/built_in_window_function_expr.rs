@@ -72,5 +72,4 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     fn uses_window_frame(&self) -> bool {
         false
     }
-
 }
