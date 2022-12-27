@@ -225,7 +225,7 @@ async fn single_file() {
 
     // Join all the cases.
     while let Some(result) = set.join_next().await {
-      result.unwrap()
+        result.unwrap()
     }
 }
 
