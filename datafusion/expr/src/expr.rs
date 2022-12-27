@@ -240,7 +240,7 @@ impl BinaryExpr {
     }
 
     /// Get the operator precedence
-    /// use https://www.postgresql.org/docs/7.0/operators.htm#AEN2026 as a reference
+    /// use <https://www.postgresql.org/docs/7.0/operators.htm#AEN2026> as a reference
     pub fn precedence(&self) -> u8 {
         match self.op {
             Operator::Or => 5,
@@ -516,9 +516,9 @@ impl WindowFunction {
 }
 
 /// Grouping sets
-/// See https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS
+/// See <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>
 /// for Postgres definition.
-/// See https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-groupby.html
+/// See <https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-groupby.html>
 /// for Apache Spark definition.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum GroupingSet {

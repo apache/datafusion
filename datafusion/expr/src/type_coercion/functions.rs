@@ -26,7 +26,7 @@ use datafusion_common::{DataFusionError, Result};
 /// each argument must be coerced to match `signature`.
 ///
 /// For more details on coercion in general, please see the
-/// [`type_coercion`](datafusion_expr::type_coercion) module.
+/// [`type_coercion`](crate::type_coercion) module.
 pub fn data_types(
     current_types: &[DataType],
     signature: &Signature,

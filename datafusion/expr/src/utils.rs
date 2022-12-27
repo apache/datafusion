@@ -258,7 +258,7 @@ pub fn generate_sort_key(
 }
 
 /// Compare the sort expr as PostgreSQL's common_prefix_cmp():
-/// https://github.com/postgres/postgres/blob/master/src/backend/optimizer/plan/planner.c
+/// <https://github.com/postgres/postgres/blob/master/src/backend/optimizer/plan/planner.c>
 pub fn compare_sort_expr(
     sort_expr_a: &Expr,
     sort_expr_b: &Expr,
