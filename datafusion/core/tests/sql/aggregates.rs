@@ -1109,6 +1109,7 @@ async fn count_distinct_integers_aggregated_multiple_partitions() -> Result<()> 
 #[tokio::test]
 async fn aggregate_with_alias() -> Result<()> {
     let ctx = SessionContext::new();
+    let state = ctx.state();
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Utf8, false),
@@ -1120,9 +1121,8 @@ async fn aggregate_with_alias() -> Result<()> {
         .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
         .build()?;
 
-    let plan = ctx.optimize(&plan)?;
-
-    let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
+    let plan = state.optimize(&plan)?;
+    let physical_plan = state.create_physical_plan(&Arc::new(plan)).await?;
     assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
     assert_eq!(
         "total_salary",

@@ -991,11 +991,17 @@ impl SessionContext {
     }
 
     /// Optimizes the logical plan by applying optimizer rules.
+    #[deprecated(
+        note = "Use SessionState::optimize to ensure a consistent state for planning and execution"
+    )]
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         self.state.read().optimize(plan)
     }
 
     /// Creates a physical plan from a logical plan.
+    #[deprecated(
+        note = "Use SessionState::create_physical_plan or DataFrame::create_physical_plan to ensure a consistent state for planning and execution"
+    )]
     pub async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
