@@ -239,6 +239,7 @@ mod tests {
     use crate::config::ConfigOptions;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::physical_optimizer::enforcement::BasicEnforcement;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -289,12 +290,20 @@ mod tests {
         Arc::new(FilterExec::try_new(col("c1", &schema()).unwrap(), input).unwrap())
     }
 
-    fn sort_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+    fn sort_exec(
+        input: Arc<dyn ExecutionPlan>,
+        preserve_partitioning: bool,
+    ) -> Arc<dyn ExecutionPlan> {
         let sort_exprs = vec![PhysicalSortExpr {
             expr: col("c1", &schema()).unwrap(),
             options: SortOptions::default(),
         }];
-        Arc::new(SortExec::try_new(sort_exprs, input, None).unwrap())
+        Arc::new(SortExec::new_with_partitioning(
+            sort_exprs,
+            input,
+            preserve_partitioning,
+            None,
+        ))
     }
 
     fn projection_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
@@ -354,9 +363,16 @@ mod tests {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
             // run optimizer
-            let optimizer = Repartition {};
-            let optimized = optimizer
-                .optimize($PLAN, &SessionConfig::new().with_target_partitions(10))?;
+            let config = SessionConfig::new().with_target_partitions(10);
+            let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
+                Arc::new(Repartition::new()),
+                // The `BasicEnforcement` is an essential rule to be applied.
+                // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
+                Arc::new(BasicEnforcement::new()),
+            ];
+            let optimized = optimizers.into_iter().fold($PLAN, |plan, optimizer| {
+                optimizer.optimize(plan, &config).unwrap()
+            });
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent().to_string();
@@ -376,6 +392,7 @@ mod tests {
 
         let expected = [
             "AggregateExec: mode=Final, gby=[], aggr=[]",
+            "CoalescePartitionsExec",
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
@@ -391,6 +408,7 @@ mod tests {
 
         let expected = &[
             "AggregateExec: mode=Final, gby=[], aggr=[]",
+            "CoalescePartitionsExec",
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
             "FilterExec: c1@0",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
@@ -407,6 +425,7 @@ mod tests {
 
         let expected = &[
             "GlobalLimitExec: skip=0, fetch=100",
+            "CoalescePartitionsExec",
             "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // nothing sorts the data, so the local limit doesn't require sorted data either
@@ -424,6 +443,7 @@ mod tests {
 
         let expected = &[
             "GlobalLimitExec: skip=5, fetch=100",
+            "CoalescePartitionsExec",
             "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // nothing sorts the data, so the local limit doesn't require sorted data either
@@ -437,7 +457,7 @@ mod tests {
 
     #[test]
     fn repartition_sorted_limit() -> Result<()> {
-        let plan = limit_exec(sort_exec(parquet_exec()));
+        let plan = limit_exec(sort_exec(parquet_exec(), false));
 
         let expected = &[
             "GlobalLimitExec: skip=0, fetch=100",
@@ -453,7 +473,7 @@ mod tests {
 
     #[test]
     fn repartition_sorted_limit_with_filter() -> Result<()> {
-        let plan = limit_exec(filter_exec(sort_exec(parquet_exec())));
+        let plan = limit_exec(filter_exec(sort_exec(parquet_exec(), false)));
 
         let expected = &[
             "GlobalLimitExec: skip=0, fetch=100",
@@ -475,9 +495,11 @@ mod tests {
 
         let expected = &[
             "AggregateExec: mode=Final, gby=[], aggr=[]",
+            "CoalescePartitionsExec",
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "GlobalLimitExec: skip=0, fetch=100",
+            "CoalescePartitionsExec",
             "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // repartition should happen prior to the filter to maximize parallelism
@@ -500,9 +522,11 @@ mod tests {
 
         let expected = &[
             "AggregateExec: mode=Final, gby=[], aggr=[]",
+            "CoalescePartitionsExec",
             "AggregateExec: mode=Partial, gby=[], aggr=[]",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "GlobalLimitExec: skip=5, fetch=100",
+            "CoalescePartitionsExec",
             "LocalLimitExec: fetch=100",
             "FilterExec: c1@0",
             // repartition should happen prior to the filter to maximize parallelism
@@ -521,7 +545,8 @@ mod tests {
 
     #[test]
     fn repartition_ignores_union() -> Result<()> {
-        let plan = Arc::new(UnionExec::new(vec![parquet_exec(); 5]));
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(UnionExec::new(vec![parquet_exec(); 5]));
 
         let expected = &[
             "UnionExec",
@@ -538,11 +563,12 @@ mod tests {
     }
 
     #[test]
-    fn repartition_with_preserving_merge() -> Result<()> {
+    fn repartition_ignores_sort_preserving_merge() -> Result<()> {
         let plan = sort_preserving_merge_exec(parquet_exec());
 
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
+            "SortExec: [c1@0 ASC]",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
         ];
@@ -552,11 +578,12 @@ mod tests {
     }
 
     #[test]
-    fn repartition_transitively() -> Result<()> {
+    fn repartition_does_not_repartition_transitively() -> Result<()> {
         let plan = sort_preserving_merge_exec(projection_exec(parquet_exec()));
 
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
+            "SortExec: [c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[c1]",
@@ -568,7 +595,8 @@ mod tests {
 
     #[test]
     fn repartition_transitively_past_sort_with_projection() -> Result<()> {
-        let plan = sort_preserving_merge_exec(sort_exec(projection_exec(parquet_exec())));
+        let plan =
+            sort_preserving_merge_exec(sort_exec(projection_exec(parquet_exec()), true));
 
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
@@ -585,7 +613,8 @@ mod tests {
 
     #[test]
     fn repartition_transitively_past_sort_with_filter() -> Result<()> {
-        let plan = sort_preserving_merge_exec(sort_exec(filter_exec(parquet_exec())));
+        let plan =
+            sort_preserving_merge_exec(sort_exec(filter_exec(parquet_exec()), true));
 
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
@@ -602,9 +631,10 @@ mod tests {
 
     #[test]
     fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()> {
-        let plan = sort_preserving_merge_exec(sort_exec(projection_exec(filter_exec(
-            parquet_exec(),
-        ))));
+        let plan = sort_preserving_merge_exec(sort_exec(
+            projection_exec(filter_exec(parquet_exec())),
+            true,
+        ));
 
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
