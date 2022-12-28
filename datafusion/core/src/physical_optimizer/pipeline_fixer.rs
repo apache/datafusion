@@ -15,8 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! PipelineFixer rule is ensures that a given plan can accommodate its
-//! infinite sources, if there are any.
+//! The [PipelineFixer] rule tries to modify a given plan so that it can
+//! accommodate its infinite sources, if there are any. In other words,
+//! it tries to obtain a runnable query (with the given infinite sources)
+//! from an non-runnable query by transforming pipeline-breaking operations
+//! to pipeline-friendly ones. If this can not be done, the rule emits a
+//! diagnostic error message.
 //!
 use crate::config::ConfigOptions;
 use crate::error::Result;
@@ -32,9 +36,9 @@ use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;
 use std::sync::Arc;
 
-/// The PipelineFixer rule ensures that the given plan can accommodate
-/// its infinite sources, if there are any. It will reject any plan with
-/// pipeline-breaking operators with an diagnostic error message.
+/// The [PipelineFixer] rule tries to modify a given plan so that it can
+/// accommodate its infinite sources, if there are any. If this is not
+/// possible, the rule emits a diagnostic error message.
 #[derive(Default)]
 pub struct PipelineFixer {}
 
@@ -44,7 +48,7 @@ impl PipelineFixer {
         Self {}
     }
 }
-type PipelineCheckerSubrule =
+type PipelineFixerSubrule =
     dyn Fn(&PipelineStatePropagator) -> Option<Result<PipelineStatePropagator>>;
 impl PhysicalOptimizerRule for PipelineFixer {
     fn optimize(
@@ -53,7 +57,7 @@ impl PhysicalOptimizerRule for PipelineFixer {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let pipeline = PipelineStatePropagator::new(plan);
-        let physical_optimizer_subrules: Vec<Box<PipelineCheckerSubrule>> =
+        let physical_optimizer_subrules: Vec<Box<PipelineFixerSubrule>> =
             vec![Box::new(hash_join_swap_subrule)];
         let state = pipeline.transform_up(&|p| {
             apply_subrules_and_check_finiteness_requirements(
@@ -73,8 +77,8 @@ impl PhysicalOptimizerRule for PipelineFixer {
     }
 }
 
-/// It will swap build/probe sides of a hash join depending on whether its inputs may
-/// produce an infinite stream of records. The rule ensures that the left (build) side
+/// This subrule will swap build/probe sides of a hash join depending on whether its inputs
+/// may produce an infinite stream of records. The rule ensures that the left (build) side
 /// of the hash join always operates on an input stream that will produce a finite set of.
 /// records If the left side can not be chosen to be "finite", the order stays the
 /// same as the original query.
@@ -121,21 +125,20 @@ fn hash_join_swap_subrule(
     let children = &input.children_unbounded;
     if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
         let (left_unbounded, right_unbounded) = (children[0], children[1]);
-        let new_plan = match (left_unbounded, right_unbounded) {
-            (true, false) => {
-                if matches!(
-                    *hash_join.join_type(),
-                    JoinType::Inner
-                        | JoinType::Left
-                        | JoinType::LeftSemi
-                        | JoinType::LeftAnti
-                ) {
-                    swap(hash_join)
-                } else {
-                    Ok(plan)
-                }
+        let new_plan = if left_unbounded && !right_unbounded {
+            if matches!(
+                *hash_join.join_type(),
+                JoinType::Inner
+                    | JoinType::Left
+                    | JoinType::LeftSemi
+                    | JoinType::LeftAnti
+            ) {
+                swap(hash_join)
+            } else {
+                Ok(plan)
             }
-            _ => Ok(plan),
+        } else {
+            Ok(plan)
         };
         let new_state = new_plan.map(|plan| PipelineStatePropagator {
             plan,
@@ -150,7 +153,7 @@ fn hash_join_swap_subrule(
 
 /// This function swaps sides of a hash join to make it runnable even if one of its
 /// inputs are infinite. Note that this is not always possible; i.e. [JoinType::Full],
-/// [JoinType::Left], [JoinType::LeftAnti] and [JoinType::LeftSemi] can not run with
+/// [JoinType::Right], [JoinType::RightAnti] and [JoinType::RightSemi] can not run with
 /// an unbounded left side, even if we swap. Therefore, we do not consider them here.
 fn swap(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
     let partition_mode = hash_join.partition_mode();
@@ -177,7 +180,7 @@ fn swap(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
 
 fn apply_subrules_and_check_finiteness_requirements(
     mut input: PipelineStatePropagator,
-    physical_optimizer_subrules: &Vec<Box<PipelineCheckerSubrule>>,
+    physical_optimizer_subrules: &Vec<Box<PipelineFixerSubrule>>,
 ) -> Result<Option<PipelineStatePropagator>> {
     for sub_rule in physical_optimizer_subrules {
         if let Some(value) = sub_rule(&input).transpose()? {

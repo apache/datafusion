@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! PipelineChecker rule is ensures that a given plan can accommodate its
-//! infinite sources, if there are any.
+//! The [PipelineChecker] rule ensures that a given plan can accommodate its
+//! infinite sources, if there are any. It will reject non-runnable query plans
+//! that use pipeline-breaking operators on infinite input(s).
 //!
 use crate::config::ConfigOptions;
 use crate::error::Result;
@@ -25,8 +26,8 @@ use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use std::sync::Arc;
 
-/// The PipelineChecker rule will reject any plan with
-/// pipeline-breaking operators with an diagnostic error message.
+/// The PipelineChecker rule rejects non-runnable query plans that use
+/// pipeline-breaking operators on infinite input(s).
 #[derive(Default)]
 pub struct PipelineChecker {}
 
@@ -49,7 +50,7 @@ impl PhysicalOptimizerRule for PipelineChecker {
     }
 
     fn name(&self) -> &str {
-        "PipelineFixer"
+        "PipelineChecker"
     }
 
     fn schema_check(&self) -> bool {
@@ -75,21 +76,6 @@ impl PipelineStatePropagator {
             children_unbounded: vec![false; length],
         }
     }
-    /// It generates children of the execution plan with state.
-    pub fn children(&self) -> Vec<PipelineStatePropagator> {
-        self.plan
-            .children()
-            .into_iter()
-            .map(|child| {
-                let length = child.children().len();
-                PipelineStatePropagator {
-                    plan: child,
-                    unbounded: false,
-                    children_unbounded: vec![false; length],
-                }
-            })
-            .collect()
-    }
 }
 
 impl TreeNodeRewritable for PipelineStatePropagator {
@@ -97,10 +83,11 @@ impl TreeNodeRewritable for PipelineStatePropagator {
     where
         F: FnMut(Self) -> Result<Self>,
     {
-        let children = self.children();
+        let children = self.plan.children();
         if !children.is_empty() {
             let new_children = children
                 .into_iter()
+                .map(|child| PipelineStatePropagator::new(child))
                 .map(transform)
                 .collect::<Result<Vec<_>>>()?;
             let children_unbounded = new_children
@@ -122,18 +109,18 @@ impl TreeNodeRewritable for PipelineStatePropagator {
     }
 }
 
-/// It propagates finiteness information and reject any plan with
-/// pipeline-breaking operators
+/// This function propagates finiteness information and rejects any plan with
+/// pipeline-breaking operators acting on infinite inputs.
 pub fn check_finiteness_requirements(
     input: PipelineStatePropagator,
 ) -> Result<Option<PipelineStatePropagator>> {
     let plan = input.plan;
-    let children = &input.children_unbounded;
-    plan.unbounded_output(children).map(|value| {
+    let children = input.children_unbounded;
+    plan.unbounded_output(&children).map(|value| {
         Some(PipelineStatePropagator {
             plan,
             unbounded: value,
-            children_unbounded: input.children_unbounded,
+            children_unbounded: children,
         })
     })
 }

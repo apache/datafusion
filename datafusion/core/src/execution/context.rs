@@ -641,7 +641,7 @@ impl SessionContext {
             }
             (None, true) => {
                 return Err(DataFusionError::Plan(
-                    "Schema inference for infinite data sources not supported."
+                    "Schema inference for infinite data sources is not supported."
                         .to_string(),
                 ))
             }
@@ -674,7 +674,7 @@ impl SessionContext {
             }
             (None, true) => {
                 return Err(DataFusionError::Plan(
-                    "Schema inference for infinite data sources not supported."
+                    "Schema inference for infinite data sources is not supported."
                         .to_string(),
                 ))
             }
@@ -713,7 +713,7 @@ impl SessionContext {
             }
             (None, true) => {
                 return Err(DataFusionError::Plan(
-                    "Schema inference for infinite data sources not supported."
+                    "Schema inference for infinite data sources is not supported."
                         .to_string(),
                 ))
             }
@@ -792,7 +792,7 @@ impl SessionContext {
             (None, false) => options.infer_schema(&self.state(), &table_path).await?,
             (None, true) => {
                 return Err(DataFusionError::Plan(
-                    "Schema inference for infinite data sources not supported."
+                    "Schema inference for infinite data sources is not supported."
                         .to_string(),
                 ))
             }
@@ -1588,9 +1588,11 @@ impl SessionState {
         // and local sort to meet the distribution and ordering requirements.
         // Therefore, it should be run before BasicEnforcement
         physical_optimizers.push(Arc::new(JoinSelection::new()));
-        // At current implementation, the pipeline fixer might alter the output partitioning of
-        // the hash join by swapping hash join.
-        // Therefore, it should be run before BasicEnforcement.
+        // If the query is processing infinite inputs, the PipelineFixer rule applies the
+        // necessary transformations to make the query runnable (if it is not already runnable).
+        // If the query can not be made runnable, the rule emits an error with a diagnostic message.
+        // Since the transformations it applies may alter output partitioning properties of operators
+        // (e.g. by swapping hash join sides), this rule runs before BasicEnforcement.
         physical_optimizers.push(Arc::new(PipelineFixer::new()));
         // It's for adding essential repartition and local sorting operator to satisfy the
         // required distribution and local sort.
@@ -1617,8 +1619,10 @@ impl SessionState {
                     .unwrap(),
             )));
         }
-        // The PipelineChecker rule will reject any plan with pipeline-breaking operators with
-        // an diagnostic error message. It is only a gatekeeper.
+        // The PipelineChecker rule will reject non-runnable query plans that use
+        // pipeline-breaking operators on infinite input(s). The rule generates a
+        // diagnostic error message when this happens. It makes no changes to the
+        // given query plan; i.e. it only acts as a final gatekeeping rule.
         physical_optimizers.push(Arc::new(PipelineChecker::new()));
         SessionState {
             session_id,
