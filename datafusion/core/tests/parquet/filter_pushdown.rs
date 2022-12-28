@@ -305,7 +305,7 @@ async fn single_file_small_data_pages() {
         .with_name("selective")
         // predicate is chosen carefully to prune all bar 0-1, 1-0, 1-1
         // time > 1970-01-01T00:00:00.000216064
-        .with_filter(col("time").gt(lit_timestamp_nano(000216064)))
+        .with_filter(col("time").gt(lit_timestamp_nano(216064)))
         .with_pushdown_expected(PushdownExpected::Some)
         .with_page_index_filtering_expected(PageIndexFilteringExpected::Some)
         .with_expected_rows(178)
