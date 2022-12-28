@@ -18,7 +18,9 @@
 //! Enforcement optimizer rules are used to make sure the plan's Distribution and Ordering
 //! requirements are met by inserting necessary [[RepartitionExec]] and [[SortExec]].
 //!
-use crate::config::OPT_TOP_DOWN_JOIN_KEY_REORDERING;
+use crate::config::{
+    ConfigOptions, OPT_TARGET_PARTITIONS, OPT_TOP_DOWN_JOIN_KEY_REORDERING,
+};
 use crate::error::Result;
 use crate::physical_optimizer::utils::{add_sort_above_child, ordering_satisfy};
 use crate::physical_optimizer::PhysicalOptimizerRule;
@@ -34,7 +36,6 @@ use crate::physical_plan::sorts::sort::SortOptions;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
-use crate::prelude::SessionConfig;
 use arrow::datatypes::SchemaRef;
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
@@ -69,11 +70,10 @@ impl PhysicalOptimizerRule for BasicEnforcement {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &SessionConfig,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_partitions = config.target_partitions();
+        let target_partitions = config.get_usize(OPT_TARGET_PARTITIONS).unwrap();
         let top_down_join_key_reordering = config
-            .config_options()
             .get_bool(OPT_TOP_DOWN_JOIN_KEY_REORDERING)
             .unwrap_or_default();
         let new_plan = if top_down_join_key_reordering {
@@ -1135,10 +1135,12 @@ mod tests {
         ($EXPECTED_LINES: expr, $PLAN: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
+            let mut config = ConfigOptions::new();
+            config.set_usize(OPT_TARGET_PARTITIONS, 10);
+
             // run optimizer
             let optimizer = BasicEnforcement {};
-            let optimized = optimizer
-                .optimize($PLAN, &SessionConfig::new().with_target_partitions(10))?;
+            let optimized = optimizer.optimize($PLAN, &config)?;
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent().to_string();
