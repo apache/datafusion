@@ -113,6 +113,35 @@ impl WindowFrame {
             }
         }
     }
+
+    /// Get reversed window frame. For example
+    /// `3 ROWS PRECEDING AND 2 ROWS FOLLOWING` -->
+    /// `2 ROWS PRECEDING AND 3 ROWS FOLLOWING`
+    pub fn reverse(&self) -> Self {
+        let start_bound = match &self.end_bound {
+            WindowFrameBound::Preceding(elem) => {
+                WindowFrameBound::Following(elem.clone())
+            }
+            WindowFrameBound::Following(elem) => {
+                WindowFrameBound::Preceding(elem.clone())
+            }
+            WindowFrameBound::CurrentRow => WindowFrameBound::CurrentRow,
+        };
+        let end_bound = match &self.start_bound {
+            WindowFrameBound::Preceding(elem) => {
+                WindowFrameBound::Following(elem.clone())
+            }
+            WindowFrameBound::Following(elem) => {
+                WindowFrameBound::Preceding(elem.clone())
+            }
+            WindowFrameBound::CurrentRow => WindowFrameBound::CurrentRow,
+        };
+        WindowFrame {
+            units: self.units,
+            start_bound,
+            end_bound,
+        }
+    }
 }
 
 /// There are five ways to describe starting and ending frame boundaries:

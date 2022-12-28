@@ -19,18 +19,13 @@
 //!
 //! Information Schema]<https://en.wikipedia.org/wiki/Information_schema>
 
-use std::{
-    any::Any,
-    sync::{Arc, Weak},
-};
+use std::{any::Any, sync::Arc};
 
 use arrow::{
     array::{StringBuilder, UInt64Builder},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-
-use datafusion_common::Result;
 
 use crate::config::ConfigOptions;
 use crate::datasource::streaming::{PartitionStream, StreamingTable};
@@ -40,71 +35,13 @@ use crate::logical_expr::TableType;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::SendableRecordBatchStream;
 
-use super::{
-    catalog::{CatalogList, CatalogProvider},
-    schema::SchemaProvider,
-};
+use super::{catalog::CatalogList, schema::SchemaProvider};
 
-const INFORMATION_SCHEMA: &str = "information_schema";
-const TABLES: &str = "tables";
-const VIEWS: &str = "views";
-const COLUMNS: &str = "columns";
-const DF_SETTINGS: &str = "df_settings";
-
-/// Wraps another [`CatalogProvider`] and adds a "information_schema"
-/// schema that can introspect on tables in the catalog_list
-pub(crate) struct CatalogWithInformationSchema {
-    catalog_list: Weak<dyn CatalogList>,
-    /// wrapped provider
-    inner: Arc<dyn CatalogProvider>,
-}
-
-impl CatalogWithInformationSchema {
-    pub(crate) fn new(
-        catalog_list: Weak<dyn CatalogList>,
-        inner: Arc<dyn CatalogProvider>,
-    ) -> Self {
-        Self {
-            catalog_list,
-            inner,
-        }
-    }
-}
-
-impl CatalogProvider for CatalogWithInformationSchema {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema_names(&self) -> Vec<String> {
-        self.inner
-            .schema_names()
-            .into_iter()
-            .chain(std::iter::once(INFORMATION_SCHEMA.to_string()))
-            .collect::<Vec<String>>()
-    }
-
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        if name.eq_ignore_ascii_case(INFORMATION_SCHEMA) {
-            Weak::upgrade(&self.catalog_list).map(|catalog_list| {
-                Arc::new(InformationSchemaProvider {
-                    config: InformationSchemaConfig { catalog_list },
-                }) as Arc<dyn SchemaProvider>
-            })
-        } else {
-            self.inner.schema(name)
-        }
-    }
-
-    fn register_schema(
-        &self,
-        name: &str,
-        schema: Arc<dyn SchemaProvider>,
-    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
-        let catalog = &self.inner;
-        catalog.register_schema(name, schema)
-    }
-}
+pub const INFORMATION_SCHEMA: &str = "information_schema";
+pub const TABLES: &str = "tables";
+pub const VIEWS: &str = "views";
+pub const COLUMNS: &str = "columns";
+pub const DF_SETTINGS: &str = "df_settings";
 
 /// Implements the `information_schema` virtual schema and tables
 ///
@@ -112,8 +49,17 @@ impl CatalogProvider for CatalogWithInformationSchema {
 /// demand. This means that if more tables are added to the underlying
 /// providers, they will appear the next time the `information_schema`
 /// table is queried.
-struct InformationSchemaProvider {
+pub struct InformationSchemaProvider {
     config: InformationSchemaConfig,
+}
+
+impl InformationSchemaProvider {
+    /// Creates a new [`InformationSchemaProvider`] for the provided `catalog_list`
+    pub fn new(catalog_list: Arc<dyn CatalogList>) -> Self {
+        Self {
+            config: InformationSchemaConfig { catalog_list },
+        }
+    }
 }
 
 #[derive(Clone)]

@@ -25,7 +25,7 @@ use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statist
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
-use arrow::ipc::writer::FileWriter;
+use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use futures::{Future, Stream, StreamExt, TryStreamExt};
 use log::debug;
@@ -266,6 +266,22 @@ impl<T> Drop for AbortOnDropMany<T> {
     }
 }
 
+/// Transposes the given vector of vectors.
+pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
+    match original.as_slice() {
+        [] => vec![],
+        [first, ..] => {
+            let mut result = (0..first.len()).map(|_| vec![]).collect::<Vec<_>>();
+            for row in original {
+                for (item, transposed_row) in row.into_iter().zip(&mut result) {
+                    transposed_row.push(item);
+                }
+            }
+            result
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,6 +348,15 @@ mod tests {
         assert_eq!(actual, expected);
         Ok(())
     }
+
+    #[test]
+    fn test_transpose() -> Result<()> {
+        let in_data = vec![vec![1, 2, 3], vec![4, 5, 6]];
+        let transposed = transpose(in_data);
+        let expected = vec![vec![1, 4], vec![2, 5], vec![3, 6]];
+        assert_eq!(expected, transposed);
+        Ok(())
+    }
 }
 
 /// Write in Arrow IPC format.
@@ -366,6 +391,26 @@ impl IPCWriter {
         })
     }
 
+    /// Create new writer with IPC write options
+    pub fn new_with_options(
+        path: &Path,
+        schema: &Schema,
+        write_options: IpcWriteOptions,
+    ) -> Result<Self> {
+        let file = File::create(path).map_err(|e| {
+            DataFusionError::Execution(format!(
+                "Failed to create partition file at {:?}: {:?}",
+                path, e
+            ))
+        })?;
+        Ok(Self {
+            num_batches: 0,
+            num_rows: 0,
+            num_bytes: 0,
+            path: path.into(),
+            writer: FileWriter::try_new_with_options(file, schema, write_options)?,
+        })
+    }
     /// Write one single batch
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         self.writer.write(batch)?;

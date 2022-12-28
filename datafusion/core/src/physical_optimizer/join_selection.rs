@@ -20,8 +20,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use crate::config::OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD;
-use crate::execution::context::SessionConfig;
+use crate::config::{ConfigOptions, OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD};
 use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::joins::{
@@ -213,10 +212,9 @@ impl PhysicalOptimizerRule for JoinSelection {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        session_config: &SessionConfig,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let collect_left_threshold: usize = session_config
-            .config_options()
+        let collect_left_threshold: usize = config
             .get_u64(OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD)
             .unwrap_or_default()
             .try_into()
@@ -498,7 +496,7 @@ mod tests {
         .unwrap();
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &SessionConfig::new())
+            .optimize(Arc::new(join), &ConfigOptions::new())
             .unwrap();
 
         let swapping_projection = optimized_join
@@ -546,7 +544,7 @@ mod tests {
         .unwrap();
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &SessionConfig::new())
+            .optimize(Arc::new(join), &ConfigOptions::new())
             .unwrap();
 
         let swapping_projection = optimized_join
@@ -599,7 +597,7 @@ mod tests {
             let original_schema = join.schema();
 
             let optimized_join = JoinSelection::new()
-                .optimize(Arc::new(join), &SessionConfig::new())
+                .optimize(Arc::new(join), &ConfigOptions::new())
                 .unwrap();
 
             let swapped_join = optimized_join
@@ -628,7 +626,7 @@ mod tests {
                 $EXPECTED_LINES.iter().map(|s| *s).collect::<Vec<&str>>();
 
             let optimized = JoinSelection::new()
-                .optimize(Arc::new($PLAN), &SessionConfig::new())
+                .optimize(Arc::new($PLAN), &ConfigOptions::new())
                 .unwrap();
 
             let plan = displayable(optimized.as_ref()).indent().to_string();
@@ -715,7 +713,7 @@ mod tests {
         .unwrap();
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &SessionConfig::new())
+            .optimize(Arc::new(join), &ConfigOptions::new())
             .unwrap();
 
         let swapped_join = optimized_join
@@ -940,7 +938,7 @@ mod tests {
         .unwrap();
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &SessionConfig::new())
+            .optimize(Arc::new(join), &ConfigOptions::new())
             .unwrap();
 
         if !is_swapped {

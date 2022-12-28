@@ -198,7 +198,7 @@ pub fn create_physical_expr(
                     input_schema,
                 )?)),
                 _ => {
-                    // assume that we can coerce both sides into a common type
+                    // we have coerced both sides into a common type in the logical phase,
                     // and then perform a binary operation
                     binary(lhs, *op, rhs, input_schema)
                 }

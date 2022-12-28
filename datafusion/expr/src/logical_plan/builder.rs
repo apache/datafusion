@@ -32,8 +32,8 @@ use crate::{
         Union, Values, Window,
     },
     utils::{
-        can_hash, check_all_column_from_schema, expand_qualified_wildcard,
-        expand_wildcard, group_window_expr_by_sort_keys,
+        can_hash, expand_qualified_wildcard, expand_wildcard,
+        find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
     },
     Expr, ExprSchemable, TableSource,
 };
@@ -257,7 +257,7 @@ impl LogicalPlanBuilder {
         // The sort_by() implementation here is a stable sort.
         // Note that by this rule if there's an empty over, it'll be at the top level
         groups.sort_by(|(key_a, _), (key_b, _)| {
-            for (first, second) in key_a.iter().zip(key_b.iter()) {
+            for ((first, _), (second, _)) in key_a.iter().zip(key_b.iter()) {
                 let key_ordering = compare_sort_expr(first, second, plan.schema());
                 match key_ordering {
                     Ordering::Less => {
@@ -853,39 +853,17 @@ impl LogicalPlanBuilder {
                     &[right_using_columns],
                 )?;
 
-                let normalized_left_using_columns = normalized_left_key.to_columns()?;
-                let l_is_left = check_all_column_from_schema(
-                    &normalized_left_using_columns,
-                    self.plan.schema().clone(),
-                )?;
-
-                let normalized_right_using_columns = normalized_right_key.to_columns()?;
-                let r_is_right = check_all_column_from_schema(
-                    &normalized_right_using_columns,
-                    right.schema().clone(),
-                )?;
-
-                let r_is_left_and_l_is_right = || {
-                    let result = check_all_column_from_schema(
-                        &normalized_right_using_columns,
+                // find valid equijoin
+                find_valid_equijoin_key_pair(
+                        &normalized_left_key,
+                        &normalized_right_key,
                         self.plan.schema().clone(),
-                    )? && check_all_column_from_schema(
-                        &normalized_left_using_columns,
                         right.schema().clone(),
-                    )?;
-                    Result::Ok(result)
-                };
-
-                if l_is_left && r_is_right {
-                    Ok((normalized_left_key, normalized_right_key))
-                } else if r_is_left_and_l_is_right()?{
-                    Ok((normalized_right_key, normalized_left_key))
-                } else {
-                    Err(DataFusionError::Plan(format!(
-                        "can't create join plan, join key should belong to one input, error key: ({},{})",
-                        normalized_left_key, normalized_right_key
-                    )))
-                }
+                    )?.ok_or_else(||
+                        DataFusionError::Plan(format!(
+                            "can't create join plan, join key should belong to one input, error key: ({},{})",
+                            normalized_left_key, normalized_right_key
+                        )))
             })
             .collect::<Result<Vec<_>>>()?;
 

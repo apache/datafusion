@@ -204,7 +204,9 @@ pub fn expand_qualified_wildcard(
     expand_wildcard(&qualifier_schema, plan)
 }
 
-type WindowSortKey = Vec<Expr>;
+/// (expr, "is the SortExpr for window (either comes from PARTITION BY or ORDER BY columns)")
+/// if bool is true SortExpr comes from `PARTITION BY` column, if false comes from `ORDER BY` column
+type WindowSortKey = Vec<(Expr, bool)>;
 
 /// Generate a sort key for a given window expr's partition_by and order_bu expr
 pub fn generate_sort_key(
@@ -224,6 +226,7 @@ pub fn generate_sort_key(
         .collect::<Result<Vec<_>>>()?;
 
     let mut final_sort_keys = vec![];
+    let mut is_partition_flag = vec![];
     partition_by.iter().for_each(|e| {
         // By default, create sort key with ASC is true and NULLS LAST to be consistent with
         // PostgreSQL's rule: https://www.postgresql.org/docs/current/queries-order.html
@@ -232,18 +235,26 @@ pub fn generate_sort_key(
             let order_by_key = &order_by[pos];
             if !final_sort_keys.contains(order_by_key) {
                 final_sort_keys.push(order_by_key.clone());
+                is_partition_flag.push(true);
             }
         } else if !final_sort_keys.contains(&e) {
             final_sort_keys.push(e);
+            is_partition_flag.push(true);
         }
     });
 
     order_by.iter().for_each(|e| {
         if !final_sort_keys.contains(e) {
             final_sort_keys.push(e.clone());
+            is_partition_flag.push(false);
         }
     });
-    Ok(final_sort_keys)
+    let res = final_sort_keys
+        .into_iter()
+        .zip(is_partition_flag)
+        .map(|(lhs, rhs)| (lhs, rhs))
+        .collect::<Vec<_>>();
+    Ok(res)
 }
 
 /// Compare the sort expr as PostgreSQL's common_prefix_cmp():
@@ -942,15 +953,54 @@ pub fn can_hash(data_type: &DataType) -> bool {
 }
 
 /// Check whether all columns are from the schema.
-pub fn check_all_column_from_schema(
-    columns: &HashSet<Column>,
-    schema: DFSchemaRef,
-) -> Result<bool> {
-    let result = columns
+fn check_all_column_from_schema(columns: &HashSet<Column>, schema: DFSchemaRef) -> bool {
+    columns
         .iter()
-        .all(|column| schema.index_of_column(column).is_ok());
+        .all(|column| schema.index_of_column(column).is_ok())
+}
 
-    Ok(result)
+/// Give two sides of the equijoin predicate, return a valid join key pair.
+/// If there is no valid join key pair, return None.
+///
+/// A valid join means:
+/// 1. All referenced column of the left side is from the left schema, and
+///    all referenced column of the right side is from the right schema.
+/// 2. Or opposite. All referenced column of the left side is from the right schema,
+///    and the right side is from the left schema.
+///
+pub fn find_valid_equijoin_key_pair(
+    left_key: &Expr,
+    right_key: &Expr,
+    left_schema: DFSchemaRef,
+    right_schema: DFSchemaRef,
+) -> Result<Option<(Expr, Expr)>> {
+    let left_using_columns = left_key.to_columns()?;
+    let right_using_columns = right_key.to_columns()?;
+
+    // Conditions like a = 10, will be added to non-equijoin.
+    if left_using_columns.is_empty() || right_using_columns.is_empty() {
+        return Ok(None);
+    }
+
+    let l_is_left =
+        check_all_column_from_schema(&left_using_columns, left_schema.clone());
+    let r_is_right =
+        check_all_column_from_schema(&right_using_columns, right_schema.clone());
+
+    let r_is_left_and_l_is_right = || {
+        check_all_column_from_schema(&right_using_columns, left_schema.clone())
+            && check_all_column_from_schema(&left_using_columns, right_schema.clone())
+    };
+
+    let join_key_pair = match (l_is_left, r_is_right) {
+        (true, true) => Some((left_key.clone(), right_key.clone())),
+        (_, _) if r_is_left_and_l_is_right() => {
+            Some((right_key.clone(), left_key.clone()))
+        }
+        _ => None,
+    };
+
+    Ok(join_key_pair)
 }
 
 #[cfg(test)]
@@ -1043,9 +1093,13 @@ mod tests {
         let exprs = &[max1.clone(), max2.clone(), min3.clone(), sum4.clone()];
         let result = group_window_expr_by_sort_keys(exprs)?;
 
-        let key1 = vec![age_asc.clone(), name_desc.clone()];
+        let key1 = vec![(age_asc.clone(), false), (name_desc.clone(), false)];
         let key2 = vec![];
-        let key3 = vec![name_desc, age_asc, created_at_desc];
+        let key3 = vec![
+            (name_desc, false),
+            (age_asc, false),
+            (created_at_desc, false),
+        ];
 
         let expected: Vec<(WindowSortKey, Vec<&Expr>)> = vec![
             (key1, vec![&max1, &min3]),
@@ -1112,21 +1166,30 @@ mod tests {
                 ];
 
                 let expected = vec![
-                    Expr::Sort(Sort {
-                        expr: Box::new(col("age")),
-                        asc: asc_,
-                        nulls_first: nulls_first_,
-                    }),
-                    Expr::Sort(Sort {
-                        expr: Box::new(col("name")),
-                        asc: asc_,
-                        nulls_first: nulls_first_,
-                    }),
-                    Expr::Sort(Sort {
-                        expr: Box::new(col("created_at")),
-                        asc: true,
-                        nulls_first: false,
-                    }),
+                    (
+                        Expr::Sort(Sort {
+                            expr: Box::new(col("age")),
+                            asc: asc_,
+                            nulls_first: nulls_first_,
+                        }),
+                        true,
+                    ),
+                    (
+                        Expr::Sort(Sort {
+                            expr: Box::new(col("name")),
+                            asc: asc_,
+                            nulls_first: nulls_first_,
+                        }),
+                        true,
+                    ),
+                    (
+                        Expr::Sort(Sort {
+                            expr: Box::new(col("created_at")),
+                            asc: true,
+                            nulls_first: false,
+                        }),
+                        true,
+                    ),
                 ];
                 let result = generate_sort_key(partition_by, order_by)?;
                 assert_eq!(expected, result);
