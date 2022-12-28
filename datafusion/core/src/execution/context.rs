@@ -99,6 +99,8 @@ use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::memory_pool::MemoryPool;
+use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
+use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
 use uuid::Uuid;
@@ -1586,6 +1588,9 @@ impl SessionState {
         // and local sort to meet the distribution and ordering requirements.
         // Therefore, it should be run before BasicEnforcement
         physical_optimizers.push(Arc::new(JoinSelection::new()));
+        // At current implementation, the pipeline fixer might alter the output partitioning of
+        // the hash join by swapping hash join.
+        // Therefore, it should be run before BasicEnforcement.
         physical_optimizers.push(Arc::new(PipelineFixer::new()));
         // It's for adding essential repartition and local sorting operator to satisfy the
         // required distribution and local sort.
@@ -1612,6 +1617,8 @@ impl SessionState {
                     .unwrap(),
             )));
         }
+        // The PipelineChecker rule will reject any plan with pipeline-breaking operators with
+        // an diagnostic error message. It is only a gatekeeper.
         physical_optimizers.push(Arc::new(PipelineChecker::new()));
         SessionState {
             session_id,

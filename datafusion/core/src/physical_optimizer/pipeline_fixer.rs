@@ -18,6 +18,7 @@
 //! PipelineFixer rule is ensures that a given plan can accommodate its
 //! infinite sources, if there are any.
 //!
+use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::join_selection::swap_hash_join;
 use crate::physical_optimizer::pipeline_checker::{
@@ -27,7 +28,6 @@ use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::joins::{HashJoinExec, PartitionMode};
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::ExecutionPlan;
-use crate::prelude::SessionConfig;
 use datafusion_common::DataFusionError;
 use datafusion_expr::logical_plan::JoinType;
 use std::sync::Arc;
@@ -50,7 +50,7 @@ impl PhysicalOptimizerRule for PipelineFixer {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &SessionConfig,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let pipeline = PipelineStatePropagator::new(plan);
         let physical_optimizer_subrules: Vec<Box<PipelineCheckerSubrule>> =

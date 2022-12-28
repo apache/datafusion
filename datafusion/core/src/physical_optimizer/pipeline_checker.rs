@@ -18,11 +18,11 @@
 //! PipelineChecker rule is ensures that a given plan can accommodate its
 //! infinite sources, if there are any.
 //!
+use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
-use crate::prelude::SessionConfig;
 use std::sync::Arc;
 
 /// The PipelineChecker rule will reject any plan with
@@ -41,7 +41,7 @@ impl PhysicalOptimizerRule for PipelineChecker {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &SessionConfig,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let pipeline = PipelineStatePropagator::new(plan);
         let state = pipeline.transform_up(&check_finiteness_requirements)?;
