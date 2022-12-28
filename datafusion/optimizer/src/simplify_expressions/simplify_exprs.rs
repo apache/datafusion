@@ -120,6 +120,7 @@ mod tests {
     use crate::simplify_expressions::utils::for_test::{
         cast_to_int64_expr, now_expr, to_timestamp_expr,
     };
+    use crate::test::test_table_scan_with_name;
 
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -131,7 +132,7 @@ mod tests {
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr,
-        ExprSchemable,
+        ExprSchemable, JoinType,
     };
 
     /// A macro to assert that one string is contained within another with
@@ -786,6 +787,30 @@ mod tests {
             .build()?;
         let expected = "Filter: test.d IS DISTINCT FROM Int32(10)\
         \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn simplify_equijoin_predicate() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let left_key = col("t1.a") + lit(1i64).cast_to(&DataType::UInt32, t1.schema())?;
+        let right_key =
+            col("t2.a") + lit(2i64).cast_to(&DataType::UInt32, t2.schema())?;
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_with_expr_keys(
+                t2,
+                JoinType::Inner,
+                (vec![left_key], vec![right_key]),
+                None,
+            )?
+            .build()?;
+
+        let expected = "Inner Join: t1.a + UInt32(1) = t2.a + UInt32(2)\
+            \n  TableScan: t1\
+            \n  TableScan: t2";
 
         assert_optimized_plan_eq(&plan, expected)
     }

@@ -586,6 +586,12 @@ pub fn from_plan(
             // The preceding part of expr is equi-exprs,
             // and the struct of each equi-expr is like `left-expr = right-expr`.
             let new_on:Vec<(Expr,Expr)> = expr.iter().take(equi_expr_count).map(|equi_expr| {
+                    // SimplifyExpression may add alias for an expression.
+                    let equi_expr = match equi_expr {
+                        Expr::Alias(expr,_) => expr.as_ref(),
+                        _ => equi_expr,
+                    };
+
                     if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = equi_expr {
                         assert!(op == &Operator::Eq);
                         Ok(((**left).clone(), (**right).clone()))
