@@ -327,11 +327,17 @@ impl Iterator for AccessLogGenerator {
             return None;
         }
 
-        let mut builder = BatchBuilder::default();
-        builder.options = self.options.clone();
-        builder.options.row_limit = self
+        let row_limit = self
             .max_batch_size
             .min(self.options.row_limit - self.row_count);
+
+        let mut builder = BatchBuilder {
+            options: GeneratorOptions {
+                row_limit,
+                ..self.options.clone()
+            },
+            ..Default::default()
+        };
 
         let host = format!(
             "i-{:016x}.ec2.internal",
