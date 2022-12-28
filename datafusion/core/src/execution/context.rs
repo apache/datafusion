@@ -1332,6 +1332,35 @@ impl SessionConfig {
             .unwrap()
     }
 
+    /// Enables or disables the coalescence of small batches into larger batches
+    pub fn with_coalesce_batches(mut self, enabled: bool) -> Self {
+        self.config_options.set_bool(OPT_COALESCE_BATCHES, enabled);
+        self
+    }
+
+    /// Returns true if record batches will be examined between each operator
+    /// and small batches will be coalesced into larger batches.
+    pub fn coalesce_batches(&self) -> bool {
+        self.config_options
+            .get_bool(OPT_COALESCE_BATCHES)
+            .unwrap_or_default()
+    }
+
+    /// Enables or disables the round robin repartition for increasing parallelism
+    pub fn with_round_robin_repartition(mut self, enabled: bool) -> Self {
+        self.config_options
+            .set_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION, enabled);
+        self
+    }
+
+    /// Returns true if the physical plan optimizer will try to
+    /// add round robin repartition to increase parallelism to leverage more CPU cores.
+    pub fn round_robin_repartition(&self) -> bool {
+        self.config_options
+            .get_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION)
+            .unwrap_or_default()
+    }
+
     /// Return a handle to the configuration options.
     ///
     /// [`config_options`]: SessionContext::config_option
@@ -1489,11 +1518,7 @@ impl SessionState {
         //      - it's conflicted with some parts of the BasicEnforcement, since it will
         //      introduce additional repartitioning while the BasicEnforcement aims at
         //      reducing unnecessary repartitioning.
-        if config
-            .config_options
-            .get_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION)
-            .unwrap_or_default()
-        {
+        if config.round_robin_repartition() {
             physical_optimizers.push(Arc::new(Repartition::new()));
         }
         //- Currently it will depend on the partition number to decide whether to change the
@@ -1519,11 +1544,7 @@ impl SessionState {
         physical_optimizers.push(Arc::new(OptimizeSorts::new()));
         // It will not influence the distribution and ordering of the whole plan tree.
         // Therefore, to avoid influencing other rules, it should be run at last.
-        if config
-            .config_options
-            .get_bool(OPT_COALESCE_BATCHES)
-            .unwrap_or_default()
-        {
+        if config.coalesce_batches() {
             physical_optimizers.push(Arc::new(CoalesceBatches::new(
                 config
                     .config_options
