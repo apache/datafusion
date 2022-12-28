@@ -257,9 +257,9 @@ async fn csv_explain_plans() {
     );
 
     // Optimized logical plan
-    //
+    let state = ctx.state();
     let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.optimize(plan).expect(&msg);
+    let plan = state.optimize(plan).expect(&msg);
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
     assert_eq!(logical_schema, optimized_logical_schema.as_ref());
@@ -334,12 +334,11 @@ async fn csv_explain_plans() {
     // Physical plan
     // Create plan
     let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
+    let plan = state.create_physical_plan(&plan).await.expect(&msg);
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx).await.expect(&msg);
+    let results = collect(plan, state.task_ctx()).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
@@ -481,9 +480,9 @@ async fn csv_explain_verbose_plans() {
     );
 
     // Optimized logical plan
-    //
     let msg = format!("Optimizing logical plan for '{}': {:?}", sql, dataframe);
-    let plan = dataframe.into_optimized_plan().expect(&msg);
+    let (state, plan) = dataframe.into_parts();
+    let plan = state.optimize(&plan).expect(&msg);
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
     assert_eq!(&logical_schema, optimized_logical_schema.as_ref());
@@ -558,7 +557,7 @@ async fn csv_explain_verbose_plans() {
     // Physical plan
     // Create plan
     let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
+    let plan = state.create_physical_plan(&plan).await.expect(&msg);
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);

@@ -208,11 +208,12 @@ async fn custom_source_dataframe() -> Result<()> {
     let ctx = SessionContext::new();
 
     let table = ctx.read_table(Arc::new(CustomTableProvider))?;
-    let logical_plan = LogicalPlanBuilder::from(table.into_optimized_plan()?)
+    let (state, plan) = table.into_parts();
+    let logical_plan = LogicalPlanBuilder::from(plan)
         .project(vec![col("c2")])?
         .build()?;
 
-    let optimized_plan = ctx.optimize(&logical_plan)?;
+    let optimized_plan = state.optimize(&logical_plan)?;
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match &**input {
             LogicalPlan::TableScan(TableScan {
@@ -235,13 +236,12 @@ async fn custom_source_dataframe() -> Result<()> {
     );
     assert_eq!(format!("{:?}", optimized_plan), expected);
 
-    let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
+    let physical_plan = state.create_physical_plan(&optimized_plan).await?;
 
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
 
-    let task_ctx = ctx.task_ctx();
-    let batches = collect(physical_plan, task_ctx).await?;
+    let batches = collect(physical_plan, state.task_ctx()).await?;
     let origin_rec_batch = TEST_CUSTOM_RECORD_BATCH!()?;
     assert_eq!(1, batches.len());
     assert_eq!(1, batches[0].num_columns());
@@ -261,10 +261,7 @@ async fn optimizers_catch_all_statistics() {
         .await
         .unwrap();
 
-    let physical_plan = ctx
-        .create_physical_plan(&df.into_optimized_plan().unwrap())
-        .await
-        .unwrap();
+    let physical_plan = df.create_physical_plan().await.unwrap();
 
     // when the optimization kicks in, the source is replaced by an EmptyExec
     assert!(
