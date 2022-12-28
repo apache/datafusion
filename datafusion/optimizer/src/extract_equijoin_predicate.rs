@@ -61,7 +61,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
 
                 filter.as_ref().map_or(Result::Ok(None), |expr| {
                     let (equijoin_predicates, non_equijoin_expr) =
-                        split_equi_and_none_equijoin_predicate(
+                        split_eq_and_noneq_join_predicate(
                             expr,
                             left_schema,
                             right_schema,
@@ -99,17 +99,17 @@ impl OptimizerRule for ExtractEquijoinPredicate {
     }
 }
 
-fn split_equi_and_none_equijoin_predicate(
-    expr: &Expr,
+fn split_eq_and_noneq_join_predicate(
+    filter: &Expr,
     left_schema: &Arc<DFSchema>,
     right_schema: &Arc<DFSchema>,
 ) -> Result<(Vec<EquijoinPredicate>, Option<Expr>)> {
-    let filters = split_conjunction(expr);
+    let exprs = split_conjunction(filter);
 
     let mut accum_join_keys: Vec<(Expr, Expr)> = vec![];
     let mut accum_filters: Vec<Expr> = vec![];
-    for filter in filters {
-        match filter {
+    for expr in exprs {
+        match expr {
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Operator::Eq,
@@ -132,13 +132,13 @@ fn split_equi_and_none_equijoin_predicate(
                     if can_hash(&left_expr_type) && can_hash(&right_expr_type) {
                         accum_join_keys.push((left_expr, right_expr));
                     } else {
-                        accum_filters.push(filter.clone());
+                        accum_filters.push(expr.clone());
                     }
                 } else {
-                    accum_filters.push(filter.clone());
+                    accum_filters.push(expr.clone());
                 }
             }
-            _ => accum_filters.push(filter.clone()),
+            _ => accum_filters.push(expr.clone()),
         }
     }
 
