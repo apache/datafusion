@@ -271,7 +271,7 @@ mod tests {
         file_compression_type: FileCompressionType,
     ) -> (ObjectStoreUrl, Vec<Vec<PartitionedFile>>, SchemaRef) {
         let store_url = ObjectStoreUrl::local_filesystem();
-        let store = state.runtime_env.object_store(&store_url).unwrap();
+        let store = state.runtime_env().object_store(&store_url).unwrap();
 
         let filename = "1.json";
         let file_groups = partitioned_file_groups(
