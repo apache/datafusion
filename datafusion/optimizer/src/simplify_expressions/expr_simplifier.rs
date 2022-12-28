@@ -1652,6 +1652,9 @@ mod tests {
                 .and(not_like(col("c1"), "%bar%"))
                 .and(not_like(col("c1"), "%baz%")),
         );
+        // Too many patterns (MAX_REGEX_ALTERNATIONS_EXPANSION)
+        assert_no_change(regex_match(col("c1"), lit("foo|bar|baz|blarg|bozo|etc")));
+
     }
 
     #[track_caller]

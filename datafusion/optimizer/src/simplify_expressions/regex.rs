@@ -20,7 +20,7 @@ use datafusion_expr::{BinaryExpr, Expr, Like, Operator};
 use regex_syntax::hir::{Hir, HirKind, Literal};
 
 /// Maximum number of regex alternations (`foo|bar|...`) that will be expanded into multiple `LIKE` expressions.
-const MAX_REGEX_ALTERNATIONS_EXPENSION: usize = 4;
+const MAX_REGEX_ALTERNATIONS_EXPANSION: usize = 4;
 
 pub fn simplify_regex_expr(
     left: Box<Expr>,
@@ -35,7 +35,7 @@ pub fn simplify_regex_expr(
                 let kind = hir.kind();
 
                 if let HirKind::Alternation(alts) = kind {
-                    if alts.len() <= MAX_REGEX_ALTERNATIONS_EXPENSION {
+                    if alts.len() <= MAX_REGEX_ALTERNATIONS_EXPANSION {
                         if let Some(expr) = lower_alt(&mode, &left, alts) {
                             return Ok(expr);
                         }
