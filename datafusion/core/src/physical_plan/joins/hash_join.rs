@@ -328,7 +328,7 @@ impl ExecutionPlan for HashJoinExec {
 
         if breaking {
             Err(DataFusionError::Plan(format!(
-                "Join Error: The join with cannot be executed. {}",
+                "Join Error: The join with cannot be executed with unbounded inputs. {}",
                 if left && right {
                     "Currently, we do not support unbounded inputs on both sides."
                 } else {

@@ -101,6 +101,7 @@ use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::memory_pool::MemoryPool;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
+use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
 use uuid::Uuid;
 
 use super::options::{
@@ -632,8 +633,17 @@ impl SessionContext {
 
         let resolved_schema = match (options.schema, options.infinite) {
             (Some(s), _) => Arc::new(s.to_owned()),
-            (None, false) => listing_options.infer_schema(&self.state(), &table_path).await?,
-            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support schema inference for infinite data sources.".to_string())),
+            (None, false) => {
+                listing_options
+                    .infer_schema(&self.state(), &table_path)
+                    .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources not supported."
+                        .to_string(),
+                ))
+            }
         };
 
         let config = ListingTableConfig::new(table_path)
@@ -656,8 +666,17 @@ impl SessionContext {
 
         let resolved_schema = match (options.schema, options.infinite) {
             (Some(s), _) => Arc::new(s.to_owned()),
-            (None, false) => listing_options.infer_schema(&self.state(), &table_path).await?,
-            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support schema inference for infinite data sources.".to_string()))
+            (None, false) => {
+                listing_options
+                    .infer_schema(&self.state(), &table_path)
+                    .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources not supported."
+                        .to_string(),
+                ))
+            }
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(listing_options)
@@ -686,8 +705,17 @@ impl SessionContext {
         let listing_options = options.to_listing_options(target_partitions);
         let resolved_schema = match (options.schema, options.infinite) {
             (Some(s), _) => Arc::new(s.to_owned()),
-            (None, false) => listing_options.infer_schema(&self.state(), &table_path).await?,
-            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support schema inference for infinite data sources.".to_string()))
+            (None, false) => {
+                listing_options
+                    .infer_schema(&self.state(), &table_path)
+                    .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources not supported."
+                        .to_string(),
+                ))
+            }
         };
         let config = ListingTableConfig::new(table_path.clone())
             .with_listing_options(listing_options)
@@ -761,7 +789,12 @@ impl SessionContext {
         let resolved_schema = match (provided_schema, options.infinite_source) {
             (Some(s), _) => s,
             (None, false) => options.infer_schema(&self.state(), &table_path).await?,
-            (None, true) => return Err(DataFusionError::Plan("Currently, we do not support schema inference for infinite data sources.".to_string()))
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources not supported."
+                        .to_string(),
+                ))
+            }
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
@@ -1555,6 +1588,7 @@ impl SessionState {
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
             Arc::new(JoinSelection::new()),
+            Arc::new(PipelineFixer::new()),
         ];
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
         if config
@@ -1576,7 +1610,6 @@ impl SessionState {
         // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
         physical_optimizers.push(Arc::new(PipelineChecker::new()));
-        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
 
         SessionState {
             session_id,

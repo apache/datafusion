@@ -28,6 +28,7 @@ pub mod pruning;
 pub mod repartition;
 mod utils;
 
+pub mod pipeline_fixer;
 #[cfg(test)]
 pub mod test_utils;
 

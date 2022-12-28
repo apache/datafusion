@@ -229,7 +229,7 @@ pub struct ListingOptions {
     ///
     /// See <https://github.com/apache/arrow-datafusion/issues/4177>
     pub file_sort_order: Option<Vec<Expr>>,
-    /// DataFusion may optimize or adjust query plans (e.g. joins) to
+    /// Infinite source means that the input is not guaranteed to end,
     /// accommodate infinite data sources and run the given query in full
     /// pipelining mode. This flag lets Datafusion know that this file
     /// is potentially infinite. Currently, CSV, JSON, and AVRO formats
