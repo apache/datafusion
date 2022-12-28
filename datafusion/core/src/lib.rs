@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 #![warn(missing_docs, clippy::needless_borrow)]
-// TODO: Temporary workaround for https://github.com/apache/arrow-rs/issues/2372 (#3081)
-#![allow(where_clauses_object_safety)]
 
 //! [DataFusion](https://github.com/apache/arrow-datafusion)
 //! is an extensible query execution framework that uses
@@ -212,6 +210,7 @@
 /// DataFusion crate version
 pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+extern crate core;
 extern crate sqlparser;
 
 pub mod avro_to_arrow;

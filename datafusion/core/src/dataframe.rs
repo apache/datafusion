@@ -21,10 +21,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use parking_lot::RwLock;
 use parquet::file::properties::WriterProperties;
 
-use datafusion_common::{Column, DFSchema};
+use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::TableProviderFilterPushDown;
 
 use crate::arrow::datatypes::Schema;
@@ -74,13 +73,13 @@ use crate::prelude::SessionContext;
 /// ```
 #[derive(Debug, Clone)]
 pub struct DataFrame {
-    session_state: Arc<RwLock<SessionState>>,
+    session_state: SessionState,
     plan: LogicalPlan,
 }
 
 impl DataFrame {
     /// Create a new Table based on an existing logical plan
-    pub fn new(session_state: Arc<RwLock<SessionState>>, plan: LogicalPlan) -> Self {
+    pub fn new(session_state: SessionState, plan: LogicalPlan) -> Self {
         Self {
             session_state,
             plan,
@@ -89,25 +88,7 @@ impl DataFrame {
 
     /// Create a physical plan
     pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
-        // this function is copied from SessionContext function of the
-        // same name
-        let state_cloned = {
-            let mut state = self.session_state.write();
-            state.execution_props.start_execution();
-
-            // We need to clone `state` to release the lock that is not `Send`. We could
-            // make the lock `Send` by using `tokio::sync::Mutex`, but that would require to
-            // propagate async even to the `LogicalPlan` building methods.
-            // Cloning `state` here is fine as we then pass it as immutable `&state`, which
-            // means that we avoid write consistency issues as the cloned version will not
-            // be written to. As for eventual modifications that would be applied to the
-            // original state after it has been cloned, they will not be picked up by the
-            // clone but that is okay, as it is equivalent to postponing the state update
-            // by keeping the lock until the end of the function scope.
-            state.clone()
-        };
-
-        state_cloned.create_physical_plan(&self.plan).await
+        self.session_state.create_physical_plan(&self.plan).await
     }
 
     /// Filter the DataFrame by column. Returns a new DataFrame only containing the
@@ -437,8 +418,7 @@ impl DataFrame {
     }
 
     fn task_ctx(&self) -> TaskContext {
-        let lock = self.session_state.read();
-        TaskContext::from(&*lock)
+        TaskContext::from(&self.session_state)
     }
 
     /// Executes this DataFrame and returns a stream over a single partition
@@ -519,16 +499,38 @@ impl DataFrame {
         self.plan.schema()
     }
 
-    /// Return the unoptimized logical plan represented by this DataFrame.
-    pub fn to_unoptimized_plan(self) -> LogicalPlan {
+    /// Return the unoptimized logical plan
+    pub fn logical_plan(&self) -> &LogicalPlan {
+        &self.plan
+    }
+
+    /// Return the logical plan represented by this DataFrame without running the optimizers
+    ///
+    /// Note: This method should not be used outside testing, as it loses the snapshot
+    /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
+    /// operations may take place against a different state
+    pub fn into_unoptimized_plan(self) -> LogicalPlan {
         self.plan
     }
 
     /// Return the optimized logical plan represented by this DataFrame.
-    pub fn to_logical_plan(self) -> Result<LogicalPlan> {
+    ///
+    /// Note: This method should not be used outside testing, as it loses the snapshot
+    /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
+    /// operations may take place against a different state
+    pub fn into_optimized_plan(self) -> Result<LogicalPlan> {
         // Optimize the plan first for better UX
-        let state = self.session_state.read().clone();
-        state.optimize(&self.plan)
+        self.session_state.optimize(&self.plan)
+    }
+
+    /// Return the optimized logical plan represented by this DataFrame.
+    ///
+    /// Note: This method should not be used outside testing, as it loses the snapshot
+    /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
+    /// operations may take place against a different state
+    #[deprecated(note = "Use DataFrame::into_optimized_plan")]
+    pub fn to_logical_plan(self) -> Result<LogicalPlan> {
+        self.into_optimized_plan()
     }
 
     /// Return a DataFrame with the explanation of its plan so far.
@@ -567,9 +569,8 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn registry(&self) -> Arc<dyn FunctionRegistry> {
-        let registry = self.session_state.read().clone();
-        Arc::new(registry)
+    pub fn registry(&self) -> &dyn FunctionRegistry {
+        &self.session_state
     }
 
     /// Calculate the intersection of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
@@ -621,9 +622,8 @@ impl DataFrame {
 
     /// Write a `DataFrame` to a CSV file.
     pub async fn write_csv(self, path: &str) -> Result<()> {
-        let state = self.session_state.read().clone();
-        let plan = self.create_physical_plan().await?;
-        plan_to_csv(&state, plan, path).await
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
+        plan_to_csv(&self.session_state, plan, path).await
     }
 
     /// Write a `DataFrame` to a Parquet file.
@@ -632,16 +632,14 @@ impl DataFrame {
         path: &str,
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
-        let state = self.session_state.read().clone();
-        let plan = self.create_physical_plan().await?;
-        plan_to_parquet(&state, plan, path, writer_properties).await
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
+        plan_to_parquet(&self.session_state, plan, path, writer_properties).await
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.
     pub async fn write_json(self, path: impl AsRef<str>) -> Result<()> {
-        let state = self.session_state.read().clone();
-        let plan = self.create_physical_plan().await?;
-        plan_to_json(&state, plan, path).await
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
+        plan_to_json(&self.session_state, plan, path).await
     }
 
     /// Add an additional column to the DataFrame.
@@ -733,6 +731,12 @@ impl DataFrame {
         }
     }
 
+    /// Convert a prepare logical plan into its inner logical plan with all params replaced with their corresponding values
+    pub fn with_param_values(self, param_values: Vec<ScalarValue>) -> Result<Self> {
+        let plan = self.plan.with_param_values(param_values)?;
+        Ok(Self::new(self.session_state, plan))
+    }
+
     /// Cache DataFrame as a memory table.
     ///
     /// ```
@@ -747,7 +751,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
-        let context = SessionContext::with_state(self.session_state.read().clone());
+        let context = SessionContext::with_state(self.session_state.clone());
         let mem_table = MemTable::try_new(
             SchemaRef::from(self.schema().clone()),
             self.collect_partitioned().await?,
@@ -787,7 +791,7 @@ impl TableProvider for DataFrame {
 
     async fn scan(
         &self,
-        _ctx: &SessionState,
+        _state: &SessionState,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -826,7 +830,7 @@ mod tests {
     use arrow::datatypes::DataType;
 
     use datafusion_expr::{
-        avg, cast, count, count_distinct, create_udf, lit, max, min, sum,
+        avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
         BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
         WindowFunction,
     };
@@ -880,13 +884,13 @@ mod tests {
     async fn select_with_window_exprs() -> Result<()> {
         // build plan using Table API
         let t = test_table().await?;
-        let first_row = Expr::WindowFunction {
-            fun: WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::FirstValue),
-            args: vec![col("aggregate_test_100.c1")],
-            partition_by: vec![col("aggregate_test_100.c2")],
-            order_by: vec![],
-            window_frame: WindowFrame::new(false),
-        };
+        let first_row = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::FirstValue),
+            vec![col("aggregate_test_100.c1")],
+            vec![col("aggregate_test_100.c2")],
+            vec![],
+            WindowFrame::new(false),
+        ));
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
 
@@ -1029,16 +1033,14 @@ mod tests {
         // build query with a UDF using DataFrame API
         let df = ctx.table("aggregate_test_100")?;
 
-        let f = df.registry();
-
-        let df = df.select(vec![f.udf("my_fn")?.call(vec![col("c12")])])?;
+        let expr = df.registry().udf("my_fn")?.call(vec![col("c12")]);
+        let df = df.select(vec![expr])?;
 
         // build query using SQL
-        let sql_plan =
-            ctx.create_logical_plan("SELECT my_fn(c12) FROM aggregate_test_100")?;
+        let sql_plan = ctx.sql("SELECT my_fn(c12) FROM aggregate_test_100").await?;
 
         // the two plans should be identical
-        assert_same_plan(&df.plan, &sql_plan);
+        assert_same_plan(&df.plan, &sql_plan.plan);
 
         Ok(())
     }
@@ -1088,7 +1090,7 @@ mod tests {
     async fn register_table() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1", "c12"])?;
         let ctx = SessionContext::new();
-        let df_impl = DataFrame::new(ctx.state.clone(), df.plan.clone());
+        let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
 
         // register a dataframe as a table
         ctx.register_table("test_table", Arc::new(df_impl.clone()))?;
@@ -1148,7 +1150,7 @@ mod tests {
     async fn create_plan(sql: &str) -> Result<LogicalPlan> {
         let mut ctx = SessionContext::new();
         register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
-        ctx.create_logical_plan(sql)
+        Ok(ctx.sql(sql).await?.into_unoptimized_plan())
     }
 
     async fn test_table_with_name(name: &str) -> Result<DataFrame> {
@@ -1180,7 +1182,7 @@ mod tests {
     async fn with_column() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1", "c2", "c3"])?;
         let ctx = SessionContext::new();
-        let df_impl = DataFrame::new(ctx.state.clone(), df.plan.clone());
+        let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
 
         let df = df_impl
             .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
@@ -1328,7 +1330,7 @@ mod tests {
         \n      Inner Join: t1.c1 = t2.c1\
         \n        TableScan: t1\
         \n        TableScan: t2",
-                   format!("{:?}", df_renamed.clone().to_unoptimized_plan())
+                   format!("{:?}", df_renamed.logical_plan())
         );
 
         assert_eq!("\
@@ -1342,7 +1344,7 @@ mod tests {
         \n        SubqueryAlias: t2\
         \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
         \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]",
-                   format!("{:?}", df_renamed.clone().to_logical_plan()?)
+                   format!("{:?}", df_renamed.clone().into_optimized_plan()?)
         );
 
         let df_results = df_renamed.collect().await?;
@@ -1489,7 +1491,7 @@ mod tests {
 
         assert_eq!(
             "TableScan: ?table? projection=[c2, c3, sum]",
-            format!("{:?}", cached_df.clone().to_logical_plan()?)
+            format!("{:?}", cached_df.clone().into_optimized_plan()?)
         );
 
         let df_results = df.collect().await?;

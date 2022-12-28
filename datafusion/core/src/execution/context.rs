@@ -17,10 +17,7 @@
 
 //! SessionContext contains methods for registering data sources and executing queries
 use crate::{
-    catalog::{
-        catalog::{CatalogList, MemoryCatalogList},
-        information_schema::CatalogWithInformationSchema,
-    },
+    catalog::catalog::{CatalogList, MemoryCatalogList},
     config::{
         OPT_COLLECT_STATISTICS, OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA,
         OPT_INFORMATION_SCHEMA, OPT_PARQUET_ENABLE_PRUNING, OPT_REPARTITION_AGGREGATIONS,
@@ -68,7 +65,7 @@ use crate::logical_expr::{
     CreateView, DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder,
     SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
-use crate::optimizer::optimizer::{OptimizerConfig, OptimizerRule};
+use crate::optimizer::{OptimizerContext, OptimizerRule};
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
@@ -76,7 +73,8 @@ use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
-    OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
+    OPT_ENABLE_ROUND_ROBIN_REPARTITION, OPT_FILTER_NULL_JOIN_KEYS,
+    OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_optimizer::enforcement::BasicEnforcement;
@@ -97,8 +95,14 @@ use datafusion_sql::{
 use parquet::file::properties::WriterProperties;
 use url::Url;
 
+use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
+use crate::execution::memory_pool::MemoryPool;
+use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
+use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
+use crate::physical_optimizer::pipeline_checker::PipelineChecker;
+use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
 use uuid::Uuid;
 
 use super::options::{
@@ -156,9 +160,9 @@ pub struct SessionContext {
     /// Uuid for the session
     session_id: String,
     /// Session start time
-    pub session_start_time: DateTime<Utc>,
+    session_start_time: DateTime<Utc>,
     /// Shared session state for the session
-    pub state: Arc<RwLock<SessionState>>,
+    state: Arc<RwLock<SessionState>>,
 }
 
 impl Default for SessionContext {
@@ -202,20 +206,21 @@ impl SessionContext {
     /// Creates a new session context using the provided configuration and RuntimeEnv.
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let state = SessionState::with_config_rt(config, runtime);
-        Self {
-            session_id: state.session_id.clone(),
-            session_start_time: chrono::Utc::now(),
-            state: Arc::new(RwLock::new(state)),
-        }
+        Self::with_state(state)
     }
 
     /// Creates a new session context using the provided session state.
     pub fn with_state(state: SessionState) -> Self {
         Self {
             session_id: state.session_id.clone(),
-            session_start_time: chrono::Utc::now(),
+            session_start_time: Utc::now(),
             state: Arc::new(RwLock::new(state)),
         }
+    }
+
+    /// Returns the time this session was created
+    pub fn session_start_time(&self) -> DateTime<Utc> {
+        self.session_start_time
     }
 
     /// Registers the [`RecordBatch`] as the specified table name
@@ -233,11 +238,6 @@ impl SessionContext {
         self.state.read().runtime_env.clone()
     }
 
-    /// Return a handle to the shared configuration options
-    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
-        self.state.read().config_options()
-    }
-
     /// Return the session_id of this Session
     pub fn session_id(&self) -> String {
         self.session_id.clone()
@@ -253,7 +253,21 @@ impl SessionContext {
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
     /// might require the schema to be inferred.
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
-        let plan = self.create_logical_plan(sql)?;
+        let mut statements = DFParser::parse_sql(sql)?;
+        if statements.len() != 1 {
+            return Err(DataFusionError::NotImplemented(
+                "The context currently only supports a single SQL statement".to_string(),
+            ));
+        }
+
+        // create a query planner
+        let plan = {
+            // TODO: Move catalog off SessionState onto SessionContext
+            let state = self.state.read();
+            let query_planner = SqlToRel::new(&*state);
+            query_planner.statement_to_plan(statements.pop_front().unwrap())?
+        };
+
         match plan {
             LogicalPlan::CreateExternalTable(cmd) => {
                 self.create_external_table(&cmd).await
@@ -273,7 +287,7 @@ impl SessionContext {
                     (false, true, Ok(_)) => {
                         self.deregister_table(&name)?;
                         let schema = Arc::new(input.schema().as_ref().into());
-                        let physical = DataFrame::new(self.state.clone(), input);
+                        let physical = DataFrame::new(self.state(), input);
 
                         let batches: Vec<_> = physical.collect_partitioned().await?;
                         let table = Arc::new(MemTable::try_new(schema, batches)?);
@@ -286,7 +300,7 @@ impl SessionContext {
                     )),
                     (_, _, Err(_)) => {
                         let schema = Arc::new(input.schema().as_ref().into());
-                        let physical = DataFrame::new(self.state.clone(), input);
+                        let physical = DataFrame::new(self.state(), input);
 
                         let batches: Vec<_> = physical.collect_partitioned().await?;
                         let table = Arc::new(MemTable::try_new(schema, batches)?);
@@ -363,15 +377,15 @@ impl SessionContext {
             LogicalPlan::SetVariable(SetVariable {
                 variable, value, ..
             }) => {
-                let config_options = &self.state.write().config.config_options;
+                let mut state = self.state.write();
+                let config_options = &mut state.config.config_options;
 
-                let old_value =
-                    config_options.read().get(&variable).ok_or_else(|| {
-                        DataFusionError::Execution(format!(
-                            "Can not SET variable: Unknown Variable {}",
-                            variable
-                        ))
-                    })?;
+                let old_value = config_options.get(&variable).ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Can not SET variable: Unknown Variable {}",
+                        variable
+                    ))
+                })?;
 
                 match old_value {
                     ScalarValue::Boolean(_) => {
@@ -381,7 +395,7 @@ impl SessionContext {
                                 value,
                             ))
                         })?;
-                        config_options.write().set_bool(&variable, new_value);
+                        config_options.set_bool(&variable, new_value);
                     }
 
                     ScalarValue::UInt64(_) => {
@@ -391,7 +405,7 @@ impl SessionContext {
                                 value,
                             ))
                         })?;
-                        config_options.write().set_u64(&variable, new_value);
+                        config_options.set_u64(&variable, new_value);
                     }
 
                     ScalarValue::Utf8(_) => {
@@ -401,7 +415,7 @@ impl SessionContext {
                                 value,
                             ))
                         })?;
-                        config_options.write().set_string(&variable, new_value);
+                        config_options.set_string(&variable, new_value);
                     }
 
                     _ => {
@@ -410,6 +424,8 @@ impl SessionContext {
                         ))
                     }
                 }
+                drop(state);
+
                 self.return_empty_dataframe()
             }
 
@@ -475,14 +491,14 @@ impl SessionContext {
                 }
             }
 
-            plan => Ok(DataFrame::new(self.state.clone(), plan)),
+            plan => Ok(DataFrame::new(self.state(), plan)),
         }
     }
 
     // return an empty dataframe
     fn return_empty_dataframe(&self) -> Result<DataFrame> {
         let plan = LogicalPlanBuilder::empty(false).build()?;
-        Ok(DataFrame::new(self.state.clone(), plan))
+        Ok(DataFrame::new(self.state(), plan))
     }
 
     async fn create_external_table(
@@ -549,6 +565,7 @@ impl SessionContext {
     /// Creates a logical plan.
     ///
     /// This function is intended for internal use and should not be called directly.
+    #[deprecated(note = "Use SessionContext::sql which snapshots the SessionState")]
     pub fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
         let mut statements = DFParser::parse_sql(sql)?;
 
@@ -615,12 +632,18 @@ impl SessionContext {
 
         let listing_options = options.to_listing_options(target_partitions);
 
-        let resolved_schema = match options.schema {
-            Some(s) => s,
-            None => {
+        let resolved_schema = match (options.schema, options.infinite) {
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, false) => {
                 listing_options
                     .infer_schema(&self.state(), &table_path)
                     .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
             }
         };
 
@@ -642,12 +665,18 @@ impl SessionContext {
 
         let listing_options = options.to_listing_options(target_partitions);
 
-        let resolved_schema = match options.schema {
-            Some(s) => s,
-            None => {
+        let resolved_schema = match (options.schema, options.infinite) {
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, false) => {
                 listing_options
                     .infer_schema(&self.state(), &table_path)
                     .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
             }
         };
         let config = ListingTableConfig::new(table_path)
@@ -661,7 +690,7 @@ impl SessionContext {
     /// Creates an empty DataFrame.
     pub fn read_empty(&self) -> Result<DataFrame> {
         Ok(DataFrame::new(
-            self.state.clone(),
+            self.state(),
             LogicalPlanBuilder::empty(true).build()?,
         ))
     }
@@ -675,12 +704,18 @@ impl SessionContext {
         let table_path = ListingTableUrl::parse(table_path)?;
         let target_partitions = self.copied_config().target_partitions();
         let listing_options = options.to_listing_options(target_partitions);
-        let resolved_schema = match options.schema {
-            Some(s) => Arc::new(s.to_owned()),
-            None => {
+        let resolved_schema = match (options.schema, options.infinite) {
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, false) => {
                 listing_options
                     .infer_schema(&self.state(), &table_path)
                     .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
             }
         };
         let config = ListingTableConfig::new(table_path.clone())
@@ -716,7 +751,7 @@ impl SessionContext {
     /// Creates a [`DataFrame`] for reading a custom [`TableProvider`].
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<DataFrame> {
         Ok(DataFrame::new(
-            self.state.clone(),
+            self.state(),
             LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
                 .build()?,
         ))
@@ -726,7 +761,7 @@ impl SessionContext {
     pub fn read_batch(&self, batch: RecordBatch) -> Result<DataFrame> {
         let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
         Ok(DataFrame::new(
-            self.state.clone(),
+            self.state(),
             LogicalPlanBuilder::scan(
                 UNNAMED_TABLE,
                 provider_as_source(Arc::new(provider)),
@@ -752,9 +787,15 @@ impl SessionContext {
         sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let resolved_schema = match provided_schema {
-            None => options.infer_schema(&self.state(), &table_path).await?,
-            Some(s) => s,
+        let resolved_schema = match (provided_schema, options.infinite_source) {
+            (Some(s), _) => s,
+            (None, false) => options.infer_schema(&self.state(), &table_path).await?,
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
+            }
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
@@ -802,7 +843,7 @@ impl SessionContext {
             name,
             table_path,
             listing_options,
-            options.schema,
+            options.schema.map(|s| Arc::new(s.to_owned())),
             None,
         )
         .await?;
@@ -839,7 +880,7 @@ impl SessionContext {
             name,
             table_path,
             listing_options,
-            options.schema,
+            options.schema.map(|s| Arc::new(s.to_owned())),
             None,
         )
         .await?;
@@ -858,19 +899,10 @@ impl SessionContext {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         let name = name.into();
-        let information_schema = self.copied_config().information_schema();
-        let state = self.state.read();
-        let catalog = if information_schema {
-            Arc::new(CatalogWithInformationSchema::new(
-                Arc::downgrade(&state.catalog_list),
-                Arc::downgrade(&state.config.config_options),
-                catalog,
-            ))
-        } else {
-            catalog
-        };
-
-        state.catalog_list.register_catalog(name, catalog)
+        self.state
+            .read()
+            .catalog_list
+            .register_catalog(name, catalog)
     }
 
     /// Retrieves the list of available catalog names.
@@ -946,7 +978,7 @@ impl SessionContext {
             None,
         )?
         .build()?;
-        Ok(DataFrame::new(self.state.clone(), plan))
+        Ok(DataFrame::new(self.state(), plan))
     }
 
     /// Return a [`TabelProvider`] for the specified table.
@@ -996,23 +1028,7 @@ impl SessionContext {
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let state_cloned = {
-            let mut state = self.state.write();
-            state.execution_props.start_execution();
-
-            // We need to clone `state` to release the lock that is not `Send`. We could
-            // make the lock `Send` by using `tokio::sync::Mutex`, but that would require to
-            // propagate async even to the `LogicalPlan` building methods.
-            // Cloning `state` here is fine as we then pass it as immutable `&state`, which
-            // means that we avoid write consistency issues as the cloned version will not
-            // be written to. As for eventual modifications that would be applied to the
-            // original state after it has been cloned, they will not be picked up by the
-            // clone but that is okay, as it is equivalent to postponing the state update
-            // by keeping the lock until the end of the function scope.
-            state.clone()
-        };
-
-        state_cloned.create_physical_plan(logical_plan).await
+        self.state().create_physical_plan(logical_plan).await
     }
 
     /// Executes a query and writes the results to a partitioned CSV file.
@@ -1051,9 +1067,12 @@ impl SessionContext {
         Arc::new(TaskContext::from(self))
     }
 
-    /// Get a copy of the [`SessionState`] of this [`SessionContext`]
+    /// Snapshots the [`SessionState`] of this [`SessionContext`] setting the
+    /// `query_execution_start_time` to the current time
     pub fn state(&self) -> SessionState {
-        self.state.read().clone()
+        let mut state = self.state.read().clone();
+        state.execution_props.start_execution();
+        state
     }
 }
 
@@ -1153,7 +1172,7 @@ pub struct SessionConfig {
     /// due to `resolve_table_ref` which passes back references)
     default_schema: String,
     /// Configuration options
-    pub config_options: Arc<RwLock<ConfigOptions>>,
+    config_options: ConfigOptions,
     /// Opaque extensions.
     extensions: AnyMap,
 }
@@ -1163,7 +1182,7 @@ impl Default for SessionConfig {
         Self {
             default_catalog: DEFAULT_CATALOG.to_owned(),
             default_schema: DEFAULT_SCHEMA.to_owned(),
-            config_options: Arc::new(RwLock::new(ConfigOptions::new())),
+            config_options: ConfigOptions::new(),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
                 0,
@@ -1182,14 +1201,14 @@ impl SessionConfig {
     /// Create an execution config with config options read from the environment
     pub fn from_env() -> Self {
         Self {
-            config_options: ConfigOptions::from_env().into_shareable(),
+            config_options: ConfigOptions::from_env(),
             ..Default::default()
         }
     }
 
     /// Set a configuration option
-    pub fn set(self, key: &str, value: ScalarValue) -> Self {
-        self.config_options.write().set(key, value);
+    pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
+        self.config_options.set(key, value);
         self
     }
 
@@ -1231,7 +1250,6 @@ impl SessionConfig {
     /// get target_partitions
     pub fn target_partitions(&self) -> usize {
         self.config_options
-            .read()
             .get_usize(OPT_TARGET_PARTITIONS)
             .expect("target partitions must be set")
     }
@@ -1239,7 +1257,6 @@ impl SessionConfig {
     /// Is the information schema enabled?
     pub fn information_schema(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_INFORMATION_SCHEMA)
             .unwrap_or_default()
     }
@@ -1247,7 +1264,6 @@ impl SessionConfig {
     /// Should the context create the default catalog and schema?
     pub fn create_default_catalog_and_schema(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA)
             .unwrap_or_default()
     }
@@ -1255,7 +1271,6 @@ impl SessionConfig {
     /// Are joins repartitioned during execution?
     pub fn repartition_joins(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_REPARTITION_JOINS)
             .unwrap_or_default()
     }
@@ -1263,7 +1278,6 @@ impl SessionConfig {
     /// Are aggregates repartitioned during execution?
     pub fn repartition_aggregations(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_REPARTITION_AGGREGATIONS)
             .unwrap_or_default()
     }
@@ -1271,7 +1285,6 @@ impl SessionConfig {
     /// Are window functions repartitioned during execution?
     pub fn repartition_window_functions(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_REPARTITION_WINDOWS)
             .unwrap_or_default()
     }
@@ -1279,7 +1292,6 @@ impl SessionConfig {
     /// Are statistics collected during execution?
     pub fn collect_statistics(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_COLLECT_STATISTICS)
             .unwrap_or_default()
     }
@@ -1296,49 +1308,42 @@ impl SessionConfig {
     }
 
     /// Controls whether the default catalog and schema will be automatically created
-    pub fn with_create_default_catalog_and_schema(self, create: bool) -> Self {
+    pub fn with_create_default_catalog_and_schema(mut self, create: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA, create);
         self
     }
 
     /// Enables or disables the inclusion of `information_schema` virtual tables
-    pub fn with_information_schema(self, enabled: bool) -> Self {
+    pub fn with_information_schema(mut self, enabled: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_INFORMATION_SCHEMA, enabled);
         self
     }
 
     /// Enables or disables the use of repartitioning for joins to improve parallelism
-    pub fn with_repartition_joins(self, enabled: bool) -> Self {
-        self.config_options
-            .write()
-            .set_bool(OPT_REPARTITION_JOINS, enabled);
+    pub fn with_repartition_joins(mut self, enabled: bool) -> Self {
+        self.config_options.set_bool(OPT_REPARTITION_JOINS, enabled);
         self
     }
 
     /// Enables or disables the use of repartitioning for aggregations to improve parallelism
-    pub fn with_repartition_aggregations(self, enabled: bool) -> Self {
+    pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_REPARTITION_AGGREGATIONS, enabled);
         self
     }
 
     /// Enables or disables the use of repartitioning for window functions to improve parallelism
-    pub fn with_repartition_windows(self, enabled: bool) -> Self {
+    pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_REPARTITION_WINDOWS, enabled);
         self
     }
 
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
-    pub fn with_parquet_pruning(self, enabled: bool) -> Self {
+    pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_PARQUET_ENABLE_PRUNING, enabled);
         self
     }
@@ -1346,15 +1351,13 @@ impl SessionConfig {
     /// Returns true if pruning predicate should be used to skip parquet row groups
     pub fn parquet_pruning(&self) -> bool {
         self.config_options
-            .read()
             .get_bool(OPT_PARQUET_ENABLE_PRUNING)
             .unwrap_or(false)
     }
 
     /// Enables or disables the collection of statistics after listing files
-    pub fn with_collect_statistics(self, enabled: bool) -> Self {
+    pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
         self.config_options
-            .write()
             .set_bool(OPT_COLLECT_STATISTICS, enabled);
         self
     }
@@ -1362,7 +1365,6 @@ impl SessionConfig {
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
         self.config_options
-            .read()
             .get_u64(OPT_BATCH_SIZE)
             .unwrap_or_default()
             .try_into()
@@ -1379,7 +1381,7 @@ impl SessionConfig {
     pub fn to_props(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         // copy configs from config_options
-        for (k, v) in self.config_options.read().options() {
+        for (k, v) in self.config_options.options() {
             map.insert(k.to_string(), format!("{}", v));
         }
         map.insert(
@@ -1410,11 +1412,18 @@ impl SessionConfig {
         map
     }
 
-    /// Return a handle to the shared configuration options.
+    /// Return a handle to the configuration options.
     ///
     /// [`config_options`]: SessionContext::config_option
-    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
-        self.config_options.clone()
+    pub fn config_options(&self) -> &ConfigOptions {
+        &self.config_options
+    }
+
+    /// Return a mutable handle to the configuration options.
+    ///
+    /// [`config_options`]: SessionContext::config_option
+    pub fn config_options_mut(&mut self) -> &mut ConfigOptions {
+        &mut self.config_options
     }
 
     /// Add extensions.
@@ -1543,57 +1552,81 @@ impl SessionState {
 
             Self::register_default_schema(&config, &runtime, &default_catalog);
 
-            let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema()
-            {
-                Arc::new(CatalogWithInformationSchema::new(
-                    Arc::downgrade(&catalog_list),
-                    Arc::downgrade(&config.config_options),
-                    Arc::new(default_catalog),
-                ))
-            } else {
-                Arc::new(default_catalog)
-            };
-            catalog_list
-                .register_catalog(config.default_catalog.clone(), default_catalog);
+            catalog_list.register_catalog(
+                config.default_catalog.clone(),
+                Arc::new(default_catalog),
+            );
         }
 
-        let optimizer_config = OptimizerConfig::new().filter_null_keys(
-            config
-                .config_options
-                .read()
-                .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
-                .unwrap_or_default(),
-        );
-
-        let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
-            Arc::new(AggregateStatistics::new()),
-            Arc::new(JoinSelection::new()),
-        ];
-        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
+        // We need to take care of the rule ordering. They may influence each other.
+        let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> =
+            vec![Arc::new(AggregateStatistics::new())];
+        // - In order to increase the parallelism, it will change the output partitioning
+        // of some operators in the plan tree, which will influence other rules.
+        // Therefore, it should be run as soon as possible.
+        // - The reason to make it optional is
+        //      - it's not used for the distributed engine, Ballista.
+        //      - it's conflicted with some parts of the BasicEnforcement, since it will
+        //      introduce additional repartitioning while the BasicEnforcement aims at
+        //      reducing unnecessary repartitioning.
         if config
             .config_options
-            .read()
+            .get_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION)
+            .unwrap_or_default()
+        {
+            physical_optimizers.push(Arc::new(Repartition::new()));
+        }
+        //- Currently it will depend on the partition number to decide whether to change the
+        // single node sort to parallel local sort and merge. Therefore, it should be run
+        // after the Repartition.
+        // - Since it will change the output ordering of some operators, it should be run
+        // before JoinSelection and BasicEnforcement, which may depend on that.
+        physical_optimizers.push(Arc::new(GlobalSortSelection::new()));
+        // Statistics-base join selection will change the Auto mode to real join implementation,
+        // like collect left, or hash join, or future sort merge join, which will
+        // influence the BasicEnforcement to decide whether to add additional repartition
+        // and local sort to meet the distribution and ordering requirements.
+        // Therefore, it should be run before BasicEnforcement
+        physical_optimizers.push(Arc::new(JoinSelection::new()));
+        // If the query is processing infinite inputs, the PipelineFixer rule applies the
+        // necessary transformations to make the query runnable (if it is not already runnable).
+        // If the query can not be made runnable, the rule emits an error with a diagnostic message.
+        // Since the transformations it applies may alter output partitioning properties of operators
+        // (e.g. by swapping hash join sides), this rule runs before BasicEnforcement.
+        physical_optimizers.push(Arc::new(PipelineFixer::new()));
+        // It's for adding essential repartition and local sorting operator to satisfy the
+        // required distribution and local sort.
+        // Please make sure that the whole plan tree is determined.
+        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
+        // `BasicEnforcement` stage conservatively inserts `SortExec`s to satisfy ordering requirements.
+        // However, a deeper analysis may sometimes reveal that such a `SortExec` is actually unnecessary.
+        // These cases typically arise when we have reversible `WindowAggExec`s or deep subqueries. The
+        // rule below performs this analysis and removes unnecessary `SortExec`s.
+        physical_optimizers.push(Arc::new(OptimizeSorts::new()));
+        // It will not influence the distribution and ordering of the whole plan tree.
+        // Therefore, to avoid influencing other rules, it should be run at last.
+        if config
+            .config_options
             .get_bool(OPT_COALESCE_BATCHES)
             .unwrap_or_default()
         {
             physical_optimizers.push(Arc::new(CoalesceBatches::new(
                 config
                     .config_options
-                    .read()
                     .get_u64(OPT_COALESCE_TARGET_BATCH_SIZE)
                     .unwrap_or_default()
                     .try_into()
                     .unwrap(),
             )));
         }
-        physical_optimizers.push(Arc::new(Repartition::new()));
-        // Repartition rule could introduce additional RepartitionExec with RoundRobin partitioning.
-        // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
-        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
-
+        // The PipelineChecker rule will reject non-runnable query plans that use
+        // pipeline-breaking operators on infinite input(s). The rule generates a
+        // diagnostic error message when this happens. It makes no changes to the
+        // given query plan; i.e. it only acts as a final gatekeeping rule.
+        physical_optimizers.push(Arc::new(PipelineChecker::new()));
         SessionState {
             session_id,
-            optimizer: Optimizer::new(&optimizer_config),
+            optimizer: Optimizer::new(),
             physical_optimizers,
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
@@ -1610,11 +1643,8 @@ impl SessionState {
         runtime: &Arc<RuntimeEnv>,
         default_catalog: &MemoryCatalogProvider,
     ) {
-        let url = config
-            .config_options
-            .read()
-            .get("datafusion.catalog.location");
-        let format = config.config_options.read().get("datafusion.catalog.type");
+        let url = config.config_options.get("datafusion.catalog.location");
+        let format = config.config_options.get("datafusion.catalog.type");
         let (url, format) = match (url, format) {
             (Some(url), Some(format)) => (url, format),
             _ => return,
@@ -1625,10 +1655,7 @@ impl SessionState {
         let url = url.to_string();
         let format = format.to_string();
 
-        let has_header = config
-            .config_options
-            .read()
-            .get("datafusion.catalog.has_header");
+        let has_header = config.config_options.get("datafusion.catalog.has_header");
         let has_header: bool = has_header
             .map(|x| FromStr::from_str(&x.to_string()).unwrap_or_default())
             .unwrap_or_default();
@@ -1677,6 +1704,12 @@ impl SessionState {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
+        if self.config.information_schema() && resolved_ref.schema == INFORMATION_SCHEMA {
+            return Ok(Arc::new(InformationSchemaProvider::new(
+                self.catalog_list.clone(),
+            )));
+        }
+
         self.catalog_list
             .catalog(resolved_ref.catalog)
             .ok_or_else(|| {
@@ -1741,24 +1774,29 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        let mut optimizer_config = OptimizerConfig::new()
-            .with_skip_failing_rules(
-                self.config
-                    .config_options
-                    .read()
-                    .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
-                    .unwrap_or_default(),
-            )
-            .with_max_passes(
-                self.config
-                    .config_options
-                    .read()
-                    .get_u64(OPT_OPTIMIZER_MAX_PASSES)
-                    .unwrap_or_default() as u8,
-            )
-            .with_query_execution_start_time(
-                self.execution_props.query_execution_start_time,
-            );
+        // TODO: Implement OptimizerContext directly on DataFrame (#4631) (#4626)
+        let config = {
+            let config_options = self.config_options();
+            OptimizerContext::new()
+                .with_skip_failing_rules(
+                    config_options
+                        .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
+                        .unwrap_or_default(),
+                )
+                .with_max_passes(
+                    config_options
+                        .get_u64(OPT_OPTIMIZER_MAX_PASSES)
+                        .unwrap_or_default() as u8,
+                )
+                .with_query_execution_start_time(
+                    self.execution_props.query_execution_start_time,
+                )
+                .filter_null_keys(
+                    config_options
+                        .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
+                        .unwrap_or_default(),
+                )
+        };
 
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
@@ -1766,7 +1804,7 @@ impl SessionState {
             // optimize the child plan, capturing the output of each optimizer
             let plan = self.optimizer.optimize(
                 e.plan.as_ref(),
-                &mut optimizer_config,
+                &config,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
@@ -1781,8 +1819,7 @@ impl SessionState {
                 schema: e.schema.clone(),
             }))
         } else {
-            self.optimizer
-                .optimize(plan, &mut optimizer_config, |_, _| {})
+            self.optimizer.optimize(plan, &config, |_, _| {})
         }
     }
 
@@ -1791,14 +1828,20 @@ impl SessionState {
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let planner = self.query_planner.clone();
         let logical_plan = self.optimize(logical_plan)?;
-        planner.create_physical_plan(&logical_plan, self).await
+        self.query_planner
+            .create_physical_plan(&logical_plan, self)
+            .await
     }
 
     /// return the configuration options
-    pub fn config_options(&self) -> Arc<RwLock<ConfigOptions>> {
+    pub fn config_options(&self) -> &ConfigOptions {
         self.config.config_options()
+    }
+
+    /// Get a new TaskContext to run in this session
+    pub fn task_ctx(&self) -> Arc<TaskContext> {
+        Arc::new(TaskContext::from(self))
     }
 }
 
@@ -1845,7 +1888,7 @@ impl ContextProvider for SessionState {
     }
 
     fn get_config_option(&self, variable: &str) -> Option<ScalarValue> {
-        self.config.config_options.read().get(variable)
+        self.config_options().get(variable)
     }
 }
 
@@ -1961,6 +2004,11 @@ impl TaskContext {
         self.task_id.clone()
     }
 
+    /// Return the [`MemoryPool`] associated with this [TaskContext]
+    pub fn memory_pool(&self) -> &Arc<dyn MemoryPool> {
+        &self.runtime.memory_pool
+    }
+
     /// Return the [RuntimeEnv] associated with this [TaskContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.runtime.clone()
@@ -2026,6 +2074,7 @@ mod tests {
     use super::*;
     use crate::assert_batches_eq;
     use crate::execution::context::QueryPlanner;
+    use crate::execution::memory_pool::MemoryConsumer;
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::expressions::AvgAccumulator;
     use crate::test;
@@ -2040,31 +2089,33 @@ mod tests {
     use std::fs::File;
     use std::path::PathBuf;
     use std::sync::Weak;
-    use std::thread::{self, JoinHandle};
-    use std::{env, io::prelude::*, sync::Mutex};
+    use std::{env, io::prelude::*};
     use tempfile::TempDir;
 
     #[tokio::test]
     async fn shared_memory_and_disk_manager() {
         // Demonstrate the ability to share DiskManager and
-        // MemoryManager between two different executions.
+        // MemoryPool between two different executions.
         let ctx1 = SessionContext::new();
 
         // configure with same memory / disk manager
-        let memory_manager = ctx1.runtime_env().memory_manager.clone();
+        let memory_pool = ctx1.runtime_env().memory_pool.clone();
+
+        let mut reservation = MemoryConsumer::new("test").register(&memory_pool);
+        reservation.grow(100);
+
         let disk_manager = ctx1.runtime_env().disk_manager.clone();
 
         let ctx2 =
             SessionContext::with_config_rt(SessionConfig::new(), ctx1.runtime_env());
 
-        assert!(std::ptr::eq(
-            Arc::as_ptr(&memory_manager),
-            Arc::as_ptr(&ctx1.runtime_env().memory_manager)
-        ));
-        assert!(std::ptr::eq(
-            Arc::as_ptr(&memory_manager),
-            Arc::as_ptr(&ctx2.runtime_env().memory_manager)
-        ));
+        assert_eq!(ctx1.runtime_env().memory_pool.reserved(), 100);
+        assert_eq!(ctx2.runtime_env().memory_pool.reserved(), 100);
+
+        drop(reservation);
+
+        assert_eq!(ctx1.runtime_env().memory_pool.reserved(), 0);
+        assert_eq!(ctx2.runtime_env().memory_pool.reserved(), 0);
 
         assert!(std::ptr::eq(
             Arc::as_ptr(&disk_manager),
@@ -2258,23 +2309,21 @@ mod tests {
         // environment. Usecase is for concurrent planing.
         let tmp_dir = TempDir::new()?;
         let partition_count = 4;
-        let ctx = Arc::new(Mutex::new(create_ctx(&tmp_dir, partition_count).await?));
+        let ctx = Arc::new(create_ctx(&tmp_dir, partition_count).await?);
 
-        let threads: Vec<JoinHandle<Result<_>>> = (0..2)
+        let threads: Vec<_> = (0..2)
             .map(|_| ctx.clone())
-            .map(|ctx_clone| {
-                thread::spawn(move || {
-                    let ctx = ctx_clone.lock().expect("Locked context");
+            .map(|ctx| {
+                tokio::spawn(async move {
                     // Ensure we can create logical plan code on a separate thread.
-                    ctx.create_logical_plan(
-                        "SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3",
-                    )
+                    ctx.sql("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")
+                        .await
                 })
             })
             .collect();
 
-        for thread in threads {
-            thread.join().expect("Failed to join thread")?;
+        for handle in threads {
+            handle.await.unwrap().unwrap();
         }
         Ok(())
     }

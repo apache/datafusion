@@ -23,8 +23,7 @@ async fn csv_query_error() -> Result<()> {
     let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT sin(c1) FROM aggregate_test_100";
-    let plan = ctx.create_logical_plan(sql);
-    assert!(plan.is_err());
+    ctx.sql(sql).await.unwrap_err();
     Ok(())
 }
 
@@ -34,11 +33,8 @@ async fn test_cast_expressions_error() -> Result<()> {
     let ctx = create_ctx();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT CAST(c1 AS INT) FROM aggregate_test_100";
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let task_ctx = ctx.task_ctx();
-    let result = collect(plan, task_ctx).await;
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let result = dataframe.collect().await;
 
     match result {
         Ok(_) => panic!("expected error"),
@@ -58,10 +54,9 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT COUNT(DISTINCT) FROM aggregate_test_100";
-    let logical_plan = ctx.create_logical_plan(sql);
-    let err = logical_plan.unwrap_err();
+    let err = ctx.sql(sql).await.unwrap_err().to_string();
     assert_eq!(
-        err.to_string(),
+        err,
         DataFusionError::Plan(
             "The function Count expects 1 arguments, but 0 were provided".to_string()
         )
@@ -76,28 +71,25 @@ async fn query_cte_incorrect() -> Result<()> {
 
     // self reference
     let sql = "WITH t AS (SELECT * FROM t) SELECT * from u";
-    let plan = ctx.create_logical_plan(sql);
-    assert!(plan.is_err());
+    let err = ctx.sql(sql).await.unwrap_err().to_string();
     assert_eq!(
-        format!("{}", plan.unwrap_err()),
+        err,
         "Error during planning: table 'datafusion.public.t' not found"
     );
 
     // forward referencing
     let sql = "WITH t AS (SELECT * FROM u), u AS (SELECT 1) SELECT * from u";
-    let plan = ctx.create_logical_plan(sql);
-    assert!(plan.is_err());
+    let err = ctx.sql(sql).await.unwrap_err().to_string();
     assert_eq!(
-        format!("{}", plan.unwrap_err()),
+        err,
         "Error during planning: table 'datafusion.public.u' not found"
     );
 
     // wrapping should hide u
     let sql = "WITH t AS (WITH u as (SELECT 1) SELECT 1) SELECT * from u";
-    let plan = ctx.create_logical_plan(sql);
-    assert!(plan.is_err());
+    let err = ctx.sql(sql).await.unwrap_err().to_string();
     assert_eq!(
-        format!("{}", plan.unwrap_err()),
+        err,
         "Error during planning: table 'datafusion.public.u' not found"
     );
 
@@ -143,6 +135,7 @@ async fn invalid_qualified_table_references() -> Result<()> {
 }
 
 #[tokio::test]
+#[allow(deprecated)] // TODO: Remove this test once create_logical_plan removed
 async fn unsupported_sql_returns_error() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;

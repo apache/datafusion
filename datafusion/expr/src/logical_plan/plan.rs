@@ -25,8 +25,11 @@ use crate::utils::{
     self, exprlist_to_fields, from_plan, grouping_set_expr_count,
     grouping_set_to_exprlist,
 };
-use crate::{Expr, ExprSchemable, TableProviderFilterPushDown, TableSource};
+use crate::{
+    build_join_schema, Expr, ExprSchemable, TableProviderFilterPushDown, TableSource,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference,
     ScalarValue,
@@ -250,9 +253,12 @@ impl LogicalPlan {
                 aggr_expr,
                 ..
             }) => group_expr.iter().chain(aggr_expr.iter()).cloned().collect(),
+            // There are two part of expression for join, equijoin(on) and non-equijoin(filter).
+            // 1. the first part is `on.len()` equijoin expressions, and the struct of each expr is `left-on = right-on`.
+            // 2. the second part is non-equijoin(filter).
             LogicalPlan::Join(Join { on, filter, .. }) => on
                 .iter()
-                .flat_map(|(l, r)| vec![Expr::Column(l.clone()), Expr::Column(r.clone())])
+                .map(|(l, r)| Expr::eq(l.clone(), r.clone()))
                 .chain(
                     filter
                         .as_ref()
@@ -343,12 +349,14 @@ impl LogicalPlan {
                     ..
                 }) = plan
                 {
-                    self.using_columns.push(
-                        on.iter()
-                            .flat_map(|entry| [&entry.0, &entry.1])
-                            .cloned()
-                            .collect::<HashSet<Column>>(),
-                    );
+                    // The join keys in using-join must be columns.
+                    let columns =
+                        on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
+                            accumu.insert(l.try_into_col()?);
+                            accumu.insert(r.try_into_col()?);
+                            Result::<_, DataFusionError>::Ok(accumu)
+                        })?;
+                    self.using_columns.push(columns);
                 }
                 Ok(true)
             }
@@ -1227,6 +1235,8 @@ pub struct Values {
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
 #[derive(Clone)]
+// mark non_exhaustive to encourage use of try_new/new()
+#[non_exhaustive]
 pub struct Projection {
     /// The list of expressions
     pub expr: Vec<Expr>,
@@ -1290,6 +1300,8 @@ impl Projection {
 
 /// Aliased subquery
 #[derive(Clone)]
+// mark non_exhaustive to encourage use of try_new/new()
+#[non_exhaustive]
 pub struct SubqueryAlias {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -1324,12 +1336,16 @@ impl SubqueryAlias {
 /// If the value of `<predicate>` is true, the input row is passed to
 /// the output. If the value of `<predicate>` is false, the row is
 /// discarded.
+///
+/// Filter should not be created directly but instead use `try_new()`
+/// and that these fields are only pub to support pattern matching
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct Filter {
     /// The predicate expression, which must have Boolean type.
-    predicate: Expr,
+    pub predicate: Expr,
     /// The incoming logical plan
-    input: Arc<LogicalPlan>,
+    pub input: Arc<LogicalPlan>,
 }
 
 impl Filter {
@@ -1369,16 +1385,6 @@ impl Filter {
             LogicalPlan::Filter(it) => Ok(it),
             _ => plan_err!("Could not coerce into Filter!"),
         }
-    }
-
-    /// Access the filter predicate expression
-    pub fn predicate(&self) -> &Expr {
-        &self.predicate
-    }
-
-    /// Access the filter input plan
-    pub fn input(&self) -> &Arc<LogicalPlan> {
-        &self.input
     }
 }
 
@@ -1487,7 +1493,7 @@ pub struct CreateExternalTable {
     /// SQL used to create the table, if available
     pub definition: Option<String>,
     /// File compression type (GZIP, BZIP2, XZ)
-    pub file_compression_type: String,
+    pub file_compression_type: CompressionTypeVariant,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
 }
@@ -1559,6 +1565,8 @@ pub struct Distinct {
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
 #[derive(Clone)]
+// mark non_exhaustive to encourage use of try_new/new()
+#[non_exhaustive]
 pub struct Aggregate {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
@@ -1646,8 +1654,8 @@ pub struct Join {
     pub left: Arc<LogicalPlan>,
     /// Right input
     pub right: Arc<LogicalPlan>,
-    /// Equijoin clause expressed as pairs of (left, right) join columns
-    pub on: Vec<(Column, Column)>,
+    /// Equijoin clause expressed as pairs of (left, right) join expressions
+    pub on: Vec<(Expr, Expr)>,
     /// Filters applied during join (non-equi conditions)
     pub filter: Option<Expr>,
     /// Join type
@@ -1658,6 +1666,41 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
+}
+
+impl Join {
+    /// Create Join with input which wrapped with projection, this method is used to help create physical join.
+    pub fn try_new_with_project_input(
+        original: &LogicalPlan,
+        left: Arc<LogicalPlan>,
+        right: Arc<LogicalPlan>,
+        column_on: (Vec<Column>, Vec<Column>),
+    ) -> Result<Self, DataFusionError> {
+        let original_join = match original {
+            LogicalPlan::Join(join) => join,
+            _ => return plan_err!("Could not create join with project input"),
+        };
+
+        let on: Vec<(Expr, Expr)> = column_on
+            .0
+            .into_iter()
+            .zip(column_on.1.into_iter())
+            .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
+            .collect();
+        let join_schema =
+            build_join_schema(left.schema(), right.schema(), &original_join.join_type)?;
+
+        Ok(Join {
+            left,
+            right,
+            on,
+            filter: original_join.filter.clone(),
+            join_type: original_join.join_type,
+            join_constraint: original_join.join_constraint,
+            schema: Arc::new(join_schema),
+            null_equals_null: original_join.null_equals_null,
+        })
+    }
 }
 
 /// Subquery

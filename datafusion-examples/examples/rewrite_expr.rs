@@ -22,7 +22,7 @@ use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource,
 };
 use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::{utils, OptimizerConfig, OptimizerRule};
+use datafusion_optimizer::{utils, OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::dialect::PostgreSqlDialect;
 use datafusion_sql::sqlparser::parser::Parser;
@@ -47,9 +47,8 @@ pub fn main() -> Result<()> {
 
     // now run the optimizer with our custom rule
     let optimizer = Optimizer::with_rules(vec![Arc::new(MyRule {})]);
-    let mut optimizer_config = OptimizerConfig::default().with_skip_failing_rules(false);
-    let optimized_plan =
-        optimizer.optimize(&logical_plan, &mut optimizer_config, observe)?;
+    let config = OptimizerContext::default().with_skip_failing_rules(false);
+    let optimized_plan = optimizer.optimize(&logical_plan, &config, observe)?;
     println!(
         "Optimized Logical Plan:\n\n{}\n",
         optimized_plan.display_indent()
@@ -76,19 +75,19 @@ impl OptimizerRule for MyRule {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _config: &mut OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         // recurse down and optimize children first
-        let plan = utils::optimize_children(self, plan, _config)?;
+        let plan = utils::optimize_children(self, plan, config)?;
 
         match plan {
             LogicalPlan::Filter(filter) => {
                 let mut expr_rewriter = MyExprRewriter {};
-                let predicate = filter.predicate().clone();
+                let predicate = filter.predicate.clone();
                 let predicate = predicate.rewrite(&mut expr_rewriter)?;
                 Ok(Some(LogicalPlan::Filter(Filter::try_new(
                     predicate,
-                    filter.input().clone(),
+                    filter.input,
                 )?)))
             }
             _ => Ok(Some(plan.clone())),

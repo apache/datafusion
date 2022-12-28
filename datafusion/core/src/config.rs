@@ -21,11 +21,9 @@ use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use itertools::Itertools;
 use log::warn;
-use parking_lot::RwLock;
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 
 /*-************************************
 *  Catalog related
@@ -132,6 +130,10 @@ pub const OPT_PREFER_HASH_JOIN: &str = "datafusion.optimizer.prefer_hash_join";
 /// Configuration option "atafusion.optimizer.hash_join_single_partition_threshold"
 pub const OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD: &str =
     "datafusion.optimizer.hash_join_single_partition_threshold";
+
+/// Configuration option "datafusion.execution.round_robin_repartition"
+pub const OPT_ENABLE_ROUND_ROBIN_REPARTITION: &str =
+    "datafusion.optimizer.enable_round_robin_repartition";
 
 /// Definition of a configuration option
 pub struct ConfigDefinition {
@@ -411,6 +413,11 @@ impl BuiltInConfigs {
                  "The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition",
                  1024 * 1024,
              ),
+             ConfigDefinition::new_bool(
+                 OPT_ENABLE_ROUND_ROBIN_REPARTITION,
+                 "When set to true, the physical plan optimizer will try to add round robin repartition to increase parallelism to leverage more CPU cores",
+                 true,
+             ),
             ]
         }
     }
@@ -482,11 +489,6 @@ impl ConfigOptions {
             options.insert(config_def.key.clone(), config_def.default_value.clone());
         }
         Self { options }
-    }
-
-    /// Create a new [`ConfigOptions`] wrapped in an RwLock and Arc
-    pub fn into_shareable(self) -> Arc<RwLock<Self>> {
-        Arc::new(RwLock::new(self))
     }
 
     /// Create new ConfigOptions struct, taking values from

@@ -185,7 +185,9 @@ fn create_join_context(
     repartition_joins: bool,
 ) -> Result<SessionContext> {
     let ctx = SessionContext::with_config(
-        SessionConfig::new().with_repartition_joins(repartition_joins),
+        SessionConfig::new()
+            .with_repartition_joins(repartition_joins)
+            .with_target_partitions(2),
     );
 
     let t1_schema = Arc::new(Schema::new(vec![
@@ -1018,61 +1020,30 @@ async fn try_execute_to_batches(
     ctx: &SessionContext,
     sql: &str,
 ) -> Result<Vec<RecordBatch>> {
-    let plan = ctx.create_logical_plan(sql)?;
-    let logical_schema = plan.schema();
+    let dataframe = ctx.sql(sql).await?;
+    let logical_schema = dataframe.schema().clone();
 
-    let plan = ctx.optimize(&plan)?;
-    let optimized_logical_schema = plan.schema();
+    let optimized = ctx.optimize(dataframe.logical_plan())?;
+    let optimized_logical_schema = optimized.schema();
+    let results = dataframe.collect().await?;
 
-    let plan = ctx.create_physical_plan(&plan).await?;
-
-    let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx).await?;
-
-    assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
+    assert_eq!(&logical_schema, optimized_logical_schema.as_ref());
     Ok(results)
 }
 
 /// Execute query and return results as a Vec of RecordBatches
 async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx
-        .create_logical_plan(sql)
-        .map_err(|e| format!("{:?} at {}", e, msg))
-        .unwrap();
-    let logical_schema = plan.schema();
+    let df = ctx.sql(sql).await.unwrap();
 
     // We are not really interested in the direct output of optimized_logical_plan
     // since the physical plan construction already optimizes the given logical plan
     // and we want to avoid double-optimization as a consequence. So we just construct
     // it here to make sure that it doesn't fail at this step and get the optimized
     // schema (to assert later that the logical and optimized schemas are the same).
-    let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
-    let optimized_logical_plan = ctx
-        .optimize(&plan)
-        .map_err(|e| format!("{:?} at {}", e, msg))
-        .unwrap();
-    let optimized_logical_schema = optimized_logical_plan.schema();
+    let optimized = df.clone().into_optimized_plan().unwrap();
+    assert_eq!(df.logical_plan().schema(), optimized.schema());
 
-    let msg = format!(
-        "Creating physical plan for '{}': {:?}",
-        sql, optimized_logical_plan
-    );
-    let plan = ctx
-        .create_physical_plan(&plan)
-        .await
-        .map_err(|e| format!("{:?} at {}", e, msg))
-        .unwrap();
-
-    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx)
-        .await
-        .map_err(|e| format!("{:?} at {}", e, msg))
-        .unwrap();
-
-    assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
-    results
+    df.collect().await.unwrap()
 }
 
 /// Execute query and return result set as 2-d table of Vecs
@@ -1564,12 +1535,13 @@ async fn nyc() -> Result<()> {
     )
     .await?;
 
-    let logical_plan = ctx.create_logical_plan(
-        "SELECT passenger_count, MIN(fare_amount), MAX(fare_amount) \
+    let dataframe = ctx
+        .sql(
+            "SELECT passenger_count, MIN(fare_amount), MAX(fare_amount) \
          FROM tripdata GROUP BY passenger_count",
-    )?;
-
-    let optimized_plan = ctx.optimize(&logical_plan)?;
+        )
+        .await?;
+    let optimized_plan = dataframe.into_optimized_plan().unwrap();
 
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match input.as_ref() {

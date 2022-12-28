@@ -123,6 +123,20 @@ impl BuiltInWindowFunctionExpr for NthValue {
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(NthValueEvaluator { kind: self.kind }))
     }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+        let reversed_kind = match self.kind {
+            NthValueKind::First => NthValueKind::Last,
+            NthValueKind::Last => NthValueKind::First,
+            NthValueKind::Nth(_) => return None,
+        };
+        Some(Arc::new(Self {
+            name: self.name.clone(),
+            expr: self.expr.clone(),
+            data_type: self.data_type.clone(),
+            kind: reversed_kind,
+        }))
+    }
 }
 
 /// Value evaluator for nth_value functions

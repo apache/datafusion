@@ -108,9 +108,6 @@ impl TableProvider for ViewTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // clone state and start_execution so that now() works in views
-        let mut state_cloned = state.clone();
-        state_cloned.execution_props.start_execution();
         let plan = if let Some(projection) = projection {
             // avoiding adding a redundant projection (e.g. SELECT * FROM view)
             let current_projection =
@@ -144,7 +141,7 @@ impl TableProvider for ViewTable {
             plan = plan.limit(0, Some(limit))?;
         }
 
-        state_cloned.create_physical_plan(&plan.build()?).await
+        state.create_physical_plan(&plan.build()?).await
     }
 }
 
@@ -493,12 +490,10 @@ mod tests {
         let view_sql = "CREATE VIEW xyz AS SELECT * FROM abc";
         session_ctx.sql(view_sql).await?.collect().await?;
 
-        let plan = session_ctx
+        let dataframe = session_ctx
             .sql("EXPLAIN CREATE VIEW xyz AS SELECT * FROM abc")
-            .await?
-            .to_logical_plan()
-            .unwrap();
-        let plan = session_ctx.optimize(&plan).unwrap();
+            .await?;
+        let plan = dataframe.into_optimized_plan()?;
         let actual = format!("{}", plan.display_indent());
         let expected = "\
         Explain\
@@ -507,12 +502,10 @@ mod tests {
         \n      TableScan: abc projection=[column1, column2, column3]";
         assert_eq!(expected, actual);
 
-        let plan = session_ctx
+        let dataframe = session_ctx
             .sql("EXPLAIN CREATE VIEW xyz AS SELECT * FROM abc WHERE column2 = 5")
-            .await?
-            .to_logical_plan()
-            .unwrap();
-        let plan = session_ctx.optimize(&plan).unwrap();
+            .await?;
+        let plan = dataframe.into_optimized_plan()?;
         let actual = format!("{}", plan.display_indent());
         let expected = "\
         Explain\
@@ -522,12 +515,10 @@ mod tests {
         \n        TableScan: abc projection=[column1, column2, column3]";
         assert_eq!(expected, actual);
 
-        let plan = session_ctx
+        let dataframe = session_ctx
             .sql("EXPLAIN CREATE VIEW xyz AS SELECT column1, column2 FROM abc WHERE column2 = 5")
-            .await?
-            .to_logical_plan()
-            .unwrap();
-        let plan = session_ctx.optimize(&plan).unwrap();
+            .await?;
+        let plan = dataframe.into_optimized_plan()?;
         let actual = format!("{}", plan.display_indent());
         let expected = "\
         Explain\

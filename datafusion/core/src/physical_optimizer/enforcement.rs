@@ -18,8 +18,11 @@
 //! Enforcement optimizer rules are used to make sure the plan's Distribution and Ordering
 //! requirements are met by inserting necessary [[RepartitionExec]] and [[SortExec]].
 //!
-use crate::config::OPT_TOP_DOWN_JOIN_KEY_REORDERING;
+use crate::config::{
+    ConfigOptions, OPT_TARGET_PARTITIONS, OPT_TOP_DOWN_JOIN_KEY_REORDERING,
+};
 use crate::error::Result;
+use crate::physical_optimizer::utils::{add_sort_above_child, ordering_satisfy};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -29,21 +32,18 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
-use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::sorts::sort::SortOptions;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
-use crate::prelude::SessionConfig;
 use arrow::datatypes::SchemaRef;
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::expressions::NoOp;
 use datafusion_physical_expr::{
-    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties,
-    normalize_sort_expr_with_equivalence_properties, AggregateExpr, PhysicalExpr,
-    PhysicalSortExpr,
+    expr_list_eq_strict_order, normalize_expr_with_equivalence_properties, AggregateExpr,
+    PhysicalExpr,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -70,12 +70,10 @@ impl PhysicalOptimizerRule for BasicEnforcement {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &SessionConfig,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_partitions = config.target_partitions();
+        let target_partitions = config.get_usize(OPT_TARGET_PARTITIONS).unwrap();
         let top_down_join_key_reordering = config
-            .config_options()
-            .read()
             .get_bool(OPT_TOP_DOWN_JOIN_KEY_REORDERING)
             .unwrap_or_default();
         let new_plan = if top_down_join_key_reordering {
@@ -835,6 +833,9 @@ fn new_join_conditions(
     new_join_on
 }
 
+/// Within this function, it checks whether we need to add additional plan operators
+/// of data exchanging and data ordering to satisfy the required distribution and ordering.
+/// And we should avoid to manually add plan operators of data exchanging and data ordering in other places
 fn ensure_distribution_and_ordering(
     plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
     target_partitions: usize,
@@ -842,6 +843,7 @@ fn ensure_distribution_and_ordering(
     if plan.children().is_empty() {
         return Ok(plan);
     }
+
     let required_input_distributions = plan.required_input_distribution();
     let required_input_orderings = plan.required_input_ordering();
     let children: Vec<Arc<dyn ExecutionPlan>> = plan.children();
@@ -874,7 +876,7 @@ fn ensure_distribution_and_ordering(
             }
         });
 
-    // Add SortExec to guarantee output ordering
+    // Add local SortExec to guarantee output ordering within each partition
     let new_children: Result<Vec<Arc<dyn ExecutionPlan>>> = children
         .zip(required_input_orderings.into_iter())
         .map(|(child_result, required)| {
@@ -885,74 +887,12 @@ fn ensure_distribution_and_ordering(
                 Ok(child)
             } else {
                 let sort_expr = required.unwrap().to_vec();
-                if child.output_partitioning().partition_count() > 1 {
-                    Ok(Arc::new(SortExec::new_with_partitioning(
-                        sort_expr, child, true, None,
-                    )) as Arc<dyn ExecutionPlan>)
-                } else {
-                    Ok(Arc::new(SortExec::try_new(sort_expr, child, None)?)
-                        as Arc<dyn ExecutionPlan>)
-                }
+                add_sort_above_child(&child, sort_expr)
             }
         })
         .collect();
 
     with_new_children_if_necessary(plan, new_children?)
-}
-
-/// Check the required ordering requirements are satisfied by the provided PhysicalSortExprs.
-fn ordering_satisfy<F: FnOnce() -> EquivalenceProperties>(
-    provided: Option<&[PhysicalSortExpr]>,
-    required: Option<&[PhysicalSortExpr]>,
-    equal_properties: F,
-) -> bool {
-    match (provided, required) {
-        (_, None) => true,
-        (None, Some(_)) => false,
-        (Some(provided), Some(required)) => {
-            if required.len() > provided.len() {
-                false
-            } else {
-                let fast_match = required
-                    .iter()
-                    .zip(provided.iter())
-                    .all(|(order1, order2)| order1.eq(order2));
-
-                if !fast_match {
-                    let eq_properties = equal_properties();
-                    let eq_classes = eq_properties.classes();
-                    if !eq_classes.is_empty() {
-                        let normalized_required_exprs = required
-                            .iter()
-                            .map(|e| {
-                                normalize_sort_expr_with_equivalence_properties(
-                                    e.clone(),
-                                    eq_classes,
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        let normalized_provided_exprs = provided
-                            .iter()
-                            .map(|e| {
-                                normalize_sort_expr_with_equivalence_properties(
-                                    e.clone(),
-                                    eq_classes,
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        normalized_required_exprs
-                            .iter()
-                            .zip(normalized_provided_exprs.iter())
-                            .all(|(order1, order2)| order1.eq(order2))
-                    } else {
-                        fast_match
-                    }
-                } else {
-                    fast_match
-                }
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -1034,14 +974,13 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_expr::logical_plan::JoinType;
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::binary;
-    use datafusion_physical_expr::expressions::lit;
-    use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_expr::{expressions, PhysicalExpr};
+    use datafusion_physical_expr::{
+        expressions, expressions::binary, expressions::lit, expressions::Column,
+        PhysicalExpr, PhysicalSortExpr,
+    };
     use std::ops::Deref;
 
     use super::*;
-    use crate::config::ConfigOptions;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::physical_plan::aggregates::{
@@ -1081,8 +1020,8 @@ mod tests {
                 projection: None,
                 limit: None,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
                 output_ordering,
+                infinite_source: false,
             },
             None,
             None,
@@ -1197,10 +1136,12 @@ mod tests {
         ($EXPECTED_LINES: expr, $PLAN: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
+            let mut config = ConfigOptions::new();
+            config.set_usize(OPT_TARGET_PARTITIONS, 10);
+
             // run optimizer
             let optimizer = BasicEnforcement {};
-            let optimized = optimizer
-                .optimize($PLAN, &SessionConfig::new().with_target_partitions(10))?;
+            let optimized = optimizer.optimize($PLAN, &config)?;
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent().to_string();

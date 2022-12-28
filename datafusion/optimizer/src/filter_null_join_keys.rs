@@ -20,10 +20,11 @@
 //! and then insert an `IsNotNull` filter on the nullable side since null values
 //! can never match.
 
-use crate::{utils, OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DFField, DFSchemaRef};
+use crate::optimizer::ApplyOrder;
+use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::Result;
 use datafusion_expr::{
-    and, logical_plan::Filter, logical_plan::JoinType, Expr, LogicalPlan,
+    and, logical_plan::Filter, logical_plan::JoinType, Expr, ExprSchemable, LogicalPlan,
 };
 use std::sync::Arc;
 
@@ -34,24 +35,19 @@ use std::sync::Arc;
 #[derive(Default)]
 pub struct FilterNullJoinKeys {}
 
+impl FilterNullJoinKeys {
+    pub const NAME: &'static str = "filter_null_join_keys";
+}
+
 impl OptimizerRule for FilterNullJoinKeys {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> datafusion_common::Result<Option<LogicalPlan>> {
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
-                // recurse down first and optimize inputs
                 let mut join = join.clone();
-                join.left = Arc::new(
-                    self.try_optimize(&join.left, optimizer_config)?
-                        .unwrap_or_else(|| join.left.as_ref().clone()),
-                );
-                join.right = Arc::new(
-                    self.try_optimize(&join.right, optimizer_config)?
-                        .unwrap_or_else(|| join.right.as_ref().clone()),
-                );
 
                 let left_schema = join.left.schema();
                 let right_schema = join.right.schema();
@@ -60,15 +56,12 @@ impl OptimizerRule for FilterNullJoinKeys {
                 let mut right_filters = vec![];
 
                 for (l, r) in &join.on {
-                    if let Some((left_field, right_field)) =
-                        resolve_join_key_pair(left_schema, right_schema, l, r)
-                    {
-                        if left_field.is_nullable() {
-                            left_filters.push(l.clone());
-                        }
-                        if right_field.is_nullable() {
-                            right_filters.push(r.clone());
-                        }
+                    if l.nullable(left_schema)? {
+                        left_filters.push(l.clone());
+                    }
+
+                    if r.nullable(right_schema)? {
+                        right_filters.push(r.clone());
                     }
                 }
 
@@ -88,26 +81,23 @@ impl OptimizerRule for FilterNullJoinKeys {
                 }
                 Ok(Some(LogicalPlan::Join(join)))
             }
-            _ => {
-                // Apply the optimization to all inputs of the plan
-                Ok(Some(utils::optimize_children(
-                    self,
-                    plan,
-                    optimizer_config,
-                )?))
-            }
+            _ => Ok(None),
         }
     }
 
     fn name(&self) -> &str {
-        "filter_null_join_keys"
+        Self::NAME
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
     }
 }
 
-fn create_not_null_predicate(columns: Vec<Column>) -> Expr {
-    let not_null_exprs: Vec<Expr> = columns
+fn create_not_null_predicate(filters: Vec<Expr>) -> Expr {
+    let not_null_exprs: Vec<Expr> = filters
         .into_iter()
-        .map(|c| Expr::IsNotNull(Box::new(Expr::Column(c))))
+        .map(|c| Expr::IsNotNull(Box::new(c)))
         .collect();
     // combine the IsNotNull expressions with AND
     not_null_exprs
@@ -116,54 +106,17 @@ fn create_not_null_predicate(columns: Vec<Column>) -> Expr {
         .fold(not_null_exprs[0].clone(), |a, b| and(a, b.clone()))
 }
 
-fn resolve_join_key_pair(
-    left_schema: &DFSchemaRef,
-    right_schema: &DFSchemaRef,
-    c1: &Column,
-    c2: &Column,
-) -> Option<(DFField, DFField)> {
-    resolve_fields(left_schema, right_schema, c1, c2)
-        .or_else(|| resolve_fields(left_schema, right_schema, c2, c1))
-}
-
-fn resolve_fields(
-    left_schema: &DFSchemaRef,
-    right_schema: &DFSchemaRef,
-    c1: &Column,
-    c2: &Column,
-) -> Option<(DFField, DFField)> {
-    match (
-        left_schema.index_of_column(c1),
-        right_schema.index_of_column(c2),
-    ) {
-        (Ok(left_index), Ok(right_index)) => {
-            let left_field = left_schema.field(left_index);
-            let right_field = right_schema.field(right_index);
-            Some((left_field.clone(), right_field.clone()))
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test::assert_optimized_plan_eq;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Column, Result};
     use datafusion_expr::logical_plan::table_scan;
-    use datafusion_expr::{logical_plan::JoinType, LogicalPlanBuilder};
+    use datafusion_expr::{col, lit, logical_plan::JoinType, LogicalPlanBuilder};
 
-    fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
-        let rule = FilterNullJoinKeys::default();
-        rule.try_optimize(plan, &mut OptimizerConfig::new())
-            .unwrap()
-            .expect("failed to optimize plan")
-    }
-
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let optimized_plan = optimize_plan(plan);
-        let formatted_plan = format!("{:?}", optimized_plan);
-        assert_eq!(formatted_plan, expected);
+    fn assert_optimized_plan_equal(plan: &LogicalPlan, expected: &str) -> Result<()> {
+        assert_optimized_plan_eq(Arc::new(FilterNullJoinKeys {}), plan, expected)
     }
 
     #[test]
@@ -174,8 +127,7 @@ mod tests {
         \n  Filter: t1.optional_id IS NOT NULL\
         \n    TableScan: t1\
         \n  TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -186,8 +138,7 @@ mod tests {
         \n  Filter: t1.optional_id IS NOT NULL\
         \n    TableScan: t1\
         \n  TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     #[test]
@@ -224,8 +175,72 @@ mod tests {
         \n    Filter: t1.optional_id IS NOT NULL\
         \n      TableScan: t1\
         \n    TableScan: t2";
-        assert_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn left_nullable_expr_key() -> Result<()> {
+        let (t1, t2) = test_tables()?;
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_with_expr_keys(
+                t2,
+                JoinType::Inner,
+                (
+                    vec![col("t1.optional_id") + lit(1u32)],
+                    vec![col("t2.id") + lit(1u32)],
+                ),
+                None,
+            )?
+            .build()?;
+        let expected = "Inner Join: t1.optional_id + UInt32(1) = t2.id + UInt32(1)\
+        \n  Filter: t1.optional_id + UInt32(1) IS NOT NULL\
+        \n    TableScan: t1\
+        \n  TableScan: t2";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn right_nullable_expr_key() -> Result<()> {
+        let (t1, t2) = test_tables()?;
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_with_expr_keys(
+                t2,
+                JoinType::Inner,
+                (
+                    vec![col("t1.id") + lit(1u32)],
+                    vec![col("t2.optional_id") + lit(1u32)],
+                ),
+                None,
+            )?
+            .build()?;
+        let expected = "Inner Join: t1.id + UInt32(1) = t2.optional_id + UInt32(1)\
+        \n  TableScan: t1\
+        \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
+        \n    TableScan: t2";
+        assert_optimized_plan_equal(&plan, expected)
+    }
+
+    #[test]
+    fn both_side_nullable_expr_key() -> Result<()> {
+        let (t1, t2) = test_tables()?;
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_with_expr_keys(
+                t2,
+                JoinType::Inner,
+                (
+                    vec![col("t1.optional_id") + lit(1u32)],
+                    vec![col("t2.optional_id") + lit(1u32)],
+                ),
+                None,
+            )?
+            .build()?;
+        let expected =
+            "Inner Join: t1.optional_id + UInt32(1) = t2.optional_id + UInt32(1)\
+        \n  Filter: t1.optional_id + UInt32(1) IS NOT NULL\
+        \n    TableScan: t1\
+        \n  Filter: t2.optional_id + UInt32(1) IS NOT NULL\
+        \n    TableScan: t2";
+        assert_optimized_plan_equal(&plan, expected)
     }
 
     fn build_plan(

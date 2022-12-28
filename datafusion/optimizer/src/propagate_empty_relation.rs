@@ -20,7 +20,8 @@ use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{EmptyRelation, JoinType, Projection, Union};
 use std::sync::Arc;
 
-use crate::{utils, OptimizerConfig, OptimizerRule};
+use crate::optimizer::ApplyOrder;
+use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimization rule that bottom-up to eliminate plan by propagating empty_relation.
 #[derive(Default)]
@@ -37,33 +38,28 @@ impl OptimizerRule for PropagateEmptyRelation {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
-        // optimize child plans first
-        let optimized_children_plan =
-            utils::optimize_children(self, plan, optimizer_config)?;
-        match &optimized_children_plan {
-            LogicalPlan::EmptyRelation(_) => Ok(Some(optimized_children_plan)),
+        match plan {
+            LogicalPlan::EmptyRelation(_) => {}
             LogicalPlan::Projection(_)
             | LogicalPlan::Filter(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Sort(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Repartition(_)
-            | LogicalPlan::Limit(_) => match empty_child(&optimized_children_plan)? {
-                Some(empty) => Ok(Some(empty)),
-                None => Ok(Some(optimized_children_plan)),
-            },
+            | LogicalPlan::Limit(_) => {
+                if let Some(empty) = empty_child(plan)? {
+                    return Ok(Some(empty));
+                }
+            }
             LogicalPlan::CrossJoin(_) => {
-                let (left_empty, right_empty) =
-                    binary_plan_children_is_empty(&optimized_children_plan)?;
+                let (left_empty, right_empty) = binary_plan_children_is_empty(plan)?;
                 if left_empty || right_empty {
-                    Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
+                    return Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
-                        schema: optimized_children_plan.schema().clone(),
-                    })))
-                } else {
-                    Ok(Some(optimized_children_plan))
+                        schema: plan.schema().clone(),
+                    })));
                 }
             }
             LogicalPlan::Join(join) => {
@@ -80,18 +76,13 @@ impl OptimizerRule for PropagateEmptyRelation {
                 // For RightOut/Full Join, if the left side is empty, the Join can be eliminated with a Projection with right side
                 // columns + left side columns replaced with null values.
                 if join.join_type == JoinType::Inner {
-                    let (left_empty, right_empty) =
-                        binary_plan_children_is_empty(&optimized_children_plan)?;
+                    let (left_empty, right_empty) = binary_plan_children_is_empty(plan)?;
                     if left_empty || right_empty {
-                        Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
+                        return Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
-                            schema: optimized_children_plan.schema().clone(),
-                        })))
-                    } else {
-                        Ok(Some(optimized_children_plan))
+                            schema: plan.schema().clone(),
+                        })));
                     }
-                } else {
-                    Ok(Some(optimized_children_plan))
                 }
             }
             LogicalPlan::Union(union) => {
@@ -106,45 +97,49 @@ impl OptimizerRule for PropagateEmptyRelation {
                     .collect::<Vec<_>>();
 
                 if new_inputs.len() == union.inputs.len() {
-                    Ok(Some(optimized_children_plan))
+                    return Ok(None);
                 } else if new_inputs.is_empty() {
-                    Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
+                    return Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
-                        schema: optimized_children_plan.schema().clone(),
-                    })))
+                        schema: plan.schema().clone(),
+                    })));
                 } else if new_inputs.len() == 1 {
                     let child = (**(union.inputs.get(0).unwrap())).clone();
-                    if child.schema().eq(optimized_children_plan.schema()) {
-                        Ok(Some(child))
+                    if child.schema().eq(plan.schema()) {
+                        return Ok(Some(child));
                     } else {
-                        Ok(Some(LogicalPlan::Projection(Projection::new_from_schema(
-                            Arc::new(child),
-                            optimized_children_plan.schema().clone(),
-                        ))))
+                        return Ok(Some(LogicalPlan::Projection(
+                            Projection::new_from_schema(
+                                Arc::new(child),
+                                plan.schema().clone(),
+                            ),
+                        )));
                     }
                 } else {
-                    Ok(Some(LogicalPlan::Union(Union {
+                    return Ok(Some(LogicalPlan::Union(Union {
                         inputs: new_inputs,
                         schema: union.schema.clone(),
-                    })))
+                    })));
                 }
             }
             LogicalPlan::Aggregate(agg) => {
                 if !agg.group_expr.is_empty() {
-                    match empty_child(&optimized_children_plan)? {
-                        Some(empty) => Ok(Some(empty)),
-                        None => Ok(Some(optimized_children_plan)),
+                    if let Some(empty) = empty_child(plan)? {
+                        return Ok(Some(empty));
                     }
-                } else {
-                    Ok(Some(optimized_children_plan))
                 }
             }
-            _ => Ok(Some(optimized_children_plan)),
+            _ => {}
         }
+        Ok(None)
     }
 
     fn name(&self) -> &str {
         "propagate_empty_relation"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
     }
 }
 
@@ -203,7 +198,11 @@ fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
 #[cfg(test)]
 mod tests {
     use crate::eliminate_filter::EliminateFilter;
-    use crate::test::{test_table_scan, test_table_scan_with_name};
+    use crate::optimizer::Optimizer;
+    use crate::test::{
+        assert_optimized_plan_eq, test_table_scan, test_table_scan_with_name,
+    };
+    use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Column, ScalarValue};
     use datafusion_expr::logical_plan::table_scan;
@@ -214,29 +213,29 @@ mod tests {
 
     use super::*;
 
-    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = PropagateEmptyRelation::new();
-        let optimized_plan = rule
-            .try_optimize(plan, &mut OptimizerConfig::new())
-            .unwrap()
+    fn assert_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
+        assert_optimized_plan_eq(Arc::new(PropagateEmptyRelation::new()), plan, expected)
+    }
+
+    fn assert_together_optimized_plan_eq(
+        plan: &LogicalPlan,
+        expected: &str,
+    ) -> Result<()> {
+        fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(EliminateFilter::new()),
+            Arc::new(PropagateEmptyRelation::new()),
+        ]);
+        let config = &mut OptimizerContext::new()
+            .with_max_passes(1)
+            .with_skip_failing_rules(false);
+        let optimized_plan = optimizer
+            .optimize(plan, config, observe)
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
         assert_eq!(plan.schema(), optimized_plan.schema());
-    }
-
-    fn assert_together_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let optimize_one = EliminateFilter::new()
-            .try_optimize(plan, &mut OptimizerConfig::new())
-            .unwrap()
-            .expect("failed to optimize plan");
-        let optimize_two = PropagateEmptyRelation::new()
-            .try_optimize(&optimize_one, &mut OptimizerConfig::new())
-            .unwrap()
-            .expect("failed to optimize plan");
-        let formatted_plan = format!("{:?}", optimize_two);
-        assert_eq!(formatted_plan, expected);
-        assert_eq!(plan.schema(), optimize_two.schema());
+        Ok(())
     }
 
     #[test]
@@ -248,9 +247,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_eq(&plan, expected)
     }
 
     #[test]
@@ -273,9 +270,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_together_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -289,9 +284,7 @@ mod tests {
 
         let expected = "Projection: a, b, c\
             \n  TableScan: test";
-        assert_together_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_together_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -316,9 +309,7 @@ mod tests {
         let expected = "Union\
             \n  TableScan: test1\
             \n  TableScan: test4";
-        assert_together_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_together_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -343,9 +334,7 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_together_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -372,9 +361,7 @@ mod tests {
         let expected = "Union\
             \n  TableScan: test2\
             \n  TableScan: test3";
-        assert_together_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_together_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -388,8 +375,7 @@ mod tests {
 
         let expected = "Projection: a, b, c\
             \n  TableScan: test";
-        assert_together_optimized_plan_eq(&plan, expected);
-        Ok(())
+        assert_together_optimized_plan_eq(&plan, expected)
     }
 
     #[test]
@@ -404,8 +390,6 @@ mod tests {
             .build()?;
 
         let expected = "EmptyRelation";
-        assert_together_optimized_plan_eq(&plan, expected);
-
-        Ok(())
+        assert_together_optimized_plan_eq(&plan, expected)
     }
 }

@@ -21,7 +21,9 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::aggregate::row_accumulator::{
+    is_row_accumulator_support_dtype, RowAccumulator,
+};
 use crate::aggregate::sum;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
@@ -105,19 +107,7 @@ impl AggregateExpr for Avg {
     }
 
     fn row_accumulator_supported(&self) -> bool {
-        matches!(
-            self.data_type,
-            DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::Float32
-                | DataType::Float64
-        )
+        is_row_accumulator_support_dtype(&self.data_type)
     }
 
     fn create_row_accumulator(

@@ -19,100 +19,29 @@
 //!
 //! Information Schema]<https://en.wikipedia.org/wiki/Information_schema>
 
-use std::{
-    any::Any,
-    sync::{Arc, Weak},
-};
+use std::{any::Any, sync::Arc};
 
 use arrow::{
     array::{StringBuilder, UInt64Builder},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use parking_lot::RwLock;
-
-use datafusion_common::Result;
 
 use crate::config::ConfigOptions;
 use crate::datasource::streaming::{PartitionStream, StreamingTable};
 use crate::datasource::TableProvider;
+use crate::execution::context::TaskContext;
 use crate::logical_expr::TableType;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::SendableRecordBatchStream;
 
-use super::{
-    catalog::{CatalogList, CatalogProvider},
-    schema::SchemaProvider,
-};
+use super::{catalog::CatalogList, schema::SchemaProvider};
 
-const INFORMATION_SCHEMA: &str = "information_schema";
-const TABLES: &str = "tables";
-const VIEWS: &str = "views";
-const COLUMNS: &str = "columns";
-const DF_SETTINGS: &str = "df_settings";
-
-/// Wraps another [`CatalogProvider`] and adds a "information_schema"
-/// schema that can introspect on tables in the catalog_list
-pub(crate) struct CatalogWithInformationSchema {
-    catalog_list: Weak<dyn CatalogList>,
-    config_options: Weak<RwLock<ConfigOptions>>,
-    /// wrapped provider
-    inner: Arc<dyn CatalogProvider>,
-}
-
-impl CatalogWithInformationSchema {
-    pub(crate) fn new(
-        catalog_list: Weak<dyn CatalogList>,
-        config_options: Weak<RwLock<ConfigOptions>>,
-        inner: Arc<dyn CatalogProvider>,
-    ) -> Self {
-        Self {
-            catalog_list,
-            config_options,
-            inner,
-        }
-    }
-}
-
-impl CatalogProvider for CatalogWithInformationSchema {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema_names(&self) -> Vec<String> {
-        self.inner
-            .schema_names()
-            .into_iter()
-            .chain(std::iter::once(INFORMATION_SCHEMA.to_string()))
-            .collect::<Vec<String>>()
-    }
-
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        if name.eq_ignore_ascii_case(INFORMATION_SCHEMA) {
-            Weak::upgrade(&self.catalog_list).and_then(|catalog_list| {
-                Weak::upgrade(&self.config_options).map(|config_options| {
-                    Arc::new(InformationSchemaProvider {
-                        config: InformationSchemaConfig {
-                            catalog_list,
-                            config_options,
-                        },
-                    }) as Arc<dyn SchemaProvider>
-                })
-            })
-        } else {
-            self.inner.schema(name)
-        }
-    }
-
-    fn register_schema(
-        &self,
-        name: &str,
-        schema: Arc<dyn SchemaProvider>,
-    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
-        let catalog = &self.inner;
-        catalog.register_schema(name, schema)
-    }
-}
+pub const INFORMATION_SCHEMA: &str = "information_schema";
+pub const TABLES: &str = "tables";
+pub const VIEWS: &str = "views";
+pub const COLUMNS: &str = "columns";
+pub const DF_SETTINGS: &str = "df_settings";
 
 /// Implements the `information_schema` virtual schema and tables
 ///
@@ -120,14 +49,22 @@ impl CatalogProvider for CatalogWithInformationSchema {
 /// demand. This means that if more tables are added to the underlying
 /// providers, they will appear the next time the `information_schema`
 /// table is queried.
-struct InformationSchemaProvider {
+pub struct InformationSchemaProvider {
     config: InformationSchemaConfig,
+}
+
+impl InformationSchemaProvider {
+    /// Creates a new [`InformationSchemaProvider`] for the provided `catalog_list`
+    pub fn new(catalog_list: Arc<dyn CatalogList>) -> Self {
+        Self {
+            config: InformationSchemaConfig { catalog_list },
+        }
+    }
 }
 
 #[derive(Clone)]
 struct InformationSchemaConfig {
     catalog_list: Arc<dyn CatalogList>,
-    config_options: Arc<RwLock<ConfigOptions>>,
 }
 
 impl InformationSchemaConfig {
@@ -220,8 +157,12 @@ impl InformationSchemaConfig {
     }
 
     /// Construct the `information_schema.df_settings` virtual table
-    fn make_df_settings(&self, builder: &mut InformationSchemaDfSettingsBuilder) {
-        for (name, setting) in self.config_options.read().options() {
+    fn make_df_settings(
+        &self,
+        config_options: &ConfigOptions,
+        builder: &mut InformationSchemaDfSettingsBuilder,
+    ) {
+        for (name, setting) in config_options.options() {
             builder.add_setting(name, setting.to_string());
         }
     }
@@ -298,7 +239,7 @@ impl PartitionStream for InformationSchemaTables {
         &self.schema
     }
 
-    fn execute(&self) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
@@ -389,7 +330,7 @@ impl PartitionStream for InformationSchemaViews {
         &self.schema
     }
 
-    fn execute(&self) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
@@ -503,7 +444,7 @@ impl PartitionStream for InformationSchemaColumns {
         &self.schema
     }
 
-    fn execute(&self) -> SendableRecordBatchStream {
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
         let mut builder = self.builder();
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
@@ -690,15 +631,18 @@ impl PartitionStream for InformationSchemaDfSettings {
         &self.schema
     }
 
-    fn execute(&self) -> SendableRecordBatchStream {
-        let mut builder = self.builder();
+    fn execute(&self, ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
         let config = self.config.clone();
+        let mut builder = self.builder();
         Box::pin(RecordBatchStreamAdapter::new(
             self.schema.clone(),
             // TODO: Stream this
             futures::stream::once(async move {
                 // create a mem table with the names of tables
-                config.make_df_settings(&mut builder);
+                config.make_df_settings(
+                    ctx.session_config().config_options(),
+                    &mut builder,
+                );
                 Ok(builder.finish())
             }),
         ))
