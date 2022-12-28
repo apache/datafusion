@@ -18,7 +18,9 @@
 //! Enforcement optimizer rules are used to make sure the plan's Distribution and Ordering
 //! requirements are met by inserting necessary [[RepartitionExec]] and [[SortExec]].
 //!
-use crate::config::OPT_TOP_DOWN_JOIN_KEY_REORDERING;
+use crate::config::{
+    ConfigOptions, OPT_TARGET_PARTITIONS, OPT_TOP_DOWN_JOIN_KEY_REORDERING,
+};
 use crate::error::Result;
 use crate::physical_optimizer::utils::{add_sort_above_child, ordering_satisfy};
 use crate::physical_optimizer::PhysicalOptimizerRule;
@@ -30,12 +32,10 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
-use crate::physical_plan::sorts::sort::{SortExec, SortOptions};
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::physical_plan::sorts::sort::SortOptions;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
-use crate::prelude::SessionConfig;
 use arrow::datatypes::SchemaRef;
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
@@ -70,11 +70,10 @@ impl PhysicalOptimizerRule for BasicEnforcement {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &SessionConfig,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_partitions = config.target_partitions();
+        let target_partitions = config.get_usize(OPT_TARGET_PARTITIONS).unwrap();
         let top_down_join_key_reordering = config
-            .config_options()
             .get_bool(OPT_TOP_DOWN_JOIN_KEY_REORDERING)
             .unwrap_or_default();
         let new_plan = if top_down_join_key_reordering {
@@ -844,36 +843,6 @@ fn ensure_distribution_and_ordering(
     if plan.children().is_empty() {
         return Ok(plan);
     }
-    // It's mainly for changing the single node global SortExec to
-    // the SortPreservingMergeExec with multiple local SortExec.
-    // What's more, if limit exists, it can also be pushed down to the local sort
-    let plan = plan
-        .as_any()
-        .downcast_ref::<SortExec>()
-        .and_then(|sort_exec| {
-            // There are three situations that there's no need for this optimization
-            // - There's only one input partition;
-            // - It's already preserving the partitioning so that it can be regarded as a local sort
-            // - There's no limit pushed down to the local sort (It's still controversial)
-            if sort_exec.input().output_partitioning().partition_count() > 1
-                && !sort_exec.preserve_partitioning()
-                && sort_exec.fetch().is_some()
-            {
-                let sort = SortExec::new_with_partitioning(
-                    sort_exec.expr().to_vec(),
-                    sort_exec.input().clone(),
-                    true,
-                    sort_exec.fetch(),
-                );
-                Some(Arc::new(SortPreservingMergeExec::new(
-                    sort_exec.expr().to_vec(),
-                    Arc::new(sort),
-                )))
-            } else {
-                None
-            }
-        })
-        .map_or(plan, |new_plan| new_plan);
 
     let required_input_distributions = plan.required_input_distribution();
     let required_input_orderings = plan.required_input_ordering();
@@ -1166,10 +1135,12 @@ mod tests {
         ($EXPECTED_LINES: expr, $PLAN: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
+            let mut config = ConfigOptions::new();
+            config.set_usize(OPT_TARGET_PARTITIONS, 10);
+
             // run optimizer
             let optimizer = BasicEnforcement {};
-            let optimized = optimizer
-                .optimize($PLAN, &SessionConfig::new().with_target_partitions(10))?;
+            let optimized = optimizer.optimize($PLAN, &config)?;
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent().to_string();
