@@ -1021,6 +1021,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering,
+                infinite_source: false,
             },
             None,
             None,

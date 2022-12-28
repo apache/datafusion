@@ -41,7 +41,7 @@ pub struct AnalyzeExec {
     /// control how much extra to print
     verbose: bool,
     /// The input plan (the plan being analyzed)
-    input: Arc<dyn ExecutionPlan>,
+    pub(crate) input: Arc<dyn ExecutionPlan>,
     /// The output schema for RecordBatches of this exec node
     schema: SchemaRef,
 }
@@ -74,6 +74,20 @@ impl ExecutionPlan for AnalyzeExec {
     /// Specifies we want the input as a single stream
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::SinglePartition]
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        if children[0] {
+            Err(DataFusionError::Plan(
+                "Analyze Error: Analysis is not supported for unbounded inputs"
+                    .to_string(),
+            ))
+        } else {
+            Ok(false)
+        }
     }
 
     /// Get the output partitioning of this plan

@@ -89,21 +89,23 @@ fn supports_collect_by_size(
         false
     }
 }
-
-fn supports_swap(join_type: JoinType) -> bool {
-    match join_type {
+/// Predicate that checks whether the given join type supports input swapping.
+pub fn supports_swap(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
         JoinType::Inner
-        | JoinType::Left
-        | JoinType::Right
-        | JoinType::Full
-        | JoinType::LeftSemi
-        | JoinType::RightSemi
-        | JoinType::LeftAnti
-        | JoinType::RightAnti => true,
-    }
+            | JoinType::Left
+            | JoinType::Right
+            | JoinType::Full
+            | JoinType::LeftSemi
+            | JoinType::RightSemi
+            | JoinType::LeftAnti
+            | JoinType::RightAnti
+    )
 }
-
-fn swap_join_type(join_type: JoinType) -> JoinType {
+/// This function returns the new join type we get after swapping the given
+/// join's inputs.
+pub fn swap_join_type(join_type: JoinType) -> JoinType {
     match join_type {
         JoinType::Inner => JoinType::Inner,
         JoinType::Full => JoinType::Full,
@@ -116,12 +118,13 @@ fn swap_join_type(join_type: JoinType) -> JoinType {
     }
 }
 
-fn swap_hash_join(
+/// This function swaps the inputs of the given join operator.
+pub fn swap_hash_join(
     hash_join: &HashJoinExec,
     partition_mode: PartitionMode,
-    left: &Arc<dyn ExecutionPlan>,
-    right: &Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let left = hash_join.left();
+    let right = hash_join.right();
     let new_join = HashJoinExec::try_new(
         Arc::clone(right),
         Arc::clone(left),
@@ -153,12 +156,11 @@ fn swap_hash_join(
     }
 }
 
-/// When the order of the join is changed by the optimizer,
-/// the columns in the output should not be impacted.
-/// This helper creates the expressions that will allow to swap
-/// back the values from the original left as first columns and
-/// those on the right next
-fn swap_reverting_projection(
+/// When the order of the join is changed by the optimizer, the columns in
+/// the output should not be impacted. This function creates the expressions
+/// that will allow to swap back the values from the original left as the first
+/// columns and those on the right next.
+pub fn swap_reverting_projection(
     left_schema: &Schema,
     right_schema: &Schema,
 ) -> Vec<(Arc<dyn PhysicalExpr>, String)> {
@@ -241,8 +243,6 @@ impl PhysicalOptimizerRule for JoinSelection {
                             Ok(Some(swap_hash_join(
                                 hash_join,
                                 PartitionMode::Partitioned,
-                                left,
-                                right,
                             )?))
                         } else {
                             Ok(None)
@@ -320,12 +320,7 @@ fn try_collect_left(
             if should_swap_join_order(&**left, &**right)
                 && supports_swap(*hash_join.join_type())
             {
-                Ok(Some(swap_hash_join(
-                    hash_join,
-                    PartitionMode::CollectLeft,
-                    left,
-                    right,
-                )?))
+                Ok(Some(swap_hash_join(hash_join, PartitionMode::CollectLeft)?))
             } else {
                 Ok(Some(Arc::new(HashJoinExec::try_new(
                     Arc::clone(left),
@@ -349,12 +344,7 @@ fn try_collect_left(
         )?))),
         (false, true) => {
             if supports_swap(*hash_join.join_type()) {
-                Ok(Some(swap_hash_join(
-                    hash_join,
-                    PartitionMode::CollectLeft,
-                    left,
-                    right,
-                )?))
+                Ok(Some(swap_hash_join(hash_join, PartitionMode::CollectLeft)?))
             } else {
                 Ok(None)
             }
@@ -368,7 +358,7 @@ fn partitioned_hash_join(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPl
     let right = hash_join.right();
     if should_swap_join_order(&**left, &**right) && supports_swap(*hash_join.join_type())
     {
-        swap_hash_join(hash_join, PartitionMode::Partitioned, left, right)
+        swap_hash_join(hash_join, PartitionMode::Partitioned)
     } else {
         Ok(Arc::new(HashJoinExec::try_new(
             Arc::clone(left),

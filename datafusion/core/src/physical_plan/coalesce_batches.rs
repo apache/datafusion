@@ -96,6 +96,13 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self.input.output_partitioning()
     }
 
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        Ok(children[0])
+    }
+
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         // The coalesce batches operator does not make any changes to the sorting of its input
         self.input.output_ordering()

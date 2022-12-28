@@ -25,8 +25,13 @@ pub mod global_sort_selection;
 pub mod join_selection;
 pub mod optimize_sorts;
 pub mod optimizer;
+pub mod pipeline_checker;
 pub mod pruning;
 pub mod repartition;
 mod utils;
+
+pub mod pipeline_fixer;
+#[cfg(test)]
+pub mod test_utils;
 
 pub use optimizer::PhysicalOptimizerRule;
