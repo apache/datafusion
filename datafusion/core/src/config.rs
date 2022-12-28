@@ -512,6 +512,34 @@ impl ConfigOptions {
         Self { options }
     }
 
+    /// Create new ConfigOptions struct, taking values from a string hash map.
+    /// Only the built-in configurations will be extracted from the hash map
+    /// and other key value pairs will be ignored.
+    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Self {
+        let built_in = BuiltInConfigs::new();
+        let mut options = HashMap::with_capacity(built_in.config_definitions.len());
+        for config_def in &built_in.config_definitions {
+            let config_value = {
+                if let Some(v) = settings.get(&config_def.key) {
+                    match ScalarValue::try_from_string(v.clone(), &config_def.data_type) {
+                        Ok(parsed) => parsed,
+                        Err(_) => {
+                            warn!(
+                                "Warning: could not parse setting {}={} to type {}.",
+                                config_def.key, v, config_def.data_type
+                            );
+                            config_def.default_value.clone()
+                        }
+                    }
+                } else {
+                    config_def.default_value.clone()
+                }
+            };
+            options.insert(config_def.key.clone(), config_value);
+        }
+        Self { options }
+    }
+
     /// set a configuration option
     pub fn set(&mut self, key: &str, value: ScalarValue) {
         self.options.insert(key.to_string(), value);
@@ -578,6 +606,7 @@ impl ConfigOptions {
 #[cfg(test)]
 mod test {
     use crate::config::{BuiltInConfigs, ConfigOptions};
+    use std::collections::HashMap;
 
     #[test]
     fn docs() {
@@ -618,5 +647,34 @@ mod test {
         assert!(config.exists(key));
         assert_eq!(None, config.get_string(key));
         assert!(!config.get_bool(key).unwrap_or_default());
+    }
+
+    #[test]
+    fn get_config_from_string_hash_map() {
+        use crate::config::{OPT_COLLECT_STATISTICS, OPT_ENABLE_ROUND_ROBIN_REPARTITION};
+
+        let valid_built_in_setting = (OPT_ENABLE_ROUND_ROBIN_REPARTITION, "false");
+        let invalid_built_in_setting = (OPT_COLLECT_STATISTICS, "true2");
+        let none_built_in_setting = ("a", "false");
+
+        let mut settings = HashMap::new();
+        settings.insert(
+            valid_built_in_setting.0.to_string(),
+            valid_built_in_setting.1.to_string(),
+        );
+        settings.insert(
+            invalid_built_in_setting.0.to_string(),
+            invalid_built_in_setting.1.to_string(),
+        );
+        settings.insert(
+            none_built_in_setting.0.to_string(),
+            none_built_in_setting.1.to_string(),
+        );
+
+        let config = ConfigOptions::from_string_hash_map(settings);
+
+        assert_eq!(config.get_bool(valid_built_in_setting.0), Some(false));
+        assert_eq!(config.get_bool(invalid_built_in_setting.0), Some(false));
+        assert_eq!(None, config.get_bool(none_built_in_setting.0));
     }
 }

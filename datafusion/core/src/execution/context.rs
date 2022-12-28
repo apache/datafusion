@@ -1167,6 +1167,14 @@ impl SessionConfig {
         }
     }
 
+    /// Create new ConfigOptions struct, taking values from a string hash map.
+    pub fn from_string_hash_map(settings: HashMap<String, String>) -> Self {
+        Self {
+            config_options: ConfigOptions::from_string_hash_map(settings),
+            ..Default::default()
+        }
+    }
+
     /// Set a configuration option
     pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
         self.config_options.set(key, value);
