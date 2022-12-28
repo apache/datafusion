@@ -1705,7 +1705,7 @@ mod tests {
         Expr::Like(Like {
             negated: false,
             expr: Box::new(expr),
-            pattern: Box::new(Expr::Literal(ScalarValue::Utf8(Some(pattern.to_owned())))),
+            pattern: Box::new(lit(pattern)),
             escape_char: None,
         })
     }
@@ -1714,7 +1714,7 @@ mod tests {
         Expr::Like(Like {
             negated: true,
             expr: Box::new(expr),
-            pattern: Box::new(Expr::Literal(ScalarValue::Utf8(Some(pattern.to_owned())))),
+            pattern: Box::new(lit(pattern)),
             escape_char: None,
         })
     }
@@ -1723,7 +1723,7 @@ mod tests {
         Expr::ILike(Like {
             negated: false,
             expr: Box::new(expr),
-            pattern: Box::new(Expr::Literal(ScalarValue::Utf8(Some(pattern.to_owned())))),
+            pattern: Box::new(lit(pattern)),
             escape_char: None,
         })
     }
@@ -1732,7 +1732,7 @@ mod tests {
         Expr::ILike(Like {
             negated: true,
             expr: Box::new(expr),
-            pattern: Box::new(Expr::Literal(ScalarValue::Utf8(Some(pattern.to_owned())))),
+            pattern: Box::new(lit(pattern)),
             escape_char: None,
         })
     }
