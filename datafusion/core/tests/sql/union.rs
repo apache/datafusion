@@ -83,8 +83,9 @@ async fn union_all_with_aggregate() -> Result<()> {
 #[tokio::test]
 async fn union_all_with_count() -> Result<()> {
     let ctx = SessionContext::new();
+    execute_to_batches(&ctx, "CREATE table t as SELECT 1 as a").await;
     let sql =
-        "SELECT COUNT(*) FROM (SELECT 1 as c, 2 as d UNION ALL SELECT 1 as c, 3 AS d)";
+        "SELECT COUNT(*) FROM (SELECT a from t UNION ALL SELECT a from t)";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
