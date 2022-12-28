@@ -18,7 +18,6 @@
 //! Aggregates functionalities
 
 use crate::execution::context::TaskContext;
-use crate::physical_plan::aggregates::hash::GroupedHashAggregateStream;
 use crate::physical_plan::aggregates::no_grouping::AggregateStream;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
@@ -30,7 +29,7 @@ use crate::physical_plan::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
@@ -39,19 +38,22 @@ use datafusion_physical_expr::{
 use std::any::Any;
 use std::collections::HashMap;
 
+use parquet::schema::printer::print_schema;
 use std::sync::Arc;
 
-mod hash;
 mod no_grouping;
 mod row_hash;
 
-use crate::physical_plan::aggregates::row_hash::GroupedHashAggregateStreamV2;
+use crate::physical_plan::aggregates::row_hash::{
+    read_as_batch, GroupedHashAggregateStreamV2, RowAggregationState,
+};
 use crate::physical_plan::EquivalenceProperties;
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 use datafusion_physical_expr::equivalence::project_equivalence_properties;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
+use datafusion_row::accessor::RowAccessor;
 use datafusion_row::{row_supported, RowType};
 
 /// Hash aggregate modes
@@ -153,7 +155,6 @@ impl PhysicalGroupBy {
 enum StreamType {
     AggregateStream(AggregateStream),
     GroupedHashAggregateStreamV2(GroupedHashAggregateStreamV2),
-    GroupedHashAggregateStream(GroupedHashAggregateStream),
 }
 
 impl From<StreamType> for SendableRecordBatchStream {
@@ -161,7 +162,6 @@ impl From<StreamType> for SendableRecordBatchStream {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
             StreamType::GroupedHashAggregateStreamV2(stream) => Box::pin(stream),
-            StreamType::GroupedHashAggregateStream(stream) => Box::pin(stream),
         }
     }
 }
@@ -285,9 +285,8 @@ impl AggregateExec {
     ) -> Result<StreamType> {
         let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, Arc::clone(&context))?;
-
+        const VERSION: usize = 1;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-
         if self.group_by.expr.is_empty() {
             Ok(StreamType::AggregateStream(AggregateStream::new(
                 self.mode,
@@ -298,7 +297,7 @@ impl AggregateExec {
                 context,
                 partition,
             )?))
-        } else if self.row_aggregate_supported() {
+        } else {
             Ok(StreamType::GroupedHashAggregateStreamV2(
                 GroupedHashAggregateStreamV2::new(
                     self.mode,
@@ -308,19 +307,6 @@ impl AggregateExec {
                     input,
                     baseline_metrics,
                     batch_size,
-                    context,
-                    partition,
-                )?,
-            ))
-        } else {
-            Ok(StreamType::GroupedHashAggregateStream(
-                GroupedHashAggregateStream::new(
-                    self.mode,
-                    self.schema.clone(),
-                    self.group_by.clone(),
-                    self.aggr_expr.clone(),
-                    input,
-                    baseline_metrics,
                     context,
                     partition,
                 )?,
@@ -634,9 +620,14 @@ fn create_accumulators_v2(
 /// final value (mode = Final) or states (mode = Partial)
 fn finalize_aggregation(
     accumulators: &[AccumulatorItem],
+    row_accumulators: &[AccumulatorItemV2],
     mode: &AggregateMode,
+    aggr_schema: &Schema,
+    aggr_state: &mut RowAggregationState,
+    output_schema: &Schema,
+    indices: &Vec<Vec<(usize, (usize, usize))>>,
 ) -> datafusion_common::Result<Vec<ArrayRef>> {
-    match mode {
+    let mut acc_res = match mode {
         AggregateMode::Partial => {
             // build the vector of states
             let a = accumulators
@@ -657,7 +648,65 @@ fn finalize_aggregation(
                 .map(|accumulator| accumulator.evaluate().map(|v| v.to_array()))
                 .collect::<datafusion_common::Result<Vec<ArrayRef>>>()
         }
+    }?;
+
+    let mut state_accessor = RowAccessor::new(aggr_schema, RowType::WordAligned);
+
+    let mut state_buffers = vec![aggr_state.group_states[0].aggregation_buffer.clone()];
+    let mut columns: Vec<ArrayRef> = vec![];
+    match mode {
+        AggregateMode::Partial => columns.extend(read_as_batch(
+            &state_buffers,
+            aggr_schema,
+            RowType::WordAligned,
+        )),
+        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+            let mut results: Vec<Vec<ScalarValue>> = vec![vec![]; row_accumulators.len()];
+            for buffer in state_buffers.iter_mut() {
+                state_accessor.point_to(0, buffer);
+                for (i, acc) in row_accumulators.iter().enumerate() {
+                    results[i].push(acc.evaluate(&state_accessor).unwrap());
+                }
+            }
+            // We skip over the first `columns.len()` elements.
+            //
+            // This shouldn't panic if the `output_schema` has enough fields.
+            let remaining_field_iterator = output_schema.fields()[columns.len()..].iter();
+
+            for (scalars, field) in results.into_iter().zip(remaining_field_iterator) {
+                if !scalars.is_empty() {
+                    columns.push(ScalarValue::iter_to_array(scalars)?);
+                } else {
+                    columns.push(arrow::array::new_empty_array(field.data_type()))
+                }
+            }
+        }
+    };
+    let empty_arr = ScalarValue::iter_to_array(vec![ScalarValue::Null])?;
+    let n_res = indices[0]
+        .iter()
+        .map(|(_, range)| range.1 - range.0)
+        .sum::<usize>()
+        + indices[1]
+            .iter()
+            .map(|(_, range)| range.1 - range.0)
+            .sum::<usize>();
+    let mut res = vec![empty_arr; n_res];
+    let results = vec![acc_res, columns];
+    for outer in [0, 1] {
+        let mut start_idx = 0;
+        let cur_res = &results[outer];
+        let cur_indices = &indices[outer];
+        // println!("cur res:{:?}", cur_res);
+        // println!("cur_indices:{:?}", cur_indices);
+        for (_idx, range) in cur_indices.iter() {
+            for res_idx in range.0..range.1 {
+                res[res_idx] = cur_res[start_idx].clone();
+                start_idx += 1;
+            }
+        }
     }
+    Ok(res)
 }
 
 /// Evaluates expressions against a record batch.
@@ -1183,7 +1232,10 @@ mod tests {
                     assert!(matches!(stream, StreamType::AggregateStream(_)));
                 }
                 1 => {
-                    assert!(matches!(stream, StreamType::GroupedHashAggregateStream(_)));
+                    assert!(matches!(
+                        stream,
+                        StreamType::GroupedHashAggregateStreamV2(_)
+                    ));
                 }
                 2 => {
                     assert!(matches!(

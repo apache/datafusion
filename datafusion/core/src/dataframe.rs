@@ -834,6 +834,7 @@ mod tests {
 
     use arrow::array::Int32Array;
     use arrow::datatypes::DataType;
+    use arrow::util::pretty::print_batches;
 
     use datafusion_expr::{
         avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
@@ -945,6 +946,7 @@ mod tests {
         ];
 
         let df: Vec<RecordBatch> = df.aggregate(group_expr, aggr_expr)?.collect().await?;
+        print_batches(&df)?;
 
         assert_batches_sorted_eq!(
             vec![
