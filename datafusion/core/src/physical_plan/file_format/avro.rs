@@ -239,7 +239,7 @@ mod tests {
         let state = session_ctx.state();
 
         state
-            .runtime_env
+            .runtime_env()
             .register_object_store("file", "", store.clone());
 
         let testdata = crate::test_util::arrow_test_data();
