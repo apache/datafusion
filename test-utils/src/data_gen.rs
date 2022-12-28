@@ -24,8 +24,8 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use rand::{Rng, SeedableRng};
 use rand::prelude::StdRng;
+use rand::{Rng, SeedableRng};
 
 #[derive(Debug, Clone)]
 struct GeneratorOptions {
@@ -329,7 +329,9 @@ impl Iterator for AccessLogGenerator {
 
         let mut builder = BatchBuilder::default();
         builder.options = self.options.clone();
-        builder.options.row_limit = self.max_batch_size.min(self.options.row_limit - self.row_count);
+        builder.options.row_limit = self
+            .max_batch_size
+            .min(self.options.row_limit - self.row_count);
 
         let host = format!(
             "i-{:016x}.ec2.internal",
