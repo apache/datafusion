@@ -1093,19 +1093,6 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 
-/// Session Configuration entry name for 'TARGET_PARTITIONS'
-pub const TARGET_PARTITIONS: &str = "target_partitions";
-/// Session Configuration entry name for 'REPARTITION_JOINS'
-pub const REPARTITION_JOINS: &str = "repartition_joins";
-/// Session Configuration entry name for 'REPARTITION_AGGREGATIONS'
-pub const REPARTITION_AGGREGATIONS: &str = "repartition_aggregations";
-/// Session Configuration entry name for 'REPARTITION_WINDOWS'
-pub const REPARTITION_WINDOWS: &str = "repartition_windows";
-/// Session Configuration entry name for 'PARQUET_PRUNING'
-pub const PARQUET_PRUNING: &str = "parquet_pruning";
-/// Session Configuration entry name for 'COLLECT_STATISTICS'
-pub const COLLECT_STATISTICS: &str = "collect_statistics";
-
 /// Map that holds opaque objects indexed by their type.
 ///
 /// Data is wrapped into an [`Arc`] to enable [`Clone`] while still being [object safe].
@@ -1343,47 +1330,6 @@ impl SessionConfig {
             .unwrap_or_default()
             .try_into()
             .unwrap()
-    }
-
-    /// Convert configuration options to name-value pairs with values
-    /// converted to strings.
-    ///
-    /// Note that this method will eventually be deprecated and
-    /// replaced by [`config_options`].
-    ///
-    /// [`config_options`]: SessionContext::config_option
-    pub fn to_props(&self) -> HashMap<String, String> {
-        let mut map = HashMap::new();
-        // copy configs from config_options
-        for (k, v) in self.config_options.options() {
-            map.insert(k.to_string(), format!("{}", v));
-        }
-        map.insert(
-            TARGET_PARTITIONS.to_owned(),
-            format!("{}", self.target_partitions()),
-        );
-        map.insert(
-            REPARTITION_JOINS.to_owned(),
-            format!("{}", self.repartition_joins()),
-        );
-        map.insert(
-            REPARTITION_AGGREGATIONS.to_owned(),
-            format!("{}", self.repartition_aggregations()),
-        );
-        map.insert(
-            REPARTITION_WINDOWS.to_owned(),
-            format!("{}", self.repartition_window_functions()),
-        );
-        map.insert(
-            PARQUET_PRUNING.to_owned(),
-            format!("{}", self.parquet_pruning()),
-        );
-        map.insert(
-            COLLECT_STATISTICS.to_owned(),
-            format!("{}", self.collect_statistics()),
-        );
-
-        map
     }
 
     /// Return a handle to the configuration options.
@@ -1916,30 +1862,46 @@ impl TaskContext {
             SessionConfig::new()
                 .with_batch_size(task_props.get(OPT_BATCH_SIZE).unwrap().parse().unwrap())
                 .with_target_partitions(
-                    task_props.get(TARGET_PARTITIONS).unwrap().parse().unwrap(),
+                    task_props
+                        .get(OPT_TARGET_PARTITIONS)
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
                 )
                 .with_repartition_joins(
-                    task_props.get(REPARTITION_JOINS).unwrap().parse().unwrap(),
+                    task_props
+                        .get(OPT_REPARTITION_JOINS)
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
                 )
                 .with_repartition_aggregations(
                     task_props
-                        .get(REPARTITION_AGGREGATIONS)
+                        .get(OPT_REPARTITION_AGGREGATIONS)
                         .unwrap()
                         .parse()
                         .unwrap(),
                 )
                 .with_repartition_windows(
                     task_props
-                        .get(REPARTITION_WINDOWS)
+                        .get(OPT_REPARTITION_WINDOWS)
                         .unwrap()
                         .parse()
                         .unwrap(),
                 )
                 .with_parquet_pruning(
-                    task_props.get(PARQUET_PRUNING).unwrap().parse().unwrap(),
+                    task_props
+                        .get(OPT_PARQUET_ENABLE_PRUNING)
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
                 )
                 .with_collect_statistics(
-                    task_props.get(COLLECT_STATISTICS).unwrap().parse().unwrap(),
+                    task_props
+                        .get(OPT_COLLECT_STATISTICS)
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
                 )
         };
 
