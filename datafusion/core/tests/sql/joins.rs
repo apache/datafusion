@@ -2520,7 +2520,7 @@ async fn left_side_expr_key_inner_join() -> Result<()> {
         let physical_plan = dataframe.create_physical_plan().await?;
 
         let expected = if repartition_joins {
-           vec![
+            vec![
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
@@ -2590,7 +2590,7 @@ async fn right_side_expr_key_inner_join() -> Result<()> {
         let physical_plan = dataframe.create_physical_plan().await?;
 
         let expected = if repartition_joins {
-           vec![
+            vec![
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@2 as t2_id]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
@@ -2658,7 +2658,7 @@ async fn select_wildcard_with_expr_key_inner_join() -> Result<()> {
         let physical_plan = dataframe.create_physical_plan().await?;
 
         let expected = if repartition_joins {
-           vec![
+            vec![
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
                 "    CoalesceBatchesExec: target_batch_size=4096",

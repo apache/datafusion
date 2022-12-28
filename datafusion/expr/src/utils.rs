@@ -586,9 +586,9 @@ pub fn from_plan(
             // The preceding part of expr is equi-exprs,
             // and the struct of each equi-expr is like `left-expr = right-expr`.
             let new_on:Vec<(Expr,Expr)> = expr.iter().take(equi_expr_count).map(|equi_expr| {
-                    // SimplifyExpression may add alias for an expression.
+                    // SimplifyExpression rule may add alias to the equi_expr.
                     let equi_expr = match equi_expr {
-                        Expr::Alias(expr,_) => expr.as_ref(),
+                        Expr::Alias(expr, _) => expr.as_ref(),
                         _ => equi_expr,
                     };
 

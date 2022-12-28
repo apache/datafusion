@@ -808,6 +808,8 @@ mod tests {
             )?
             .build()?;
 
+        // before simplify: t1.a + CAST(Int64(1), UInt32) = t2.a + CAST(Int64(2), UInt32)
+        // after simplify: t1.a + UInt32(1) = t2.a + UInt32(2) AS t1.a + Int64(1) = t2.a + Int64(2)
         let expected = "Inner Join: t1.a + UInt32(1) = t2.a + UInt32(2)\
             \n  TableScan: t1\
             \n  TableScan: t2";
