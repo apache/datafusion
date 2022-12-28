@@ -754,7 +754,7 @@ async fn cross_join() {
 
         assert_eq!(4 * 4, actual.len());
 
-        let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2";
+        let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id";
 
         let actual = execute(&ctx, sql).await;
         assert_eq!(4 * 4, actual.len());
@@ -2201,8 +2201,8 @@ async fn right_semi_join() -> Result<()> {
                 "SortExec: [t1_id@0 ASC NULLS LAST]",
                 "  CoalescePartitionsExec",
                 "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
-                "      CoalesceBatchesExec: target_batch_size=4096",
-                "        RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "      RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "        CoalesceBatchesExec: target_batch_size=4096",
                 "          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
@@ -2539,8 +2539,8 @@ async fn left_side_expr_key_inner_join() -> Result<()> {
             vec![
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
-                "    CoalesceBatchesExec: target_batch_size=4096",
-                "      RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "    RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "      CoalesceBatchesExec: target_batch_size=4096",
                 "        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + Int64(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
                 "          CoalescePartitionsExec",
                 "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + CAST(11 AS UInt32) as t1.t1_id + Int64(11)]",

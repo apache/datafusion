@@ -1792,6 +1792,11 @@ impl DefaultPhysicalPlanner {
                         new_plan.schema()
                     )));
             }
+            trace!(
+                "Optimized physical plan by {}:\n{}\n",
+                optimizer.name(),
+                displayable(new_plan.as_ref()).indent()
+            );
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
         debug!(

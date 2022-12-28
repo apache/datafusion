@@ -264,6 +264,6 @@ impl ExecutionPlan for CustomExec {
     }
 
     fn statistics(&self) -> Statistics {
-        todo!()
+        Statistics::default()
     }
 }
