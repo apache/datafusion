@@ -21,6 +21,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use itertools::Itertools;
 use log::warn;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fmt::{Debug, Formatter};
@@ -134,9 +135,9 @@ pub const OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD: &str =
 /// Definition of a configuration option
 pub struct ConfigDefinition {
     /// key used to identifier this configuration option
-    key: String,
+    key: Cow<'static, str>,
     /// Description to be used in generated documentation
-    description: String,
+    description: Cow<'static, str>,
     /// Data type of this option
     data_type: DataType,
     /// Default value
@@ -162,8 +163,8 @@ macro_rules! get_conf_value {
 impl ConfigDefinition {
     /// Create a configuration option definition
     pub fn new(
-        name: impl Into<String>,
-        description: impl Into<String>,
+        name: impl Into<Cow<'static, str>>,
+        description: impl Into<Cow<'static, str>>,
         data_type: DataType,
         default_value: ScalarValue,
     ) -> Self {
@@ -177,8 +178,8 @@ impl ConfigDefinition {
 
     /// Create a configuration option definition with a boolean value
     pub fn new_bool(
-        key: impl Into<String>,
-        description: impl Into<String>,
+        key: impl Into<Cow<'static, str>>,
+        description: impl Into<Cow<'static, str>>,
         default_value: bool,
     ) -> Self {
         Self::new(
@@ -191,8 +192,8 @@ impl ConfigDefinition {
 
     /// Create a configuration option definition with a u64 value
     pub fn new_u64(
-        key: impl Into<String>,
-        description: impl Into<String>,
+        key: impl Into<Cow<'static, str>>,
+        description: impl Into<Cow<'static, str>>,
         default_value: u64,
     ) -> Self {
         Self::new(
@@ -205,8 +206,8 @@ impl ConfigDefinition {
 
     /// Create a configuration option definition with a string value
     pub fn new_string(
-        key: impl Into<String>,
-        description: impl Into<String>,
+        key: impl Into<Cow<'static, str>>,
+        description: impl Into<Cow<'static, str>>,
         default_value: Option<String>,
     ) -> Self {
         Self::new(
@@ -426,7 +427,7 @@ impl BuiltInConfigs {
             .map(normalize_for_display)
             .collect();
 
-        for config in config_definitions.iter().sorted_by_key(|c| c.key.as_str()) {
+        for config in config_definitions.iter().sorted_by_key(|c| c.key.as_ref()) {
             let _ = writeln!(
                 &mut docs,
                 "| {} | {} | {} | {} |",
@@ -450,7 +451,7 @@ fn normalize_for_display(mut v: ConfigDefinition) -> ConfigDefinition {
 /// Configuration options struct. This can contain values for built-in and custom options
 #[derive(Clone)]
 pub struct ConfigOptions {
-    options: HashMap<String, ScalarValue>,
+    options: HashMap<Cow<'static, str>, ScalarValue>,
 }
 
 /// Print the configurations in an ordered way so that we can directly compare the equality of two ConfigOptions by their debug strings
@@ -514,28 +515,32 @@ impl ConfigOptions {
     }
 
     /// set a configuration option
-    pub fn set(&mut self, key: &str, value: ScalarValue) {
-        self.options.insert(key.to_string(), value);
+    pub fn set(&mut self, key: impl Into<Cow<'static, str>>, value: ScalarValue) {
+        self.options.insert(key.into(), value);
     }
 
     /// set a boolean configuration option
-    pub fn set_bool(&mut self, key: &str, value: bool) {
+    pub fn set_bool(&mut self, key: impl Into<Cow<'static, str>>, value: bool) {
         self.set(key, ScalarValue::Boolean(Some(value)))
     }
 
     /// set a `u64` configuration option
-    pub fn set_u64(&mut self, key: &str, value: u64) {
+    pub fn set_u64(&mut self, key: impl Into<Cow<'static, str>>, value: u64) {
         self.set(key, ScalarValue::UInt64(Some(value)))
     }
 
     /// set a `usize` configuration option
-    pub fn set_usize(&mut self, key: &str, value: usize) {
+    pub fn set_usize(&mut self, key: impl Into<Cow<'static, str>>, value: usize) {
         let value: u64 = value.try_into().expect("convert u64 to usize");
         self.set(key, ScalarValue::UInt64(Some(value)))
     }
 
     /// set a `String` configuration option
-    pub fn set_string(&mut self, key: &str, value: impl Into<String>) {
+    pub fn set_string(
+        &mut self,
+        key: impl Into<Cow<'static, str>>,
+        value: impl Into<String>,
+    ) {
         self.set(key, ScalarValue::Utf8(Some(value.into())))
     }
 
@@ -566,7 +571,7 @@ impl ConfigOptions {
     }
 
     /// Access the underlying hashmap
-    pub fn options(&self) -> &HashMap<String, ScalarValue> {
+    pub fn options(&self) -> &HashMap<Cow<'static, str>, ScalarValue> {
         &self.options
     }
 
@@ -590,7 +595,7 @@ mod test {
         );
         let configs = BuiltInConfigs::default();
         for config in configs.config_definitions {
-            assert!(docs.contains(&config.key));
+            assert!(docs.contains(config.key.as_ref()));
         }
     }
 

@@ -35,6 +35,7 @@ use crate::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
+use std::borrow::Cow;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{
@@ -391,7 +392,7 @@ impl SessionContext {
                                 value,
                             ))
                         })?;
-                        config_options.set_bool(&variable, new_value);
+                        config_options.set_bool(variable, new_value);
                     }
 
                     ScalarValue::UInt64(_) => {
@@ -401,7 +402,7 @@ impl SessionContext {
                                 value,
                             ))
                         })?;
-                        config_options.set_u64(&variable, new_value);
+                        config_options.set_u64(variable, new_value);
                     }
 
                     ScalarValue::Utf8(_) => {
@@ -411,7 +412,7 @@ impl SessionContext {
                                 value,
                             ))
                         })?;
-                        config_options.set_string(&variable, new_value);
+                        config_options.set_string(variable, new_value);
                     }
 
                     _ => {
@@ -1192,29 +1193,29 @@ impl SessionConfig {
     }
 
     /// Set a configuration option
-    pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
+    pub fn set(mut self, key: impl Into<Cow<'static, str>>, value: ScalarValue) -> Self {
         self.config_options.set(key, value);
         self
     }
 
     /// Set a boolean configuration option
-    pub fn set_bool(self, key: &str, value: bool) -> Self {
+    pub fn set_bool(self, key: impl Into<Cow<'static, str>>, value: bool) -> Self {
         self.set(key, ScalarValue::Boolean(Some(value)))
     }
 
     /// Set a generic `u64` configuration option
-    pub fn set_u64(self, key: &str, value: u64) -> Self {
+    pub fn set_u64(self, key: impl Into<Cow<'static, str>>, value: u64) -> Self {
         self.set(key, ScalarValue::UInt64(Some(value)))
     }
 
     /// Set a generic `usize` configuration option
-    pub fn set_usize(self, key: &str, value: usize) -> Self {
+    pub fn set_usize(self, key: impl Into<Cow<'static, str>>, value: usize) -> Self {
         let value: u64 = value.try_into().expect("convert usize to u64");
         self.set(key, ScalarValue::UInt64(Some(value)))
     }
 
     /// Set a generic `str` configuration option
-    pub fn set_str(self, key: &str, value: &str) -> Self {
+    pub fn set_str(self, key: impl Into<Cow<'static, str>>, value: &str) -> Self {
         self.set(key, ScalarValue::Utf8(Some(value.to_string())))
     }
 
