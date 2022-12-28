@@ -19,11 +19,12 @@
 use std::sync::Arc;
 
 use super::optimizer::PhysicalOptimizerRule;
+use crate::config::{ConfigOptions, OPT_TARGET_PARTITIONS};
+use crate::error::Result;
 use crate::physical_plan::Partitioning::*;
 use crate::physical_plan::{
     repartition::RepartitionExec, with_new_children_if_necessary, ExecutionPlan,
 };
-use crate::{error::Result, execution::context::SessionConfig};
 
 /// Optimizer that introduces repartition to introduce more
 /// parallelism in the plan
@@ -207,14 +208,15 @@ impl PhysicalOptimizerRule for Repartition {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &SessionConfig,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let target_partitions = config.get_usize(OPT_TARGET_PARTITIONS).unwrap();
         // Don't run optimizer if target_partitions == 1
-        if config.target_partitions() == 1 {
+        if target_partitions == 1 {
             Ok(plan)
         } else {
             optimize_partitions(
-                config.target_partitions(),
+                target_partitions,
                 plan.clone(),
                 plan.output_ordering().is_none(),
                 false,
@@ -360,8 +362,10 @@ mod tests {
         ($EXPECTED_LINES: expr, $PLAN: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
+            let mut config = ConfigOptions::new();
+            config.set_usize(OPT_TARGET_PARTITIONS, 10);
+
             // run optimizer
-            let config = SessionConfig::new().with_target_partitions(10);
             let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
                 Arc::new(Repartition::new()),
                 // The `BasicEnforcement` is an essential rule to be applied.
