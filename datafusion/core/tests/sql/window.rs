@@ -1743,7 +1743,11 @@ async fn over_order_by_sort_keys_sorting_global_order_compacting() -> Result<()>
 
 #[tokio::test]
 async fn test_window_partition_by_order_by() -> Result<()> {
-    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(2));
+    let ctx = SessionContext::with_config(
+        SessionConfig::new()
+            .with_target_partitions(2)
+            .with_batch_size(4096),
+    );
     register_aggregate_csv(&ctx).await?;
 
     let sql = "SELECT \
@@ -2253,6 +2257,7 @@ async fn test_window_agg_sort_orderby_reversed_binary_expr() -> Result<()> {
 async fn test_remove_unnecessary_sort_in_sub_query() -> Result<()> {
     let config = SessionConfig::new()
         .with_target_partitions(8)
+        .with_batch_size(4096)
         .with_repartition_windows(true);
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv(&ctx).await?;

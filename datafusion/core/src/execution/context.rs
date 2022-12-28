@@ -72,7 +72,7 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
-    ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
+    ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES,
     OPT_ENABLE_ROUND_ROBIN_REPARTITION, OPT_FILTER_NULL_JOIN_KEYS,
     OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
@@ -1545,14 +1545,7 @@ impl SessionState {
         // It will not influence the distribution and ordering of the whole plan tree.
         // Therefore, to avoid influencing other rules, it should be run at last.
         if config.coalesce_batches() {
-            physical_optimizers.push(Arc::new(CoalesceBatches::new(
-                config
-                    .config_options
-                    .get_u64(OPT_COALESCE_TARGET_BATCH_SIZE)
-                    .unwrap_or_default()
-                    .try_into()
-                    .unwrap(),
-            )));
+            physical_optimizers.push(Arc::new(CoalesceBatches::new(config.batch_size())));
         }
 
         SessionState {

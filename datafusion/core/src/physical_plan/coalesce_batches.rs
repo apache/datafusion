@@ -301,7 +301,7 @@ pub fn concat_batches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE};
+    use crate::config::OPT_COALESCE_BATCHES;
     use crate::datasource::MemTable;
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::projection::ProjectionExec;
@@ -312,9 +312,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_custom_batch_size() -> Result<()> {
-        let ctx = SessionContext::with_config(
-            SessionConfig::new().set_u64(OPT_COALESCE_TARGET_BATCH_SIZE, 1234),
-        );
+        let ctx = SessionContext::with_config(SessionConfig::new().with_batch_size(1234));
         let plan = create_physical_plan(ctx).await?;
         let projection = plan.as_any().downcast_ref::<ProjectionExec>().unwrap();
         let coalesce = projection
