@@ -94,10 +94,10 @@ async fn page_index_filter_one_col() {
     // `month = 1` from the page index should create below RowSelection
     //  vec.push(RowSelector::select(312));
     //  vec.push(RowSelector::skip(3330));
-    //  vec.push(RowSelector::select(333));
-    //  vec.push(RowSelector::skip(3330));
-    // total 645 row
-    assert_eq!(batch.num_rows(), 645);
+    //  vec.push(RowSelector::select(339));
+    //  vec.push(RowSelector::skip(3319));
+    // total 651 row
+    assert_eq!(batch.num_rows(), 651);
 
     // 2. create filter month == 1 or month == 2;
     let filter = col("month").eq(lit(1_i32)).or(col("month").eq(lit(2_i32)));
@@ -108,14 +108,16 @@ async fn page_index_filter_one_col() {
 
     let batch = results.next().await.unwrap().unwrap();
 
-    // `month = 12` from the page index should create below RowSelection
-    //  vec.push(RowSelector::skip(894));
-    //  vec.push(RowSelector::select(339));
-    //  vec.push(RowSelector::skip(3330));
+    // `month = 1` or `month = 2` from the page index should create below RowSelection
     //  vec.push(RowSelector::select(312));
-    //  vec.push(RowSelector::skip(2430));
-    //  combine with before filter total 1275 row
-    assert_eq!(batch.num_rows(), 1275);
+    //  vec.push(RowSelector::skip(900));
+    //  vec.push(RowSelector::select(312));
+    //  vec.push(RowSelector::skip(2118));
+    //  vec.push(RowSelector::select(339));
+    //  vec.push(RowSelector::skip(873));
+    //  vec.push(RowSelector::select(318));
+    //  vec.push(RowSelector::skip(2128));
+    assert_eq!(batch.num_rows(), 1281);
 
     // 3. create filter month == 1 and month == 12;
     let filter = col("month")
@@ -140,7 +142,7 @@ async fn page_index_filter_one_col() {
     let batch = results.next().await.unwrap().unwrap();
 
     // should same with `month = 1`
-    assert_eq!(batch.num_rows(), 645);
+    assert_eq!(batch.num_rows(), 651);
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
@@ -191,7 +193,7 @@ async fn page_index_filter_multi_col() {
     let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
 
     let batch = results.next().await.unwrap().unwrap();
-    assert_eq!(batch.num_rows(), 645);
+    assert_eq!(batch.num_rows(), 651);
 
     // create filter (year = 2009 or id = 1)
     // this filter use two columns will not push down
