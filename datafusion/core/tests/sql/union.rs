@@ -86,7 +86,7 @@ async fn union_schemas() -> Result<()> {
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     let result = ctx
-        .sql("SELECT 1 A UNION ALL SELECT 2")
+        .sql("SELECT 1 A UNION ALL SELECT 2 order by 1")
         .await
         .unwrap()
         .collect()
@@ -105,7 +105,7 @@ async fn union_schemas() -> Result<()> {
     assert_batches_eq!(expected, &result);
 
     let result = ctx
-        .sql("SELECT 1 UNION SELECT 2")
+        .sql("SELECT 1 UNION SELECT 2 order by 1")
         .await
         .unwrap()
         .collect()

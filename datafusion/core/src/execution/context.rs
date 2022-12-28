@@ -17,10 +17,7 @@
 
 //! SessionContext contains methods for registering data sources and executing queries
 use crate::{
-    catalog::{
-        catalog::{CatalogList, MemoryCatalogList},
-        information_schema::CatalogWithInformationSchema,
-    },
+    catalog::catalog::{CatalogList, MemoryCatalogList},
     config::{
         OPT_COLLECT_STATISTICS, OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA,
         OPT_INFORMATION_SCHEMA, OPT_PARQUET_ENABLE_PRUNING, OPT_REPARTITION_AGGREGATIONS,
@@ -76,7 +73,8 @@ use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
     ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
-    OPT_FILTER_NULL_JOIN_KEYS, OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
+    OPT_ENABLE_ROUND_ROBIN_REPARTITION, OPT_FILTER_NULL_JOIN_KEYS,
+    OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_optimizer::enforcement::BasicEnforcement;
@@ -97,10 +95,14 @@ use datafusion_sql::{
 use parquet::file::properties::WriterProperties;
 use url::Url;
 
+use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_SCHEMA};
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::memory_pool::MemoryPool;
+use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
+use crate::physical_optimizer::pipeline_checker::PipelineChecker;
+use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
 use uuid::Uuid;
 
 use super::options::{
@@ -422,10 +424,6 @@ impl SessionContext {
                         ))
                     }
                 }
-                // Since information_schema config may have changed, revalidate
-                if variable == OPT_INFORMATION_SCHEMA {
-                    state.update_information_schema();
-                }
                 drop(state);
 
                 self.return_empty_dataframe()
@@ -634,12 +632,18 @@ impl SessionContext {
 
         let listing_options = options.to_listing_options(target_partitions);
 
-        let resolved_schema = match options.schema {
-            Some(s) => s,
-            None => {
+        let resolved_schema = match (options.schema, options.infinite) {
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, false) => {
                 listing_options
                     .infer_schema(&self.state(), &table_path)
                     .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
             }
         };
 
@@ -661,12 +665,18 @@ impl SessionContext {
 
         let listing_options = options.to_listing_options(target_partitions);
 
-        let resolved_schema = match options.schema {
-            Some(s) => s,
-            None => {
+        let resolved_schema = match (options.schema, options.infinite) {
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, false) => {
                 listing_options
                     .infer_schema(&self.state(), &table_path)
                     .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
             }
         };
         let config = ListingTableConfig::new(table_path)
@@ -694,12 +704,18 @@ impl SessionContext {
         let table_path = ListingTableUrl::parse(table_path)?;
         let target_partitions = self.copied_config().target_partitions();
         let listing_options = options.to_listing_options(target_partitions);
-        let resolved_schema = match options.schema {
-            Some(s) => Arc::new(s.to_owned()),
-            None => {
+        let resolved_schema = match (options.schema, options.infinite) {
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, false) => {
                 listing_options
                     .infer_schema(&self.state(), &table_path)
                     .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
             }
         };
         let config = ListingTableConfig::new(table_path.clone())
@@ -771,9 +787,15 @@ impl SessionContext {
         sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let resolved_schema = match provided_schema {
-            None => options.infer_schema(&self.state(), &table_path).await?,
-            Some(s) => s,
+        let resolved_schema = match (provided_schema, options.infinite_source) {
+            (Some(s), _) => s,
+            (None, false) => options.infer_schema(&self.state(), &table_path).await?,
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
+            }
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
@@ -821,7 +843,7 @@ impl SessionContext {
             name,
             table_path,
             listing_options,
-            options.schema,
+            options.schema.map(|s| Arc::new(s.to_owned())),
             None,
         )
         .await?;
@@ -858,7 +880,7 @@ impl SessionContext {
             name,
             table_path,
             listing_options,
-            options.schema,
+            options.schema.map(|s| Arc::new(s.to_owned())),
             None,
         )
         .await?;
@@ -877,18 +899,10 @@ impl SessionContext {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         let name = name.into();
-        let information_schema = self.copied_config().information_schema();
-        let state = self.state.read();
-        let catalog = if information_schema {
-            Arc::new(CatalogWithInformationSchema::new(
-                Arc::downgrade(&state.catalog_list),
-                catalog,
-            ))
-        } else {
-            catalog
-        };
-
-        state.catalog_list.register_catalog(name, catalog)
+        self.state
+            .read()
+            .catalog_list
+            .register_catalog(name, catalog)
     }
 
     /// Retrieves the list of available catalog names.
@@ -1014,23 +1028,7 @@ impl SessionContext {
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let state_cloned = {
-            let mut state = self.state.write();
-            state.execution_props.start_execution();
-
-            // We need to clone `state` to release the lock that is not `Send`. We could
-            // make the lock `Send` by using `tokio::sync::Mutex`, but that would require to
-            // propagate async even to the `LogicalPlan` building methods.
-            // Cloning `state` here is fine as we then pass it as immutable `&state`, which
-            // means that we avoid write consistency issues as the cloned version will not
-            // be written to. As for eventual modifications that would be applied to the
-            // original state after it has been cloned, they will not be picked up by the
-            // clone but that is okay, as it is equivalent to postponing the state update
-            // by keeping the lock until the end of the function scope.
-            state.clone()
-        };
-
-        state_cloned.create_physical_plan(logical_plan).await
+        self.state().create_physical_plan(logical_plan).await
     }
 
     /// Executes a query and writes the results to a partitioned CSV file.
@@ -1069,9 +1067,12 @@ impl SessionContext {
         Arc::new(TaskContext::from(self))
     }
 
-    /// Get a copy of the [`SessionState`] of this [`SessionContext`]
+    /// Snapshots the [`SessionState`] of this [`SessionContext`] setting the
+    /// `query_execution_start_time` to the current time
     pub fn state(&self) -> SessionState {
-        self.state.read().clone()
+        let mut state = self.state.read().clone();
+        state.execution_props.start_execution();
+        state
     }
 }
 
@@ -1557,11 +1558,53 @@ impl SessionState {
             );
         }
 
-        let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
-            Arc::new(AggregateStatistics::new()),
-            Arc::new(JoinSelection::new()),
-        ];
+        // We need to take care of the rule ordering. They may influence each other.
+        let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> =
+            vec![Arc::new(AggregateStatistics::new())];
+        // - In order to increase the parallelism, it will change the output partitioning
+        // of some operators in the plan tree, which will influence other rules.
+        // Therefore, it should be run as soon as possible.
+        // - The reason to make it optional is
+        //      - it's not used for the distributed engine, Ballista.
+        //      - it's conflicted with some parts of the BasicEnforcement, since it will
+        //      introduce additional repartitioning while the BasicEnforcement aims at
+        //      reducing unnecessary repartitioning.
+        if config
+            .config_options
+            .get_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION)
+            .unwrap_or_default()
+        {
+            physical_optimizers.push(Arc::new(Repartition::new()));
+        }
+        //- Currently it will depend on the partition number to decide whether to change the
+        // single node sort to parallel local sort and merge. Therefore, it should be run
+        // after the Repartition.
+        // - Since it will change the output ordering of some operators, it should be run
+        // before JoinSelection and BasicEnforcement, which may depend on that.
+        physical_optimizers.push(Arc::new(GlobalSortSelection::new()));
+        // Statistics-base join selection will change the Auto mode to real join implementation,
+        // like collect left, or hash join, or future sort merge join, which will
+        // influence the BasicEnforcement to decide whether to add additional repartition
+        // and local sort to meet the distribution and ordering requirements.
+        // Therefore, it should be run before BasicEnforcement
+        physical_optimizers.push(Arc::new(JoinSelection::new()));
+        // If the query is processing infinite inputs, the PipelineFixer rule applies the
+        // necessary transformations to make the query runnable (if it is not already runnable).
+        // If the query can not be made runnable, the rule emits an error with a diagnostic message.
+        // Since the transformations it applies may alter output partitioning properties of operators
+        // (e.g. by swapping hash join sides), this rule runs before BasicEnforcement.
+        physical_optimizers.push(Arc::new(PipelineFixer::new()));
+        // It's for adding essential repartition and local sorting operator to satisfy the
+        // required distribution and local sort.
+        // Please make sure that the whole plan tree is determined.
         physical_optimizers.push(Arc::new(BasicEnforcement::new()));
+        // `BasicEnforcement` stage conservatively inserts `SortExec`s to satisfy ordering requirements.
+        // However, a deeper analysis may sometimes reveal that such a `SortExec` is actually unnecessary.
+        // These cases typically arise when we have reversible `WindowAggExec`s or deep subqueries. The
+        // rule below performs this analysis and removes unnecessary `SortExec`s.
+        physical_optimizers.push(Arc::new(OptimizeSorts::new()));
+        // It will not influence the distribution and ordering of the whole plan tree.
+        // Therefore, to avoid influencing other rules, it should be run at last.
         if config
             .config_options
             .get_bool(OPT_COALESCE_BATCHES)
@@ -1576,18 +1619,12 @@ impl SessionState {
                     .unwrap(),
             )));
         }
-        physical_optimizers.push(Arc::new(Repartition::new()));
-        // Repartition rule could introduce additional RepartitionExec with RoundRobin partitioning.
-        // To make sure the SinglePartition is satisfied, run the BasicEnforcement again, originally it was the AddCoalescePartitionsExec here.
-        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
-
-        // `BasicEnforcement` stage conservatively inserts `SortExec`s to satisfy ordering requirements.
-        // However, a deeper analysis may sometimes reveal that such a `SortExec` is actually unnecessary.
-        // These cases typically arise when we have reversible `WindowAggExec`s or deep subqueries. The
-        // rule below performs this analysis and removes unnecessary `SortExec`s.
-        physical_optimizers.push(Arc::new(OptimizeSorts::new()));
-
-        let mut this = SessionState {
+        // The PipelineChecker rule will reject non-runnable query plans that use
+        // pipeline-breaking operators on infinite input(s). The rule generates a
+        // diagnostic error message when this happens. It makes no changes to the
+        // given query plan; i.e. it only acts as a final gatekeeping rule.
+        physical_optimizers.push(Arc::new(PipelineChecker::new()));
+        SessionState {
             session_id,
             optimizer: Optimizer::new(),
             physical_optimizers,
@@ -1598,60 +1635,6 @@ impl SessionState {
             config,
             execution_props: ExecutionProps::new(),
             runtime_env: runtime,
-        };
-        this.update_information_schema();
-        this
-    }
-
-    /// Enables/Disables information_schema support based on the value of
-    /// config.information_schema()
-    ///
-    /// When enabled, all catalog providers are wrapped with
-    /// [`CatalogWithInformationSchema`] if needed
-    ///
-    /// When disabled, any [`CatalogWithInformationSchema`] is unwrapped
-    fn update_information_schema(&mut self) {
-        let enabled = self.config.information_schema();
-        let catalog_list = &self.catalog_list;
-
-        let new_catalogs: Vec<_> = self
-            .catalog_list
-            .catalog_names()
-            .into_iter()
-            .map(|catalog_name| {
-                // unwrap because the list of names came from catalog
-                // list so it should still be there
-                let catalog = catalog_list.catalog(&catalog_name).unwrap();
-
-                let unwrapped = catalog
-                    .as_any()
-                    .downcast_ref::<CatalogWithInformationSchema>()
-                    .map(|wrapped| wrapped.inner());
-
-                let new_catalog = match (enabled, unwrapped) {
-                    // already wrapped, no thing needed
-                    (true, Some(_)) => catalog,
-                    (true, None) => {
-                        // wrap the catalog in information schema
-                        Arc::new(CatalogWithInformationSchema::new(
-                            Arc::downgrade(catalog_list),
-                            catalog,
-                        ))
-                    }
-                    // disabling, currently wrapped
-                    (false, Some(unwrapped)) => unwrapped,
-                    // disabling, currently unwrapped
-                    (false, None) => catalog,
-                };
-
-                (catalog_name, new_catalog)
-            })
-            // collect to avoid concurrent modification
-            .collect();
-
-        // replace all catalogs
-        for (catalog_name, new_catalog) in new_catalogs {
-            catalog_list.register_catalog(catalog_name, new_catalog);
         }
     }
 
@@ -1721,6 +1704,12 @@ impl SessionState {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
+        if self.config.information_schema() && resolved_ref.schema == INFORMATION_SCHEMA {
+            return Ok(Arc::new(InformationSchemaProvider::new(
+                self.catalog_list.clone(),
+            )));
+        }
+
         self.catalog_list
             .catalog(resolved_ref.catalog)
             .ok_or_else(|| {

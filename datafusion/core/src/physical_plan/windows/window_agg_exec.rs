@@ -52,7 +52,7 @@ use std::task::{Context, Poll};
 #[derive(Debug)]
 pub struct WindowAggExec {
     /// Input plan
-    input: Arc<dyn ExecutionPlan>,
+    pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Window function expression
     window_expr: Vec<Arc<dyn WindowExpr>>,
     /// Schema after the window is run
@@ -148,6 +148,20 @@ impl ExecutionPlan for WindowAggExec {
         // this would be either 1 or more than 1 depending on the presense of
         // repartitioning
         self.input.output_partitioning()
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.    
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        if children[0] {
+            Err(DataFusionError::Plan(
+                "Window Error: Windowing is not currently support for unbounded inputs."
+                    .to_string(),
+            ))
+        } else {
+            Ok(false)
+        }
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
