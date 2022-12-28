@@ -30,6 +30,7 @@ use arrow::{
     datatypes::{Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_common::{DFSchemaRef, DataFusionError};
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use log::debug;
@@ -63,6 +64,38 @@ pub struct UnionExec {
 }
 
 impl UnionExec {
+    /// Create a new UnionExec with specified schema.
+    /// The `schema` should always be a subset of the schema of `inputs`,
+    /// otherwise, an error will be returned.
+    pub fn try_new_with_schema(
+        inputs: Vec<Arc<dyn ExecutionPlan>>,
+        schema: DFSchemaRef,
+    ) -> Result<Self> {
+        let mut exec = Self::new(inputs);
+        let exec_schema = exec.schema();
+        let fields = schema
+            .fields()
+            .iter()
+            .map(|dff| {
+                exec_schema
+                    .field_with_name(dff.name())
+                    .cloned()
+                    .map_err(|_| {
+                        DataFusionError::Internal(format!(
+                            "Cannot find the field {:?} in child schema",
+                            dff.name()
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<Field>>>()?;
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            exec.schema().metadata().clone(),
+        ));
+        exec.schema = schema;
+        Ok(exec)
+    }
+
     /// Create a new UnionExec
     pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
         let fields: Vec<Field> = (0..inputs[0].schema().fields().len())
