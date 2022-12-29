@@ -1505,25 +1505,25 @@ impl SessionConfig {
 #[derive(Clone)]
 pub struct SessionState {
     /// Uuid for the session
-    pub session_id: String,
+    session_id: String,
     /// Responsible for optimizing a logical plan
-    pub optimizer: Optimizer,
+    optimizer: Optimizer,
     /// Responsible for optimizing a physical execution plan
-    pub physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
     /// Responsible for planning `LogicalPlan`s, and `ExecutionPlan`
-    pub query_planner: Arc<dyn QueryPlanner + Send + Sync>,
+    query_planner: Arc<dyn QueryPlanner + Send + Sync>,
     /// Collection of catalogs containing schemas and ultimately TableProviders
-    pub catalog_list: Arc<dyn CatalogList>,
+    catalog_list: Arc<dyn CatalogList>,
     /// Scalar functions that are registered with the context
-    pub scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions registered in the context
-    pub aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+    aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Session configuration
-    pub config: SessionConfig,
+    config: SessionConfig,
     /// Execution properties
-    pub execution_props: ExecutionProps,
+    execution_props: ExecutionProps,
     /// Runtime environment
-    pub runtime_env: Arc<RuntimeEnv>,
+    runtime_env: Arc<RuntimeEnv>,
 }
 
 impl Debug for SessionState {
@@ -1838,6 +1838,31 @@ impl SessionState {
         self.query_planner
             .create_physical_plan(&logical_plan, self)
             .await
+    }
+
+    /// Return the session ID
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// Return the runtime env
+    pub fn runtime_env(&self) -> &Arc<RuntimeEnv> {
+        &self.runtime_env
+    }
+
+    /// Return the execution properties
+    pub fn execution_props(&self) -> &ExecutionProps {
+        &self.execution_props
+    }
+
+    /// Return the [`SessionConfig`]
+    pub fn config(&self) -> &SessionConfig {
+        &self.config
+    }
+
+    /// Return the physical optimizers
+    pub fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        &self.physical_optimizers
     }
 
     /// return the configuration options
