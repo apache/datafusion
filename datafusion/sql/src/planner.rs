@@ -2274,16 +2274,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     normalize_ident(function.name.0[0].clone())
                 };
 
-                // first, check SQL reserved words
-                // TODO: remove when https://github.com/sqlparser-rs/sqlparser-rs/pull/771
-                if name == "rollup" {
-                    let args = self.function_args_to_expr(function.args, schema)?;
-                    return Ok(Expr::GroupingSet(GroupingSet::Rollup(args)));
-                } else if name == "cube" {
-                    let args = self.function_args_to_expr(function.args, schema)?;
-                    return Ok(Expr::GroupingSet(GroupingSet::Cube(args)));
-                }
-
                 // next, scalar built-in
                 if let Ok(fun) = BuiltinScalarFunction::from_str(&name) {
                     let args = self.function_args_to_expr(function.args, schema)?;
@@ -3294,9 +3284,7 @@ fn ensure_any_column_reference_is_unambiguous(
 mod tests {
     use std::any::Any;
 
-    use sqlparser::dialect::{
-        Dialect, GenericDialect, HiveDialect, MySqlDialect, PostgreSqlDialect,
-    };
+    use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
     use datafusion_common::assert_contains;
 
@@ -5861,7 +5849,6 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    #[ignore] // see https://github.com/apache/arrow-datafusion/issues/2469
     #[test]
     fn aggregate_with_grouping_sets() {
         let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
@@ -5869,46 +5856,6 @@ mod tests {
         \n  Aggregate: groupBy=[[person.id, GROUPING SETS ((person.state), (person.state, person.age), (person.id, person.state))]], aggr=[[COUNT(UInt8(1))]]\
         \n    TableScan: person";
         quick_test(sql, expected);
-    }
-
-    #[test]
-    // TODO: remove when https://github.com/sqlparser-rs/sqlparser-rs/pull/771
-    fn postgres_aggregate_with_grouping_sets() -> Result<()> {
-        let dialect = &PostgreSqlDialect {};
-        let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
-        let plan = logical_plan_with_dialect(sql, dialect)?;
-        let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-        \n  Aggregate: groupBy=[[person.id, GROUPING SETS ((person.state), (person.state, person.age), (person.id, person.state))]], aggr=[[COUNT(UInt8(1))]]\
-        \n    TableScan: person".to_string();
-        assert_eq!(plan.display_indent().to_string(), expected);
-        Ok(())
-    }
-
-    #[test]
-    // TODO: remove when https://github.com/sqlparser-rs/sqlparser-rs/pull/771
-    fn postgres_aggregate_with_cube() -> Result<()> {
-        let dialect = &PostgreSqlDialect {};
-        let sql =
-            "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
-        let plan = logical_plan_with_dialect(sql, dialect)?;
-        let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-        \n  Aggregate: groupBy=[[person.id, CUBE (person.state, person.age)]], aggr=[[COUNT(UInt8(1))]]\
-        \n    TableScan: person".to_string();
-        assert_eq!(plan.display_indent().to_string(), expected);
-        Ok(())
-    }
-
-    #[test]
-    // TODO: remove when https://github.com/sqlparser-rs/sqlparser-rs/pull/771
-    fn postgres_aggregate_with_rollup() -> Result<()> {
-        let dialect = &PostgreSqlDialect {};
-        let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, ROLLUP (state, age)";
-        let plan = logical_plan_with_dialect(sql, dialect)?;
-        let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
-        \n  Aggregate: groupBy=[[person.id, ROLLUP (person.state, person.age)]], aggr=[[COUNT(UInt8(1))]]\
-        \n    TableScan: person";
-        assert_eq!(plan.display_indent().to_string(), expected);
-        Ok(())
     }
 
     #[test]
