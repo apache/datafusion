@@ -371,12 +371,15 @@ impl ConfigOptions {
 
         let mut docs = "| key | default | description |\n".to_string();
         docs += "|-----|---------|-------------|\n";
+        let mut entries = s.entries();
+        entries.sort_unstable_by(|a, b| a.key.cmp(&b.key));
+
         for entry in s.entries() {
             let _ = writeln!(
                 &mut docs,
                 "| {} | {} | {} |",
                 entry.key,
-                entry.value.as_deref().unwrap_or(""),
+                entry.value.as_deref().unwrap_or("NULL"),
                 entry.description
             );
         }
