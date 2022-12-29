@@ -2658,6 +2658,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Identifier(i) => i.to_string(),
             SQLExpr::Value(v) => match v {
                 Value::SingleQuotedString(s) => s.to_string(),
+                Value::DollarQuotedString(s) => s.to_string(),
                 Value::Number(_, _) | Value::Boolean(_) => v.to_string(),
                 Value::DoubleQuotedString(_)
                 | Value::UnQuotedString(_)
