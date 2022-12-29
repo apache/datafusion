@@ -65,7 +65,7 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
 
     let testdata = datafusion::test_util::arrow_test_data();
 
-    let path = format!("{}/csv/aggregate_test_100.csv", testdata);
+    let path = format!("{testdata}/csv/aggregate_test_100.csv");
     let table_path = ListingTableUrl::parse(path).unwrap();
 
     // create CSV data source

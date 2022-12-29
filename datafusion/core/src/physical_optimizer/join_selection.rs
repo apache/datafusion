@@ -553,7 +553,7 @@ mod tests {
             .expect("A proj is required to swap columns back to their original order");
 
         assert_eq!(swapping_projection.expr().len(), 2);
-        println!("swapping_projection {:?}", swapping_projection);
+        println!("swapping_projection {swapping_projection:?}");
         let (col, name) = &swapping_projection.expr()[0];
         assert_eq!(name, "small_col");
         assert_col_expr(col, "small_col", 1);

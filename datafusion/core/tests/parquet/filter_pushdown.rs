@@ -54,7 +54,7 @@ fn generate_file(tempdir: &TempDir, props: WriterProperties) -> TestParquetFile 
     let file = tempdir.path().join("data.parquet");
 
     let start = Instant::now();
-    println!("Writing test data to {:?}", file);
+    println!("Writing test data to {file:?}");
     let test_parquet_file = TestParquetFile::try_new(file, props, generator).unwrap();
     println!(
         "Completed generating test data in {:?}",
@@ -513,7 +513,7 @@ impl<'a> TestCase<'a> {
         filter: &Expr,
     ) -> RecordBatch {
         println!("  scan options: {scan_options:?}");
-        println!("  reading with filter {:?}", filter);
+        println!("  reading with filter {filter:?}");
         let ctx = SessionContext::with_config(scan_options.config());
         let exec = self
             .test_parquet_file
@@ -548,7 +548,7 @@ impl<'a> TestCase<'a> {
         };
 
         let pushdown_rows_filtered = get_value(&metrics, "pushdown_rows_filtered");
-        println!("  pushdown_rows_filtered: {}", pushdown_rows_filtered);
+        println!("  pushdown_rows_filtered: {pushdown_rows_filtered}");
 
         match pushdown_expected {
             PushdownExpected::None => {
@@ -564,7 +564,7 @@ impl<'a> TestCase<'a> {
         };
 
         let page_index_rows_filtered = get_value(&metrics, "page_index_rows_filtered");
-        println!(" page_index_rows_filtered: {}", page_index_rows_filtered);
+        println!(" page_index_rows_filtered: {page_index_rows_filtered}");
 
         let page_index_filtering_expected = if scan_options.enable_page_index {
             self.page_index_filtering_expected
@@ -595,8 +595,7 @@ fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
         Some(v) => v.as_usize(),
         _ => {
             panic!(
-                "Expected metric not found. Looking for '{}' in\n\n{:#?}",
-                metric_name, metrics
+                "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
             );
         }
     }

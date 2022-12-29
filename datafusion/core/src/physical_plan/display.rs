@@ -171,14 +171,14 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
                         .sorted_for_display()
                         .timestamps_removed();
 
-                    write!(self.f, ", metrics=[{}]", metrics)?;
+                    write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
                 }
             }
             ShowMetrics::Full => {
                 if let Some(metrics) = plan.metrics() {
-                    write!(self.f, ", metrics=[{}]", metrics)?;
+                    write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
                 }

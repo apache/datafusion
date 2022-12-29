@@ -98,7 +98,7 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
             0,
             "The sort should have returned all memory used back to the memory pool"
         );
-        assert_eq!(expected, actual, "failure in @ pool_size {}", pool_size);
+        assert_eq!(expected, actual, "failure in @ pool_size {pool_size}");
     }
 }
 

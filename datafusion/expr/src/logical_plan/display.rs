@@ -142,7 +142,7 @@ impl GraphvizBuilder {
     /// makes a quoted string suitable for inclusion in a graphviz chart
     fn quoted(label: &str) -> String {
         let label = label.replace('"', "_");
-        format!("\"{}\"", label)
+        format!("\"{label}\"")
     }
 }
 
@@ -214,8 +214,7 @@ impl<'a, 'b> PlanVisitor for GraphvizVisitor<'a, 'b> {
         if let Some(parent_id) = self.parent_ids.last() {
             writeln!(
                 self.f,
-                "    {} -> {} [arrowhead=none, arrowtail=normal, dir=back]",
-                parent_id, id
+                "    {parent_id} -> {id} [arrowhead=none, arrowtail=normal, dir=back]"
             )?;
         }
 

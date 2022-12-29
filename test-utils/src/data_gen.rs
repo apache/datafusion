@@ -106,10 +106,9 @@ impl BatchBuilder {
         for pod in pods {
             let num_containers = rng.gen_range(self.options.containers_per_pod.clone());
             for container_idx in 0..num_containers {
-                let container = format!("{}_container_{}", service, container_idx);
+                let container = format!("{service}_container_{container_idx}");
                 let image = format!(
-                    "{}@sha256:30375999bf03beec2187843017b10c9e88d8b1a91615df4eb6350fb39472edd9",
-                    container
+                    "{container}@sha256:30375999bf03beec2187843017b10c9e88d8b1a91615df4eb6350fb39472edd9"
                 );
 
                 let num_entries =
@@ -162,7 +161,7 @@ impl BatchBuilder {
         self.request_method
             .append_value(methods[rng.gen_range(0..methods.len())]);
         self.request_host
-            .append_value(format!("https://{}.mydomain.com", service));
+            .append_value(format!("https://{service}.mydomain.com"));
 
         self.request_bytes
             .append_option(rng.gen_bool(0.9).then(|| rng.gen()));

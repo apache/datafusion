@@ -113,22 +113,22 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         }
         Expr::Alias(_, name) => Ok(name.clone()),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
-        Expr::Literal(value) => Ok(format!("{:?}", value)),
+        Expr::Literal(value) => Ok(format!("{value:?}")),
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             let left = create_physical_name(left, false)?;
             let right = create_physical_name(right, false)?;
-            Ok(format!("{} {} {}", left, op, right))
+            Ok(format!("{left} {op} {right}"))
         }
         Expr::Case(case) => {
             let mut name = "CASE ".to_string();
             if let Some(e) = &case.expr {
-                let _ = write!(name, "{:?} ", e);
+                let _ = write!(name, "{e:?} ");
             }
             for (w, t) in &case.when_then_expr {
-                let _ = write!(name, "WHEN {:?} THEN {:?} ", w, t);
+                let _ = write!(name, "WHEN {w:?} THEN {t:?} ");
             }
             if let Some(e) = &case.else_expr {
-                let _ = write!(name, "ELSE {:?} ", e);
+                let _ = write!(name, "ELSE {e:?} ");
             }
             name += "END";
             Ok(name)
@@ -143,47 +143,47 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         }
         Expr::Not(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("NOT {}", expr))
+            Ok(format!("NOT {expr}"))
         }
         Expr::Negative(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("(- {})", expr))
+            Ok(format!("(- {expr})"))
         }
         Expr::IsNull(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS NULL", expr))
+            Ok(format!("{expr} IS NULL"))
         }
         Expr::IsNotNull(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS NOT NULL", expr))
+            Ok(format!("{expr} IS NOT NULL"))
         }
         Expr::IsTrue(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS TRUE", expr))
+            Ok(format!("{expr} IS TRUE"))
         }
         Expr::IsFalse(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS FALSE", expr))
+            Ok(format!("{expr} IS FALSE"))
         }
         Expr::IsUnknown(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS UNKNOWN", expr))
+            Ok(format!("{expr} IS UNKNOWN"))
         }
         Expr::IsNotTrue(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS NOT TRUE", expr))
+            Ok(format!("{expr} IS NOT TRUE"))
         }
         Expr::IsNotFalse(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS NOT FALSE", expr))
+            Ok(format!("{expr} IS NOT FALSE"))
         }
         Expr::IsNotUnknown(expr) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{} IS NOT UNKNOWN", expr))
+            Ok(format!("{expr} IS NOT UNKNOWN"))
         }
         Expr::GetIndexedField(GetIndexedField { key, expr }) => {
             let expr = create_physical_name(expr, false)?;
-            Ok(format!("{}[{}]", expr, key))
+            Ok(format!("{expr}[{key}]"))
         }
         Expr::ScalarFunction { fun, args, .. } => {
             create_function_physical_name(&fun.to_string(), false, args)
@@ -237,7 +237,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                         .map(|e| create_physical_name(e, false))
                         .collect::<Result<Vec<_>>>()?
                         .join(", ");
-                    strings.push(format!("({})", exprs_str));
+                    strings.push(format!("({exprs_str})"));
                 }
                 Ok(format!("GROUPING SETS ({})", strings.join(", ")))
             }
@@ -251,9 +251,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             let list = list.iter().map(|expr| create_physical_name(expr, false));
             if *negated {
-                Ok(format!("{} NOT IN ({:?})", expr, list))
+                Ok(format!("{expr} NOT IN ({list:?})"))
             } else {
-                Ok(format!("{} IN ({:?})", expr, list))
+                Ok(format!("{expr} IN ({list:?})"))
             }
         }
         Expr::Exists { .. } => Err(DataFusionError::NotImplemented(
@@ -275,9 +275,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let low = create_physical_name(low, false)?;
             let high = create_physical_name(high, false)?;
             if *negated {
-                Ok(format!("{} NOT BETWEEN {} AND {}", expr, low, high))
+                Ok(format!("{expr} NOT BETWEEN {low} AND {high}"))
             } else {
-                Ok(format!("{} BETWEEN {} AND {}", expr, low, high))
+                Ok(format!("{expr} BETWEEN {low} AND {high}"))
             }
         }
         Expr::Like(Like {
@@ -289,14 +289,14 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
             let escape = if let Some(char) = escape_char {
-                format!("CHAR '{}'", char)
+                format!("CHAR '{char}'")
             } else {
                 "".to_string()
             };
             if *negated {
-                Ok(format!("{} NOT LIKE {}{}", expr, pattern, escape))
+                Ok(format!("{expr} NOT LIKE {pattern}{escape}"))
             } else {
-                Ok(format!("{} LIKE {}{}", expr, pattern, escape))
+                Ok(format!("{expr} LIKE {pattern}{escape}"))
             }
         }
         Expr::ILike(Like {
@@ -308,14 +308,14 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
             let escape = if let Some(char) = escape_char {
-                format!("CHAR '{}'", char)
+                format!("CHAR '{char}'")
             } else {
                 "".to_string()
             };
             if *negated {
-                Ok(format!("{} NOT ILIKE {}{}", expr, pattern, escape))
+                Ok(format!("{expr} NOT ILIKE {pattern}{escape}"))
             } else {
-                Ok(format!("{} ILIKE {}{}", expr, pattern, escape))
+                Ok(format!("{expr} ILIKE {pattern}{escape}"))
             }
         }
         Expr::SimilarTo(Like {
@@ -327,14 +327,14 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             let pattern = create_physical_name(pattern, false)?;
             let escape = if let Some(char) = escape_char {
-                format!("CHAR '{}'", char)
+                format!("CHAR '{char}'")
             } else {
                 "".to_string()
             };
             if *negated {
-                Ok(format!("{} NOT SIMILAR TO {}{}", expr, pattern, escape))
+                Ok(format!("{expr} NOT SIMILAR TO {pattern}{escape}"))
             } else {
-                Ok(format!("{} SIMILAR TO {}{}", expr, pattern, escape))
+                Ok(format!("{expr} SIMILAR TO {pattern}{escape}"))
             }
         }
         Expr::Sort { .. } => Err(DataFusionError::Internal(
@@ -1581,8 +1581,7 @@ pub fn create_window_expr_with_name(
             )
         }
         other => Err(DataFusionError::Internal(format!(
-            "Invalid window expression '{:?}'",
-            other
+            "Invalid window expression '{other:?}'"
         ))),
     }
 }
@@ -1658,8 +1657,7 @@ pub fn create_aggregate_expr_with_name(
             udaf::create_aggregate_expr(fun, &args, physical_input_schema, name)
         }
         other => Err(DataFusionError::Internal(format!(
-            "Invalid aggregate expression '{:?}'",
-            other
+            "Invalid aggregate expression '{other:?}'"
         ))),
     }
 }
@@ -1876,7 +1874,7 @@ mod tests {
         // the cast from u8 to i64 for literal will be simplified, and get lit(int64(5))
         // the cast here is implicit so has CastOptions with safe=true
         let expected = "BinaryExpr { left: Column { name: \"c7\", index: 2 }, op: Lt, right: Literal { value: Int64(5) } }";
-        assert!(format!("{:?}", exec_plan).contains(expected));
+        assert!(format!("{exec_plan:?}").contains(expected));
         Ok(())
     }
 
@@ -1902,7 +1900,7 @@ mod tests {
 
         let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[false, false, false], [true, false, false], [false, true, false], [false, false, true], [true, true, false], [true, false, true], [false, true, true], [true, true, true]] })"#;
 
-        assert_eq!(format!("{:?}", cube), expected);
+        assert_eq!(format!("{cube:?}"), expected);
 
         Ok(())
     }
@@ -1929,7 +1927,7 @@ mod tests {
 
         let expected = r#"Ok(PhysicalGroupBy { expr: [(Column { name: "c1", index: 0 }, "c1"), (Column { name: "c2", index: 1 }, "c2"), (Column { name: "c3", index: 2 }, "c3")], null_expr: [(Literal { value: Utf8(NULL) }, "c1"), (Literal { value: Int64(NULL) }, "c2"), (Literal { value: Int64(NULL) }, "c3")], groups: [[true, true, true], [false, true, true], [false, false, true], [false, false, false]] })"#;
 
-        assert_eq!(format!("{:?}", rollup), expected);
+        assert_eq!(format!("{rollup:?}"), expected);
 
         Ok(())
     }
@@ -1949,7 +1947,7 @@ mod tests {
         )?;
         let expected = expressions::not(expressions::col("a", &schema)?)?;
 
-        assert_eq!(format!("{:?}", expr), format!("{:?}", expected));
+        assert_eq!(format!("{expr:?}"), format!("{expected:?}"));
 
         Ok(())
     }
@@ -1967,7 +1965,7 @@ mod tests {
         // c12 is f64, c7 is u8 -> cast c7 to f64
         // the cast here is implicit so has CastOptions with safe=true
         let _expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";
-        let plan_debug_str = format!("{:?}", plan);
+        let plan_debug_str = format!("{plan:?}");
         assert!(plan_debug_str.contains("GlobalLimitExec"));
         assert!(plan_debug_str.contains("skip: 3"));
         Ok(())
@@ -1977,7 +1975,7 @@ mod tests {
     async fn test_with_zero_offset_plan() -> Result<()> {
         let logical_plan = test_csv_scan().await?.limit(0, None)?.build()?;
         let plan = plan(&logical_plan).await?;
-        assert!(format!("{:?}", plan).contains("limit: None"));
+        assert!(format!("{plan:?}").contains("limit: None"));
         Ok(())
     }
 
@@ -1990,12 +1988,12 @@ mod tests {
             .build()?;
         let plan = plan(&logical_plan).await?;
 
-        assert!(format!("{:?}", plan).contains("GlobalLimitExec"));
-        assert!(format!("{:?}", plan).contains("skip: 3, fetch: Some(5)"));
+        assert!(format!("{plan:?}").contains("GlobalLimitExec"));
+        assert!(format!("{plan:?}").contains("skip: 3, fetch: Some(5)"));
 
         // LocalLimitExec adjusts the `fetch`
-        assert!(format!("{:?}", plan).contains("LocalLimitExec"));
-        assert!(format!("{:?}", plan).contains("fetch: 8"));
+        assert!(format!("{plan:?}").contains("LocalLimitExec"));
+        assert!(format!("{plan:?}").contains("fetch: 8"));
         Ok(())
     }
 
@@ -2023,8 +2021,7 @@ mod tests {
         for case in cases {
             let logical_plan = test_csv_scan().await?.project(vec![case.clone()]);
             let message = format!(
-                "Expression {:?} expected to error due to impossible coercion",
-                case
+                "Expression {case:?} expected to error due to impossible coercion"
             );
             assert!(logical_plan.is_err(), "{}", message);
         }
@@ -2048,9 +2045,7 @@ mod tests {
             Ok(_) => panic!("Expected planning failure"),
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
-                "Error '{}' did not contain expected error '{}'",
-                e,
-                expected_error
+                "Error '{e}' did not contain expected error '{expected_error}'"
             ),
         }
     }
@@ -2095,9 +2090,7 @@ mod tests {
             Ok(_) => panic!("Expected planning failure"),
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
-                "Error '{}' did not contain expected error '{}'",
-                e,
-                expected_error
+                "Error '{e}' did not contain expected error '{expected_error}'"
             ),
         }
     }
@@ -2117,7 +2110,7 @@ mod tests {
 
         let expected = "expr: [(BinaryExpr { left: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"1\") } }, op: Or, right: BinaryExpr { left: Column { name: \"c1\", index: 0 }, op: Eq, right: Literal { value: Utf8(\"a\") } } }";
 
-        let actual = format!("{:?}", execution_plan);
+        let actual = format!("{execution_plan:?}");
         assert!(actual.contains(expected), "{}", actual);
 
         Ok(())
@@ -2209,7 +2202,7 @@ mod tests {
             .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
-        let formatted = format!("{:?}", execution_plan);
+        let formatted = format!("{execution_plan:?}");
 
         // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
         // mode in Aggregate (which is slower)
@@ -2240,7 +2233,7 @@ mod tests {
         .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
-        let formatted = format!("{:?}", execution_plan);
+        let formatted = format!("{execution_plan:?}");
 
         // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
         // mode in Aggregate (which is slower)
@@ -2261,7 +2254,7 @@ mod tests {
             .build()?;
 
         let execution_plan = plan(&logical_plan).await?;
-        let formatted = format!("{:?}", execution_plan);
+        let formatted = format!("{execution_plan:?}");
 
         // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
         // mode in Aggregate (which is slower)
@@ -2443,7 +2436,7 @@ mod tests {
     async fn test_csv_scan_with_name(name: &str) -> Result<LogicalPlanBuilder> {
         let ctx = SessionContext::new();
         let testdata = crate::test_util::arrow_test_data();
-        let path = format!("{}/csv/aggregate_test_100.csv", testdata);
+        let path = format!("{testdata}/csv/aggregate_test_100.csv");
         let options = CsvReadOptions::new().schema_infer_max_records(100);
         let logical_plan =
             match ctx.read_csv(path, options).await?.into_optimized_plan()? {
@@ -2466,7 +2459,7 @@ mod tests {
     async fn test_csv_scan() -> Result<LogicalPlanBuilder> {
         let ctx = SessionContext::new();
         let testdata = crate::test_util::arrow_test_data();
-        let path = format!("{}/csv/aggregate_test_100.csv", testdata);
+        let path = format!("{testdata}/csv/aggregate_test_100.csv");
         let options = CsvReadOptions::new().schema_infer_max_records(100);
         Ok(LogicalPlanBuilder::from(
             ctx.read_csv(path, options).await?.into_optimized_plan()?,

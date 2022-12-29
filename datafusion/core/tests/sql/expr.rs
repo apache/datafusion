@@ -1712,7 +1712,7 @@ async fn comparisons_with_null_lt() {
     ];
 
     for sql in cases {
-        println!("Computing: {}", sql);
+        println!("Computing: {sql}");
 
         let mut actual = execute_to_batches(&ctx, sql).await;
         assert_eq!(actual.len(), 1);
@@ -1760,7 +1760,7 @@ async fn binary_mathematical_operator_with_null_lt() {
     ];
 
     for sql in cases {
-        println!("Computing: {}", sql);
+        println!("Computing: {sql}");
 
         let mut actual = execute_to_batches(&ctx, sql).await;
         assert_eq!(actual.len(), 1);

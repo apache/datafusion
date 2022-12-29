@@ -324,7 +324,7 @@ async fn window_expr_eliminate() -> Result<()> {
             GROUP BY d.b
             ORDER BY d.b;";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.into_optimized_plan().unwrap();
     let expected = vec![
@@ -351,8 +351,7 @@ async fn window_expr_eliminate() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let results = execute_to_batches(&ctx, sql).await;
@@ -415,8 +414,7 @@ async fn window_expr_eliminate() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let results = execute_to_batches(&ctx, sql).await;
@@ -1644,7 +1642,7 @@ async fn test_window_agg_sort() -> Result<()> {
       SUM(c9) OVER(ORDER BY c9, c8) as sum2
       FROM aggregate_test_100";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -1664,8 +1662,7 @@ async fn test_window_agg_sort() -> Result<()> {
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual_trim_last
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual_trim_last:#?}\n\n"
     );
     Ok(())
 }
@@ -1677,7 +1674,7 @@ async fn over_order_by_sort_keys_sorting_prefix_compacting() -> Result<()> {
 
     let sql = "SELECT c2, MAX(c9) OVER (ORDER BY c2), SUM(c9) OVER (), MIN(c9) OVER (ORDER BY c2, c9) from aggregate_test_100";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -1698,8 +1695,7 @@ async fn over_order_by_sort_keys_sorting_prefix_compacting() -> Result<()> {
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual_trim_last
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual_trim_last:#?}\n\n"
     );
     Ok(())
 }
@@ -1711,7 +1707,7 @@ async fn over_order_by_sort_keys_sorting_global_order_compacting() -> Result<()>
     register_aggregate_csv(&ctx).await?;
 
     let sql = "SELECT c2, MAX(c9) OVER (ORDER BY c9, c2), SUM(c9) OVER (), MIN(c9) OVER (ORDER BY c2, c9) from aggregate_test_100 ORDER BY c2";
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -1735,8 +1731,7 @@ async fn over_order_by_sort_keys_sorting_global_order_compacting() -> Result<()>
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual_trim_last
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual_trim_last:#?}\n\n"
     );
     Ok(())
 }
@@ -1751,7 +1746,7 @@ async fn test_window_partition_by_order_by() -> Result<()> {
                COUNT(*) OVER(PARTITION BY c1 ORDER BY c2 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) \
                FROM aggregate_test_100";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -1775,8 +1770,7 @@ async fn test_window_partition_by_order_by() -> Result<()> {
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual_trim_last
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual_trim_last:#?}\n\n"
     );
     Ok(())
 }
@@ -1792,7 +1786,7 @@ async fn test_window_agg_sort_reversed_plan() -> Result<()> {
     FROM aggregate_test_100
     LIMIT 5";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -1813,8 +1807,7 @@ async fn test_window_agg_sort_reversed_plan() -> Result<()> {
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1849,7 +1842,7 @@ async fn test_window_agg_sort_reversed_plan_builtin() -> Result<()> {
     FROM aggregate_test_100
     LIMIT 5";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -1870,8 +1863,7 @@ async fn test_window_agg_sort_reversed_plan_builtin() -> Result<()> {
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1902,7 +1894,7 @@ async fn test_window_agg_sort_non_reversed_plan() -> Result<()> {
     FROM aggregate_test_100
     LIMIT 5";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -1924,8 +1916,7 @@ async fn test_window_agg_sort_non_reversed_plan() -> Result<()> {
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let actual = execute_to_batches(&ctx, sql).await;
@@ -1957,7 +1948,7 @@ async fn test_window_agg_sort_multi_layer_non_reversed_plan() -> Result<()> {
     FROM aggregate_test_100
     LIMIT 5";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -1980,8 +1971,7 @@ async fn test_window_agg_sort_multi_layer_non_reversed_plan() -> Result<()> {
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let actual = execute_to_batches(&ctx, sql).await;
@@ -2046,7 +2036,7 @@ async fn test_window_agg_complex_plan() -> Result<()> {
     FROM null_cases
     LIMIT 5";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2075,8 +2065,7 @@ async fn test_window_agg_complex_plan() -> Result<()> {
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     Ok(())
@@ -2096,7 +2085,7 @@ async fn test_window_agg_sort_orderby_reversed_partitionby_plan() -> Result<()> 
     FROM aggregate_test_100
     LIMIT 5";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2117,8 +2106,7 @@ async fn test_window_agg_sort_orderby_reversed_partitionby_plan() -> Result<()> 
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let actual = execute_to_batches(&ctx, sql).await;
@@ -2152,7 +2140,7 @@ async fn test_window_agg_sort_partitionby_reversed_plan() -> Result<()> {
     FROM aggregate_test_100
     LIMIT 5";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2173,8 +2161,7 @@ async fn test_window_agg_sort_partitionby_reversed_plan() -> Result<()> {
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let actual = execute_to_batches(&ctx, sql).await;
@@ -2207,7 +2194,7 @@ async fn test_window_agg_sort_orderby_reversed_binary_expr() -> Result<()> {
     FROM aggregate_test_100
     LIMIT 5";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2228,8 +2215,7 @@ async fn test_window_agg_sort_orderby_reversed_binary_expr() -> Result<()> {
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let actual = execute_to_batches(&ctx, sql).await;
@@ -2263,7 +2249,7 @@ async fn test_remove_unnecessary_sort_in_sub_query() -> Result<()> {
                   GROUP BY c1
                   ORDER BY c1 ) AS a ";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2291,8 +2277,7 @@ async fn test_remove_unnecessary_sort_in_sub_query() -> Result<()> {
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let actual = execute_to_batches(&ctx, sql).await;
@@ -2321,7 +2306,7 @@ async fn test_window_agg_sort_orderby_reversed_partitionby_reversed_plan() -> Re
     FROM aggregate_test_100
     LIMIT 5";
 
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -2342,8 +2327,7 @@ async fn test_window_agg_sort_orderby_reversed_partitionby_reversed_plan() -> Re
     let actual_trim_last = &actual[..actual_len - 1];
     assert_eq!(
         expected, actual_trim_last,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let actual = execute_to_batches(&ctx, sql).await;

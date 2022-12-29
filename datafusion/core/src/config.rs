@@ -317,13 +317,13 @@ impl BuiltInConfigs {
                 small batches will be coalesced into larger batches. This is helpful when there \
                 are highly selective filters or joins that could produce tiny output batches. The \
                 target batch size is determined by the configuration setting \
-                '{}'.", OPT_COALESCE_TARGET_BATCH_SIZE),
+                '{OPT_COALESCE_TARGET_BATCH_SIZE}'."),
                 true,
             ),
              ConfigDefinition::new_u64(
                  OPT_COALESCE_TARGET_BATCH_SIZE,
                  format!("Target batch size when coalescing batches. Uses in conjunction with the \
-                          configuration setting '{}'.", OPT_COALESCE_BATCHES),
+                          configuration setting '{OPT_COALESCE_BATCHES}'."),
                  4096,
             ),
             ConfigDefinition::new_string(

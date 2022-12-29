@@ -596,7 +596,7 @@ impl TDigest {
 
         let max_size = match &state[0] {
             ScalarValue::UInt64(Some(v)) => *v as usize,
-            v => panic!("invalid max_size type {:?}", v),
+            v => panic!("invalid max_size type {v:?}"),
         };
 
         let centroids: Vec<_> = match &state[5] {
@@ -604,7 +604,7 @@ impl TDigest {
                 .chunks(2)
                 .map(|v| Centroid::new(cast_scalar_f64!(v[0]), cast_scalar_f64!(v[1])))
                 .collect(),
-            v => panic!("invalid centroids type {:?}", v),
+            v => panic!("invalid centroids type {v:?}"),
         };
 
         let max = cast_scalar_f64!(&state[3]);

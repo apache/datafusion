@@ -449,7 +449,7 @@ impl ExecutionPlan for AggregateExec {
                         .map(|(e, alias)| {
                             let e = e.to_string();
                             if &e != alias {
-                                format!("{} as {}", e, alias)
+                                format!("{e} as {alias}")
                             } else {
                                 e
                             }
@@ -468,7 +468,7 @@ impl ExecutionPlan for AggregateExec {
                                         let (e, alias) = &self.group_by.null_expr[idx];
                                         let e = e.to_string();
                                         if &e != alias {
-                                            format!("{} as {}", e, alias)
+                                            format!("{e} as {alias}")
                                         } else {
                                             e
                                         }
@@ -476,7 +476,7 @@ impl ExecutionPlan for AggregateExec {
                                         let (e, alias) = &self.group_by.expr[idx];
                                         let e = e.to_string();
                                         if &e != alias {
-                                            format!("{} as {}", e, alias)
+                                            format!("{e} as {alias}")
                                         } else {
                                             e
                                         }
@@ -484,7 +484,7 @@ impl ExecutionPlan for AggregateExec {
                                 })
                                 .collect::<Vec<String>>()
                                 .join(", ");
-                            format!("({})", terms)
+                            format!("({terms})")
                         })
                         .collect()
                 };
@@ -1032,8 +1032,7 @@ mod tests {
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Err(DataFusionError::Internal(format!(
-                "Children cannot be replaced in {:?}",
-                self
+                "Children cannot be replaced in {self:?}"
             )))
         }
 
@@ -1215,8 +1214,7 @@ mod tests {
                 if let Some(err) = err.downcast_ref::<DataFusionError>() {
                     assert!(
                         matches!(err, DataFusionError::ResourcesExhausted(_)),
-                        "Wrong inner error type: {}",
-                        err,
+                        "Wrong inner error type: {err}",
                     );
                 } else {
                     panic!("Wrong arrow error type: {err}")

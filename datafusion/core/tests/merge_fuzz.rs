@@ -140,7 +140,7 @@ async fn run_merge_test(input: Vec<Vec<RecordBatch>>) {
         let expected = partitions_to_sorted_vec(&input);
         let actual = batches_to_vec(&collected);
 
-        assert_eq!(expected, actual, "failure in @ batch_size {}", batch_size);
+        assert_eq!(expected, actual, "failure in @ batch_size {batch_size}");
     }
 }
 

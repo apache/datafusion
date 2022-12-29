@@ -163,8 +163,7 @@ fn swap(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
             _,
             JoinType::Right | JoinType::RightSemi | JoinType::RightAnti | JoinType::Full,
         ) => Err(DataFusionError::Internal(format!(
-            "{} join cannot be swapped for unbounded input.",
-            join_type
+            "{join_type} join cannot be swapped for unbounded input."
         ))),
         (PartitionMode::Partitioned, _) => {
             swap_hash_join(hash_join, PartitionMode::Partitioned)

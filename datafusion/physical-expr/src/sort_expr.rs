@@ -60,8 +60,7 @@ impl PhysicalSortExpr {
             ColumnarValue::Array(array) => array,
             ColumnarValue::Scalar(scalar) => {
                 return Err(DataFusionError::Plan(format!(
-                    "Sort operation is not applicable to scalar value {}",
-                    scalar
+                    "Sort operation is not applicable to scalar value {scalar}"
                 )));
             }
         };

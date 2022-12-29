@@ -618,15 +618,13 @@ impl LogicalPlan {
                     // convert id (in format $1, $2, ..) to idx (0, 1, ..)
                     let idx = id[1..].parse::<usize>().map_err(|e| {
                         DataFusionError::Internal(format!(
-                            "Failed to parse placeholder id: {}",
-                            e
+                            "Failed to parse placeholder id: {e}"
                         ))
                     })? - 1;
                     // value at the idx-th position in param_values should be the value for the placeholder
                     let value = self.param_values.get(idx).ok_or_else(|| {
                         DataFusionError::Internal(format!(
-                            "No value found for placeholder with id {}",
-                            id
+                            "No value found for placeholder with id {id}"
                         ))
                     })?;
                     // check if the data type of the value matches the data type of the placeholder
@@ -836,7 +834,7 @@ impl LogicalPlan {
                                     .map(|expr| expr.to_string())
                                     .collect::<Vec<_>>()
                                     .join(", ");
-                                format!("({})", item)
+                                format!("({item})")
                             })
                             .collect();
 
@@ -864,7 +862,7 @@ impl LogicalPlan {
                             _ => "".to_string(),
                         };
 
-                        write!(f, "TableScan: {}{}", table_name, projected_fields)?;
+                        write!(f, "TableScan: {table_name}{projected_fields}")?;
 
                         if !filters.is_empty() {
                             let mut full_filter = vec![];
@@ -888,22 +886,21 @@ impl LogicalPlan {
                             });
 
                             if !full_filter.is_empty() {
-                                write!(f, ", full_filters={:?}", full_filter)?;
+                                write!(f, ", full_filters={full_filter:?}")?;
                             };
                             if !partial_filter.is_empty() {
-                                write!(f, ", partial_filters={:?}", partial_filter)?;
+                                write!(f, ", partial_filters={partial_filter:?}")?;
                             }
                             if !unsupported_filters.is_empty() {
                                 write!(
                                     f,
-                                    ", unsupported_filters={:?}",
-                                    unsupported_filters
+                                    ", unsupported_filters={unsupported_filters:?}"
                                 )?;
                             }
                         }
 
                         if let Some(n) = fetch {
-                            write!(f, ", fetch={}", n)?;
+                            write!(f, ", fetch={n}")?;
                         }
 
                         Ok(())
@@ -914,18 +911,18 @@ impl LogicalPlan {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
-                            write!(f, "{:?}", expr_item)?;
+                            write!(f, "{expr_item:?}")?;
                         }
                         Ok(())
                     }
                     LogicalPlan::Filter(Filter {
                         predicate: ref expr,
                         ..
-                    }) => write!(f, "Filter: {:?}", expr),
+                    }) => write!(f, "Filter: {expr:?}"),
                     LogicalPlan::Window(Window {
                         ref window_expr, ..
                     }) => {
-                        write!(f, "WindowAggr: windowExpr=[{:?}]", window_expr)
+                        write!(f, "WindowAggr: windowExpr=[{window_expr:?}]")
                     }
                     LogicalPlan::Aggregate(Aggregate {
                         ref group_expr,
@@ -933,8 +930,7 @@ impl LogicalPlan {
                         ..
                     }) => write!(
                         f,
-                        "Aggregate: groupBy=[{:?}], aggr=[{:?}]",
-                        group_expr, aggr_expr
+                        "Aggregate: groupBy=[{group_expr:?}], aggr=[{aggr_expr:?}]"
                     ),
                     LogicalPlan::Sort(Sort { expr, fetch, .. }) => {
                         write!(f, "Sort: ")?;
@@ -942,10 +938,10 @@ impl LogicalPlan {
                             if i > 0 {
                                 write!(f, ", ")?;
                             }
-                            write!(f, "{:?}", expr_item)?;
+                            write!(f, "{expr_item:?}")?;
                         }
                         if let Some(a) = fetch {
-                            write!(f, ", fetch={}", a)?;
+                            write!(f, ", fetch={a}")?;
                         }
 
                         Ok(())
@@ -958,10 +954,10 @@ impl LogicalPlan {
                         ..
                     }) => {
                         let join_expr: Vec<String> =
-                            keys.iter().map(|(l, r)| format!("{} = {}", l, r)).collect();
+                            keys.iter().map(|(l, r)| format!("{l} = {r}")).collect();
                         let filter_expr = filter
                             .as_ref()
-                            .map(|expr| format!(" Filter: {}", expr))
+                            .map(|expr| format!(" Filter: {expr}"))
                             .unwrap_or_else(|| "".to_string());
                         match join_constraint {
                             JoinConstraint::On => {
@@ -991,14 +987,12 @@ impl LogicalPlan {
                         partitioning_scheme,
                         ..
                     }) => match partitioning_scheme {
-                        Partitioning::RoundRobinBatch(n) => write!(
-                            f,
-                            "Repartition: RoundRobinBatch partition_count={}",
-                            n
-                        ),
+                        Partitioning::RoundRobinBatch(n) => {
+                            write!(f, "Repartition: RoundRobinBatch partition_count={n}")
+                        }
                         Partitioning::Hash(expr, n) => {
                             let hash_expr: Vec<String> =
-                                expr.iter().map(|e| format!("{:?}", e)).collect();
+                                expr.iter().map(|e| format!("{e:?}")).collect();
                             write!(
                                 f,
                                 "Repartition: Hash({}) partition_count={}",
@@ -1008,7 +1002,7 @@ impl LogicalPlan {
                         }
                         Partitioning::DistributeBy(expr) => {
                             let dist_by_expr: Vec<String> =
-                                expr.iter().map(|e| format!("{:?}", e)).collect();
+                                expr.iter().map(|e| format!("{e:?}")).collect();
                             write!(
                                 f,
                                 "Repartition: DistributeBy({})",
@@ -1032,47 +1026,47 @@ impl LogicalPlan {
                         write!(f, "Subquery:")
                     }
                     LogicalPlan::SubqueryAlias(SubqueryAlias { ref alias, .. }) => {
-                        write!(f, "SubqueryAlias: {}", alias)
+                        write!(f, "SubqueryAlias: {alias}")
                     }
                     LogicalPlan::CreateExternalTable(CreateExternalTable {
                         ref name,
                         ..
                     }) => {
-                        write!(f, "CreateExternalTable: {:?}", name)
+                        write!(f, "CreateExternalTable: {name:?}")
                     }
                     LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                         name, ..
                     }) => {
-                        write!(f, "CreateMemoryTable: {:?}", name)
+                        write!(f, "CreateMemoryTable: {name:?}")
                     }
                     LogicalPlan::CreateView(CreateView { name, .. }) => {
-                        write!(f, "CreateView: {:?}", name)
+                        write!(f, "CreateView: {name:?}")
                     }
                     LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
                         schema_name,
                         ..
                     }) => {
-                        write!(f, "CreateCatalogSchema: {:?}", schema_name)
+                        write!(f, "CreateCatalogSchema: {schema_name:?}")
                     }
                     LogicalPlan::CreateCatalog(CreateCatalog {
                         catalog_name, ..
                     }) => {
-                        write!(f, "CreateCatalog: {:?}", catalog_name)
+                        write!(f, "CreateCatalog: {catalog_name:?}")
                     }
                     LogicalPlan::DropTable(DropTable {
                         name, if_exists, ..
                     }) => {
-                        write!(f, "DropTable: {:?} if not exist:={}", name, if_exists)
+                        write!(f, "DropTable: {name:?} if not exist:={if_exists}")
                     }
                     LogicalPlan::DropView(DropView {
                         name, if_exists, ..
                     }) => {
-                        write!(f, "DropView: {:?} if not exist:={}", name, if_exists)
+                        write!(f, "DropView: {name:?} if not exist:={if_exists}")
                     }
                     LogicalPlan::SetVariable(SetVariable {
                         variable, value, ..
                     }) => {
-                        write!(f, "SetVariable: set {:?} to {:?}", variable, value)
+                        write!(f, "SetVariable: set {variable:?} to {value:?}")
                     }
                     LogicalPlan::Distinct(Distinct { .. }) => {
                         write!(f, "Distinct:")
@@ -1084,7 +1078,7 @@ impl LogicalPlan {
                     LogicalPlan::Prepare(Prepare {
                         name, data_types, ..
                     }) => {
-                        write!(f, "Prepare: {:?} {:?} ", name, data_types)
+                        write!(f, "Prepare: {name:?} {data_types:?} ")
                     }
                 }
             }
@@ -1144,7 +1138,7 @@ impl Display for JoinType {
             JoinType::LeftAnti => "LeftAnti",
             JoinType::RightAnti => "RightAnti",
         };
-        write!(f, "{}", join_type)
+        write!(f, "{join_type}")
     }
 }
 
@@ -1361,8 +1355,7 @@ impl Filter {
         if let Ok(predicate_type) = predicate.get_type(input.schema()) {
             if predicate_type != DataType::Boolean {
                 return Err(DataFusionError::Plan(format!(
-                    "Cannot create filter with non-boolean predicate '{}' returning {}",
-                    predicate, predicate_type
+                    "Cannot create filter with non-boolean predicate '{predicate}' returning {predicate_type}"
                 )));
             }
         }
@@ -1371,9 +1364,8 @@ impl Filter {
         if let Expr::Alias(expr, alias) = predicate {
             return Err(DataFusionError::Plan(format!(
                 "Attempted to create Filter predicate with \
-                expression `{}` aliased as '{}'. Filter predicates should not be \
-                aliased.",
-                expr, alias
+                expression `{expr}` aliased as '{alias}'. Filter predicates should not be \
+                aliased."
             )));
         }
 
@@ -1793,12 +1785,12 @@ impl Display for PlanType {
         match self {
             PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
             PlanType::OptimizedLogicalPlan { optimizer_name } => {
-                write!(f, "logical_plan after {}", optimizer_name)
+                write!(f, "logical_plan after {optimizer_name}")
             }
             PlanType::FinalLogicalPlan => write!(f, "logical_plan"),
             PlanType::InitialPhysicalPlan => write!(f, "initial_physical_plan"),
             PlanType::OptimizedPhysicalPlan { optimizer_name } => {
-                write!(f, "physical_plan after {}", optimizer_name)
+                write!(f, "physical_plan after {optimizer_name}")
             }
             PlanType::FinalPhysicalPlan => write!(f, "physical_plan"),
         }

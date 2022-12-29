@@ -422,7 +422,7 @@ pub fn find_join_exprs(
             Operator::Eq => {}
             Operator::NotEq => {}
             _ => {
-                plan_err!(format!("can't optimize {} column comparison", op))?;
+                plan_err!(format!("can't optimize {op} column comparison"))?;
             }
         }
 
@@ -471,7 +471,7 @@ pub fn exprs_to_join_cols(
                     continue;
                 }
             }
-            _ => plan_err!(format!("Correlation operator unsupported: {}", op))?,
+            _ => plan_err!(format!("Correlation operator unsupported: {op}"))?,
         }
         let left = left.try_into_col()?;
         let right = right.try_into_col()?;

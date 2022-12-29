@@ -125,7 +125,7 @@ impl GroupedHashAggregateStream {
         timer.done();
 
         let reservation =
-            MemoryConsumer::new(format!("GroupedHashAggregateStream[{}]", partition))
+            MemoryConsumer::new(format!("GroupedHashAggregateStream[{partition}]"))
                 .register(context.memory_pool());
 
         let inner = GroupedHashAggregateStreamInner {

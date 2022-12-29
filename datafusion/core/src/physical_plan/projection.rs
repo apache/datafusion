@@ -248,7 +248,7 @@ impl ExecutionPlan for ProjectionExec {
                     .map(|(e, alias)| {
                         let e = e.to_string();
                         if &e != alias {
-                            format!("{} as {}", e, alias)
+                            format!("{e} as {alias}")
                         } else {
                             e
                         }

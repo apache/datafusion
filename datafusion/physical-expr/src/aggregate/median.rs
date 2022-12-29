@@ -134,8 +134,7 @@ impl Accumulator for MedianAccumulator {
                 ScalarValue::List(None, _) => {} // skip empty state
                 v => {
                     return Err(DataFusionError::Internal(format!(
-                        "unexpected state in median. Expected DataType::List, got {:?}",
-                        v
+                        "unexpected state in median. Expected DataType::List, got {v:?}"
                     )))
                 }
             }
@@ -181,8 +180,7 @@ impl Accumulator for MedianAccumulator {
                 ScalarValue::Float64(Some(v)) => ScalarValue::Float64(Some(v / 2.0)),
                 v => {
                     return Err(DataFusionError::Internal(format!(
-                        "Unsupported type in MedianAccumulator: {:?}",
-                        v
+                        "Unsupported type in MedianAccumulator: {v:?}"
                     )))
                 }
             }

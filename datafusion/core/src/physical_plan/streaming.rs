@@ -98,8 +98,7 @@ impl ExecutionPlan for StreamingTableExec {
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Err(DataFusionError::Internal(format!(
-            "Children cannot be replaced in {:?}",
-            self
+            "Children cannot be replaced in {self:?}"
         )))
     }
 

@@ -111,7 +111,7 @@ mod unix_test {
         let test_data = arrow_test_data();
         ctx.register_csv(
             "right",
-            &format!("{}/csv/aggregate_test_100.csv", test_data),
+            &format!("{test_data}/csv/aggregate_test_100.csv"),
             CsvReadOptions::new().schema(schema.as_ref()),
         )
         .await?;
@@ -194,7 +194,7 @@ mod unix_test {
                 if cnt % TEST_BATCH_SIZE == 0 {
                     thread_tx.send(Operation::Write).unwrap();
                 }
-                let line = format!("{},{}\n", string_col, cnt).to_owned();
+                let line = format!("{string_col},{cnt}\n").to_owned();
                 write_to_fifo(&first_file, &line, execution_start, broken_pipe_timeout)
                     .unwrap();
             }
