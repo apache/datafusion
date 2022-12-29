@@ -27,8 +27,8 @@ use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::{
-    Column, ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan,
-    Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
+    ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
 use arrow::array::Array;
 use arrow::compute::{concat, lexicographical_partition_ranges, SortColumn};
@@ -54,7 +54,7 @@ use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
 };
-use datafusion_physical_expr::{EquivalenceProperties, EquivalentClass, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use indexmap::IndexMap;
 use log::debug;
 
@@ -159,11 +159,12 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self.input.output_partitioning()
     }
 
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        Ok(children[0])
+    }
+
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        // This executor maintains input order, and it has a required input
-        // ordering. Therefore, output_ordering would be the same with
-        // `required_input_ordering`.
-        self.required_input_ordering()[0]
+        self.input().output_ordering()
     }
 
     fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
@@ -173,7 +174,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         if self.partition_keys.is_empty() {
-            debug!("No partition defined for WindowAggExec!!!");
+            debug!("No partition defined for BoundedWindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
             //TODO support PartitionCollections if there is no common partition columns in the window_expr
@@ -182,30 +183,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        // Although WindowAggExec does not change the equivalence properties from the input, but can not return the equivalence properties
-        // from the input directly, need to adjust the column index to align with the new schema.
-        let window_expr_len = self.window_expr.len();
-        let mut new_properties = EquivalenceProperties::new(self.schema());
-        let new_eq_classes = self
-            .input
-            .equivalence_properties()
-            .classes()
-            .iter()
-            .map(|prop| {
-                let new_head = Column::new(
-                    prop.head().name(),
-                    window_expr_len + prop.head().index(),
-                );
-                let new_others = prop
-                    .others()
-                    .iter()
-                    .map(|col| Column::new(col.name(), window_expr_len + col.index()))
-                    .collect::<Vec<_>>();
-                EquivalentClass::new(new_head, new_others)
-            })
-            .collect::<Vec<_>>();
-        new_properties.extend(new_eq_classes);
-        new_properties
+        self.input().equivalence_properties()
     }
 
     fn maintains_input_order(&self) -> bool {
@@ -276,12 +254,13 @@ impl ExecutionPlan for BoundedWindowAggExec {
         let win_cols = self.window_expr.len();
         let input_cols = self.input_schema.fields().len();
         // TODO stats: some windowing function will maintain invariants such as min, max...
-        let mut column_statistics = vec![ColumnStatistics::default(); win_cols];
+        let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
         if let Some(input_col_stats) = input_stat.column_statistics {
             column_statistics.extend(input_col_stats);
         } else {
             column_statistics.extend(vec![ColumnStatistics::default(); input_cols]);
         }
+        column_statistics.extend(vec![ColumnStatistics::default(); win_cols]);
         Statistics {
             is_exact: input_stat.is_exact,
             num_rows: input_stat.num_rows,
@@ -295,11 +274,16 @@ fn create_schema(
     input_schema: &Schema,
     window_expr: &[Arc<dyn WindowExpr>],
 ) -> Result<Schema> {
-    let mut fields = window_expr
-        .iter()
-        .map(|e| e.field())
-        .collect::<Result<Vec<_>>>()?;
+    let mut fields = Vec::with_capacity(input_schema.fields().len() + window_expr.len());
     fields.extend_from_slice(input_schema.fields());
+    // append results to the schema
+    window_expr
+        .iter()
+        .map(|e| {
+            fields.push(e.field()?);
+            Ok(())
+        })
+        .collect::<Result<Vec<_>>>()?;
     Ok(Schema::new(fields))
 }
 
@@ -351,14 +335,14 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
         if n_out == 0 {
             Ok(None)
         } else {
-            self.window_agg_states
+            self.input_buffer_record_batch
+                .columns()
                 .iter()
-                .map(|elem| get_aggregate_result_out_column(elem, n_out))
+                .map(|elem| Ok(elem.slice(0, n_out)))
                 .chain(
-                    self.input_buffer_record_batch
-                        .columns()
+                    self.window_agg_states
                         .iter()
-                        .map(|elem| Ok(elem.slice(0, n_out))),
+                        .map(|elem| get_aggregate_result_out_column(elem, n_out)),
                 )
                 .collect::<Result<Vec<_>>>()
                 .map(Some)
