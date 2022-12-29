@@ -277,10 +277,10 @@ fn create_schema(
     input_schema: &Schema,
     window_expr: &[Arc<dyn WindowExpr>],
 ) -> Result<Schema> {
-    let mut fields = Vec::with_capacity(input_schema.fields().len() + window_expr.len());
-    for expr in window_expr {
-        fields.push(expr.field()?);
-    }
+    let mut fields = window_expr
+        .iter()
+        .map(|e| e.field())
+        .collect::<Result<Vec<_>>>()?;
     fields.extend_from_slice(input_schema.fields());
     Ok(Schema::new(fields))
 }

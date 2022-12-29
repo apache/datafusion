@@ -22,7 +22,7 @@
 use crate::physical_plan::windows::BoundedWindowAggExec;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::{
-    error::Result, physical_optimizer::PhysicalOptimizerRule,
+    config::ConfigOptions, error::Result, physical_optimizer::PhysicalOptimizerRule,
     physical_plan::rewrite::TreeNodeRewritable,
 };
 use datafusion_expr::WindowFrameUnits;
@@ -44,7 +44,7 @@ impl PhysicalOptimizerRule for UseBoundedWindowAggExec {
     fn optimize(
         &self,
         plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
-        _config: &crate::execution::context::SessionConfig,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
         plan.transform_up(&|plan| {
             if let Some(window_agg_exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
