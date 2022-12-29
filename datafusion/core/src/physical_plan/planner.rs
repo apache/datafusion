@@ -448,7 +448,7 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
             expr,
             input_dfschema,
             input_schema,
-            &session_state.execution_props,
+            session_state.execution_props(),
         )
     }
 }
@@ -527,8 +527,8 @@ impl DefaultPhysicalPlanner {
                     let partition_keys = window_expr_common_partition_keys(window_expr)?;
 
                     let can_repartition = !partition_keys.is_empty()
-                        && session_state.config.target_partitions() > 1
-                        && session_state.config.repartition_window_functions();
+                        && session_state.config().target_partitions() > 1
+                        && session_state.config().repartition_window_functions();
 
                     let physical_partition_keys = if can_repartition
                     {
@@ -596,7 +596,7 @@ impl DefaultPhysicalPlanner {
                                         descending: !*asc,
                                         nulls_first: *nulls_first,
                                     },
-                                    &session_state.execution_props,
+                                    session_state.execution_props(),
                                 ),
                                 _ => unreachable!(),
                             })
@@ -612,7 +612,7 @@ impl DefaultPhysicalPlanner {
                                 e,
                                 logical_input_schema,
                                 &physical_input_schema,
-                                &session_state.execution_props,
+                                session_state.execution_props(),
                             )
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -649,7 +649,7 @@ impl DefaultPhysicalPlanner {
                                 e,
                                 logical_input_schema,
                                 &physical_input_schema,
-                                &session_state.execution_props,
+                                session_state.execution_props(),
                             )
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -666,8 +666,8 @@ impl DefaultPhysicalPlanner {
                     let final_group: Vec<Arc<dyn PhysicalExpr>> = initial_aggr.output_group_expr();
 
                     let can_repartition = !groups.is_empty()
-                        && session_state.config.target_partitions() > 1
-                        && session_state.config.repartition_aggregations();
+                        && session_state.config().target_partitions() > 1
+                        && session_state.config().repartition_aggregations();
 
                     let (initial_aggr, next_partition_mode): (
                         Arc<dyn ExecutionPlan>,
@@ -833,7 +833,7 @@ impl DefaultPhysicalPlanner {
                                     descending: !*asc,
                                     nulls_first: *nulls_first,
                                 },
-                                &session_state.execution_props,
+                                session_state.execution_props(),
                             ),
                             _ => Err(DataFusionError::Plan(
                                 "Sort only accepts sort expressions".to_string(),
@@ -982,7 +982,7 @@ impl DefaultPhysicalPlanner {
                                 expr,
                                 &filter_df_schema,
                                 &filter_schema,
-                                &session_state.execution_props,
+                                session_state.execution_props(),
                             )?;
                             let column_indices = join_utils::JoinFilter::build_column_indices(left_field_indices, right_field_indices);
 
@@ -995,7 +995,7 @@ impl DefaultPhysicalPlanner {
                         _ => None
                     };
 
-                    let prefer_hash_join = session_state.config.config_options()
+                    let prefer_hash_join = session_state.config().config_options()
                         .get_bool(OPT_PREFER_HASH_JOIN)
                         .unwrap_or_default();
                     if join_on.is_empty() {
@@ -1007,8 +1007,8 @@ impl DefaultPhysicalPlanner {
                             join_filter,
                             join_type,
                         )?))
-                    } else if session_state.config.target_partitions() > 1
-                        && session_state.config.repartition_joins()
+                    } else if session_state.config().target_partitions() > 1
+                        && session_state.config().repartition_joins()
                         && !prefer_hash_join
                     {
                         // Use SortMergeJoin if hash join is not preferred
@@ -1027,11 +1027,11 @@ impl DefaultPhysicalPlanner {
                                 *null_equals_null,
                             )?))
                         }
-                    } else if session_state.config.target_partitions() > 1
-                        && session_state.config.repartition_joins()
+                    } else if session_state.config().target_partitions() > 1
+                        && session_state.config().repartition_joins()
                         && prefer_hash_join {
                          let partition_mode = {
-                            if session_state.config.collect_statistics() {
+                            if session_state.config().collect_statistics() {
                                 PartitionMode::Auto
                             } else {
                                 PartitionMode::Partitioned
@@ -1454,7 +1454,7 @@ fn get_null_physical_expr_pair(
         expr,
         input_dfschema,
         input_schema,
-        &session_state.execution_props,
+        session_state.execution_props(),
     )?;
     let physical_name = physical_name(&expr.clone())?;
 
@@ -1475,7 +1475,7 @@ fn get_physical_expr_pair(
         expr,
         input_dfschema,
         input_schema,
-        &session_state.execution_props,
+        session_state.execution_props(),
     )?;
     let physical_name = physical_name(expr)?;
     Ok((physical_expr, physical_name))
@@ -1716,7 +1716,6 @@ impl DefaultPhysicalPlanner {
             let mut stringified_plans = vec![];
 
             if !session_state
-                .config
                 .config_options()
                 .get_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY)
                 .unwrap_or_default()
@@ -1727,7 +1726,6 @@ impl DefaultPhysicalPlanner {
             }
 
             if !session_state
-                .config
                 .config_options()
                 .get_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY)
                 .unwrap_or_default()
@@ -1773,7 +1771,7 @@ impl DefaultPhysicalPlanner {
     where
         F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
     {
-        let optimizers = &session_state.physical_optimizers;
+        let optimizers = session_state.physical_optimizers();
         debug!(
             "Input physical plan:\n{}\n",
             displayable(plan.as_ref()).indent()
@@ -1844,15 +1842,14 @@ mod tests {
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
-        let config = SessionConfig::new();
+        let config = SessionConfig::new().with_target_partitions(4);
         // TODO we should really test that no optimizer rules are failing here
         // let config = config.set_bool(crate::config::OPT_OPTIMIZER_SKIP_FAILED_RULES, false);
         SessionState::with_config_rt(config, runtime)
     }
 
     async fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut session_state = make_session_state();
-        session_state.config = session_state.config.with_target_partitions(4);
+        let session_state = make_session_state();
         // optimize the logical plan
         let logical_plan = session_state.optimize(logical_plan)?;
         let planner = DefaultPhysicalPlanner::default();

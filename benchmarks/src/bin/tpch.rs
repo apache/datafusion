@@ -409,7 +409,7 @@ async fn get_table(
     let options = ListingOptions::new(format)
         .with_file_extension(extension)
         .with_target_partitions(target_partitions)
-        .with_collect_stat(state.config.collect_statistics());
+        .with_collect_stat(state.config().collect_statistics());
 
     let table_path = ListingTableUrl::parse(path)?;
     let config = ListingTableConfig::new(table_path).with_listing_options(options);
