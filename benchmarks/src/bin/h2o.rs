@@ -24,7 +24,7 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::datasource::MemTable;
-use datafusion::prelude::{CsvReadOptions, SessionConfig};
+use datafusion::prelude::CsvReadOptions;
 use datafusion::{arrow::util::pretty, error::Result, prelude::SessionContext};
 use std::path::PathBuf;
 use std::sync::Arc;

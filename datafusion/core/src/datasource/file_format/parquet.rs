@@ -85,7 +85,7 @@ impl ParquetFormat {
     /// Return true if pruning is enabled
     pub fn enable_pruning(&self, config_options: &ConfigOptions) -> bool {
         self.enable_pruning
-            .unwrap_or(config_options.built_in.execution.parquet.enable_pruning)
+            .unwrap_or(config_options.built_in.execution.parquet.pruning)
     }
 
     /// Provide a hint to the size of the file metadata. If a hint is provided

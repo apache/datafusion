@@ -103,9 +103,10 @@ query R
 SHOW ALL
 ----
 datafusion.catalog.create_default_catalog_and_schema true
+datafusion.catalog.format NULL
+datafusion.catalog.has_header false
 datafusion.catalog.information_schema true
 datafusion.catalog.location NULL
-datafusion.catalog.type NULL
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.coalesce_target_batch_size 4096

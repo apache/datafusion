@@ -127,10 +127,6 @@ config_namespace! {
         /// according to this time zone, and then extract the hour
         pub time_zone: Option<String>, default = Some("+00:00".into())
 
-        /// When set to true, the physical plan optimizer will try to add round robin
-        /// repartition to increase parallelism to leverage more CPU cores
-        pub round_robin_repartition: bool, default = true
-
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
     }
@@ -146,7 +142,7 @@ config_namespace! {
         /// If true, the parquet reader attempts to skip entire row groups based
         /// on the predicate in the query and the metadata (min/max values) stored in
         /// the parquet file
-        pub enable_pruning: bool, default = true
+        pub pruning: bool, default = true
 
         /// If true, the parquet reader skip the optional embedded metadata that may be in
         /// the file Schema. This setting can help avoid schema conflicts when querying
@@ -173,6 +169,10 @@ config_namespace! {
 config_namespace! {
     /// Options related to query optimization
     pub struct OptimizerOptions {
+        /// When set to true, the physical plan optimizer will try to add round robin
+        /// repartition to increase parallelism to leverage more CPU cores
+        pub enable_round_robin_repartition: bool, default = true
+
         /// When set to true, the optimizer will insert filters before a join between
         /// a nullable and non-nullable column to filter out nulls on the nullable side. This
         /// filter can add additional overhead when the file format does not fully support

@@ -1261,13 +1261,13 @@ impl SessionConfig {
 
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
     pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
-        self.options.built_in.execution.parquet.enable_pruning = enabled;
+        self.options.built_in.execution.parquet.pruning = enabled;
         self
     }
 
     /// Returns true if pruning predicate should be used to skip parquet row groups
     pub fn parquet_pruning(&self) -> bool {
-        self.options.built_in.execution.parquet.enable_pruning
+        self.options.built_in.execution.parquet.pruning
     }
 
     /// Enables or disables the collection of statistics after listing files
@@ -1464,7 +1464,7 @@ impl SessionState {
         //      - it's conflicted with some parts of the BasicEnforcement, since it will
         //      introduce additional repartitioning while the BasicEnforcement aims at
         //      reducing unnecessary repartitioning.
-        if config.options.built_in.execution.round_robin_repartition {
+        if config.options.built_in.optimizer.enable_round_robin_repartition {
             physical_optimizers.push(Arc::new(Repartition::new()));
         }
         //- Currently it will depend on the partition number to decide whether to change the
