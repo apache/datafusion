@@ -677,7 +677,7 @@ mod tests {
             vec![
                 "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
                 "  FilterExec: NOT non_nullable_col@1",
-                "    SortExec: [non_nullable_col@2 ASC NULLS LAST]",
+                "    SortExec: [non_nullable_col@1 ASC NULLS LAST]",
                 "      WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
                 "        SortExec: [non_nullable_col@1 DESC]",
                 "          MemoryExec: partitions=0, partition_sizes=[]",
