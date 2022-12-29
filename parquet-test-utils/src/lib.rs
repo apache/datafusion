@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion::common::ToDFSchema;
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::error::Result;
@@ -57,12 +58,11 @@ pub struct ParquetScanOptions {
 impl ParquetScanOptions {
     /// Returns a [`SessionConfig`] with the given options
     pub fn config(&self) -> SessionConfig {
-        let mut config = SessionConfig::new();
-        let mut parquet = &mut config.config_options_mut().built_in.execution.parquet;
-        parquet.pushdown_filters = self.pushdown_filters;
-        parquet.reorder_filters = self.reorder_filters;
-        parquet.enable_page_index = self.enable_page_index;
-        config
+        let mut config = ConfigOptions::new();
+        config.built_in.execution.parquet.pushdown_filters = self.pushdown_filters;
+        config.built_in.execution.parquet.reorder_filters = self.reorder_filters;
+        config.built_in.execution.parquet.enable_page_index = self.enable_page_index;
+        config.into()
     }
 }
 

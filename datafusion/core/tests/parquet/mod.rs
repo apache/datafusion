@@ -139,12 +139,8 @@ impl ContextWithParquet {
         let file = match unit {
             Unit::RowGroup => make_test_file_rg(scenario).await,
             Unit::Page => {
-                config
-                    .config_options_mut()
-                    .built_in
-                    .execution
-                    .parquet
-                    .enable_page_index = true;
+                let config = config.config_options_mut();
+                config.built_in.execution.parquet.enable_page_index = true;
                 make_test_file_page(scenario).await
             }
         };

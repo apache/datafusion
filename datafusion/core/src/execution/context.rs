@@ -1131,10 +1131,7 @@ impl SessionConfig {
 
     /// Create an execution config with config options read from the environment
     pub fn from_env() -> Result<Self> {
-        Ok(Self {
-            options: ConfigOptions::from_env()?,
-            ..Default::default()
-        })
+        Ok(ConfigOptions::from_env()?.into())
     }
 
     /// Set a configuration option
@@ -1295,7 +1292,7 @@ impl SessionConfig {
         let mut map = HashMap::new();
         // copy configs from config_options
         for entry in self.options.entries() {
-            map.insert(entry.key, entry.value.unwrap_or_else(Default::default));
+            map.insert(entry.key, entry.value.unwrap_or_default());
         }
 
         map
@@ -1381,6 +1378,15 @@ impl SessionConfig {
             .get(&id)
             .cloned()
             .map(|ext| Arc::downcast(ext).expect("TypeId unique"))
+    }
+}
+
+impl From<ConfigOptions> for SessionConfig {
+    fn from(options: ConfigOptions) -> Self {
+        Self {
+            options,
+            ..Default::default()
+        }
     }
 }
 
@@ -1837,15 +1843,15 @@ impl TaskContext {
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
-        let mut session_config = SessionConfig::new();
+        let mut config = ConfigOptions::new();
         for (k, v) in task_props {
-            let _ = session_config.config_options_mut().set(&k, &v);
+            let _ = config.set(&k, &v);
         }
 
         Self {
             task_id: Some(task_id),
             session_id,
-            session_config,
+            session_config: config.into(),
             scalar_functions,
             aggregate_functions,
             runtime,

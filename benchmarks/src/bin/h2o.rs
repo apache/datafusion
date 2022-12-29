@@ -18,6 +18,7 @@
 //! DataFusion h2o benchmarks
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -63,10 +64,10 @@ async fn main() -> Result<()> {
 
 async fn group_by(opt: &GroupBy) -> Result<()> {
     let path = opt.path.to_str().unwrap();
-    let mut config = SessionConfig::from_env()?;
-    config.config_options_mut().built_in.execution.batch_size = 65535;
+    let mut config = ConfigOptions::from_env()?;
+    config.built_in.execution.batch_size = 65535;
 
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::with_config(config.into());
 
     let schema = Schema::new(vec![
         Field::new("id1", DataType::Utf8, false),

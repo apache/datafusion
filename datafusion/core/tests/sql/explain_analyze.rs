@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use datafusion::config::ConfigOptions;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 
 #[tokio::test]
@@ -847,13 +848,9 @@ async fn csv_explain_analyze_verbose() {
 
 #[tokio::test]
 async fn explain_logical_plan_only() {
-    let mut config = SessionConfig::new();
-    config
-        .config_options_mut()
-        .built_in
-        .explain
-        .logical_plan_only = true;
-    let ctx = SessionContext::with_config(config);
+    let mut config = ConfigOptions::new();
+    config.built_in.explain.logical_plan_only = true;
+    let ctx = SessionContext::with_config(config.into());
     let sql = "EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c3)";
     let actual = execute(&ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
@@ -871,13 +868,9 @@ async fn explain_logical_plan_only() {
 
 #[tokio::test]
 async fn explain_physical_plan_only() {
-    let mut config = SessionConfig::new();
-    config
-        .config_options_mut()
-        .built_in
-        .explain
-        .physical_plan_only = true;
-    let ctx = SessionContext::with_config(config);
+    let mut config = ConfigOptions::new();
+    config.built_in.explain.physical_plan_only = true;
+    let ctx = SessionContext::with_config(config.into());
     let sql = "EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c3)";
     let actual = execute(&ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
@@ -895,13 +888,9 @@ async fn explain_physical_plan_only() {
 #[tokio::test]
 async fn explain_nested() {
     async fn test_nested_explain(explain_phy_plan_flag: bool) {
-        let mut config = SessionConfig::new();
-        config
-            .config_options_mut()
-            .built_in
-            .explain
-            .physical_plan_only = explain_phy_plan_flag;
-        let ctx = SessionContext::with_config(config);
+        let mut config = ConfigOptions::new();
+        config.built_in.explain.physical_plan_only = explain_phy_plan_flag;
+        let ctx = SessionContext::with_config(config.into());
         let sql = "EXPLAIN explain select 1";
         let dataframe = ctx.sql(sql).await.unwrap();
         let err = dataframe.create_physical_plan().await.unwrap_err();

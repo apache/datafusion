@@ -308,24 +308,21 @@ pub fn concat_batches(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConfigOptions;
     use crate::datasource::MemTable;
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::{memory::MemoryExec, repartition::RepartitionExec};
-    use crate::prelude::{SessionConfig, SessionContext};
+    use crate::prelude::SessionContext;
     use crate::test::create_vec_batches;
     use arrow::datatypes::{DataType, Field, Schema};
 
     #[tokio::test]
     async fn test_custom_batch_size() -> Result<()> {
-        let mut config = SessionConfig::new();
-        config
-            .config_options_mut()
-            .built_in
-            .execution
-            .coalesce_target_batch_size = 1234;
+        let mut config = ConfigOptions::new();
+        config.built_in.execution.coalesce_target_batch_size = 1234;
 
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::with_config(config.into());
         let plan = create_physical_plan(ctx).await?;
         let projection = plan.as_any().downcast_ref::<ProjectionExec>().unwrap();
         let coalesce = projection
@@ -339,14 +336,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_disable_coalesce() -> Result<()> {
-        let mut config = SessionConfig::new();
-        config
-            .config_options_mut()
-            .built_in
-            .execution
-            .coalesce_batches = false;
+        let mut config = ConfigOptions::new();
+        config.built_in.execution.coalesce_batches = false;
 
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::with_config(config.into());
         let plan = create_physical_plan(ctx).await?;
         let projection = plan.as_any().downcast_ref::<ProjectionExec>().unwrap();
         // projection should directly wrap filter with no coalesce step
