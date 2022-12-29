@@ -308,7 +308,7 @@ pub struct SortedPartitionByBoundedWindowStream {
     input: SendableRecordBatchStream,
     /// The record batch executor receives as input (i.e. the columns needed
     /// while calculating aggregation results).
-    input_buffer_record_batch: RecordBatch,
+    input_buffer: RecordBatch,
     /// We separate `input_buffer_record_batch` based on partitions (as
     /// determined by PARTITION BY columns) and store them per partition
     /// in `partition_batches`. We use this variable when calculating results
@@ -317,7 +317,7 @@ pub struct SortedPartitionByBoundedWindowStream {
     // Note that we could keep record batches for each window expression in
     // `PartitionWindowAggStates`. However, this would use more memory (as
     // many times as the number of window expressions).
-    partition_batches: PartitionBatches,
+    partition_buffers: PartitionBatches,
     /// An executor can run multiple window expressions if the PARTITION BY
     /// and ORDER BY sections are same. We keep state of the each window
     /// expression inside `window_agg_states`.
@@ -335,7 +335,7 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
         if n_out == 0 {
             Ok(None)
         } else {
-            self.input_buffer_record_batch
+            self.input_buffer
                 .columns()
                 .iter()
                 .map(|elem| Ok(elem.slice(0, n_out)))
@@ -384,7 +384,7 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
                     partition_range.end - partition_range.start,
                 );
                 if let Some(partition_batch_state) =
-                    self.partition_batches.get_mut(&partition_row)
+                    self.partition_buffers.get_mut(&partition_row)
                 {
                     partition_batch_state.record_batch = combine_batches(
                         &[&partition_batch_state.record_batch, &partition_batch],
@@ -400,30 +400,26 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
                         record_batch: partition_batch,
                         is_end: false,
                     };
-                    self.partition_batches
+                    self.partition_buffers
                         .insert(partition_row, partition_batch_state);
                 };
             }
         }
-        let n_partitions = self.partition_batches.len();
+        let n_partitions = self.partition_buffers.len();
         for (idx, (_, partition_batch_state)) in
-            self.partition_batches.iter_mut().enumerate()
+            self.partition_buffers.iter_mut().enumerate()
         {
             partition_batch_state.is_end |= idx < n_partitions - 1;
         }
-        self.input_buffer_record_batch = if self.input_buffer_record_batch.num_rows() == 0
-        {
+        self.input_buffer = if self.input_buffer.num_rows() == 0 {
             record_batch
         } else {
-            combine_batches(
-                &[&self.input_buffer_record_batch, &record_batch],
-                self.input.schema(),
-            )?
-            .ok_or_else(|| {
-                DataFusionError::Execution(
-                    "Should contain at least one entry".to_string(),
-                )
-            })?
+            combine_batches(&[&self.input_buffer, &record_batch], self.input.schema())?
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "Should contain at least one entry".to_string(),
+                    )
+                })?
         };
 
         Ok(())
@@ -456,8 +452,8 @@ impl SortedPartitionByBoundedWindowStream {
         Self {
             schema,
             input,
-            input_buffer_record_batch: empty_batch,
-            partition_batches: IndexMap::new(),
+            input_buffer: empty_batch,
+            partition_buffers: IndexMap::new(),
             window_agg_states: state,
             finished: false,
             window_expr,
@@ -471,7 +467,7 @@ impl SortedPartitionByBoundedWindowStream {
         for (cur_window_expr, state) in
             self.window_expr.iter().zip(&mut self.window_agg_states)
         {
-            cur_window_expr.evaluate_stateful(&self.partition_batches, state)?;
+            cur_window_expr.evaluate_stateful(&self.partition_buffers, state)?;
         }
 
         let schema = self.schema.clone();
@@ -502,7 +498,7 @@ impl SortedPartitionByBoundedWindowStream {
             Some(Err(e)) => Err(e),
             None => {
                 self.finished = true;
-                for (_, partition_batch_state) in self.partition_batches.iter_mut() {
+                for (_, partition_batch_state) in self.partition_buffers.iter_mut() {
                     partition_batch_state.is_end = true;
                 }
                 self.compute_aggregates()
@@ -547,7 +543,7 @@ impl SortedPartitionByBoundedWindowStream {
         // Remove partitions which we know already ended (is_end flag is true).
         // Since the retain method preserves insertion order, we still have
         // ordering in between partitions after removal.
-        self.partition_batches
+        self.partition_buffers
             .retain(|_, partition_batch_state| !partition_batch_state.is_end);
 
         // The data in `self.partition_batches` is used by all window expressions.
@@ -580,7 +576,7 @@ impl SortedPartitionByBoundedWindowStream {
         // Retract no longer needed parts during window calculations from partition batch:
         for (partition_row, n_prune) in n_prune_each_partition.iter() {
             let partition_batch_state = self
-                .partition_batches
+                .partition_buffers
                 .get_mut(partition_row)
                 .ok_or_else(err)?;
             let batch = &partition_batch_state.record_batch;
@@ -606,15 +602,15 @@ impl SortedPartitionByBoundedWindowStream {
     /// Prunes the section of the input batch whose aggregate results
     /// are calculated and emitted.
     fn prune_input_batch(&mut self, n_out: usize) -> Result<()> {
-        let n_to_keep = self.input_buffer_record_batch.num_rows() - n_out;
+        let n_to_keep = self.input_buffer.num_rows() - n_out;
         let batch_to_keep = self
-            .input_buffer_record_batch
+            .input_buffer
             .columns()
             .iter()
             .map(|elem| elem.slice(n_out, n_to_keep))
             .collect::<Vec<_>>();
-        self.input_buffer_record_batch =
-            RecordBatch::try_new(self.input_buffer_record_batch.schema(), batch_to_keep)?;
+        self.input_buffer =
+            RecordBatch::try_new(self.input_buffer.schema(), batch_to_keep)?;
         Ok(())
     }
 
