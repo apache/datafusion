@@ -20,30 +20,27 @@ use std::env;
 
 #[test]
 fn get_config_bool_from_env() {
-    let config_key = "datafusion.optimizer.filter_null_join_keys";
     let env_key = "DATAFUSION_OPTIMIZER_FILTER_NULL_JOIN_KEYS";
     env::set_var(env_key, "true");
-    let config = ConfigOptions::from_env();
+    let config = ConfigOptions::from_env().unwrap();
     env::remove_var(env_key);
-    assert!(config.get_bool(config_key).unwrap_or_default());
+    assert!(config.built_in.optimizer.filter_null_join_keys);
 }
 
 #[test]
 fn get_config_int_from_env() {
-    let config_key = "datafusion.execution.batch_size";
     let env_key = "DATAFUSION_EXECUTION_BATCH_SIZE";
     env::set_var(env_key, "4096");
-    let config = ConfigOptions::from_env();
+    let config = ConfigOptions::from_env().unwrap();
     env::remove_var(env_key);
-    assert_eq!(config.get_u64(config_key).unwrap_or_default(), 4096);
+    assert_eq!(config.built_in.execution.batch_size, 4096);
 }
 
 #[test]
 fn get_config_int_from_env_invalid() {
-    let config_key = "datafusion.execution.coalesce_target_batch_size";
     let env_key = "DATAFUSION_EXECUTION_COALESCE_TARGET_BATCH_SIZE";
     env::set_var(env_key, "abc");
-    let config = ConfigOptions::from_env();
+    let config = ConfigOptions::from_env().unwrap();
     env::remove_var(env_key);
-    assert_eq!(config.get_u64(config_key).unwrap_or_default(), 4096); // set to its default value
+    assert_eq!(config.built_in.execution.coalesce_target_batch_size, 4096); // set to its default value
 }

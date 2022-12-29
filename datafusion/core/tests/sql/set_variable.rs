@@ -236,7 +236,7 @@ async fn set_u64_variable_bad_value() {
 
     assert_eq!(
         err.to_string(),
-        "Execution error: Failed to parse -1 as u64"
+        "External error: invalid digit found in string"
     );
 
     let err = plan_and_collect(&ctx, "SET datafusion.execution.batch_size to abc")

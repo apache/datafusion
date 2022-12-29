@@ -63,7 +63,8 @@ async fn main() -> Result<()> {
 
 async fn group_by(opt: &GroupBy) -> Result<()> {
     let path = opt.path.to_str().unwrap();
-    let config = SessionConfig::from_env().with_batch_size(65535);
+    let mut config = SessionConfig::from_env()?;
+    config.config_options_mut().built_in.execution.batch_size = 65535;
 
     let ctx = SessionContext::with_config(config);
 

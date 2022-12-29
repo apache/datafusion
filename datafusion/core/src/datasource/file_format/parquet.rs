@@ -40,9 +40,7 @@ use crate::arrow::array::{
 };
 use crate::arrow::datatypes::{DataType, Field};
 use crate::config::ConfigOptions;
-use crate::config::OPT_PARQUET_ENABLE_PRUNING;
-use crate::config::OPT_PARQUET_METADATA_SIZE_HINT;
-use crate::config::OPT_PARQUET_SKIP_METADATA;
+
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -87,8 +85,7 @@ impl ParquetFormat {
     /// Return true if pruning is enabled
     pub fn enable_pruning(&self, config_options: &ConfigOptions) -> bool {
         self.enable_pruning
-            .or_else(|| config_options.get_bool(OPT_PARQUET_ENABLE_PRUNING))
-            .unwrap_or(true)
+            .unwrap_or_else(|| config_options.built_in.execution.parquet.enable_pruning)
     }
 
     /// Provide a hint to the size of the file metadata. If a hint is provided
@@ -105,7 +102,7 @@ impl ParquetFormat {
     /// Return the metadata size hint if set
     pub fn metadata_size_hint(&self, config_options: &ConfigOptions) -> Option<usize> {
         self.metadata_size_hint
-            .or_else(|| config_options.get_usize(OPT_PARQUET_METADATA_SIZE_HINT))
+            .or_else(|| config_options.built_in.execution.parquet.metadata_size_hint)
     }
 
     /// Tell the parquet reader to skip any metadata that may be in
@@ -122,8 +119,7 @@ impl ParquetFormat {
     /// schema merging.
     pub fn skip_metadata(&self, config_options: &ConfigOptions) -> bool {
         self.skip_metadata
-            .or_else(|| config_options.get_bool(OPT_PARQUET_SKIP_METADATA))
-            .unwrap_or(true)
+            .unwrap_or_else(|| config_options.built_in.execution.parquet.skip_metadata)
     }
 }
 

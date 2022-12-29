@@ -17,478 +17,249 @@
 
 //! DataFusion Configuration Options
 
-use arrow::datatypes::DataType;
-use datafusion_common::ScalarValue;
-use itertools::Itertools;
-use log::warn;
-use std::collections::{BTreeMap, HashMap};
-use std::env;
-use std::fmt::{Debug, Formatter};
+use datafusion_common::{DataFusionError, Result};
+use std::any::Any;
+use std::collections::BTreeMap;
 
-/*-************************************
-*  Catalog related
-**************************************/
-/// Configuration option "datafusion.catalog.create_default_catalog_and_schema"
-pub const OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA: &str =
-    "datafusion.catalog.create_default_catalog_and_schema";
+macro_rules! config_namespace {
+    (
+     $(#[$meta:meta])*
+     $vis:vis struct $struct_name:ident {
+        $(
+        $(#[doc = $d:tt])*
+        $field_vis:vis $field_name:ident : $field_type:ty, default = $default:expr
+        )*$(,)*
+    }
+    ) => {
 
-/// Configuration option "datafusion.catalog.information_schema"
-pub const OPT_INFORMATION_SCHEMA: &str = "datafusion.catalog.information_schema";
+        #[derive(Debug, Clone, PartialEq)]
+        #[non_exhaustive]
+        $vis struct $struct_name{
+            $(
+            $(#[doc = $d])*
+            $field_vis $field_name : $field_type,
+            )*
+        }
 
-/// Location scanned to load tables for `default` schema
-pub const OPT_CATALOG_LOCATION: &str = "datafusion.catalog.location";
-
-/// Type of `TableProvider` to use when loading `default` schema
-pub const OPT_CATALOG_TYPE: &str = "datafusion.catalog.type";
-
-/*-************************************
-*  Execution related
-**************************************/
-/// Configuration option "datafusion.execution.batch_size"
-pub const OPT_BATCH_SIZE: &str = "datafusion.execution.batch_size";
-
-/// Configuration option "datafusion.execution.coalesce_batches"
-pub const OPT_COALESCE_BATCHES: &str = "datafusion.execution.coalesce_batches";
-
-/// Configuration option "datafusion.execution.coalesce_target_batch_size"
-pub const OPT_COALESCE_TARGET_BATCH_SIZE: &str =
-    "datafusion.execution.coalesce_target_batch_size";
-
-/// Configuration option "datafusion.execution.collect_statistics"
-pub const OPT_COLLECT_STATISTICS: &str = "datafusion.execution.collect_statistics";
-
-/// Configuration option "datafusion.execution.target_partitions"
-pub const OPT_TARGET_PARTITIONS: &str = "datafusion.execution.target_partitions";
-
-/// Configuration option "datafusion.execution.time_zone"
-pub const OPT_TIME_ZONE: &str = "datafusion.execution.time_zone";
-
-/*-************************************
-*  Execution parquet related
-**************************************/
-/// Configuration option "datafusion.execution.parquet.enable_page_index"
-pub const OPT_PARQUET_ENABLE_PAGE_INDEX: &str =
-    "datafusion.execution.parquet.enable_page_index";
-
-/// Configuration option "datafusion.execution.parquet.pruning"
-pub const OPT_PARQUET_ENABLE_PRUNING: &str = "datafusion.execution.parquet.pruning";
-
-/// Configuration option "datafusion.execution.parquet.pushdown_filters"
-pub const OPT_PARQUET_PUSHDOWN_FILTERS: &str =
-    "datafusion.execution.parquet.pushdown_filters";
-
-/// Configuration option "datafusion.execution.parquet.reorder_filters"
-pub const OPT_PARQUET_REORDER_FILTERS: &str =
-    "datafusion.execution.parquet.reorder_filters";
-
-/// Configuration option "datafusion.execution.parquet.skip_metadata"
-pub const OPT_PARQUET_SKIP_METADATA: &str = "datafusion.execution.parquet.skip_metadata";
-
-/// Configuration option "datafusion.execution.parquet.metadata_size_hint"
-pub const OPT_PARQUET_METADATA_SIZE_HINT: &str =
-    "datafusion.execution.parquet.metadata_size_hint";
-
-/*-************************************
-*  Explain related
-**************************************/
-/// Configuration option "datafusion.explain.logical_plan_only"
-pub const OPT_EXPLAIN_LOGICAL_PLAN_ONLY: &str = "datafusion.explain.logical_plan_only";
-
-/// Configuration option "datafusion.explain.physical_plan_only"
-pub const OPT_EXPLAIN_PHYSICAL_PLAN_ONLY: &str = "datafusion.explain.physical_plan_only";
-
-/*-************************************
-*  Optimizer related
-**************************************/
-/// Configuration option "datafusion.optimizer.filter_null_join_keys"
-pub const OPT_FILTER_NULL_JOIN_KEYS: &str = "datafusion.optimizer.filter_null_join_keys";
-
-/// Configuration option "datafusion.optimizer.repartition_aggregations"
-pub const OPT_REPARTITION_AGGREGATIONS: &str =
-    "datafusion.optimizer.repartition_aggregations";
-
-/// Configuration option "datafusion.optimizer.repartition_joins"
-pub const OPT_REPARTITION_JOINS: &str = "datafusion.optimizer.repartition_joins";
-
-/// Configuration option "datafusion.optimizer.repartition_windows"
-pub const OPT_REPARTITION_WINDOWS: &str = "datafusion.optimizer.repartition_windows";
-
-/// Configuration option "datafusion.optimizer.skip_failed_rules"
-pub const OPT_OPTIMIZER_SKIP_FAILED_RULES: &str =
-    "datafusion.optimizer.skip_failed_rules";
-
-/// Configuration option "datafusion.optimizer.max_passes"
-pub const OPT_OPTIMIZER_MAX_PASSES: &str = "datafusion.optimizer.max_passes";
-
-/// Configuration option "datafusion.optimizer.top_down_join_key_reordering"
-pub const OPT_TOP_DOWN_JOIN_KEY_REORDERING: &str =
-    "datafusion.optimizer.top_down_join_key_reordering";
-
-/// Configuration option "datafusion.optimizer.prefer_hash_join"
-pub const OPT_PREFER_HASH_JOIN: &str = "datafusion.optimizer.prefer_hash_join";
-
-/// Configuration option "atafusion.optimizer.hash_join_single_partition_threshold"
-pub const OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD: &str =
-    "datafusion.optimizer.hash_join_single_partition_threshold";
-
-/// Configuration option "datafusion.execution.round_robin_repartition"
-pub const OPT_ENABLE_ROUND_ROBIN_REPARTITION: &str =
-    "datafusion.optimizer.enable_round_robin_repartition";
-
-/// Definition of a configuration option
-pub struct ConfigDefinition {
-    /// key used to identifier this configuration option
-    key: String,
-    /// Description to be used in generated documentation
-    description: String,
-    /// Data type of this option
-    data_type: DataType,
-    /// Default value
-    default_value: ScalarValue,
-}
-
-macro_rules! get_conf_value {
-    ($SELF: expr, $TPE: ident, $KEY: expr, $TPE_NAME: expr) => {
-        match $SELF.get($KEY) {
-            Some(ScalarValue::$TPE(v)) => v,
-            Some(v) => {
-                warn!(
-                    "Config type mismatch for {}. Expected: {}, got: {:?}",
-                    $KEY, $TPE_NAME, &v
-                );
-                None
+        impl ConfigField for $struct_name {
+            fn set<C: ConfigValue>(&mut self, key: &str, value: C) -> Result<()> {
+                let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+                match key {
+                    $(
+                       stringify!($field_name) => self.$field_name.set(rem, value),
+                    )*
+                    _ => Err(DataFusionError::Internal(
+                        format!(concat!("Config value \"{}\" not found on ", stringify!($struct_name)), key)
+                    ))
+                }
             }
-            None => None,
-        }
-    };
-}
 
-impl ConfigDefinition {
-    /// Create a configuration option definition
-    pub fn new(
-        name: impl Into<String>,
-        description: impl Into<String>,
-        data_type: DataType,
-        default_value: ScalarValue,
-    ) -> Self {
-        Self {
-            key: name.into(),
-            description: description.into(),
-            data_type,
-            default_value,
+            fn visit<V: FieldVisitor>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
+                $(
+                let key = format!("{}.{}", key_prefix, stringify!($field_name));
+                let desc = concat!($($d),*).trim();
+                self.$field_name.visit(v, key.as_str(), desc);
+                )*
+            }
+        }
+
+        impl Default for $struct_name {
+            fn default() -> Self {
+                Self {
+                    $($field_name: $default),*
+                }
+            }
         }
     }
+}
 
-    /// Create a configuration option definition with a boolean value
-    pub fn new_bool(
-        key: impl Into<String>,
-        description: impl Into<String>,
-        default_value: bool,
-    ) -> Self {
-        Self::new(
-            key,
-            description,
-            DataType::Boolean,
-            ScalarValue::Boolean(Some(default_value)),
-        )
-    }
+config_namespace! {
+    pub struct CatalogOptions {
+        /// Number of partitions for query execution. Increasing partitions can increase
+        /// concurrency. Defaults to the number of cpu cores on the system.
+        pub create_default_catalog_and_schema: bool, default = true
 
-    /// Create a configuration option definition with a u64 value
-    pub fn new_u64(
-        key: impl Into<String>,
-        description: impl Into<String>,
-        default_value: u64,
-    ) -> Self {
-        Self::new(
-            key,
-            description,
-            DataType::UInt64,
-            ScalarValue::UInt64(Some(default_value)),
-        )
-    }
+        /// Should DataFusion provide access to `information_schema`
+        /// virtual tables for displaying schema information
+        pub information_schema: bool, default = false
 
-    /// Create a configuration option definition with a string value
-    pub fn new_string(
-        key: impl Into<String>,
-        description: impl Into<String>,
-        default_value: Option<String>,
-    ) -> Self {
-        Self::new(
-            key,
-            description,
-            DataType::Utf8,
-            ScalarValue::Utf8(default_value),
-        )
+        /// Location scanned to load tables for `default` schema
+        pub location: Option<String>, default = None
+
+        /// Type of `TableProvider` to use when loading `default` schema
+        pub format: Option<String>, default = None
+
+        /// If the file has a header
+        pub has_header: bool, default = false
     }
 }
 
-/// Contains definitions for all built-in configuration options
-pub struct BuiltInConfigs {
-    /// Configuration option definitions
-    config_definitions: Vec<ConfigDefinition>,
-}
+config_namespace! {
+    pub struct ExecutionOptions {
+        /// Default batch size while creating new batches, it's especially useful for
+        /// buffer-in-memory batches since creating tiny batches would results in too much
+        /// metadata memory consumption
+        pub batch_size: usize, default = 8192
 
-impl Default for BuiltInConfigs {
-    fn default() -> Self {
-        Self::new()
+        /// When set to true, record batches will be examined between each operator and
+        /// small batches will be coalesced into larger batches. This is helpful when there
+        /// are highly selective filters or joins that could produce tiny output batches. The
+        /// target batch size is determined by the configuration setting
+        pub coalesce_batches: bool, default = true
+
+        /// Target batch size when coalescing batches. Used in conjunction with `coalesce_batches`
+        pub coalesce_target_batch_size: usize, default = 4096
+
+        /// Should DataFusion collect statistics after listing files
+        pub collect_statistics: bool, default = false
+
+        /// Number of partitions for query execution. Increasing partitions can increase
+        /// concurrency. Defaults to the number of cpu cores on the system
+        pub target_partitions: usize, default = num_cpus::get()
+
+        /// The default time zone
+        ///
+        /// Some functions, e.g. EXTRACT(HOUR from SOME_TIME), shift the underlying datetime
+        /// according to this time zone, and then extract the hour
+        pub time_zone: Option<String>, default = Some("+00:00".into())
+
+        /// When set to true, the physical plan optimizer will try to add round robin
+        /// repartition to increase parallelism to leverage more CPU cores
+        pub round_robin_repartition: bool, default = true
+
+        /// Parquet options
+        pub parquet: ParquetOptions, default = Default::default()
     }
 }
 
-impl BuiltInConfigs {
-    /// Create a new BuiltInConfigs struct containing definitions for all built-in
-    /// configuration options
-    pub fn new() -> Self {
-        Self {
-            config_definitions: vec![ConfigDefinition::new_u64(
-                OPT_TARGET_PARTITIONS,
-                "Number of partitions for query execution. Increasing partitions can increase \
-                 concurrency. Defaults to the number of cpu cores on the system.",
-                num_cpus::get() as u64,
-            ),
+config_namespace! {
+    pub struct ParquetOptions {
+        /// If true, uses parquet data page level metadata (Page Index) statistics
+        /// to reduce the number of rows decoded.
+        pub enable_page_index: bool, default = false
 
-            ConfigDefinition::new_bool(
-                OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA,
-                "Whether the default catalog and schema should be created automatically.",
-                true
-            ),
+        /// If true, the parquet reader attempts to skip entire row groups based
+        /// on the predicate in the query and the metadata (min/max values) stored in
+        /// the parquet file
+        pub enable_pruning: bool, default = true
 
-            ConfigDefinition::new_bool(
-                OPT_INFORMATION_SCHEMA,
-                "Should DataFusion provide access to `information_schema` \
-                 virtual tables for displaying schema information",
-                false
-            ),
+        /// If true, the parquet reader skip the optional embedded metadata that may be in
+        /// the file Schema. This setting can help avoid schema conflicts when querying
+        /// multiple parquet files with schemas containing compatible types but different metadata
+        pub skip_metadata: bool, default = true
 
-            ConfigDefinition::new_bool(
-                OPT_REPARTITION_JOINS,
-                "Should DataFusion repartition data using the join keys to execute joins in parallel \
-                 using the provided `target_partitions` level",
-                true
-            ),
+        /// If specified, the parquet reader will try and fetch the last `size_hint`
+        /// bytes of the parquet file optimistically. If not specified, two read are required:
+        /// One read to fetch the 8-byte parquet footer and
+        /// another to fetch the metadata length encoded in the footer
+        pub metadata_size_hint: Option<usize>, default = None
 
-            ConfigDefinition::new_bool(
-                OPT_REPARTITION_AGGREGATIONS,
-                "Should DataFusion repartition data using the aggregate keys to execute aggregates \
-                 in parallel using the provided `target_partitions` level",
-                true
-            ),
+        /// If true, filter expressions are be applied during the parquet decoding operation to
+        /// reduce the number of rows decoded
+        pub pushdown_filters: bool, default = false
 
-            ConfigDefinition::new_bool(
-                OPT_REPARTITION_WINDOWS,
-                "Should DataFusion repartition data using the partitions keys to execute window \
-                 functions in parallel using the provided `target_partitions` level",
-                true
-            ),
-
-            ConfigDefinition::new_bool(
-                OPT_COLLECT_STATISTICS,
-                "Should DataFusion collect statistics after listing files",
-                false
-            ),
-
-            ConfigDefinition::new_bool(
-                OPT_FILTER_NULL_JOIN_KEYS,
-                "When set to true, the optimizer will insert filters before a join between \
-                a nullable and non-nullable column to filter out nulls on the nullable side. This \
-                filter can add additional overhead when the file format does not fully support \
-                predicate push down.",
-                false,
-            ),
-            ConfigDefinition::new_bool(
-                OPT_EXPLAIN_LOGICAL_PLAN_ONLY,
-                "When set to true, the explain statement will only print logical plans.",
-                false,
-            ),
-            ConfigDefinition::new_bool(
-                OPT_EXPLAIN_PHYSICAL_PLAN_ONLY,
-                "When set to true, the explain statement will only print physical plans.",
-                false,
-            ),
-            ConfigDefinition::new_u64(
-                OPT_BATCH_SIZE,
-                "Default batch size while creating new batches, it's especially useful for \
-                 buffer-in-memory batches since creating tiny batches would results in too much metadata \
-                 memory consumption.",
-                8192,
-            ),
-            ConfigDefinition::new_bool(
-                OPT_COALESCE_BATCHES,
-                format!("When set to true, record batches will be examined between each operator and \
-                small batches will be coalesced into larger batches. This is helpful when there \
-                are highly selective filters or joins that could produce tiny output batches. The \
-                target batch size is determined by the configuration setting \
-                '{}'.", OPT_COALESCE_TARGET_BATCH_SIZE),
-                true,
-            ),
-             ConfigDefinition::new_u64(
-                 OPT_COALESCE_TARGET_BATCH_SIZE,
-                 format!("Target batch size when coalescing batches. Uses in conjunction with the \
-                          configuration setting '{}'.", OPT_COALESCE_BATCHES),
-                 4096,
-            ),
-            ConfigDefinition::new_string(
-                OPT_TIME_ZONE,
-                "The session time zone which some function require \
-                e.g. EXTRACT(HOUR from SOME_TIME) shift the underline datetime according to the time zone,
-                then extract the hour.",
-                Some("+00:00".into()),
-            ),
-            ConfigDefinition::new_bool(
-                OPT_PARQUET_PUSHDOWN_FILTERS,
-                "If true, filter expressions are be applied during the parquet decoding operation to \
-                 reduce the number of rows decoded.",
-                false,
-            ),
-            ConfigDefinition::new_bool(
-                OPT_PARQUET_REORDER_FILTERS,
-                "If true, filter expressions evaluated during the parquet decoding opearation \
-                 will be reordered heuristically to minimize the cost of evaluation. If false, \
-                 the filters are applied in the same order as written in the query.",
-                false,
-            ),
-            ConfigDefinition::new_bool(
-                OPT_PARQUET_ENABLE_PAGE_INDEX,
-                "If true, uses parquet data page level metadata (Page Index) statistics \
-                 to reduce the number of rows decoded.",
-                false,
-            ),
-            ConfigDefinition::new_bool(
-                OPT_PARQUET_ENABLE_PRUNING,
-                "If true, the parquet reader attempts to skip entire row groups based \
-                 on the predicate in the query and the metadata (min/max values) stored in \
-                 the parquet file.",
-                true,
-            ),
-            ConfigDefinition::new_bool(
-                OPT_PARQUET_SKIP_METADATA,
-                "If true, the parquet reader skip the optional embedded metadata that may be in \
-                the file Schema. This setting can help avoid schema conflicts when querying \
-                multiple parquet files with schemas containing compatible types but different metadata.",
-                true,
-            ),
-            ConfigDefinition::new(
-                OPT_PARQUET_METADATA_SIZE_HINT,
-                "If specified, the parquet reader will try and fetch the last `size_hint` \
-                 bytes of the parquet file optimistically. If not specified, two read are required: \
-                 One read to fetch the 8-byte parquet footer and  \
-                 another to fetch the metadata length encoded in the footer.",
-                DataType::UInt64,
-                ScalarValue::UInt64(None),
-            ),
-            ConfigDefinition::new_bool(
-                OPT_OPTIMIZER_SKIP_FAILED_RULES,
-                "When set to true, the logical plan optimizer will produce warning \
-                messages if any optimization rules produce errors and then proceed to the next \
-                rule. When set to false, any rules that produce errors will cause the query to fail.",
-                true
-            ),
-            ConfigDefinition::new_u64(
-                OPT_OPTIMIZER_MAX_PASSES,
-                "Number of times that the optimizer will attempt to optimize the plan",
-                3
-            ),
-            ConfigDefinition::new_string(
-                OPT_CATALOG_LOCATION,
-                "Location scanned to load tables for `default` schema, defaults to None",
-                None,
-            ),
-            ConfigDefinition::new_string(
-                OPT_CATALOG_TYPE,
-                "Type of `TableProvider` to use when loading `default` schema. Defaults to None",
-                None,
-            ),
-             ConfigDefinition::new_bool(
-                 OPT_TOP_DOWN_JOIN_KEY_REORDERING,
-                 "When set to true, the physical plan optimizer will run a top down process to reorder the join keys. Defaults to true",
-                 true,
-             ),
-             ConfigDefinition::new_bool(
-                 OPT_PREFER_HASH_JOIN,
-                 "When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin. HashJoin can work more efficiently\
-                 than SortMergeJoin but consumes more memory. Defaults to true",
-                 true,
-             ),
-             ConfigDefinition::new_u64(
-                 OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD,
-                 "The maximum estimated size in bytes for one input side of a HashJoin will be collected into a single partition",
-                 1024 * 1024,
-             ),
-             ConfigDefinition::new_bool(
-                 OPT_ENABLE_ROUND_ROBIN_REPARTITION,
-                 "When set to true, the physical plan optimizer will try to add round robin repartition to increase parallelism to leverage more CPU cores",
-                 true,
-             ),
-            ]
-        }
-    }
-
-    /// Generate documentation that can be included in the user guide
-    pub fn generate_config_markdown() -> String {
-        use std::fmt::Write as _;
-        let configs = Self::new();
-        let mut docs = "| key | type | default | description |\n".to_string();
-        docs += "|-----|------|---------|-------------|\n";
-
-        let config_definitions: Vec<_> = configs
-            .config_definitions
-            .into_iter()
-            .map(normalize_for_display)
-            .collect();
-
-        for config in config_definitions.iter().sorted_by_key(|c| c.key.as_str()) {
-            let _ = writeln!(
-                &mut docs,
-                "| {} | {} | {} | {} |",
-                config.key, config.data_type, config.default_value, config.description
-            );
-        }
-        docs
+        /// If true, filter expressions evaluated during the parquet decoding operation
+        /// will be reordered heuristically to minimize the cost of evaluation. If false,
+        /// the filters are applied in the same order as written in the query
+        pub reorder_filters: bool, default = false
     }
 }
 
-/// Normalizes a config definition prior to markdown display
-fn normalize_for_display(mut v: ConfigDefinition) -> ConfigDefinition {
-    // Since the default value of target_partitions depends on the number of cores,
-    // set the default value to 0 in the docs.
-    if v.key == OPT_TARGET_PARTITIONS {
-        v.default_value = ScalarValue::UInt64(Some(0))
+config_namespace! {
+    pub struct OptimizerOptions {
+        /// When set to true, the optimizer will insert filters before a join between
+        /// a nullable and non-nullable column to filter out nulls on the nullable side. This
+        /// filter can add additional overhead when the file format does not fully support
+        /// predicate push down.
+        pub filter_null_join_keys: bool, default = false
+
+        /// Should DataFusion repartition data using the aggregate keys to execute aggregates
+        /// in parallel using the provided `target_partitions` level"
+        pub repartition_aggregations: bool, default = true
+
+        /// Should DataFusion repartition data using the join keys to execute joins in parallel
+        /// using the provided `target_partitions` level"
+        pub repartition_joins: bool, default = true
+
+        /// Should DataFusion repartition data using the partitions keys to execute window
+        /// functions in parallel using the provided `target_partitions` level"
+        pub repartition_windows: bool, default = true
+
+        /// When set to true, the logical plan optimizer will produce warning
+        /// messages if any optimization rules produce errors and then proceed to the next
+        /// rule. When set to false, any rules that produce errors will cause the query to fail
+        pub skip_failed_rules: bool, default = true
+
+        /// Number of times that the optimizer will attempt to optimize the plan
+        pub max_passes: usize, default = 3
+
+        /// When set to true, the physical plan optimizer will run a top down
+        /// process to reorder the join keys
+        pub top_down_join_key_reordering: bool, default = true
+
+        /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
+        /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory
+        pub prefer_hash_join: bool, default = true
+
+        /// The maximum estimated size in bytes for one input side of a HashJoin
+        /// will be collected into a single partition
+        pub hash_join_single_partition_threshold: usize, default = 1024 * 1024
     }
-    v
 }
 
-/// Configuration options struct. This can contain values for built-in and custom options
-#[derive(Clone)]
+config_namespace! {
+    pub struct ExplainOptions {
+        /// When set to true, the explain statement will only print logical plans
+        pub logical_plan_only: bool, default = false
+
+        /// When set to true, the explain statement will only print physical plans
+        pub physical_plan_only: bool, default = false
+    }
+}
+
+config_namespace! {
+    pub struct DataFusionOptions {
+        /// Catalog options
+        pub catalog: CatalogOptions, default = Default::default()
+
+        /// Execution options
+        pub execution: ExecutionOptions, default = Default::default()
+
+        /// Explain options
+        pub optimizer: OptimizerOptions, default = Default::default()
+
+        /// Explain options
+        pub explain: ExplainOptions, default = Default::default()
+    }
+}
+
+/// A key value pair, with a corresponding description
+#[derive(Debug)]
+pub struct ConfigEntry {
+    /// A unique string to identify this config value
+    pub key: String,
+
+    /// The value if any
+    pub value: Option<String>,
+
+    /// A description of this configuration entry
+    pub description: &'static str,
+}
+
+/// Configuration options struct, able to store both built-in configuration and custom options
+#[derive(Debug, Default, Clone)]
 pub struct ConfigOptions {
-    options: HashMap<String, ScalarValue>,
-}
+    /// Built-in DataFusion configuration
+    pub built_in: DataFusionOptions,
 
-/// Print the configurations in an ordered way so that we can directly compare the equality of two ConfigOptions by their debug strings
-impl Debug for ConfigOptions {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ConfigOptions")
-            .field(
-                "options",
-                &format!("{:?}", BTreeMap::from_iter(self.options.iter())),
-            )
-            .finish()
-    }
-}
-
-impl Default for ConfigOptions {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Optional extensions registered using [`Extensions::insert`]
+    pub extensions: Extensions,
 }
 
 impl ConfigOptions {
-    /// Create new ConfigOptions struct
+    /// Creates a new [`ConfigOptions`] with default values
     pub fn new() -> Self {
-        let built_in = BuiltInConfigs::new();
-        let mut options = HashMap::with_capacity(built_in.config_definitions.len());
-        for config_def in &built_in.config_definitions {
-            options.insert(config_def.key.clone(), config_def.default_value.clone());
-        }
-        Self { options }
+        Self::default()
     }
 
     /// Create new ConfigOptions struct, taking values from
@@ -496,137 +267,267 @@ impl ConfigOptions {
     ///
     /// For example, setting `DATAFUSION_EXECUTION_BATCH_SIZE` will
     /// control `datafusion.execution.batch_size`.
-    pub fn from_env() -> Self {
-        let built_in = BuiltInConfigs::new();
-        let mut options = HashMap::with_capacity(built_in.config_definitions.len());
-        for config_def in &built_in.config_definitions {
-            let config_value = {
-                let mut env_key = config_def.key.replace('.', "_");
-                env_key.make_ascii_uppercase();
-                match env::var(&env_key) {
-                    Ok(value) => match ScalarValue::try_from_string(
-                        value.clone(),
-                        &config_def.data_type,
-                    ) {
-                        Ok(parsed) => parsed,
-                        Err(_) => {
-                            warn!("Warning: could not parse environment variable {}={} to type {}.", env_key, value, config_def.data_type);
-                            config_def.default_value.clone()
-                        }
-                    },
-                    Err(_) => config_def.default_value.clone(),
+    pub fn from_env() -> Result<Self> {
+        let mut ret = Self::default();
+        for (k, v) in std::env::vars_os() {
+            let k = k.to_string_lossy().to_ascii_lowercase().replace('_', ".");
+            let v = v.to_string_lossy();
+
+            if let Some((prefix, key)) = k.split_once('.') {
+                if prefix == "datafusion" {
+                    ret.built_in.set(key, v.as_ref())?
+                } else if let Some(e) = ret.extensions.0.get_mut(prefix) {
+                    e.0.set(key, v.as_ref())?
                 }
-            };
-            options.insert(config_def.key.clone(), config_value);
+            }
         }
-        Self { options }
+        Ok(ret)
     }
 
-    /// set a configuration option
-    pub fn set(&mut self, key: &str, value: ScalarValue) {
-        self.options.insert(key.to_string(), value);
+    /// Set a configuration option
+    pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        let (prefix, key) = key.split_once('.').ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "could not find config namespace for key \"{}\"",
+                key
+            ))
+        })?;
+
+        if prefix == "datafusion" {
+            return self.built_in.set(key, value);
+        }
+
+        let e = self.extensions.0.get_mut(prefix);
+        let e = e.ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "Could not find config namespace \"{}\"",
+                prefix
+            ))
+        })?;
+        e.0.set(key, value)
     }
 
-    /// set a boolean configuration option
-    pub fn set_bool(&mut self, key: &str, value: bool) {
-        self.set(key, ScalarValue::Boolean(Some(value)))
+    /// Returns the [`ConfigEntry`] stored within this [`ConfigOptions`]
+    pub fn entries(&self) -> Vec<ConfigEntry> {
+        struct Visitor(Vec<ConfigEntry>);
+
+        impl FieldVisitor for Visitor {
+            fn visit_some<C: ConfigValue>(
+                &mut self,
+                key: &str,
+                value: C,
+                description: &'static str,
+            ) {
+                self.0.push(ConfigEntry {
+                    key: key.to_string(),
+                    value: Some(value.to_string()),
+                    description,
+                })
+            }
+
+            fn visit_none(&mut self, key: &str, description: &'static str) {
+                self.0.push(ConfigEntry {
+                    key: key.to_string(),
+                    value: None,
+                    description,
+                })
+            }
+        }
+
+        let mut v = Visitor(vec![]);
+        self.built_in.visit(&mut v, "datafusion", "");
+
+        v.0.extend(self.extensions.0.values().flat_map(|e| e.0.entries()));
+        v.0
     }
 
-    /// set a `u64` configuration option
-    pub fn set_u64(&mut self, key: &str, value: u64) {
-        self.set(key, ScalarValue::UInt64(Some(value)))
-    }
+    /// Generate documentation that can be included in the user guide
+    pub fn generate_config_markdown() -> String {
+        use std::fmt::Write as _;
 
-    /// set a `usize` configuration option
-    pub fn set_usize(&mut self, key: &str, value: usize) {
-        let value: u64 = value.try_into().expect("convert u64 to usize");
-        self.set(key, ScalarValue::UInt64(Some(value)))
-    }
+        let mut s = Self::default();
+        s.built_in.execution.target_partitions = 0; // Normalize for display
 
-    /// set a `String` configuration option
-    pub fn set_string(&mut self, key: &str, value: impl Into<String>) {
-        self.set(key, ScalarValue::Utf8(Some(value.into())))
-    }
-
-    /// get a configuration option
-    pub fn get(&self, key: &str) -> Option<ScalarValue> {
-        self.options.get(key).cloned()
-    }
-
-    /// get a boolean configuration option
-    pub fn get_bool(&self, key: &str) -> Option<bool> {
-        get_conf_value!(self, Boolean, key, "bool")
-    }
-
-    /// get a u64 configuration option
-    pub fn get_u64(&self, key: &str) -> Option<u64> {
-        get_conf_value!(self, UInt64, key, "u64")
-    }
-
-    /// get a u64 configuration option as a usize
-    pub fn get_usize(&self, key: &str) -> Option<usize> {
-        let v = get_conf_value!(self, UInt64, key, "usize");
-        v.and_then(|v| v.try_into().ok())
-    }
-
-    /// get a string configuration option
-    pub fn get_string(&self, key: &str) -> Option<String> {
-        get_conf_value!(self, Utf8, key, "string")
-    }
-
-    /// Access the underlying hashmap
-    pub fn options(&self) -> &HashMap<String, ScalarValue> {
-        &self.options
-    }
-
-    /// Tests if the key exists in the configuration
-    pub fn exists(&self, key: &str) -> bool {
-        self.options().contains_key(key)
+        let mut docs = "| key | default | description |\n".to_string();
+        docs += "|-----|---------|-------------|\n";
+        for entry in s.entries() {
+            let _ = writeln!(
+                &mut docs,
+                "| {} | {} | {} |",
+                entry.key,
+                entry.value.as_deref().unwrap_or(""),
+                entry.description
+            );
+        }
+        docs
     }
 }
 
-#[cfg(test)]
-mod test {
-    use crate::config::{BuiltInConfigs, ConfigOptions};
+/// [`ConfigExtension`] provides a mechanism to store third-party configuration within DataFusion
+///
+/// Unfortunately associated constants are not currently object-safe, and so this
+/// extends the object-safe [`ExtensionOptions`]
+pub trait ConfigExtension: ExtensionOptions {
+    const PREFIX: &'static str;
+}
 
-    #[test]
-    fn docs() {
-        let docs = BuiltInConfigs::generate_config_markdown();
-        let mut lines = docs.lines();
-        assert_eq!(
-            lines.next().unwrap(),
-            "| key | type | default | description |"
-        );
-        let configs = BuiltInConfigs::default();
-        for config in configs.config_definitions {
-            assert!(docs.contains(&config.key));
+/// An object-safe API for storing arbitrary configuration
+pub trait ExtensionOptions: Send + Sync + std::fmt::Debug + 'static {
+    fn as_any(&self) -> &dyn Any;
+
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    fn cloned(&self) -> Box<dyn ExtensionOptions>;
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()>;
+
+    fn entries(&self) -> Vec<ConfigEntry>;
+}
+
+/// A type-safe container for [`ConfigExtension`]
+#[derive(Debug, Default, Clone)]
+pub struct Extensions(BTreeMap<&'static str, ExtensionBox>);
+
+impl Extensions {
+    /// Registers a [`ConfigExtension`] with this [`ConfigOptions`]
+    pub fn insert<T: ConfigExtension>(&mut self, extension: T) {
+        assert_ne!(T::PREFIX, "datafusion");
+        let e = ExtensionBox(Box::new(extension));
+        self.0.insert(T::PREFIX, e);
+    }
+
+    /// Retrieves the extension of the given type if any
+    pub fn get<T: ConfigExtension>(&self) -> Option<&T> {
+        self.0.get(T::PREFIX)?.0.as_any().downcast_ref()
+    }
+
+    /// Retrieves the extension of the given type if any
+    pub fn get_mut<T: ConfigExtension>(&mut self) -> Option<&mut T> {
+        let e = self.0.get_mut(T::PREFIX)?;
+        e.0.as_any_mut().downcast_mut()
+    }
+}
+
+#[derive(Debug)]
+struct ExtensionBox(Box<dyn ExtensionOptions>);
+
+impl Clone for ExtensionBox {
+    fn clone(&self) -> Self {
+        Self(self.0.cloned())
+    }
+}
+
+/// A trait that performs fallible coercion into a [`ConfigField`]
+trait ConfigValue: std::fmt::Display {
+    fn parse_usize(&self) -> Result<usize>;
+
+    fn parse_bool(&self) -> Result<bool>;
+}
+
+impl ConfigValue for bool {
+    fn parse_usize(&self) -> Result<usize> {
+        Ok(*self as _)
+    }
+
+    fn parse_bool(&self) -> Result<bool> {
+        Ok(*self)
+    }
+}
+
+impl ConfigValue for usize {
+    fn parse_usize(&self) -> Result<usize> {
+        Ok(*self as _)
+    }
+
+    fn parse_bool(&self) -> Result<bool> {
+        Ok(*self != 0)
+    }
+}
+
+impl ConfigValue for &str {
+    fn parse_usize(&self) -> Result<usize> {
+        self.parse()
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+
+    fn parse_bool(&self) -> Result<bool> {
+        self.parse()
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+}
+
+impl ConfigValue for String {
+    fn parse_usize(&self) -> Result<usize> {
+        self.as_str().parse_usize()
+    }
+
+    fn parse_bool(&self) -> Result<bool> {
+        self.as_str().parse_bool()
+    }
+}
+
+/// A trait implemented by `config_namespace` and for field types that provides
+/// the ability to walk and mutate the configuration tree
+trait ConfigField {
+    fn visit<V: FieldVisitor>(&self, v: &mut V, key: &str, description: &'static str);
+
+    fn set<C: ConfigValue>(&mut self, key: &str, value: C) -> Result<()>;
+}
+
+impl<F: ConfigField + Default> ConfigField for Option<F> {
+    fn visit<V: FieldVisitor>(&self, v: &mut V, key: &str, description: &'static str) {
+        match self {
+            Some(s) => s.visit(v, key, description),
+            None => v.visit_none(key, description),
         }
     }
 
-    #[test]
-    fn get_then_set() {
-        let mut config = ConfigOptions::new();
-        let config_key = "datafusion.optimizer.filter_null_join_keys";
-        assert!(!config.get_bool(config_key).unwrap_or_default());
-        config.set_bool(config_key, true);
-        assert!(config.get_bool(config_key).unwrap_or_default());
+    fn set<C: ConfigValue>(&mut self, key: &str, value: C) -> Result<()> {
+        self.get_or_insert_with(Default::default).set(key, value)
+    }
+}
+
+impl ConfigField for String {
+    fn visit<V: FieldVisitor>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.visit_some(key, self.as_str(), description)
     }
 
-    #[test]
-    fn get_invalid_config() {
-        let config = ConfigOptions::new();
-        let invalid_key = "not.valid";
-        assert!(!config.exists(invalid_key));
-        assert!(!config.get_bool(invalid_key).unwrap_or_default());
+    fn set<C: ConfigValue>(&mut self, _key: &str, value: C) -> Result<()> {
+        *self = value.to_string();
+        Ok(())
+    }
+}
+
+impl ConfigField for bool {
+    fn visit<V: FieldVisitor>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.visit_some(key, *self, description)
     }
 
-    #[test]
-    fn get_config_in_invalid_format() {
-        let config = ConfigOptions::new();
-        let key = "datafusion.execution.batch_size";
-
-        assert!(config.exists(key));
-        assert_eq!(None, config.get_string(key));
-        assert!(!config.get_bool(key).unwrap_or_default());
+    fn set<C: ConfigValue>(&mut self, _key: &str, value: C) -> Result<()> {
+        *self = value.parse_bool()?;
+        Ok(())
     }
+}
+
+impl ConfigField for usize {
+    fn visit<V: FieldVisitor>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.visit_some(key, *self, description)
+    }
+
+    fn set<C: ConfigValue>(&mut self, _key: &str, value: C) -> Result<()> {
+        *self = value.parse_usize()?;
+        Ok(())
+    }
+}
+
+/// An implementation trait used to recursively walk configuration
+trait FieldVisitor {
+    fn visit_some<C: ConfigValue>(
+        &mut self,
+        key: &str,
+        value: C,
+        description: &'static str,
+    );
+
+    fn visit_none(&mut self, key: &str, description: &'static str);
 }
