@@ -210,15 +210,15 @@ impl ContextWithParquet {
             .expect("getting input");
         let pretty_input = pretty_format_batches(&input).unwrap().to_string();
 
-        let logical_plan = self.ctx.optimize(&logical_plan).expect("optimizing plan");
+        let state = self.ctx.state();
+        let logical_plan = state.optimize(&logical_plan).expect("optimizing plan");
 
-        let physical_plan = self
-            .ctx
+        let physical_plan = state
             .create_physical_plan(&logical_plan)
             .await
             .expect("creating physical plan");
 
-        let task_ctx = self.ctx.task_ctx();
+        let task_ctx = state.task_ctx();
         let results = datafusion::physical_plan::collect(physical_plan.clone(), task_ctx)
             .await
             .expect("Running");

@@ -1022,13 +1022,11 @@ async fn try_execute_to_batches(
 ) -> Result<Vec<RecordBatch>> {
     let dataframe = ctx.sql(sql).await?;
     let logical_schema = dataframe.schema().clone();
+    let (state, plan) = dataframe.into_parts();
 
-    let optimized = ctx.optimize(dataframe.logical_plan())?;
-    let optimized_logical_schema = optimized.schema();
-    let results = dataframe.collect().await?;
-
-    assert_eq!(&logical_schema, optimized_logical_schema.as_ref());
-    Ok(results)
+    let optimized = state.optimize(&plan)?;
+    assert_eq!(&logical_schema, optimized.schema().as_ref());
+    DataFrame::new(state, optimized).collect().await
 }
 
 /// Execute query and return results as a Vec of RecordBatches

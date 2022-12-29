@@ -138,6 +138,7 @@ pub(crate) mod test_util {
                     limit,
                     table_partition_cols: vec![],
                     output_ordering: None,
+                    infinite_source: false,
                 },
                 &[],
             )

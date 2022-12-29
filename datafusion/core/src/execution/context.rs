@@ -101,6 +101,8 @@ use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::memory_pool::MemoryPool;
 use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
+use crate::physical_optimizer::pipeline_checker::PipelineChecker;
+use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
 use uuid::Uuid;
 
 use super::options::{
@@ -630,12 +632,18 @@ impl SessionContext {
 
         let listing_options = options.to_listing_options(target_partitions);
 
-        let resolved_schema = match options.schema {
-            Some(s) => s,
-            None => {
+        let resolved_schema = match (options.schema, options.infinite) {
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, false) => {
                 listing_options
                     .infer_schema(&self.state(), &table_path)
                     .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
             }
         };
 
@@ -657,12 +665,18 @@ impl SessionContext {
 
         let listing_options = options.to_listing_options(target_partitions);
 
-        let resolved_schema = match options.schema {
-            Some(s) => s,
-            None => {
+        let resolved_schema = match (options.schema, options.infinite) {
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, false) => {
                 listing_options
                     .infer_schema(&self.state(), &table_path)
                     .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
             }
         };
         let config = ListingTableConfig::new(table_path)
@@ -690,12 +704,18 @@ impl SessionContext {
         let table_path = ListingTableUrl::parse(table_path)?;
         let target_partitions = self.copied_config().target_partitions();
         let listing_options = options.to_listing_options(target_partitions);
-        let resolved_schema = match options.schema {
-            Some(s) => Arc::new(s.to_owned()),
-            None => {
+        let resolved_schema = match (options.schema, options.infinite) {
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, false) => {
                 listing_options
                     .infer_schema(&self.state(), &table_path)
                     .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
             }
         };
         let config = ListingTableConfig::new(table_path.clone())
@@ -767,9 +787,15 @@ impl SessionContext {
         sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let resolved_schema = match provided_schema {
-            None => options.infer_schema(&self.state(), &table_path).await?,
-            Some(s) => s,
+        let resolved_schema = match (provided_schema, options.infinite_source) {
+            (Some(s), _) => s,
+            (None, false) => options.infer_schema(&self.state(), &table_path).await?,
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
+            }
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
@@ -817,7 +843,7 @@ impl SessionContext {
             name,
             table_path,
             listing_options,
-            options.schema,
+            options.schema.map(|s| Arc::new(s.to_owned())),
             None,
         )
         .await?;
@@ -854,7 +880,7 @@ impl SessionContext {
             name,
             table_path,
             listing_options,
-            options.schema,
+            options.schema.map(|s| Arc::new(s.to_owned())),
             None,
         )
         .await?;
@@ -993,11 +1019,17 @@ impl SessionContext {
     }
 
     /// Optimizes the logical plan by applying optimizer rules.
+    #[deprecated(
+        note = "Use SessionState::optimize to ensure a consistent state for planning and execution"
+    )]
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         self.state.read().optimize(plan)
     }
 
     /// Creates a physical plan from a logical plan.
+    #[deprecated(
+        note = "Use SessionState::create_physical_plan or DataFrame::create_physical_plan to ensure a consistent state for planning and execution"
+    )]
     pub async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -1562,6 +1594,12 @@ impl SessionState {
         // and local sort to meet the distribution and ordering requirements.
         // Therefore, it should be run before BasicEnforcement
         physical_optimizers.push(Arc::new(JoinSelection::new()));
+        // If the query is processing infinite inputs, the PipelineFixer rule applies the
+        // necessary transformations to make the query runnable (if it is not already runnable).
+        // If the query can not be made runnable, the rule emits an error with a diagnostic message.
+        // Since the transformations it applies may alter output partitioning properties of operators
+        // (e.g. by swapping hash join sides), this rule runs before BasicEnforcement.
+        physical_optimizers.push(Arc::new(PipelineFixer::new()));
         // It's for adding essential repartition and local sorting operator to satisfy the
         // required distribution and local sort.
         // Please make sure that the whole plan tree is determined.
@@ -1587,7 +1625,11 @@ impl SessionState {
                     .unwrap(),
             )));
         }
-
+        // The PipelineChecker rule will reject non-runnable query plans that use
+        // pipeline-breaking operators on infinite input(s). The rule generates a
+        // diagnostic error message when this happens. It makes no changes to the
+        // given query plan; i.e. it only acts as a final gatekeeping rule.
+        physical_optimizers.push(Arc::new(PipelineChecker::new()));
         SessionState {
             session_id,
             optimizer: Optimizer::new(),

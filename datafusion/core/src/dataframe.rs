@@ -504,6 +504,11 @@ impl DataFrame {
         &self.plan
     }
 
+    /// Returns both the [`LogicalPlan`] and [`SessionState`] that comprise this [`DataFrame`]
+    pub fn into_parts(self) -> (SessionState, LogicalPlan) {
+        (self.session_state, self.plan)
+    }
+
     /// Return the logical plan represented by this DataFrame without running the optimizers
     ///
     /// Note: This method should not be used outside testing, as it loses the snapshot

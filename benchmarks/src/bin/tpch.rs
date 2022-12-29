@@ -325,30 +325,31 @@ async fn execute_query(
     enable_scheduler: bool,
 ) -> Result<Vec<RecordBatch>> {
     let plan = ctx.sql(sql).await?;
-    let plan = plan.into_unoptimized_plan();
+    let (state, plan) = plan.into_parts();
 
     if debug {
         println!("=== Logical plan ===\n{:?}\n", plan);
     }
 
-    let plan = ctx.optimize(&plan)?;
+    let plan = state.optimize(&plan)?;
     if debug {
         println!("=== Optimized logical plan ===\n{:?}\n", plan);
     }
-    let physical_plan = ctx.create_physical_plan(&plan).await?;
+    let physical_plan = state.create_physical_plan(&plan).await?;
     if debug {
         println!(
             "=== Physical plan ===\n{}\n",
             displayable(physical_plan.as_ref()).indent()
         );
     }
-    let task_ctx = ctx.task_ctx();
     let result = if enable_scheduler {
         let scheduler = Scheduler::new(num_cpus::get());
-        let results = scheduler.schedule(physical_plan.clone(), task_ctx).unwrap();
+        let results = scheduler
+            .schedule(physical_plan.clone(), state.task_ctx())
+            .unwrap();
         results.stream().try_collect().await?
     } else {
-        collect(physical_plan.clone(), task_ctx).await?
+        collect(physical_plan.clone(), state.task_ctx()).await?
     };
     if debug {
         println!(

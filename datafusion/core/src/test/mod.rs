@@ -182,6 +182,7 @@ pub fn partitioned_csv_config(
         limit: None,
         table_partition_cols: vec![],
         output_ordering: None,
+        infinite_source: false,
     })
 }
 

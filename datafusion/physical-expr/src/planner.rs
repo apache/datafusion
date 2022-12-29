@@ -28,7 +28,6 @@ use crate::{
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::Cast;
-use datafusion_expr::type_coercion::functions::get_common_coerced_type;
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
 };
@@ -199,16 +198,14 @@ pub fn create_physical_expr(
                     input_schema,
                 )?)),
                 _ => {
-                    let target_datatype = get_common_coerced_type(
-                        lhs.data_type(input_schema)?,
-                        rhs.data_type(input_schema)?,
-                    )?;
-                    binary(
-                        expressions::cast(lhs, input_schema, target_datatype.clone())?,
-                        *op,
-                        expressions::cast(rhs, input_schema, target_datatype)?,
-                        input_schema,
-                    )
+                    // Note that the logical planner is responsible
+                    // for type coercion on the arguments (e.g. if one
+                    // argument was originally Int32 and one was
+                    // Int64 they will both be coerced to Int64).
+                    //
+                    // There should be no coercion during physical
+                    // planning.
+                    binary(lhs, *op, rhs, input_schema)
                 }
             }
         }

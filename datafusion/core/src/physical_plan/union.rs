@@ -123,6 +123,13 @@ impl ExecutionPlan for UnionExec {
         self.schema.clone()
     }
 
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.    
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        Ok(children.iter().any(|x| *x))
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         self.inputs.clone()
     }
