@@ -25,7 +25,7 @@ use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::{
-    Column, ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
+    ColumnStatistics, DisplayFormatType, Distribution, EquivalenceProperties,
     ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
@@ -39,8 +39,6 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::DataFusionError;
-use datafusion_physical_expr::rewrite::TreeNodeRewritable;
-use datafusion_physical_expr::EquivalentClass;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use log::debug;
@@ -65,8 +63,6 @@ pub struct WindowAggExec {
     pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     /// Sort Keys
     pub sort_keys: Option<Vec<PhysicalSortExpr>>,
-    /// The output ordering
-    output_ordering: Option<Vec<PhysicalSortExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -82,33 +78,6 @@ impl WindowAggExec {
     ) -> Result<Self> {
         let schema = create_schema(&input_schema, &window_expr)?;
         let schema = Arc::new(schema);
-        let window_expr_len = window_expr.len();
-        // Although WindowAggExec does not change the output ordering from the input, but can not return the output ordering
-        // from the input directly, need to adjust the column index to align with the new schema.
-        let output_ordering = input
-            .output_ordering()
-            .map(|sort_exprs| {
-                let new_sort_exprs: Result<Vec<PhysicalSortExpr>> = sort_exprs
-                    .iter()
-                    .map(|e| {
-                        let new_expr = e.expr.clone().transform_down(&|e| {
-                            Ok(e.as_any().downcast_ref::<Column>().map(|col| {
-                                Arc::new(Column::new(
-                                    col.name(),
-                                    window_expr_len + col.index(),
-                                ))
-                                    as Arc<dyn PhysicalExpr>
-                            }))
-                        })?;
-                        Ok(PhysicalSortExpr {
-                            expr: new_expr,
-                            options: e.options,
-                        })
-                    })
-                    .collect();
-                new_sort_exprs
-            })
-            .map_or(Ok(None), |v| v.map(Some))?;
 
         Ok(Self {
             input,
@@ -117,7 +86,6 @@ impl WindowAggExec {
             input_schema,
             partition_keys,
             sort_keys,
-            output_ordering,
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -176,34 +144,10 @@ impl ExecutionPlan for WindowAggExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        // Although WindowAggExec does not change the output partitioning from the input, but can not return the output partitioning
-        // from the input directly, need to adjust the column index to align with the new schema.
-        let window_expr_len = self.window_expr.len();
-        let input_partitioning = self.input.output_partitioning();
-        match input_partitioning {
-            Partitioning::RoundRobinBatch(size) => Partitioning::RoundRobinBatch(size),
-            Partitioning::UnknownPartitioning(size) => {
-                Partitioning::UnknownPartitioning(size)
-            }
-            Partitioning::Hash(exprs, size) => {
-                let new_exprs = exprs
-                    .into_iter()
-                    .map(|expr| {
-                        expr.transform_down(&|e| {
-                            Ok(e.as_any().downcast_ref::<Column>().map(|col| {
-                                Arc::new(Column::new(
-                                    col.name(),
-                                    window_expr_len + col.index(),
-                                ))
-                                    as Arc<dyn PhysicalExpr>
-                            }))
-                        })
-                        .unwrap()
-                    })
-                    .collect::<Vec<_>>();
-                Partitioning::Hash(new_exprs, size)
-            }
-        }
+        // because we can have repartitioning using the partition keys
+        // this would be either 1 or more than 1 depending on the presense of
+        // repartitioning
+        self.input.output_partitioning()
     }
 
     /// Specifies whether this plan generates an infinite stream of records.
@@ -221,7 +165,7 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.output_ordering.as_deref()
+        self.input().output_ordering()
     }
 
     fn maintains_input_order(&self) -> bool {
@@ -244,30 +188,7 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        // Although WindowAggExec does not change the equivalence properties from the input, but can not return the equivalence properties
-        // from the input directly, need to adjust the column index to align with the new schema.
-        let window_expr_len = self.window_expr.len();
-        let mut new_properties = EquivalenceProperties::new(self.schema());
-        let new_eq_classes = self
-            .input
-            .equivalence_properties()
-            .classes()
-            .iter()
-            .map(|prop| {
-                let new_head = Column::new(
-                    prop.head().name(),
-                    window_expr_len + prop.head().index(),
-                );
-                let new_others = prop
-                    .others()
-                    .iter()
-                    .map(|col| Column::new(col.name(), window_expr_len + col.index()))
-                    .collect::<Vec<_>>();
-                EquivalentClass::new(new_head, new_others)
-            })
-            .collect::<Vec<_>>();
-        new_properties.extend(new_eq_classes);
-        new_properties
+        self.input().equivalence_properties()
     }
 
     fn with_new_children(
@@ -334,12 +255,13 @@ impl ExecutionPlan for WindowAggExec {
         let win_cols = self.window_expr.len();
         let input_cols = self.input_schema.fields().len();
         // TODO stats: some windowing function will maintain invariants such as min, max...
-        let mut column_statistics = vec![ColumnStatistics::default(); win_cols];
+        let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
         if let Some(input_col_stats) = input_stat.column_statistics {
             column_statistics.extend(input_col_stats);
         } else {
             column_statistics.extend(vec![ColumnStatistics::default(); input_cols]);
         }
+        column_statistics.extend(vec![ColumnStatistics::default(); win_cols]);
         Statistics {
             is_exact: input_stat.is_exact,
             num_rows: input_stat.num_rows,
@@ -433,7 +355,7 @@ impl WindowAggStream {
                 .map_err(|e| ArrowError::ExternalError(Box::new(e)))?,
             )
         }
-        let mut columns = transpose(partition_results)
+        let columns = transpose(partition_results)
             .iter()
             .map(|elems| concat(&elems.iter().map(|x| x.as_ref()).collect::<Vec<_>>()))
             .collect::<Vec<_>>()
@@ -442,9 +364,11 @@ impl WindowAggStream {
 
         // combine with the original cols
         // note the setup of window aggregates is that they newly calculated window
-        // expressions are always prepended to the columns
-        columns.extend_from_slice(batch.columns());
-        RecordBatch::try_new(self.schema.clone(), columns)
+        // expression results are always appended to the columns
+        let mut batch_columns = batch.columns().to_vec();
+        // calculate window cols
+        batch_columns.extend_from_slice(&columns);
+        RecordBatch::try_new(self.schema.clone(), batch_columns)
     }
 
     /// Evaluates the partition points given the sort columns. If the sort columns are

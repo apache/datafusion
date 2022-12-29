@@ -1403,7 +1403,7 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
 
         let object_store_url = ObjectStoreUrl::local_filesystem();
-        let store = state.runtime_env.object_store(&object_store_url).unwrap();
+        let store = state.runtime_env().object_store(&object_store_url).unwrap();
 
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
