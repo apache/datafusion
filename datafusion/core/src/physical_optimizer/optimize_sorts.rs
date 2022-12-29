@@ -585,8 +585,7 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
             OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
@@ -599,8 +598,7 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }
@@ -677,7 +675,7 @@ mod tests {
             vec![
                 "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
                 "  FilterExec: NOT non_nullable_col@1",
-                "    SortExec: [non_nullable_col@2 ASC NULLS LAST]",
+                "    SortExec: [non_nullable_col@1 ASC NULLS LAST]",
                 "      WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
                 "        SortExec: [non_nullable_col@1 DESC]",
                 "          MemoryExec: partitions=0, partition_sizes=[]",
@@ -686,8 +684,7 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
             OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
@@ -706,8 +703,7 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }
@@ -732,8 +728,7 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
             OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
@@ -751,8 +746,7 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }
@@ -799,8 +793,7 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
             OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
@@ -818,8 +811,7 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }
@@ -861,8 +853,7 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
             OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
@@ -879,8 +870,7 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }

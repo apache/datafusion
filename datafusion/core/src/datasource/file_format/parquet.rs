@@ -989,7 +989,7 @@ mod tests {
 
         assert_eq!(
             "[true, false, true, false, true, false, true, false]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -1014,7 +1014,7 @@ mod tests {
             values.push(array.value(i));
         }
 
-        assert_eq!("[4, 5, 6, 7, 2, 3, 0, 1]", format!("{:?}", values));
+        assert_eq!("[4, 5, 6, 7, 2, 3, 0, 1]", format!("{values:?}"));
 
         Ok(())
     }
@@ -1038,7 +1038,7 @@ mod tests {
             values.push(array.value(i));
         }
 
-        assert_eq!("[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]", format!("{:?}", values));
+        assert_eq!("[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]", format!("{values:?}"));
 
         Ok(())
     }
@@ -1064,7 +1064,7 @@ mod tests {
 
         assert_eq!(
             "[0.0, 1.1, 0.0, 1.1, 0.0, 1.1, 0.0, 1.1]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -1091,7 +1091,7 @@ mod tests {
 
         assert_eq!(
             "[0.0, 10.1, 0.0, 10.1, 0.0, 10.1, 0.0, 10.1]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -1118,7 +1118,7 @@ mod tests {
 
         assert_eq!(
             "[\"0\", \"1\", \"0\", \"1\", \"0\", \"1\", \"0\", \"1\"]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -1172,7 +1172,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_parquet_page_index() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_tiny_pages.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages.parquet");
         let file = File::open(path).await.unwrap();
         let options = ArrowReaderOptions::new().with_page_index(true);
         let builder =
@@ -1183,7 +1183,7 @@ mod tests {
                 .clone();
         check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
 
-        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let file = File::open(path).await.unwrap();
 
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(file, options)

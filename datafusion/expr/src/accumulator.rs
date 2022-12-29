@@ -40,7 +40,7 @@ pub trait Accumulator: Send + Sync + Debug {
     /// The state can be and often is a different type than the output
     /// type of the [`Accumulator`].
     ///
-    /// See [`merge_batch`] for more details on the merging process.
+    /// See [`Self::merge_batch`] for more details on the merging process.
     ///
     /// Some accumulators can return multiple values for their
     /// intermediate states. For example average, tracks `sum` and
@@ -58,7 +58,7 @@ pub trait Accumulator: Send + Sync + Debug {
     /// Retracts an update (caused by the given inputs) to
     /// accumulator's state.
     ///
-    /// This is the inverse operation of [`update_batch`] and is used
+    /// This is the inverse operation of [`Self::update_batch`] and is used
     /// to incrementally calculate window aggregates where the OVER
     /// clause defines a bounded window.
     fn retract_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
@@ -75,7 +75,7 @@ pub trait Accumulator: Send + Sync + Debug {
     /// results of calling `[state]` on zero or more other accumulator
     /// instances.
     ///
-    /// `states`  is an array of the same types as returned by [`state`]
+    /// `states`  is an array of the same types as returned by [`Self::state`]
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()>;
 
     /// Returns the final aggregate value based on its current state.

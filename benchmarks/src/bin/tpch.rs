@@ -169,8 +169,7 @@ async fn main() -> Result<()> {
                 "zstd" => Compression::ZSTD,
                 other => {
                     return Err(DataFusionError::NotImplemented(format!(
-                        "Invalid compression format: {}",
-                        other
+                        "Invalid compression format: {other}"
                     )));
                 }
             };
@@ -193,7 +192,7 @@ const TPCH_QUERY_END_ID: usize = 22;
 async fn benchmark_datafusion(
     opt: DataFusionBenchmarkOpt,
 ) -> Result<Vec<Vec<RecordBatch>>> {
-    println!("Running benchmarks with the following options: {:?}", opt);
+    println!("Running benchmarks with the following options: {opt:?}");
     let query_range = match opt.query {
         Some(query_id) => query_id..=query_id,
         None => TPCH_QUERY_START_ID..=TPCH_QUERY_END_ID,
@@ -257,14 +256,13 @@ async fn benchmark_query(
         millis.push(elapsed);
         let row_count = result.iter().map(|b| b.num_rows()).sum();
         println!(
-            "Query {} iteration {} took {:.1} ms and returned {} rows",
-            query_id, i, elapsed, row_count
+            "Query {query_id} iteration {i} took {elapsed:.1} ms and returned {row_count} rows"
         );
         benchmark_run.add_result(elapsed, row_count);
     }
 
     let avg = millis.iter().sum::<f64>() / millis.len() as f64;
-    println!("Query {} avg time: {:.2} ms", query_id, avg);
+    println!("Query {query_id} avg time: {avg:.2} ms");
 
     Ok((benchmark_run, result))
 }
@@ -286,7 +284,7 @@ async fn register_tables(
         };
 
         if opt.mem_table {
-            println!("Loading table '{}' into memory", table);
+            println!("Loading table '{table}' into memory");
             let start = Instant::now();
             let memtable =
                 MemTable::load(table_provider, Some(opt.partitions), &ctx.state())
@@ -328,12 +326,12 @@ async fn execute_query(
     let (state, plan) = plan.into_parts();
 
     if debug {
-        println!("=== Logical plan ===\n{:?}\n", plan);
+        println!("=== Logical plan ===\n{plan:?}\n");
     }
 
     let plan = state.optimize(&plan)?;
     if debug {
-        println!("=== Optimized logical plan ===\n{:?}\n", plan);
+        println!("=== Optimized logical plan ===\n{plan:?}\n");
     }
     let physical_plan = state.create_physical_plan(&plan).await?;
     if debug {
@@ -378,7 +376,7 @@ async fn get_table(
         match table_format {
             // dbgen creates .tbl ('|' delimited) files without header
             "tbl" => {
-                let path = format!("{}/{}.tbl", path, table);
+                let path = format!("{path}/{table}.tbl");
 
                 let format = CsvFormat::default()
                     .with_delimiter(b'|')
@@ -387,7 +385,7 @@ async fn get_table(
                 (Arc::new(format), path, ".tbl")
             }
             "csv" => {
-                let path = format!("{}/{}", path, table);
+                let path = format!("{path}/{table}");
                 let format = CsvFormat::default()
                     .with_delimiter(b',')
                     .with_has_header(true);
@@ -395,7 +393,7 @@ async fn get_table(
                 (Arc::new(format), path, DEFAULT_CSV_EXTENSION)
             }
             "parquet" => {
-                let path = format!("{}/{}", path, table);
+                let path = format!("{path}/{table}");
                 let format = ParquetFormat::default().with_enable_pruning(Some(true));
 
                 (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
@@ -651,8 +649,8 @@ mod tests {
         }
 
         let possibilities = vec![
-            format!("expected-plans/q{}.txt", query),
-            format!("benchmarks/expected-plans/q{}.txt", query),
+            format!("expected-plans/q{query}.txt"),
+            format!("benchmarks/expected-plans/q{query}.txt"),
         ];
 
         let mut found = false;
@@ -661,8 +659,7 @@ mod tests {
             if let Ok(expected) = read_text_file(path) {
                 assert_eq!(expected, actual,
                            // generate output that is easier to copy/paste/update
-                           "\n\nMismatch of expected content in: {:?}\nExpected:\n\n{}\n\nActual:\n\n{}\n\n",
-                           path, expected, actual);
+                           "\n\nMismatch of expected content in: {path:?}\nExpected:\n\n{expected}\n\nActual:\n\n{actual}\n\n");
                 found = true;
                 break;
             }

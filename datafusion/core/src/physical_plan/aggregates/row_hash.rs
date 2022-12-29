@@ -140,7 +140,7 @@ impl GroupedHashAggregateStreamV2 {
 
         let aggr_layout = Arc::new(RowLayout::new(&aggr_schema, RowType::WordAligned));
         let reservation =
-            MemoryConsumer::new(format!("GroupedHashAggregateStreamV2[{}]", partition))
+            MemoryConsumer::new(format!("GroupedHashAggregateStreamV2[{partition}]"))
                 .register(context.memory_pool());
 
         let aggr_state = AggregationState {

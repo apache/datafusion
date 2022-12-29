@@ -365,13 +365,11 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Result<Vec<PartitionedFile>> {
 fn to_timestamp_millis(v: i64) -> Result<chrono::DateTime<Utc>> {
     match Utc.timestamp_millis_opt(v) {
         chrono::LocalResult::None => Err(DataFusionError::Execution(format!(
-            "Can not convert {} to UTC millisecond timestamp",
-            v
+            "Can not convert {v} to UTC millisecond timestamp"
         ))),
         chrono::LocalResult::Single(v) => Ok(v),
         chrono::LocalResult::Ambiguous(_, _) => Err(DataFusionError::Execution(format!(
-            "Ambiguous timestamp when converting {} to UTC millisecond timestamp",
-            v
+            "Ambiguous timestamp when converting {v} to UTC millisecond timestamp"
         ))),
     }
 }

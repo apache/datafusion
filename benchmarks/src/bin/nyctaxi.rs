@@ -66,7 +66,7 @@ struct Opt {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt = Opt::from_args();
-    println!("Running benchmarks with the following options: {:?}", opt);
+    println!("Running benchmarks with the following options: {opt:?}");
 
     let config = SessionConfig::new()
         .with_target_partitions(opt.partitions)
@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
                 .await?
         }
         other => {
-            println!("Invalid file format '{}'", other);
+            println!("Invalid file format '{other}'");
             process::exit(-1);
         }
     }
@@ -102,7 +102,7 @@ async fn datafusion_sql_benchmarks(
     let mut queries = HashMap::new();
     queries.insert("fare_amt_by_passenger", "SELECT passenger_count, MIN(fare_amount), MAX(fare_amount), SUM(fare_amount) FROM tripdata GROUP BY passenger_count");
     for (name, sql) in &queries {
-        println!("Executing '{}'", name);
+        println!("Executing '{name}'");
         for i in 0..iterations {
             let start = Instant::now();
             execute_sql(ctx, sql, debug).await?;

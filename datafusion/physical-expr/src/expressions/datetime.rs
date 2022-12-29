@@ -70,19 +70,16 @@ impl DateTimeIntervalExpr {
                             input_schema: input_schema.clone(),
                         }),
                         _ => Err(DataFusionError::Execution(format!(
-                            "Invalid operator '{}' for DateIntervalExpr",
-                            op
+                            "Invalid operator '{op}' for DateIntervalExpr"
                         ))),
                     },
                     other => Err(DataFusionError::Execution(format!(
-                        "Operation '{}' not support for type {}",
-                        op, other
+                        "Operation '{op}' not support for type {other}"
                     ))),
                 }
             }
             other => Err(DataFusionError::Execution(format!(
-                "Invalid lhs type '{}' for DateIntervalExpr",
-                other
+                "Invalid lhs type '{other}' for DateIntervalExpr"
             ))),
         }
     }
@@ -259,42 +256,42 @@ mod tests {
     fn add_11_months() {
         let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, 11);
-        assert_eq!(format!("{:?}", actual).as_str(), "2000-12-01");
+        assert_eq!(format!("{actual:?}").as_str(), "2000-12-01");
     }
 
     #[test]
     fn add_12_months() {
         let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, 12);
-        assert_eq!(format!("{:?}", actual).as_str(), "2001-01-01");
+        assert_eq!(format!("{actual:?}").as_str(), "2001-01-01");
     }
 
     #[test]
     fn add_13_months() {
         let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, 13);
-        assert_eq!(format!("{:?}", actual).as_str(), "2001-02-01");
+        assert_eq!(format!("{actual:?}").as_str(), "2001-02-01");
     }
 
     #[test]
     fn sub_11_months() {
         let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, -11);
-        assert_eq!(format!("{:?}", actual).as_str(), "1999-02-01");
+        assert_eq!(format!("{actual:?}").as_str(), "1999-02-01");
     }
 
     #[test]
     fn sub_12_months() {
         let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, -12);
-        assert_eq!(format!("{:?}", actual).as_str(), "1999-01-01");
+        assert_eq!(format!("{actual:?}").as_str(), "1999-01-01");
     }
 
     #[test]
     fn sub_13_months() {
         let prior = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
         let actual = shift_months(prior, -13);
-        assert_eq!(format!("{:?}", actual).as_str(), "1998-12-01");
+        assert_eq!(format!("{actual:?}").as_str(), "1998-12-01");
     }
 
     #[test]
@@ -312,7 +309,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
                 let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::days(d as i64));
-                assert_eq!(format!("{:?}", res).as_str(), "1970-01-02");
+                assert_eq!(format!("{res:?}").as_str(), "1970-01-02");
             }
             _ => Err(DataFusionError::NotImplemented(
                 "Unexpected result!".to_string(),
@@ -337,7 +334,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
                 let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::days(d as i64));
-                assert_eq!(format!("{:?}", res).as_str(), "1968-12-01");
+                assert_eq!(format!("{res:?}").as_str(), "1968-12-01");
             }
             _ => Err(DataFusionError::NotImplemented(
                 "Unexpected result!".to_string(),
@@ -363,7 +360,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Date64(Some(d))) => {
                 let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::milliseconds(d));
-                assert_eq!(format!("{:?}", res).as_str(), "1969-12-16");
+                assert_eq!(format!("{res:?}").as_str(), "1969-12-16");
             }
             _ => Err(DataFusionError::NotImplemented(
                 "Unexpected result!".to_string(),
@@ -388,7 +385,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
                 let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::days(d as i64));
-                assert_eq!(format!("{:?}", res).as_str(), "1970-02-01");
+                assert_eq!(format!("{res:?}").as_str(), "1970-02-01");
             }
             _ => Err(DataFusionError::NotImplemented(
                 "Unexpected result!".to_string(),
@@ -413,7 +410,7 @@ mod tests {
             ColumnarValue::Scalar(ScalarValue::Date32(Some(d))) => {
                 let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                 let res = epoch.add(Duration::days(d as i64));
-                assert_eq!(format!("{:?}", res).as_str(), "1968-12-17");
+                assert_eq!(format!("{res:?}").as_str(), "1968-12-17");
             }
             _ => Err(DataFusionError::NotImplemented(
                 "Unexpected result!".to_string(),
@@ -631,8 +628,8 @@ mod tests {
         let lhs = create_physical_expr(dt, &dfs, &schema, &props)?;
         let rhs = create_physical_expr(interval, &dfs, &schema, &props)?;
 
-        let lhs_str = format!("{}", lhs);
-        let rhs_str = format!("{}", rhs);
+        let lhs_str = format!("{lhs}");
+        let rhs_str = format!("{rhs}");
 
         let cut = DateTimeIntervalExpr::try_new(lhs, op, rhs, &schema)?;
 

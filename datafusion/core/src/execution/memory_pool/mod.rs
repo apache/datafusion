@@ -184,7 +184,7 @@ pub fn human_readable_size(size: usize) -> String {
             (size as f64, "B")
         }
     };
-    format!("{:.1} {}", value, unit)
+    format!("{value:.1} {unit}")
 }
 
 #[cfg(test)]

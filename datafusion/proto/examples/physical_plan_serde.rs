@@ -29,8 +29,8 @@ async fn main() -> Result<()> {
     let bytes = physical_plan_to_bytes(physical_plan.clone())?;
     let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(
-        format!("{:?}", physical_plan),
-        format!("{:?}", physical_round_trip)
+        format!("{physical_plan:?}"),
+        format!("{physical_round_trip:?}")
     );
     Ok(())
 }

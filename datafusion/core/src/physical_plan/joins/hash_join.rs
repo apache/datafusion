@@ -1131,8 +1131,7 @@ fn equal_rows(
             other => {
                 // This is internal because we should have caught this before.
                 err = Some(Err(DataFusionError::Internal(format!(
-                    "Unsupported data type in hasher: {}",
-                    other
+                    "Unsupported data type in hasher: {other}"
                 ))));
                 false
             }
@@ -3008,8 +3007,7 @@ mod tests {
                 .to_string();
             assert!(
                 result_string.contains("bad data error"),
-                "actual: {}",
-                result_string
+                "actual: {result_string}"
             );
         }
     }

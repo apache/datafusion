@@ -1198,7 +1198,7 @@ mod tests {
         for join_type in join_types {
             let join = hash_join_exec(left.clone(), right.clone(), &join_on, &join_type);
             let join_plan =
-                format!("HashJoinExec: mode=Partitioned, join_type={}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"b1\", index: 1 }})]", join_type);
+                format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"b1\", index: 1 }})]");
 
             match join_type {
                 JoinType::Inner
@@ -1219,7 +1219,7 @@ mod tests {
                         &join_type,
                     );
                     let top_join_plan =
-                        format!("HashJoinExec: mode=Partitioned, join_type={}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"c\", index: 2 }})]", join_type);
+                        format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"c\", index: 2 }})]");
 
                     let expected = match join_type {
                         // Should include 3 RepartitionExecs
@@ -1271,9 +1271,9 @@ mod tests {
                         hash_join_exec(join, parquet_exec(), &top_join_on, &join_type);
                     let top_join_plan = match join_type {
                         JoinType::RightSemi | JoinType::RightAnti =>
-                            format!("HashJoinExec: mode=Partitioned, join_type={}, on=[(Column {{ name: \"b1\", index: 1 }}, Column {{ name: \"c\", index: 2 }})]", join_type),
+                            format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(Column {{ name: \"b1\", index: 1 }}, Column {{ name: \"c\", index: 2 }})]"),
                         _ =>
-                            format!("HashJoinExec: mode=Partitioned, join_type={}, on=[(Column {{ name: \"b1\", index: 6 }}, Column {{ name: \"c\", index: 2 }})]", join_type),
+                            format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(Column {{ name: \"b1\", index: 6 }}, Column {{ name: \"c\", index: 2 }})]"),
                     };
 
                     let expected = match join_type {
@@ -1906,7 +1906,7 @@ mod tests {
             let join =
                 sort_merge_join_exec(left.clone(), right.clone(), &join_on, &join_type);
             let join_plan =
-                format!("SortMergeJoin: join_type={}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"b1\", index: 1 }})]", join_type);
+                format!("SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"b1\", index: 1 }})]");
 
             // Top join on (a == c)
             let top_join_on = vec![(
@@ -1920,7 +1920,7 @@ mod tests {
                 &join_type,
             );
             let top_join_plan =
-                format!("SortMergeJoin: join_type={}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"c\", index: 2 }})]", join_type);
+                format!("SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"c\", index: 2 }})]");
 
             let expected = match join_type {
                 // Should include 3 RepartitionExecs 3 SortExecs
@@ -1974,7 +1974,7 @@ mod tests {
                         &join_type,
                     );
                     let top_join_plan =
-                        format!("SortMergeJoin: join_type={}, on=[(Column {{ name: \"b1\", index: 6 }}, Column {{ name: \"c\", index: 2 }})]", join_type);
+                        format!("SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"b1\", index: 6 }}, Column {{ name: \"c\", index: 2 }})]");
 
                     let expected = match join_type {
                         // Should include 3 RepartitionExecs and 3 SortExecs

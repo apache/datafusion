@@ -39,7 +39,7 @@ pub fn col(ident: impl Into<Column>) -> Expr {
     Expr::Column(ident.into())
 }
 
-/// Return a new expression left <op> right
+/// Return a new expression `left <op> right`
 pub fn binary_expr(left: Expr, op: Operator, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
 }

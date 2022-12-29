@@ -72,7 +72,7 @@ impl AggregateStream {
         let aggregate_expressions = aggregate_expressions(&aggr_expr, &mode, 0)?;
         let accumulators = create_accumulators(&aggr_expr)?;
 
-        let reservation = MemoryConsumer::new(format!("AggregateStream[{}]", partition))
+        let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))
             .register(context.memory_pool());
 
         let inner = AggregateStreamInner {

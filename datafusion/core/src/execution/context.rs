@@ -299,8 +299,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                        "Table '{}' already exists",
-                        name
+                        "Table '{name}' already exists"
                     ))),
                 }
             }
@@ -330,8 +329,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                        "Table '{}' already exists",
-                        name
+                        "Table '{name}' already exists"
                     ))),
                 }
             }
@@ -344,8 +342,7 @@ impl SessionContext {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
                     (_, _) => Err(DataFusionError::Execution(format!(
-                        "Table '{}' doesn't exist.",
-                        name
+                        "Table '{name}' doesn't exist."
                     ))),
                 }
             }
@@ -358,8 +355,7 @@ impl SessionContext {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
                     (_, _) => Err(DataFusionError::Execution(format!(
-                        "View '{}' doesn't exist.",
-                        name
+                        "View '{name}' doesn't exist."
                     ))),
                 }
             }
@@ -387,14 +383,12 @@ impl SessionContext {
                     1 => Ok((DEFAULT_CATALOG, schema_name.as_str())),
                     2 => Ok((tokens[0], tokens[1])),
                     _ => Err(DataFusionError::Execution(format!(
-                        "Unable to parse catalog from {}",
-                        schema_name
+                        "Unable to parse catalog from {schema_name}"
                     ))),
                 }?;
                 let catalog = self.catalog(catalog).ok_or_else(|| {
                     DataFusionError::Execution(format!(
-                        "Missing '{}' catalog",
-                        DEFAULT_CATALOG
+                        "Missing '{DEFAULT_CATALOG}' catalog"
                     ))
                 })?;
 
@@ -408,8 +402,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                        "Schema '{}' already exists",
-                        schema_name
+                        "Schema '{schema_name}' already exists"
                     ))),
                 }
             }
@@ -431,8 +424,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                        "Catalog '{}' already exists",
-                        catalog_name
+                        "Catalog '{catalog_name}' already exists"
                     ))),
                 }
             }
@@ -1803,8 +1795,7 @@ impl FunctionRegistry for SessionState {
 
         result.cloned().ok_or_else(|| {
             DataFusionError::Plan(format!(
-                "There is no UDF named \"{}\" in the registry",
-                name
+                "There is no UDF named \"{name}\" in the registry"
             ))
         })
     }
@@ -1814,8 +1805,7 @@ impl FunctionRegistry for SessionState {
 
         result.cloned().ok_or_else(|| {
             DataFusionError::Plan(format!(
-                "There is no UDAF named \"{}\" in the registry",
-                name
+                "There is no UDAF named \"{name}\" in the registry"
             ))
         })
     }
@@ -1924,8 +1914,7 @@ impl FunctionRegistry for TaskContext {
 
         result.cloned().ok_or_else(|| {
             DataFusionError::Internal(format!(
-                "There is no UDF named \"{}\" in the TaskContext",
-                name
+                "There is no UDF named \"{name}\" in the TaskContext"
             ))
         })
     }
@@ -1935,8 +1924,7 @@ impl FunctionRegistry for TaskContext {
 
         result.cloned().ok_or_else(|| {
             DataFusionError::Internal(format!(
-                "There is no UDAF named \"{}\" in the TaskContext",
-                name
+                "There is no UDAF named \"{name}\" in the TaskContext"
             ))
         })
     }
@@ -2307,7 +2295,7 @@ mod tests {
         for table_ref in &["my_catalog.my_schema.test", "my_schema.test", "test"] {
             let result = plan_and_collect(
                 &ctx,
-                &format!("SELECT COUNT(*) AS count FROM {}", table_ref),
+                &format!("SELECT COUNT(*) AS count FROM {table_ref}"),
             )
             .await
             .unwrap();
@@ -2557,7 +2545,7 @@ mod tests {
 
         // generate a partitioned file
         for partition in 0..partition_count {
-            let filename = format!("partition-{}.{}", partition, file_extension);
+            let filename = format!("partition-{partition}.{file_extension}");
             let file_path = tmp_dir.path().join(filename);
             let mut file = File::create(file_path)?;
 

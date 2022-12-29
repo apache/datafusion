@@ -96,7 +96,7 @@ pub fn partitioned_file_groups(
     file_type: FileType,
     file_compression_type: FileCompressionType,
 ) -> Result<Vec<Vec<PartitionedFile>>> {
-    let path = format!("{}/{}", path, filename);
+    let path = format!("{path}/{filename}");
 
     let tmp_dir = TempDir::new()?.into_path();
 

@@ -110,8 +110,7 @@ impl DiskManager {
         let mut guard = self.local_dirs.lock();
         let local_dirs = guard.as_mut().ok_or_else(|| {
             DataFusionError::ResourcesExhausted(format!(
-                "Memory Exhausted while {} (DiskManager is disabled)",
-                request_description
+                "Memory Exhausted while {request_description} (DiskManager is disabled)"
             ))
         })?;
 
@@ -228,6 +227,6 @@ mod tests {
                 .any(|candidate_path| *file_path == candidate_path)
         });
 
-        assert!(found, "Can't find {:?} in dirs: {:?}", file_path, dirs);
+        assert!(found, "Can't find {file_path:?} in dirs: {dirs:?}");
     }
 }
