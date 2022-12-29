@@ -199,8 +199,9 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 
     fn get_range(&self, state: &WindowAggState, n_rows: usize) -> Result<Range<usize>> {
         if self.shift_offset > 0 {
-            let start = if state.last_calculated_index > self.shift_offset as usize {
-                state.last_calculated_index - self.shift_offset as usize
+            let offset = self.shift_offset as usize;
+            let start = if state.last_calculated_index > offset {
+                state.last_calculated_index - offset
             } else {
                 0
             };
@@ -209,8 +210,8 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                 end: state.last_calculated_index + 1,
             })
         } else {
-            let end = state.last_calculated_index + (-self.shift_offset) as usize;
-            let end = min(end, n_rows);
+            let offset = (-self.shift_offset) as usize;
+            let end = min(state.last_calculated_index + offset, n_rows);
             Ok(Range {
                 start: state.last_calculated_index,
                 end,
@@ -219,12 +220,13 @@ impl PartitionEvaluator for WindowShiftEvaluator {
     }
 
     fn evaluate_stateful(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
-        let dtype = values[0].data_type();
+        let array = &values[0];
+        let dtype = array.data_type();
         let idx = self.state.idx as i64 - self.shift_offset;
-        if idx < 0 || idx as usize >= values[0].len() {
+        if idx < 0 || idx as usize >= array.len() {
             get_default_value(&self.default_value, dtype)
         } else {
-            ScalarValue::try_from_array(&values[0], idx as usize)
+            ScalarValue::try_from_array(array, idx as usize)
         }
     }
 
@@ -239,8 +241,8 @@ fn get_default_value(
     default_value: &Option<ScalarValue>,
     dtype: &DataType,
 ) -> Result<ScalarValue> {
-    if let Some(val) = default_value {
-        if let ScalarValue::Int64(Some(val)) = val {
+    if let Some(value) = default_value {
+        if let ScalarValue::Int64(Some(val)) = value {
             ScalarValue::try_from_string(val.to_string(), dtype)
         } else {
             Err(DataFusionError::Internal(

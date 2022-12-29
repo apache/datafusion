@@ -143,19 +143,16 @@ impl PartitionEvaluator for RankEvaluator {
                     && state.last_calculated_index < elem.end
             })
             .ok_or_else(|| DataFusionError::Execution("Expects sort_partition_points to contain state.last_calculated_index".to_string()))?;
-        let cur_chunk = sort_partition_points[chunk_idx].clone();
-        let mut last_rank_data = vec![];
-        for column in range_columns {
-            last_rank_data.push(ScalarValue::try_from_array(column, cur_chunk.end - 1)?)
-        }
-        if self.state.last_rank_data.is_empty() {
+        let chunk = &sort_partition_points[chunk_idx];
+        let last_rank_data = range_columns
+            .iter()
+            .map(|c| ScalarValue::try_from_array(c, chunk.end - 1))
+            .collect::<Result<Vec<_>>>()?;
+        let empty = self.state.last_rank_data.is_empty();
+        if empty || self.state.last_rank_data != last_rank_data {
             self.state.last_rank_data = last_rank_data;
-            self.state.last_rank_boundary = state.offset_pruned_rows + cur_chunk.start;
-            self.state.n_rank = chunk_idx + 1;
-        } else if self.state.last_rank_data != last_rank_data {
-            self.state.last_rank_data = last_rank_data;
-            self.state.last_rank_boundary = state.offset_pruned_rows + cur_chunk.start;
-            self.state.n_rank += 1
+            self.state.last_rank_boundary = state.offset_pruned_rows + chunk.start;
+            self.state.n_rank = 1 + if empty { chunk_idx } else { self.state.n_rank };
         }
         Ok(())
     }
@@ -168,7 +165,7 @@ impl PartitionEvaluator for RankEvaluator {
             ))),
             RankType::Dense => Ok(ScalarValue::UInt64(Some(self.state.n_rank as u64))),
             RankType::Percent => Err(DataFusionError::Execution(
-                "Can not execute Percent_RANK in a streaming fashion".to_string(),
+                "Can not execute PERCENT_RANK in a streaming fashion".to_string(),
             )),
         }
     }

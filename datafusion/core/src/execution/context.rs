@@ -101,7 +101,7 @@ use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::memory_pool::MemoryPool;
 use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
-use crate::physical_optimizer::replace_window_with_bounded_impl::ReplaceWindowWithBoundedImpl;
+use crate::physical_optimizer::use_bounded_window_execs::UseBoundedWindowAggExec;
 use uuid::Uuid;
 
 use super::options::{
@@ -1588,8 +1588,8 @@ impl SessionState {
         // rule below performs this analysis and removes unnecessary `SortExec`s.
         physical_optimizers.push(Arc::new(OptimizeSorts::new()));
 
-        // Replace WindowAggExec with BoundedWindowAggExec if conditions are met
-        physical_optimizers.push(Arc::new(ReplaceWindowWithBoundedImpl::new()));
+        // Replace ordinary window executors with bounded-memory variants when possible:
+        physical_optimizers.push(Arc::new(UseBoundedWindowAggExec::new()));
 
         let mut this = SessionState {
             session_id,

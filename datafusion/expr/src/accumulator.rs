@@ -88,7 +88,7 @@ pub trait Accumulator: Send + Sync + Debug {
 
     fn clone_dyn(&self) -> Result<Box<dyn Accumulator>> {
         Err(DataFusionError::NotImplemented(
-            "clone_dyn is not implemented by default for this accumulator, to use it in for cloning implement this method".into(),
+            "clone_dyn is not implemented by default for this accumulator".into(),
         ))
     }
 }

@@ -131,8 +131,9 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// Get the window frame of this [WindowExpr].
     fn get_window_frame(&self) -> &Arc<WindowFrame>;
 
-    /// get whether can run with bounded executor
-    fn can_run_bounded(&self) -> bool;
+    /// Return a flag indicating whether this [WindowExpr] can run with
+    /// bounded memory.
+    fn uses_bounded_memory(&self) -> bool;
 
     /// Get the reverse expression of this [WindowExpr].
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
@@ -267,7 +268,7 @@ pub struct WindowState {
 }
 pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState>;
 
-/// The IndexMap(Ordered HashMap) where record_batch is seperated for each partition
+/// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
 pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState>;
 
 impl WindowAggState {

@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! ReplaceWindowWithBoundedImpl optimizer that replaces `WindowAggExec`
-//! with `BoundedWindowAggExec` if window_expr can run using `BoundedWindowAggExec`
+//! The [UseBoundedWindowAggExec] rule replaces [WindowAggExec]s with
+//! [BoundedWindowAggExec]s if the window expression in question is
+//! amenable to pipeline-friendly bounded memory execution.
 
 use crate::physical_plan::windows::BoundedWindowAggExec;
 use crate::physical_plan::windows::WindowAggExec;
@@ -27,18 +28,19 @@ use crate::{
 use datafusion_expr::WindowFrameUnits;
 use std::sync::Arc;
 
-/// Optimizer rule that introduces replaces `WindowAggExec` with `BoundedWindowAggExec`
-/// to run executor with bounded memory.
+/// This rule checks whether [WindowAggExec]s in the query plan can be
+/// replaced with [BoundedWindowAggExec]s, and replaces them whenever possible.
 #[derive(Default)]
-pub struct ReplaceWindowWithBoundedImpl {}
+pub struct UseBoundedWindowAggExec {}
 
-impl ReplaceWindowWithBoundedImpl {
+impl UseBoundedWindowAggExec {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
-impl PhysicalOptimizerRule for ReplaceWindowWithBoundedImpl {
+
+impl PhysicalOptimizerRule for UseBoundedWindowAggExec {
     fn optimize(
         &self,
         plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
@@ -46,18 +48,18 @@ impl PhysicalOptimizerRule for ReplaceWindowWithBoundedImpl {
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
         plan.transform_up(&|plan| {
             if let Some(window_agg_exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
-                let is_contains_groups =
+                let contains_groups =
                     window_agg_exec.window_expr().iter().any(|window_expr| {
                         matches!(
                             window_expr.get_window_frame().units,
                             WindowFrameUnits::Groups
                         )
                     });
-                let can_run_bounded = window_agg_exec
+                let uses_bounded_memory = window_agg_exec
                     .window_expr()
                     .iter()
-                    .all(|elem| elem.can_run_bounded());
-                if !is_contains_groups && can_run_bounded {
+                    .all(|elem| elem.uses_bounded_memory());
+                if !contains_groups && uses_bounded_memory {
                     return Ok(Some(Arc::new(BoundedWindowAggExec::try_new(
                         window_agg_exec.window_expr().to_vec(),
                         window_agg_exec.input().clone(),
@@ -72,7 +74,7 @@ impl PhysicalOptimizerRule for ReplaceWindowWithBoundedImpl {
     }
 
     fn name(&self) -> &str {
-        "ReplaceWindowWithBoundedImpl"
+        "UseBoundedWindowAggExec"
     }
 
     fn schema_check(&self) -> bool {

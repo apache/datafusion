@@ -90,9 +90,8 @@ impl PartitionEvaluator for NumRowsEvaluator {
 
     /// evaluate window function result inside given range
     fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
-        let n_row = self.state.n_rows as u64 + 1;
         self.state.n_rows += 1;
-        Ok(ScalarValue::UInt64(Some(n_row)))
+        Ok(ScalarValue::UInt64(Some(self.state.n_rows as u64)))
     }
 
     fn evaluate(&self, _values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {

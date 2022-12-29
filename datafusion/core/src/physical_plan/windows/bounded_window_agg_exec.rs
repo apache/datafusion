@@ -16,6 +16,9 @@
 // under the License.
 
 //! Stream and channel implementations for window function expressions.
+//! The executor given here uses bounded memory (does not maintain all
+//! the input data seen so far), which makes it appropriate when processing
+//! infinite inputs.
 
 use crate::error::Result;
 use crate::execution::context::TaskContext;
@@ -46,7 +49,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_plan::common::combine_batches_with_ref;
+use crate::physical_plan::common::combine_batches;
 use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
@@ -150,15 +153,16 @@ impl ExecutionPlan for BoundedWindowAggExec {
 
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        // because we can have repartitioning using the partition keys
-        // this would be either 1 or more than 1 depending on the presense of
-        // repartitioning
+        // As we can have repartitioning using the partition keys, this can
+        // be either one or more than one, depending on the presence of
+        // repartitioning.
         self.input.output_partitioning()
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        // This executor maintains input order, and has required input_ordering filled
-        // hence output_ordering would be `required_input_ordering`
+        // This executor maintains input order, and it has a required input
+        // ordering. Therefore, output_ordering would be the same with
+        // `required_input_ordering`.
         self.required_input_ordering()[0]
     }
 
@@ -269,20 +273,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 }
 
-/// Trait for updating state, calculate results for window functions
-/// According to partition by column assumptions Sorted/Unsorted we may have different
-/// implementations for these fields
-pub trait PartitionByHandler {
-    /// Method to construct output columns from window_expression results
-    fn calculate_out_columns(&self) -> Result<Option<Vec<ArrayRef>>>;
-    /// Given how many rows we emitted as results
-    /// prune no longer needed sections from the state
-    fn prune_state(&mut self, n_out: usize) -> Result<()>;
-    /// method to update record batches for each partition
-    /// when new record batches are received
-    fn update_partition_batch(&mut self, record_batch: RecordBatch) -> Result<()>;
-}
-
 fn create_schema(
     input_schema: &Schema,
     window_expr: &[Arc<dyn WindowExpr>],
@@ -295,36 +285,54 @@ fn create_schema(
     Ok(Schema::new(fields))
 }
 
+/// This trait defines the interface for updating the state and calculating
+/// results for window functions. Depending on the partitioning scheme, one
+/// may have different implementations for the functions within.
+pub trait PartitionByHandler {
+    /// Constructs output columns from window_expression results.
+    fn calculate_out_columns(&self) -> Result<Option<Vec<ArrayRef>>>;
+    /// Prunes the window state to remove any unnecessary information
+    /// given how many rows we emitted so far.
+    fn prune_state(&mut self, n_out: usize) -> Result<()>;
+    /// Updates record batches for each partition when new batches are
+    /// received.
+    fn update_partition_batch(&mut self, record_batch: RecordBatch) -> Result<()>;
+}
+
 /// stream for window aggregation plan
 /// assuming partition by column is sorted (or without PARTITION BY expression)
 pub struct SortedPartitionByBoundedWindowStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
-    /// The record_batch executor receives as input (columns needed during aggregate results calculation)
+    /// The record batch executor receives as input (i.e. the columns needed
+    /// while calculating aggregation results).
     input_buffer_record_batch: RecordBatch,
-    /// we separate `input_buffer_record_batch` according to different partitions (determined by PARTITION BY columns)
-    /// and store the result record_batches per partition base in the `partition_batches`.
-    /// This variable is used during result calculation for each window_expression
-    /// This enables us to use same batch for different window_expressions (without copying)
-    // We may have keep record_batches for each window expression in the `PartitionWindowAggStates`
-    // However, this would use more memory (on the order of window_expression number)
+    /// We separate `input_buffer_record_batch` based on partitions (as
+    /// determined by PARTITION BY columns) and store them per partition
+    /// in `partition_batches`. We use this variable when calculating results
+    /// for each window expression. This enables us to use the same batch for
+    /// different window expressions without copying.
+    // Note that we could keep record batches for each window expression in
+    // `PartitionWindowAggStates`. However, this would use more memory (as
+    // many times as the number of window expressions).
     partition_batches: PartitionBatches,
-    /// Each executor can run multiple window expressions given
-    /// their PARTITION BY and ORDER BY sections are same
-    /// We keep state of the each window expression inside `window_agg_states`
+    /// An executor can run multiple window expressions if the PARTITION BY
+    /// and ORDER BY sections are same. We keep state of the each window
+    /// expression inside `window_agg_states`.
     window_agg_states: Vec<PartitionWindowAggStates>,
     finished: bool,
     window_expr: Vec<Arc<dyn WindowExpr>>,
-    baseline_metrics: BaselineMetrics,
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
+    baseline_metrics: BaselineMetrics,
 }
 
 impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
     /// This method constructs output columns using the result of each window expression
     fn calculate_out_columns(&self) -> Result<Option<Vec<ArrayRef>>> {
         let n_out = self.calculate_n_out_row();
-        if n_out > 0 {
-            let mut out_columns = vec![];
+        if n_out == 0 {
+            Ok(None)
+        } else {
             self.window_agg_states
                 .iter()
                 .map(|elem| get_aggregate_result_out_column(elem, n_out))
@@ -334,28 +342,21 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
                         .iter()
                         .map(|elem| Ok(elem.slice(0, n_out))),
                 )
-                .map(|elem| {
-                    out_columns.push(elem?);
-                    Ok(())
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            Ok(Some(out_columns))
-        } else {
-            Ok(None)
+                .collect::<Result<Vec<_>>>()
+                .map(Some)
         }
     }
 
-    /// Prunes sections in the state that are no longer needed
-    /// for calculating result. Determined by window frame boundaries
-    // For instance if `n_out` number of rows are calculated, we can remove first `n_out` rows from
-    // the `self.input_buffer_record_batch`
+    /// Prunes sections of the state that are no longer needed when calculating
+    /// results (as determined by window frame boundaries).
+    // For instance, if `n_out` number of rows are calculated, we can remove
+    // first `n_out` rows from `self.input_buffer_record_batch`.
     fn prune_state(&mut self, n_out: usize) -> Result<()> {
-        // Prunes `self.partition_batches`
+        // Prune `self.partition_batches`:
         self.prune_partition_batches()?;
-        // Prunes `self.input_buffer_record_batch`
+        // Prune `self.input_buffer_record_batch`:
         self.prune_input_batch(n_out)?;
-        // Prunes `self.window_agg_states`
+        // Prune `self.window_agg_states`:
         self.prune_out_columns(n_out)?;
         Ok(())
     }
@@ -380,7 +381,7 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
                 if let Some(partition_batch_state) =
                     self.partition_batches.get_mut(&partition_row)
                 {
-                    let combined_partition_batch = combine_batches_with_ref(
+                    partition_batch_state.record_batch = combine_batches(
                         &[&partition_batch_state.record_batch, &partition_batch],
                         self.input.schema(),
                     )?
@@ -389,7 +390,6 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
                             "Should contain at least one entry".to_string(),
                         )
                     })?;
-                    partition_batch_state.record_batch = combined_partition_batch;
                 } else {
                     let partition_batch_state = PartitionBatchState {
                         record_batch: partition_batch,
@@ -404,14 +404,13 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
         for (idx, (_, partition_batch_state)) in
             self.partition_batches.iter_mut().enumerate()
         {
-            if idx < n_partitions - 1 {
-                partition_batch_state.is_end = true;
-            }
+            partition_batch_state.is_end |= idx < n_partitions - 1;
         }
-        if self.input_buffer_record_batch.num_rows() == 0 {
-            self.input_buffer_record_batch = record_batch;
+        self.input_buffer_record_batch = if self.input_buffer_record_batch.num_rows() == 0
+        {
+            record_batch
         } else {
-            self.input_buffer_record_batch = combine_batches_with_ref(
+            combine_batches(
                 &[&self.input_buffer_record_batch, &record_batch],
                 self.input.schema(),
             )?
@@ -419,8 +418,8 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
                 DataFusionError::Execution(
                     "Should contain at least one entry".to_string(),
                 )
-            })?;
-        }
+            })?
+        };
 
         Ok(())
     }
@@ -439,7 +438,7 @@ impl Stream for SortedPartitionByBoundedWindowStream {
 }
 
 impl SortedPartitionByBoundedWindowStream {
-    /// Create a new WindowAggStream
+    /// Create a new BoundedWindowAggStream
     pub fn new(
         schema: SchemaRef,
         window_expr: Vec<Arc<dyn WindowExpr>>,
@@ -447,10 +446,7 @@ impl SortedPartitionByBoundedWindowStream {
         baseline_metrics: BaselineMetrics,
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
     ) -> Self {
-        let mut state = vec![];
-        for _i in 0..window_expr.len() {
-            state.push(IndexMap::new());
-        }
+        let state = window_expr.iter().map(|_| IndexMap::new()).collect();
         let empty_batch = RecordBatch::new_empty(schema.clone());
         Self {
             schema,
@@ -467,20 +463,20 @@ impl SortedPartitionByBoundedWindowStream {
 
     fn compute_aggregates(&mut self) -> ArrowResult<RecordBatch> {
         // calculate window cols
-        for (idx, cur_window_expr) in self.window_expr.iter().enumerate() {
-            cur_window_expr.evaluate_stateful(
-                &self.partition_batches,
-                &mut self.window_agg_states[idx],
-            )?;
+        for (cur_window_expr, state) in
+            self.window_expr.iter().zip(&mut self.window_agg_states)
+        {
+            cur_window_expr.evaluate_stateful(&self.partition_batches, state)?;
         }
 
+        let schema = self.schema.clone();
         let columns_to_show = self.calculate_out_columns()?;
         if let Some(columns_to_show) = columns_to_show {
             let n_generated = columns_to_show[0].len();
             self.prune_state(n_generated)?;
-            RecordBatch::try_new(self.schema.clone(), columns_to_show)
+            RecordBatch::try_new(schema, columns_to_show)
         } else {
-            Ok(RecordBatch::new_empty(self.schema.clone()))
+            Ok(RecordBatch::new_empty(schema))
         }
     }
 
@@ -510,24 +506,25 @@ impl SortedPartitionByBoundedWindowStream {
         Poll::Ready(Some(result))
     }
 
-    /// Method to calculate how many rows SortedPartitionByBoundedWindowStream can produce as output
+    /// Calculates how many rows [SortedPartitionByBoundedWindowStream]
+    /// can produce as output.
     fn calculate_n_out_row(&self) -> usize {
-        // different window aggregators may produce results with different rates
-        // we produce the overall batch result with the same speed as slowest one
+        // Different window aggregators may produce results with different rates.
+        // We produce the overall batch result with the same speed as slowest one.
         self.window_agg_states
             .iter()
             .map(|window_agg_state| {
-                // below variable stores how many elements are generated (can displayed) for current
-                // window expression
+                // Store how many elements are generated for the current
+                // window expression:
                 let mut cur_window_expr_out_result_len = 0;
-                // We iterate over window_agg_state
-                // since it is IndexMap, iteration is over insertion order
-                // Hence we preserve sorting when partition columns are sorted
+                // We iterate over `window_agg_state`, which is an IndexMap.
+                // Iterations follow the insertion order, hence we preserve
+                // sorting when partition columns are sorted.
                 for (_, WindowState { state, .. }) in window_agg_state.iter() {
                     cur_window_expr_out_result_len += state.out_col.len();
-                    // If we do not generate all results for current partition
-                    // we do not generate result for next partition
-                    // otherwise we will lose input ordering
+                    // If we do not generate all results for the current
+                    // partition, we do not generate results for next
+                    // partition --  otherwise we will lose input ordering.
                     if state.n_row_result_missing > 0 {
                         break;
                     }
@@ -539,22 +536,26 @@ impl SortedPartitionByBoundedWindowStream {
             .unwrap_or(0)
     }
 
-    /// prunes the sections of the record batch (for each partition)
-    /// we no longer need to calculate window function result
+    /// Prunes the sections of the record batch (for each partition)
+    /// that we no longer need to calculate the window function result.
     fn prune_partition_batches(&mut self) -> Result<()> {
-        // Remove partitions which we know that ended (is_end flag is true)
-        // Retain method keep the remaining elements in the insertion order
-        // Hence after removal we still preserve ordering in between partitions
+        // Remove partitions which we know already ended (is_end flag is true).
+        // Since the retain method preserves insertion order, we still have
+        // ordering in between partitions after removal.
         self.partition_batches
             .retain(|_, partition_batch_state| !partition_batch_state.is_end);
 
-        // `self.partition_batches` data are used by all window expressions
-        // hence when removing from `self.partition_batches` we need to remove from the earliest range boundary
-        // among all window expressions. `n_prune_each_partition` fill the earliest range boundary information
-        // for each partition. By this way we can delete no longer needed sections from the `self.partition_batches`.
-        // For instance if window frame one uses [10, 20] and window frame 2 uses [5, 15]
-        // We prune only first 5 elements from corresponding record batch in `self.partition_batches`
-        // Calculate how many element to prune for each partition_batch
+        // The data in `self.partition_batches` is used by all window expressions.
+        // Therefore, when removing from `self.partition_batches`, we need to remove
+        // from the earliest range boundary among all window expressions. Variable
+        // `n_prune_each_partition` fill the earliest range boundary information for
+        // each partition. This way, we can delete the no-longer-needed sections from
+        // `self.partition_batches`.
+        // For instance, if window frame one uses [10, 20] and window frame two uses
+        // [5, 15]; we only prune the first 5 elements from the corresponding record
+        // batch in `self.partition_batches`.
+
+        // Calculate how many elements to prune for each partition batch
         let mut n_prune_each_partition: HashMap<PartitionKey, usize> = HashMap::new();
         for window_agg_state in self.window_agg_states.iter_mut() {
             window_agg_state.retain(|_, WindowState { state, .. }| !state.is_end);
@@ -571,19 +572,17 @@ impl SortedPartitionByBoundedWindowStream {
         }
 
         let err = || DataFusionError::Execution("Expects to have partition".to_string());
-        // Retracts no longer needed parts during window calculations from partition batch
+        // Retract no longer needed parts during window calculations from partition batch:
         for (partition_row, n_prune) in n_prune_each_partition.iter() {
             let partition_batch_state = self
                 .partition_batches
                 .get_mut(partition_row)
                 .ok_or_else(err)?;
-            let new_record_batch = partition_batch_state.record_batch.slice(
-                *n_prune,
-                partition_batch_state.record_batch.num_rows() - n_prune,
-            );
-            partition_batch_state.record_batch = new_record_batch;
+            let batch = &partition_batch_state.record_batch;
+            partition_batch_state.record_batch =
+                batch.slice(*n_prune, batch.num_rows() - n_prune);
 
-            // Update State indices, since we have pruned some rows from the beginning
+            // Update state indices since we have pruned some rows from the beginning:
             for window_agg_state in self.window_agg_states.iter_mut() {
                 let window_state =
                     window_agg_state.get_mut(partition_row).ok_or_else(err)?;
@@ -600,10 +599,9 @@ impl SortedPartitionByBoundedWindowStream {
     }
 
     /// Prunes the section of the input batch whose aggregate results
-    /// are calculated and emitted as result
+    /// are calculated and emitted.
     fn prune_input_batch(&mut self, n_out: usize) -> Result<()> {
-        let len_batch = self.input_buffer_record_batch.num_rows();
-        let n_to_keep = len_batch - n_out;
+        let n_to_keep = self.input_buffer_record_batch.num_rows() - n_out;
         let batch_to_keep = self
             .input_buffer_record_batch
             .columns()
@@ -615,15 +613,17 @@ impl SortedPartitionByBoundedWindowStream {
         Ok(())
     }
 
-    /// Prunes emitted parts from WindowAggState `out_col` field
+    /// Prunes emitted parts from WindowAggState `out_col` field.
     fn prune_out_columns(&mut self, n_out: usize) -> Result<()> {
-        // We store generated columns for each window expression in `out_col` field of the `WindowAggState`
-        // Given how many rows are emitted to output we remove these sections from state
+        // We store generated columns for each window expression in the `out_col`
+        // field of `WindowAggState`. Given how many rows are emitted, we remove
+        // these sections from state.
         for partition_window_agg_states in self.window_agg_states.iter_mut() {
             let mut running_length = 0;
-            // Remove total of `n_out` entries from `out_col` field of `WindowAggState`. Iterates in the
-            // insertion order. Hence we preserve per partition ordering. Without emitting all results for a partition
-            // we do not generate result for another partition
+            // Remove `n_out` entries from the `out_col` field of `WindowAggState`.
+            // Preserve per partition ordering by iterating in the order of insertion.
+            // Do not generate a result for a new partition without emitting all results
+            // for the current partition.
             for (
                 _,
                 WindowState {
@@ -647,7 +647,7 @@ impl SortedPartitionByBoundedWindowStream {
     pub fn partition_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
         self.partition_by_sort_keys
             .iter()
-            .map(|elem| elem.evaluate_to_sort_column(batch))
+            .map(|e| e.evaluate_to_sort_column(batch))
             .collect::<Result<Vec<_>>>()
     }
 
@@ -658,16 +658,16 @@ impl SortedPartitionByBoundedWindowStream {
         num_rows: usize,
         partition_columns: &[SortColumn],
     ) -> Result<Vec<Range<usize>>> {
-        if partition_columns.is_empty() {
-            Ok(vec![Range {
+        Ok(if partition_columns.is_empty() {
+            vec![Range {
                 start: 0,
                 end: num_rows,
-            }])
+            }]
         } else {
-            Ok(lexicographical_partition_ranges(partition_columns)
+            lexicographical_partition_ranges(partition_columns)
                 .map_err(DataFusionError::ArrowError)?
-                .collect::<Vec<_>>())
-        }
+                .collect::<Vec<_>>()
+        })
     }
 }
 
@@ -683,7 +683,7 @@ fn get_aggregate_result_out_column(
     partition_window_agg_states: &PartitionWindowAggStates,
     len_to_show: usize,
 ) -> Result<ArrayRef> {
-    let mut ret = None;
+    let mut result = None;
     let mut running_length = 0;
     // We assume that iteration order is according to insertion order
     for (
@@ -696,12 +696,12 @@ fn get_aggregate_result_out_column(
     {
         if running_length < len_to_show {
             let n_to_use = min(len_to_show - running_length, out_col.len());
-            running_length += n_to_use;
             let slice_to_use = out_col.slice(0, n_to_use);
-            ret = match ret {
-                Some(ret) => Some(concat(&[&ret, &slice_to_use])?),
-                None => Some(slice_to_use),
-            }
+            result = Some(match result {
+                Some(arr) => concat(&[&arr, &slice_to_use])?,
+                None => slice_to_use,
+            });
+            running_length += n_to_use;
         } else {
             break;
         }
@@ -712,5 +712,6 @@ fn get_aggregate_result_out_column(
             len_to_show, running_length
         )));
     }
-    ret.ok_or_else(|| DataFusionError::Execution("Should contain something".to_string()))
+    result
+        .ok_or_else(|| DataFusionError::Execution("Should contain something".to_string()))
 }

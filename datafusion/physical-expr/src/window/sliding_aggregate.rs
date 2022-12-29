@@ -115,11 +115,11 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         partition_batches: &PartitionBatches,
         window_agg_state: &mut PartitionWindowAggStates,
     ) -> Result<()> {
+        let field = self.aggregate.field()?;
+        let out_type = field.data_type();
         for (partition_row, partition_batch_state) in partition_batches.iter() {
             if !window_agg_state.contains_key(partition_row) {
                 let accumulator = self.aggregate.create_sliding_accumulator()?;
-                let field = self.aggregate.field()?;
-                let out_type = field.data_type();
                 window_agg_state.insert(
                     partition_row.clone(),
                     WindowState {
@@ -142,8 +142,6 @@ impl WindowExpr for SlidingAggregateWindowExpr {
             let mut state = &mut window_state.state;
             state.is_end = partition_batch_state.is_end;
 
-            let num_rows = partition_batch_state.record_batch.num_rows();
-
             let mut idx = state.last_calculated_index;
             let mut last_range = state.window_frame_range.clone();
             let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
@@ -159,6 +157,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
             state.window_frame_range = last_range.clone();
 
             state.out_col = concat(&[&state.out_col, &out_col])?;
+            let num_rows = partition_batch_state.record_batch.num_rows();
             state.n_row_result_missing = num_rows - state.last_calculated_index;
 
             state.window_function_state =
@@ -200,7 +199,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         })
     }
 
-    fn can_run_bounded(&self) -> bool {
+    fn uses_bounded_memory(&self) -> bool {
         self.aggregate.supports_bounded_execution()
             && !self.window_frame.start_bound.is_unbounded()
             && !self.window_frame.end_bound.is_unbounded()
@@ -268,7 +267,7 @@ impl SlidingAggregateWindowExpr {
                 length,
                 *idx,
             )?;
-            // exit if range end index is length, need kind of flag to stop
+            // Exit if range end index is length, need kind of flag to stop
             if cur_range.end == length && !is_end {
                 break;
             }
@@ -283,12 +282,10 @@ impl SlidingAggregateWindowExpr {
             last_range.end = cur_range.end;
             *idx += 1;
         }
-        let out_col = if !row_wise_results.is_empty() {
-            ScalarValue::iter_to_array(row_wise_results.into_iter())?
+        Ok(if row_wise_results.is_empty() {
+            ScalarValue::try_from(out_type)?.to_array_of_size(0)
         } else {
-            let a = ScalarValue::try_from(out_type)?;
-            a.to_array_of_size(0)
-        };
-        Ok(out_col)
+            ScalarValue::iter_to_array(row_wise_results.into_iter())?
+        })
     }
 }

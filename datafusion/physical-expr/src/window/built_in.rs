@@ -127,17 +127,17 @@ impl WindowExpr for BuiltInWindowExpr {
         }
     }
 
-    /// evaluate the window function values against the batch
+    /// Evaluate the window function against the batch. This function facilitates
+    /// stateful, bounded-memory implementations.
     fn evaluate_stateful(
         &self,
         partition_batches: &PartitionBatches,
         window_agg_state: &mut PartitionWindowAggStates,
     ) -> Result<()> {
-        let sort_options: Vec<SortOptions> =
-            self.order_by.iter().map(|o| o.options).collect();
+        let field = self.expr.field()?;
+        let out_type = field.data_type();
+        let sort_options = self.order_by.iter().map(|o| o.options).collect::<Vec<_>>();
         for (partition_row, partition_batch_state) in partition_batches.iter() {
-            let field = self.expr.field()?;
-            let out_type = field.data_type();
             if !window_agg_state.contains_key(partition_row) {
                 let evaluator = self.expr.create_evaluator()?;
                 window_agg_state.insert(
@@ -163,13 +163,12 @@ impl WindowExpr for BuiltInWindowExpr {
             };
             let mut state = &mut window_state.state;
             state.is_end = partition_batch_state.is_end;
-            let num_rows = partition_batch_state.record_batch.num_rows();
 
             let (values, order_bys) =
                 self.get_values_orderbys(&partition_batch_state.record_batch)?;
 
             // We iterate on each row to perform a running calculation.
-            let mut row_wise_results: Vec<ScalarValue> = vec![];
+            let num_rows = partition_batch_state.record_batch.num_rows();
             let mut last_range = state.window_frame_range.clone();
             let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
             let sort_partition_points = if evaluator.include_rank() {
@@ -178,6 +177,7 @@ impl WindowExpr for BuiltInWindowExpr {
             } else {
                 vec![]
             };
+            let mut row_wise_results: Vec<ScalarValue> = vec![];
             for idx in state.last_calculated_index..num_rows {
                 state.window_frame_range = if self.expr.uses_window_frame() {
                     window_frame_ctx.calculate_range(
@@ -185,28 +185,27 @@ impl WindowExpr for BuiltInWindowExpr {
                         &sort_options,
                         num_rows,
                         idx,
-                    )?
+                    )
                 } else {
-                    evaluator.get_range(state, num_rows)?
-                };
+                    evaluator.get_range(state, num_rows)
+                }?;
                 evaluator.update_state(state, &order_bys, &sort_partition_points)?;
 
-                // exit if range end index is length, need kind of flag to stop
+                // Exit if range end index is length, need kind of flag to stop
                 if state.window_frame_range.end == num_rows
                     && !partition_batch_state.is_end
                 {
                     state.window_frame_range = last_range.clone();
                     break;
                 }
-                if state.window_frame_range.start == state.window_frame_range.end {
+                let frame_range = &state.window_frame_range;
+                row_wise_results.push(if frame_range.start == frame_range.end {
                     // We produce None if the window is empty.
-                    row_wise_results
-                        .push(ScalarValue::try_from(self.expr.field()?.data_type())?);
+                    ScalarValue::try_from(out_type)
                 } else {
-                    let res = evaluator.evaluate_stateful(&values)?;
-                    row_wise_results.push(res);
-                }
-                last_range = state.window_frame_range.clone();
+                    evaluator.evaluate_stateful(&values)
+                }?);
+                last_range = frame_range.clone();
                 state.last_calculated_index = idx + 1;
             }
             state.window_frame_range = last_range;
@@ -239,7 +238,7 @@ impl WindowExpr for BuiltInWindowExpr {
         })
     }
 
-    fn can_run_bounded(&self) -> bool {
+    fn uses_bounded_memory(&self) -> bool {
         self.expr.supports_bounded_execution()
             && (!self.expr.uses_window_frame()
                 || !(self.window_frame.start_bound.is_unbounded()

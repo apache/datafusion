@@ -96,10 +96,10 @@ pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatc
         .map_err(DataFusionError::from)
 }
 
-/// Combine a slice of record batches into one, or returns None if the slice itself
-/// is empty; all the record batches inside the slice must be of the same schema.
-/// Same with above implementation except receives reference
-pub fn combine_batches_with_ref(
+/// Combine a slice of record batch references into a single record batch, or
+/// return None if the slice itself is empty. All the record batches inside the
+/// slice must have the same schema.
+pub fn combine_batches(
     batches: &[&RecordBatch],
     schema: SchemaRef,
 ) -> ArrowResult<Option<RecordBatch>> {

@@ -92,7 +92,7 @@ pub trait PartitionEvaluator: Debug + Send + Sync {
 
     fn clone_dyn(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Err(DataFusionError::NotImplemented(
-            "clone_dyn is not implemented by default for this evaluator, to use it in for cloning implement this method".into(),
+            "clone_dyn is not implemented by default for this evaluator".into(),
         ))
     }
 }
