@@ -34,7 +34,7 @@ fn optimize_explain() {
     if let LogicalPlan::Explain(e) = &plan {
         assert_eq!(e.stringified_plans.len(), 1);
     } else {
-        panic!("plan was not an explain: {:?}", plan);
+        panic!("plan was not an explain: {plan:?}");
     }
 
     let ctx = SessionContext::new();
@@ -57,6 +57,6 @@ fn optimize_explain() {
 
         assert!(opt, "plans: {:#?}", e.stringified_plans);
     } else {
-        panic!("plan was not an explain: {:?}", plan);
+        panic!("plan was not an explain: {plan:?}");
     }
 }

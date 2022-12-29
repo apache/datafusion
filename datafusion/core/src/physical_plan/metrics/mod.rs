@@ -103,7 +103,7 @@ impl Display for Metric {
                     is_first = false;
                 }
 
-                write!(f, "{}", i)?;
+                write!(f, "{i}")?;
             }
 
             write!(f, "}}")?;
@@ -322,7 +322,7 @@ impl Display for MetricsSet {
                 is_first = false;
             }
 
-            write!(f, "{}", i)?;
+            write!(f, "{i}")?;
         }
         Ok(())
     }

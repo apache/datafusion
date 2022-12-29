@@ -27,7 +27,7 @@ async fn qualified_table_references() -> Result<()> {
         "public.aggregate_test_100",
         "datafusion.public.aggregate_test_100",
     ] {
-        let sql = format!("SELECT COUNT(*) FROM {}", table_ref);
+        let sql = format!("SELECT COUNT(*) FROM {table_ref}");
         let actual = execute_to_batches(&ctx, &sql).await;
         let expected = vec![
             "+-----------------+",

@@ -131,9 +131,8 @@ pub fn coerce_types(
                 DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
                     return Err(DataFusionError::Plan(
                         format!(
-                            "'{:?} {} {:?}' is an unsupported operation. \
-                                addition/subtraction on dates/timestamps only supported with interval types",
-                            lhs_type, op, rhs_type
+                            "'{lhs_type:?} {op} {rhs_type:?}' is an unsupported operation. \
+                                addition/subtraction on dates/timestamps only supported with interval types"
                         ),
                     ));
                 }
@@ -162,8 +161,7 @@ pub fn coerce_types(
     match result {
         None => Err(DataFusionError::Plan(
             format!(
-                "'{:?} {} {:?}' can't be evaluated because there isn't a common type to coerce the types to",
-                lhs_type, op, rhs_type
+                "'{lhs_type:?} {op} {rhs_type:?}' can't be evaluated because there isn't a common type to coerce the types to"
             ),
         )),
         Some(t) => Ok(t)

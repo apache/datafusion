@@ -383,7 +383,7 @@ async fn aggregates_table(ctx: &SessionContext) -> Result<DataFrame> {
     let testdata = datafusion::test_util::arrow_test_data();
 
     ctx.read_csv(
-        format!("{}/csv/aggregate_test_100.csv", testdata),
+        format!("{testdata}/csv/aggregate_test_100.csv"),
         CsvReadOptions::default(),
     )
     .await

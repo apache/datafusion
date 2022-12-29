@@ -101,7 +101,7 @@ impl OwnedTableReference {
 impl std::fmt::Display for OwnedTableReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OwnedTableReference::Bare { table } => write!(f, "{}", table),
+            OwnedTableReference::Bare { table } => write!(f, "{table}"),
             OwnedTableReference::Partial { schema, table } => {
                 write!(f, "{schema}.{table}")
             }

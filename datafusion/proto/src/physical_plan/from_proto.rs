@@ -232,7 +232,7 @@ fn parse_required_physical_box_expr(
         .map(|e| parse_physical_expr(e.as_ref(), registry, input_schema))
         .transpose()?
         .ok_or_else(|| {
-            DataFusionError::Internal(format!("Missing required field {:?}", field))
+            DataFusionError::Internal(format!("Missing required field {field:?}"))
         })
 }
 
@@ -246,7 +246,7 @@ fn parse_required_physical_expr(
         .map(|e| parse_physical_expr(e, registry, input_schema))
         .transpose()?
         .ok_or_else(|| {
-            DataFusionError::Internal(format!("Missing required field {:?}", field))
+            DataFusionError::Internal(format!("Missing required field {field:?}"))
         })
 }
 
@@ -260,8 +260,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
             protobuf::physical_window_expr_node::WindowFunction::AggrFunction(n) => {
                 let f = protobuf::AggregateFunction::from_i32(*n).ok_or_else(|| {
                     proto_error(format!(
-                        "Received an unknown window aggregate function: {}",
-                        n
+                        "Received an unknown window aggregate function: {n}"
                     ))
                 })?;
 
@@ -271,8 +270,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                 let f =
                     protobuf::BuiltInWindowFunction::from_i32(*n).ok_or_else(|| {
                         proto_error(format!(
-                            "Received an unknown window builtin function: {}",
-                            n
+                            "Received an unknown window builtin function: {n}"
                         ))
                     })?;
 

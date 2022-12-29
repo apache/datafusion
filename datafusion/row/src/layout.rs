@@ -96,9 +96,7 @@ impl RowLayout {
     pub fn new(schema: &Schema, row_type: RowType) -> Self {
         assert!(
             row_supported(schema, row_type),
-            "{:?}Row with {:?} not supported yet.",
-            row_type,
-            schema,
+            "{row_type:?}Row with {schema:?} not supported yet.",
         );
         let null_free = schema_null_free(schema);
         let field_count = schema.fields().len();

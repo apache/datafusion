@@ -1140,8 +1140,7 @@ pub fn binary(
     let rhs_type = &rhs.data_type(input_schema)?;
     if !lhs_type.eq(rhs_type) {
         return Err(DataFusionError::Internal(format!(
-            "The type of {} {} {} of binary physical should be same",
-            lhs_type, op, rhs_type
+            "The type of {lhs_type} {op} {rhs_type} of binary physical should be same"
         )));
     }
     Ok(Arc::new(BinaryExpr::new(lhs, op, rhs)))
@@ -1230,7 +1229,7 @@ mod tests {
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
 
-        assert_eq!("a@0 < b@1 OR a@0 = b@1", format!("{}", expr));
+        assert_eq!("a@0 < b@1 OR a@0 = b@1", format!("{expr}"));
 
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         assert_eq!(result.len(), 5);

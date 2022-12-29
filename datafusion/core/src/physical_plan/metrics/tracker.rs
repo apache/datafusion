@@ -42,9 +42,8 @@ impl MemTrackingMetrics {
         pool: &Arc<dyn MemoryPool>,
         partition: usize,
     ) -> Self {
-        let reservation =
-            MemoryConsumer::new(format!("MemTrackingMetrics[{}]", partition))
-                .register(pool);
+        let reservation = MemoryConsumer::new(format!("MemTrackingMetrics[{partition}]"))
+            .register(pool);
 
         Self {
             reservation,

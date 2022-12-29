@@ -77,7 +77,7 @@ impl FlightService for FlightServiceImpl {
         let ticket = request.into_inner();
         match std::str::from_utf8(&ticket.ticket) {
             Ok(sql) => {
-                println!("do_get: {}", sql);
+                println!("do_get: {sql}");
 
                 // create local execution context
                 let ctx = SessionContext::new();
@@ -87,7 +87,7 @@ impl FlightService for FlightServiceImpl {
                 // register parquet file with the execution context
                 ctx.register_parquet(
                     "alltypes_plain",
-                    &format!("{}/alltypes_plain.parquet", testdata),
+                    &format!("{testdata}/alltypes_plain.parquet"),
                     ParquetReadOptions::default(),
                 )
                 .await
@@ -131,7 +131,7 @@ impl FlightService for FlightServiceImpl {
 
                 Ok(Response::new(Box::pin(output) as Self::DoGetStream))
             }
-            Err(e) => Err(Status::invalid_argument(format!("Invalid ticket: {:?}", e))),
+            Err(e) => Err(Status::invalid_argument(format!("Invalid ticket: {e:?}"))),
         }
     }
 
@@ -186,7 +186,7 @@ impl FlightService for FlightServiceImpl {
 }
 
 fn to_tonic_err(e: datafusion::error::DataFusionError) -> Status {
-    Status::internal(format!("{:?}", e))
+    Status::internal(format!("{e:?}"))
 }
 
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
@@ -199,7 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let svc = FlightServiceServer::new(service);
 
-    println!("Listening on {:?}", addr);
+    println!("Listening on {addr:?}");
 
     Server::builder().add_service(svc).serve(addr).await?;
 

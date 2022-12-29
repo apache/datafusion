@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
 
     let testdata = datafusion::test_util::parquet_test_data();
 
-    let filename = &format!("{}/alltypes_plain.parquet", testdata);
+    let filename = &format!("{testdata}/alltypes_plain.parquet");
 
     // define the query using the DataFrame trait
     let df = ctx

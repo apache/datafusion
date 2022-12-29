@@ -83,8 +83,7 @@ pub fn create_physical_expr(
                 Ok(DataType::Utf8) => datetime_expressions::to_timestamp,
                 other => {
                     return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function to_timestamp",
-                        other,
+                        "Unsupported data type {other:?} for function to_timestamp",
                     )));
                 }
             })
@@ -103,8 +102,7 @@ pub fn create_physical_expr(
                 Ok(DataType::Utf8) => datetime_expressions::to_timestamp_millis,
                 other => {
                     return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function to_timestamp_millis",
-                        other,
+                        "Unsupported data type {other:?} for function to_timestamp_millis",
                     )));
                 }
             })
@@ -123,8 +121,7 @@ pub fn create_physical_expr(
                 Ok(DataType::Utf8) => datetime_expressions::to_timestamp_micros,
                 other => {
                     return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function to_timestamp_micros",
-                        other,
+                        "Unsupported data type {other:?} for function to_timestamp_micros",
                     )));
                 }
             })
@@ -143,8 +140,7 @@ pub fn create_physical_expr(
                 Ok(DataType::Utf8) => datetime_expressions::to_timestamp_seconds,
                 other => {
                     return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function to_timestamp_seconds",
-                        other,
+                        "Unsupported data type {other:?} for function to_timestamp_seconds",
                     )));
                 }
             }
@@ -160,8 +156,7 @@ pub fn create_physical_expr(
                 },
                 other => {
                     return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function from_unixtime",
-                        other,
+                        "Unsupported data type {other:?} for function from_unixtime",
                     )));
                 }
             }
@@ -170,8 +165,7 @@ pub fn create_physical_expr(
             let input_data_type = input_phy_exprs[0].data_type(input_schema)?;
             Arc::new(move |_| {
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(format!(
-                    "{}",
-                    input_data_type
+                    "{input_data_type}"
                 )))))
             })
         }
@@ -180,7 +174,7 @@ pub fn create_physical_expr(
     };
 
     Ok(Arc::new(ScalarFunctionExpr::new(
-        &format!("{}", fun),
+        &format!("{fun}"),
         fun_expr,
         input_phy_exprs.to_vec(),
         &data_type,
@@ -358,8 +352,7 @@ pub fn create_physical_fun(
                 make_scalar_function(string_expressions::ascii::<i64>)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function ascii",
-                other,
+                "Unsupported data type {other:?} for function ascii",
             ))),
         }),
         BuiltinScalarFunction::BitLength => Arc::new(|args| match &args[0] {
@@ -382,8 +375,7 @@ pub fn create_physical_fun(
                 make_scalar_function(string_expressions::btrim::<i64>)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function btrim",
-                other,
+                "Unsupported data type {other:?} for function btrim",
             ))),
         }),
         BuiltinScalarFunction::CharacterLength => {
@@ -405,8 +397,7 @@ pub fn create_physical_fun(
                     make_scalar_function(func)(args)
                 }
                 other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {:?} for function character_length",
-                    other,
+                    "Unsupported data type {other:?} for function character_length",
                 ))),
             })
         }
@@ -447,8 +438,7 @@ pub fn create_physical_fun(
                 make_scalar_function(string_expressions::initcap::<i64>)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function initcap",
-                other,
+                "Unsupported data type {other:?} for function initcap",
             ))),
         }),
         BuiltinScalarFunction::Left => Arc::new(|args| match args[0].data_type() {
@@ -461,8 +451,7 @@ pub fn create_physical_fun(
                 make_scalar_function(func)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function left",
-                other,
+                "Unsupported data type {other:?} for function left",
             ))),
         }),
         BuiltinScalarFunction::Lower => Arc::new(string_expressions::lower),
@@ -476,8 +465,7 @@ pub fn create_physical_fun(
                 make_scalar_function(func)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function lpad",
-                other,
+                "Unsupported data type {other:?} for function lpad",
             ))),
         }),
         BuiltinScalarFunction::Ltrim => Arc::new(|args| match args[0].data_type() {
@@ -488,8 +476,7 @@ pub fn create_physical_fun(
                 make_scalar_function(string_expressions::ltrim::<i64>)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function ltrim",
-                other,
+                "Unsupported data type {other:?} for function ltrim",
             ))),
         }),
         BuiltinScalarFunction::MD5 => {
@@ -530,8 +517,7 @@ pub fn create_physical_fun(
                     make_scalar_function(func)(args)
                 }
                 other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {:?} for function regexp_match",
-                    other
+                    "Unsupported data type {other:?} for function regexp_match"
                 ))),
             })
         }
@@ -556,8 +542,7 @@ pub fn create_physical_fun(
                     func(args)
                 }
                 other => Err(DataFusionError::Internal(format!(
-                    "Unsupported data type {:?} for function regexp_replace",
-                    other,
+                    "Unsupported data type {other:?} for function regexp_replace",
                 ))),
             })
         }
@@ -569,8 +554,7 @@ pub fn create_physical_fun(
                 make_scalar_function(string_expressions::repeat::<i64>)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function repeat",
-                other,
+                "Unsupported data type {other:?} for function repeat",
             ))),
         }),
         BuiltinScalarFunction::Replace => Arc::new(|args| match args[0].data_type() {
@@ -581,8 +565,7 @@ pub fn create_physical_fun(
                 make_scalar_function(string_expressions::replace::<i64>)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function replace",
-                other,
+                "Unsupported data type {other:?} for function replace",
             ))),
         }),
         BuiltinScalarFunction::Reverse => Arc::new(|args| match args[0].data_type() {
@@ -597,8 +580,7 @@ pub fn create_physical_fun(
                 make_scalar_function(func)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function reverse",
-                other,
+                "Unsupported data type {other:?} for function reverse",
             ))),
         }),
         BuiltinScalarFunction::Right => Arc::new(|args| match args[0].data_type() {
@@ -613,8 +595,7 @@ pub fn create_physical_fun(
                 make_scalar_function(func)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function right",
-                other,
+                "Unsupported data type {other:?} for function right",
             ))),
         }),
         BuiltinScalarFunction::Rpad => Arc::new(|args| match args[0].data_type() {
@@ -627,8 +608,7 @@ pub fn create_physical_fun(
                 make_scalar_function(func)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function rpad",
-                other,
+                "Unsupported data type {other:?} for function rpad",
             ))),
         }),
         BuiltinScalarFunction::Rtrim => Arc::new(|args| match args[0].data_type() {
@@ -639,8 +619,7 @@ pub fn create_physical_fun(
                 make_scalar_function(string_expressions::rtrim::<i64>)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function rtrim",
-                other,
+                "Unsupported data type {other:?} for function rtrim",
             ))),
         }),
         BuiltinScalarFunction::SHA224 => {
@@ -663,8 +642,7 @@ pub fn create_physical_fun(
                 make_scalar_function(string_expressions::split_part::<i64>)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function split_part",
-                other,
+                "Unsupported data type {other:?} for function split_part",
             ))),
         }),
         BuiltinScalarFunction::StartsWith => Arc::new(|args| match args[0].data_type() {
@@ -675,8 +653,7 @@ pub fn create_physical_fun(
                 make_scalar_function(string_expressions::starts_with::<i64>)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function starts_with",
-                other,
+                "Unsupported data type {other:?} for function starts_with",
             ))),
         }),
         BuiltinScalarFunction::Strpos => Arc::new(|args| match args[0].data_type() {
@@ -693,8 +670,7 @@ pub fn create_physical_fun(
                 make_scalar_function(func)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function strpos",
-                other,
+                "Unsupported data type {other:?} for function strpos",
             ))),
         }),
         BuiltinScalarFunction::Substr => Arc::new(|args| match args[0].data_type() {
@@ -709,8 +685,7 @@ pub fn create_physical_fun(
                 make_scalar_function(func)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function substr",
-                other,
+                "Unsupported data type {other:?} for function substr",
             ))),
         }),
         BuiltinScalarFunction::ToHex => Arc::new(|args| match args[0].data_type() {
@@ -721,8 +696,7 @@ pub fn create_physical_fun(
                 make_scalar_function(string_expressions::to_hex::<Int64Type>)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function to_hex",
-                other,
+                "Unsupported data type {other:?} for function to_hex",
             ))),
         }),
         BuiltinScalarFunction::Translate => Arc::new(|args| match args[0].data_type() {
@@ -743,8 +717,7 @@ pub fn create_physical_fun(
                 make_scalar_function(func)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function translate",
-                other,
+                "Unsupported data type {other:?} for function translate",
             ))),
         }),
         BuiltinScalarFunction::Trim => Arc::new(|args| match args[0].data_type() {
@@ -755,16 +728,14 @@ pub fn create_physical_fun(
                 make_scalar_function(string_expressions::btrim::<i64>)(args)
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function trim",
-                other,
+                "Unsupported data type {other:?} for function trim",
             ))),
         }),
         BuiltinScalarFunction::Upper => Arc::new(string_expressions::upper),
         BuiltinScalarFunction::Uuid => Arc::new(string_expressions::uuid),
         _ => {
             return Err(DataFusionError::Internal(format!(
-                "create_physical_fun: Unsupported scalar function {:?}",
-                fun
+                "create_physical_fun: Unsupported scalar function {fun:?}"
             )));
         }
     })
@@ -2733,24 +2704,21 @@ mod tests {
             match expr {
                 Ok(..) => {
                     return Err(DataFusionError::Plan(format!(
-                        "Builtin scalar function {} does not support empty arguments",
-                        fun
+                        "Builtin scalar function {fun} does not support empty arguments"
                     )));
                 }
                 Err(DataFusionError::Internal(err)) => {
                     if err
                         != format!(
-                            "Builtin scalar function {} does not support empty arguments",
-                            fun
-                        )
-                    {
+                        "Builtin scalar function {fun} does not support empty arguments"
+                    ) {
                         return Err(DataFusionError::Internal(format!(
-                            "Builtin scalar function {} didn't got the right error message with empty arguments", fun)));
+                            "Builtin scalar function {fun} didn't got the right error message with empty arguments")));
                     }
                 }
                 Err(..) => {
                     return Err(DataFusionError::Internal(format!(
-                        "Builtin scalar function {} didn't got the right error with empty arguments", fun)));
+                        "Builtin scalar function {fun} didn't got the right error with empty arguments")));
                 }
             }
         }

@@ -36,7 +36,7 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     let store = state.runtime_env().object_store(&object_store_url).unwrap();
 
     let testdata = datafusion::test_util::parquet_test_data();
-    let filename = format!("{}/alltypes_tiny_pages.parquet", testdata);
+    let filename = format!("{testdata}/alltypes_tiny_pages.parquet");
 
     let location = Path::from_filesystem_path(filename.as_str()).unwrap();
     let metadata = std::fs::metadata(filename).expect("Local file metadata");

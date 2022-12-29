@@ -31,7 +31,7 @@ async fn register_current_csv(
     let schema = crate::test_util::aggr_test_schema();
     ctx.register_csv(
         table_name,
-        &format!("{}/csv/aggregate_test_100.csv", testdata),
+        &format!("{testdata}/csv/aggregate_test_100.csv"),
         CsvReadOptions::new()
             .schema(&schema)
             .mark_infinite(infinite),

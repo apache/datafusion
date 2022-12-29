@@ -176,7 +176,7 @@ mod tests {
             .try_optimize(plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
-        let formatted_plan = format!("{:?}", optimized_plan);
+        let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(formatted_plan, expected);
         Ok(())
     }
@@ -402,7 +402,7 @@ mod tests {
             .try_optimize(plan, &config)
             .unwrap()
             .expect("failed to optimize plan");
-        format!("{:?}", optimized_plan)
+        format!("{optimized_plan:?}")
     }
 
     #[test]

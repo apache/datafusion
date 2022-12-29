@@ -164,8 +164,7 @@ pub fn cast_with_options(
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
         Err(DataFusionError::NotImplemented(format!(
-            "Unsupported CAST from {:?} to {:?}",
-            expr_type, cast_type
+            "Unsupported CAST from {expr_type:?} to {cast_type:?}"
         )))
     }
 }

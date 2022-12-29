@@ -103,8 +103,7 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     (Some(string), Some(length)) => {
                         if length > i32::MAX as i64 {
                             return Err(DataFusionError::Internal(format!(
-                                "lpad requested length {} too large",
-                                length
+                                "lpad requested length {length} too large"
                             )));
                         }
 
@@ -141,8 +140,7 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     (Some(string), Some(length), Some(fill)) => {
                         if length > i32::MAX as i64 {
                             return Err(DataFusionError::Internal(format!(
-                                "lpad requested length {} too large",
-                                length
+                                "lpad requested length {length} too large"
                             )));
                         }
 
@@ -181,8 +179,7 @@ pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => Err(DataFusionError::Internal(format!(
-            "lpad was called with {} arguments. It requires at least 2 and at most 3.",
-            other
+            "lpad was called with {other} arguments. It requires at least 2 and at most 3."
         ))),
     }
 }
@@ -249,8 +246,7 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     (Some(string), Some(length)) => {
                         if length > i32::MAX as i64 {
                             return Err(DataFusionError::Internal(format!(
-                                "rpad requested length {} too large",
-                                length
+                                "rpad requested length {length} too large"
                             )));
                         }
 
@@ -286,8 +282,7 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     (Some(string), Some(length), Some(fill)) => {
                         if length > i32::MAX as i64 {
                             return Err(DataFusionError::Internal(format!(
-                                "rpad requested length {} too large",
-                                length
+                                "rpad requested length {length} too large"
                             )));
                         }
 
@@ -318,8 +313,7 @@ pub fn rpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => Err(DataFusionError::Internal(format!(
-            "rpad was called with {} arguments. It requires at least 2 and at most 3.",
-            other
+            "rpad was called with {other} arguments. It requires at least 2 and at most 3."
         ))),
     }
 }
@@ -398,9 +392,7 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     (Some(string), Some(start), Some(count)) => {
                         if count < 0 {
                             Err(DataFusionError::Execution(format!(
-                                "negative substring length not allowed: substr(<str>, {}, {})",
-                                start,
-                                count
+                                "negative substring length not allowed: substr(<str>, {start}, {count})"
                             )))
                         } else {
                             let skip = max(0, start - 1);
@@ -415,8 +407,7 @@ pub fn substr<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => Err(DataFusionError::Internal(format!(
-            "substr was called with {} arguments. It requires 2 or 3.",
-            other
+            "substr was called with {other} arguments. It requires 2 or 3."
         ))),
     }
 }

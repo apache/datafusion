@@ -123,13 +123,13 @@ impl PhysicalExpr for GetIndexedFieldExpr {
             (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
                 let as_struct_array = as_struct_array(&array)?;
                 match as_struct_array.column_by_name(k) {
-                    None => Err(DataFusionError::Execution(format!("get indexed field {} not found in struct", k))),
+                    None => Err(DataFusionError::Execution(format!("get indexed field {k} not found in struct"))),
                     Some(col) => Ok(ColumnarValue::Array(col.clone()))
                 }
             }
-            (DataType::List(_), key) => Err(DataFusionError::Execution(format!("get indexed field is only possible on lists with int64 indexes. Tried with {:?} index", key))),
-            (DataType::Struct(_), key) => Err(DataFusionError::Execution(format!("get indexed field is only possible on struct with utf8 indexes. Tried with {:?} index", key))),
-            (dt, key) => Err(DataFusionError::Execution(format!("get indexed field is only possible on lists with int64 indexes or struct with utf8 indexes. Tried {:?} with {:?} index", dt, key))),
+            (DataType::List(_), key) => Err(DataFusionError::Execution(format!("get indexed field is only possible on lists with int64 indexes. Tried with {key:?} index"))),
+            (DataType::Struct(_), key) => Err(DataFusionError::Execution(format!("get indexed field is only possible on struct with utf8 indexes. Tried with {key:?} index"))),
+            (dt, key) => Err(DataFusionError::Execution(format!("get indexed field is only possible on lists with int64 indexes or struct with utf8 indexes. Tried {dt:?} with {key:?} index"))),
         }
     }
 
