@@ -27,8 +27,8 @@ use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use crate::physical_plan::{
-    ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
+    Column, ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan,
+    Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
 use arrow::array::Array;
 use arrow::compute::{concat, lexicographical_partition_ranges, SortColumn};
@@ -54,7 +54,7 @@ use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
 };
-use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, EquivalentClass, PhysicalExpr};
 use indexmap::IndexMap;
 use log::debug;
 
@@ -182,14 +182,33 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
-        self.input.equivalence_properties()
+        // Although WindowAggExec does not change the equivalence properties from the input, but can not return the equivalence properties
+        // from the input directly, need to adjust the column index to align with the new schema.
+        let window_expr_len = self.window_expr.len();
+        let mut new_properties = EquivalenceProperties::new(self.schema());
+        let new_eq_classes = self
+            .input
+            .equivalence_properties()
+            .classes()
+            .iter()
+            .map(|prop| {
+                let new_head = Column::new(
+                    prop.head().name(),
+                    window_expr_len + prop.head().index(),
+                );
+                let new_others = prop
+                    .others()
+                    .iter()
+                    .map(|col| Column::new(col.name(), window_expr_len + col.index()))
+                    .collect::<Vec<_>>();
+                EquivalentClass::new(new_head, new_others)
+            })
+            .collect::<Vec<_>>();
+        new_properties.extend(new_eq_classes);
+        new_properties
     }
 
     fn maintains_input_order(&self) -> bool {
-        true
-    }
-
-    fn relies_on_input_order(&self) -> bool {
         true
     }
 
@@ -267,7 +286,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
             is_exact: input_stat.is_exact,
             num_rows: input_stat.num_rows,
             column_statistics: Some(column_statistics),
-            // TODO stats: knowing the type of the new columns we can guess the output size
             total_byte_size: None,
         }
     }
@@ -348,7 +366,10 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
     }
 
     /// Prunes sections of the state that are no longer needed when calculating
-    /// results (as determined by window frame boundaries).
+    /// results (as determined by window frame boundaries and number of results generated).
+    // For instance, if first `n` (not necessarily same with `n_out`) elements are no longer needed to
+    // calculate window expression result (outside the window frame boundary) we retract first `n` elements
+    // from `self.partition_batches` in corresponding partition.
     // For instance, if `n_out` number of rows are calculated, we can remove
     // first `n_out` rows from `self.input_buffer_record_batch`.
     fn prune_state(&mut self, n_out: usize) -> Result<()> {
