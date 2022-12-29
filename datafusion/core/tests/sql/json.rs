@@ -22,7 +22,7 @@ const TEST_DATA_BASE: &str = "tests/jsons";
 #[tokio::test]
 async fn json_query() {
     let ctx = SessionContext::new();
-    let path = format!("{}/2.json", TEST_DATA_BASE);
+    let path = format!("{TEST_DATA_BASE}/2.json");
     ctx.register_json("t1", &path, NdJsonReadOptions::default())
         .await
         .unwrap();
@@ -55,7 +55,7 @@ async fn json_query() {
 #[should_panic]
 async fn json_single_nan_schema() {
     let ctx = SessionContext::new();
-    let path = format!("{}/3.json", TEST_DATA_BASE);
+    let path = format!("{TEST_DATA_BASE}/3.json");
     ctx.register_json("single_nan", &path, NdJsonReadOptions::default())
         .await
         .unwrap();
@@ -72,7 +72,7 @@ async fn json_single_nan_schema() {
 #[cfg_attr(tarpaulin, ignore)]
 async fn json_explain() {
     let ctx = SessionContext::new();
-    let path = format!("{}/2.json", TEST_DATA_BASE);
+    let path = format!("{TEST_DATA_BASE}/2.json");
     ctx.register_json("t1", &path, NdJsonReadOptions::default())
         .await
         .unwrap();

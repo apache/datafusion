@@ -166,7 +166,7 @@ impl<'a> DFParser<'a> {
 
     /// Report an unexpected token
     fn expected<T>(&self, expected: &str, found: Token) -> Result<T, ParserError> {
-        parser_err!(format!("Expected {}, found: {}", expected, found))
+        parser_err!(format!("Expected {expected}, found: {found}"))
     }
 
     /// Parse a new expression
@@ -474,17 +474,14 @@ mod tests {
         match DFParser::parse_sql(sql) {
             Ok(statements) => {
                 panic!(
-                    "Expected parse error for '{}', but was successful: {:?}",
-                    sql, statements
+                    "Expected parse error for '{sql}', but was successful: {statements:?}"
                 );
             }
             Err(e) => {
                 let error_message = e.to_string();
                 assert!(
                     error_message.contains(expected_error),
-                    "Expected error '{}' not found in actual error '{}'",
-                    expected_error,
-                    error_message
+                    "Expected error '{expected_error}' not found in actual error '{error_message}'"
                 );
             }
         }

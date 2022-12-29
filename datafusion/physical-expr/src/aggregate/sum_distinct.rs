@@ -119,8 +119,7 @@ impl DistinctSumAccumulator {
         states.iter().try_for_each(|state| match state {
             ScalarValue::List(Some(values), _) => self.update(values.as_ref()),
             _ => Err(DataFusionError::Internal(format!(
-                "Unexpected accumulator state {:?}",
-                state
+                "Unexpected accumulator state {state:?}"
             ))),
         })
     }

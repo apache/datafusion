@@ -221,7 +221,7 @@ impl AsyncFileReader for ParquetFileReader {
         self.store
             .get_range(&self.meta.location, range)
             .map_err(|e| {
-                ParquetError::General(format!("AsyncChunkReader::get_bytes error: {}", e))
+                ParquetError::General(format!("AsyncChunkReader::get_bytes error: {e}"))
             })
             .boxed()
     }
@@ -238,8 +238,7 @@ impl AsyncFileReader for ParquetFileReader {
             .await
             .map_err(|e| {
                 ParquetError::General(format!(
-                    "AsyncChunkReader::get_metadata error: {}",
-                    e
+                    "AsyncChunkReader::get_metadata error: {e}"
                 ))
             })?;
             Ok(Arc::new(metadata))

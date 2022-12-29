@@ -82,8 +82,7 @@ impl Pipeline for RepartitionPipeline {
         let mut state = self.state.lock();
         assert!(
             !state.partition_closed[partition],
-            "attempt to push to closed partition {} of RepartitionPipeline({:?})",
-            partition, state
+            "attempt to push to closed partition {partition} of RepartitionPipeline({state:?})"
         );
 
         let state = &mut *state;
@@ -99,8 +98,7 @@ impl Pipeline for RepartitionPipeline {
         let mut state = self.state.lock();
         assert!(
             !state.partition_closed[partition],
-            "attempt to close already closed partition {} of RepartitionPipeline({:?})",
-            partition, state
+            "attempt to close already closed partition {partition} of RepartitionPipeline({state:?})"
         );
 
         state.partition_closed[partition] = true;

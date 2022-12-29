@@ -129,8 +129,7 @@ impl FromStr for BuiltInWindowFunction {
             "NTH_VALUE" => BuiltInWindowFunction::NthValue,
             _ => {
                 return Err(DataFusionError::Plan(format!(
-                    "There is no built-in window function named {}",
-                    name
+                    "There is no built-in window function named {name}"
                 )))
             }
         })

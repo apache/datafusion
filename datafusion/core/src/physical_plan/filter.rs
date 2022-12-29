@@ -70,8 +70,7 @@ impl FilterExec {
                 metrics: ExecutionPlanMetricsSet::new(),
             }),
             other => Err(DataFusionError::Plan(format!(
-                "Filter predicate must return boolean values, not {:?}",
-                other
+                "Filter predicate must return boolean values, not {other:?}"
             ))),
         }
     }

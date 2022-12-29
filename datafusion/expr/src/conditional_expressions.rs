@@ -103,8 +103,7 @@ impl CaseBuilder {
             let unique_types: HashSet<&DataType> = then_types.iter().collect();
             if unique_types.len() != 1 {
                 return Err(DataFusionError::Plan(format!(
-                    "CASE expression 'then' values had multiple data types: {:?}",
-                    unique_types
+                    "CASE expression 'then' values had multiple data types: {unique_types:?}"
                 )));
             }
         }

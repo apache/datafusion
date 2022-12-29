@@ -110,7 +110,7 @@ async fn run_query_with_options(options: ListingOptions, num_files: usize) -> St
     let ctx = SessionContext::new();
 
     let testdata = datafusion::test_util::parquet_test_data();
-    let file_path = format!("{}/alltypes_plain.parquet", testdata);
+    let file_path = format!("{testdata}/alltypes_plain.parquet");
 
     // Create a directory of parquet files with names
     // 0.parquet
@@ -171,7 +171,7 @@ async fn parquet_single_nan_schema() {
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "single_nan",
-        &format!("{}/single_nan.parquet", testdata),
+        &format!("{testdata}/single_nan.parquet"),
         ParquetReadOptions::default(),
     )
     .await
@@ -192,7 +192,7 @@ async fn parquet_list_columns() {
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "list_columns",
-        &format!("{}/list_columns.parquet", testdata),
+        &format!("{testdata}/list_columns.parquet"),
         ParquetReadOptions::default(),
     )
     .await

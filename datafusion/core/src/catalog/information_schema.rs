@@ -511,7 +511,7 @@ impl InformationSchemaColumnsBuilder {
         self.is_nullables.append_value(nullable_str);
 
         // "System supplied type" --> Use debug format of the datatype
-        self.data_types.append_value(format!("{:?}", data_type));
+        self.data_types.append_value(format!("{data_type:?}"));
 
         // "If data_type identifies a character or bit string type, the
         // declared maximum length; null for all other data types or
