@@ -273,9 +273,9 @@ impl ConfigOptions {
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let (prefix, key) = key.split_once('.').ok_or_else(|| {
-            DataFusionError::External(format!(
-                "could not find config namespace for key \"{key}\"",
-            ).into())
+            DataFusionError::External(
+                format!("could not find config namespace for key \"{key}\"",).into(),
+            )
         })?;
 
         if prefix == "datafusion" {
@@ -284,9 +284,9 @@ impl ConfigOptions {
 
         let e = self.extensions.0.get_mut(prefix);
         let e = e.ok_or_else(|| {
-            DataFusionError::External(format!(
-                "Could not find config namespace \"{prefix}\"",
-            ).into())
+            DataFusionError::External(
+                format!("Could not find config namespace \"{prefix}\"",).into(),
+            )
         })?;
         e.0.set(key, value)
     }

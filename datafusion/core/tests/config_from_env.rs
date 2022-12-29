@@ -18,7 +18,6 @@
 use datafusion::config::ConfigOptions;
 use std::env;
 
-
 #[test]
 fn from_env() {
     // Note: these must be a single test to avoid interference from concurrent execution
