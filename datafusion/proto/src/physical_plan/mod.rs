@@ -1477,6 +1477,7 @@ mod roundtrip_tests {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: None,
+            infinite_source: false,
         };
 
         let predicate = datafusion::prelude::col("col").eq(datafusion::prelude::lit("1"));

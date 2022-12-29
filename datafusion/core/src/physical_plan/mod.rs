@@ -110,6 +110,13 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Specifies the output partitioning scheme of this plan
     fn output_partitioning(&self) -> Partitioning;
 
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
+        Ok(false)
+    }
+
     /// If the output of this operator within each partition is sorted,
     /// returns `Some(keys)` with the description of how it was sorted.
     ///

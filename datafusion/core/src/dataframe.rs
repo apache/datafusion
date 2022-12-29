@@ -87,13 +87,7 @@ impl DataFrame {
     }
 
     /// Create a physical plan
-    pub async fn create_physical_plan(mut self) -> Result<Arc<dyn ExecutionPlan>> {
-        self.create_physical_plan_impl().await
-    }
-
-    /// Temporary pending #4626
-    async fn create_physical_plan_impl(&mut self) -> Result<Arc<dyn ExecutionPlan>> {
-        self.session_state.execution_props.start_execution();
+    pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
         self.session_state.create_physical_plan(&self.plan).await
     }
 
@@ -510,6 +504,11 @@ impl DataFrame {
         &self.plan
     }
 
+    /// Returns both the [`LogicalPlan`] and [`SessionState`] that comprise this [`DataFrame`]
+    pub fn into_parts(self) -> (SessionState, LogicalPlan) {
+        (self.session_state, self.plan)
+    }
+
     /// Return the logical plan represented by this DataFrame without running the optimizers
     ///
     /// Note: This method should not be used outside testing, as it loses the snapshot
@@ -627,24 +626,24 @@ impl DataFrame {
     }
 
     /// Write a `DataFrame` to a CSV file.
-    pub async fn write_csv(mut self, path: &str) -> Result<()> {
-        let plan = self.create_physical_plan_impl().await?;
+    pub async fn write_csv(self, path: &str) -> Result<()> {
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
         plan_to_csv(&self.session_state, plan, path).await
     }
 
     /// Write a `DataFrame` to a Parquet file.
     pub async fn write_parquet(
-        mut self,
+        self,
         path: &str,
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
-        let plan = self.create_physical_plan_impl().await?;
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
         plan_to_parquet(&self.session_state, plan, path, writer_properties).await
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.
-    pub async fn write_json(mut self, path: impl AsRef<str>) -> Result<()> {
-        let plan = self.create_physical_plan_impl().await?;
+    pub async fn write_json(self, path: impl AsRef<str>) -> Result<()> {
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
         plan_to_json(&self.session_state, plan, path).await
     }
 

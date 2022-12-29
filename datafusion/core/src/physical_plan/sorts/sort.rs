@@ -627,7 +627,7 @@ fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: &Path) -> Result<(
 #[derive(Debug)]
 pub struct SortExec {
     /// Input schema
-    input: Arc<dyn ExecutionPlan>,
+    pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
     /// Containing all metrics set created during sort
@@ -701,6 +701,19 @@ impl ExecutionPlan for SortExec {
             self.input.output_partitioning()
         } else {
             Partitioning::UnknownPartitioning(1)
+        }
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.    
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        if children[0] {
+            Err(DataFusionError::Plan(
+                "Sort Error: Can not sort unbounded inputs.".to_string(),
+            ))
+        } else {
+            Ok(false)
         }
     }
 

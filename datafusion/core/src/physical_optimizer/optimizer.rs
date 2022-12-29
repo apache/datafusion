@@ -19,9 +19,8 @@
 
 use std::sync::Arc;
 
-use crate::{
-    error::Result, execution::context::SessionConfig, physical_plan::ExecutionPlan,
-};
+use crate::config::ConfigOptions;
+use crate::{error::Result, physical_plan::ExecutionPlan};
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
 /// computes the same results, but in a potentially more efficient
@@ -31,7 +30,7 @@ pub trait PhysicalOptimizerRule {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &SessionConfig,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// A human readable name for this optimizer rule

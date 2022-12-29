@@ -108,9 +108,6 @@ impl TableProvider for ViewTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // clone state and start_execution so that now() works in views
-        let mut state_cloned = state.clone();
-        state_cloned.execution_props.start_execution();
         let plan = if let Some(projection) = projection {
             // avoiding adding a redundant projection (e.g. SELECT * FROM view)
             let current_projection =
@@ -144,7 +141,7 @@ impl TableProvider for ViewTable {
             plan = plan.limit(0, Some(limit))?;
         }
 
-        state_cloned.create_physical_plan(&plan.build()?).await
+        state.create_physical_plan(&plan.build()?).await
     }
 }
 

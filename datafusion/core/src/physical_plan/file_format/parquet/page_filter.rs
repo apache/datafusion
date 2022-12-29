@@ -251,7 +251,7 @@ fn prune_pages_in_one_row_group(
                 let mut sum_row = *row_vec.first().unwrap();
                 let mut selected = *values.first().unwrap();
                 trace!("Pruned to to {:?} using {:?}", values, pruning_stats);
-                for (i, &f) in values.iter().skip(1).enumerate() {
+                for (i, &f) in values.iter().enumerate().skip(1) {
                     if f == selected {
                         sum_row += *row_vec.get(i).unwrap();
                     } else {
@@ -443,10 +443,15 @@ impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
             Index::DOUBLE(index) => Some(Arc::new(Int64Array::from_iter(
                 index.indexes.iter().map(|x| x.null_count),
             ))),
-            Index::INT96(_) | Index::BYTE_ARRAY(_) | Index::FIXED_LEN_BYTE_ARRAY(_) => {
-                // Todo support these types
-                None
-            }
+            Index::INT96(index) => Some(Arc::new(Int64Array::from_iter(
+                index.indexes.iter().map(|x| x.null_count),
+            ))),
+            Index::BYTE_ARRAY(index) => Some(Arc::new(Int64Array::from_iter(
+                index.indexes.iter().map(|x| x.null_count),
+            ))),
+            Index::FIXED_LEN_BYTE_ARRAY(index) => Some(Arc::new(Int64Array::from_iter(
+                index.indexes.iter().map(|x| x.null_count),
+            ))),
         }
     }
 }

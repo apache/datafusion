@@ -27,6 +27,25 @@ use arrow::record_batch::RecordBatch;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 
+#[derive(Debug, Clone)]
+struct GeneratorOptions {
+    row_limit: usize,
+    pods_per_host: Range<usize>,
+    containers_per_pod: Range<usize>,
+    entries_per_container: Range<usize>,
+}
+
+impl Default for GeneratorOptions {
+    fn default() -> Self {
+        Self {
+            row_limit: usize::MAX,
+            pods_per_host: 1..15,
+            containers_per_pod: 1..3,
+            entries_per_container: 1024..8192,
+        }
+    }
+}
+
 #[derive(Default)]
 struct BatchBuilder {
     service: StringDictionaryBuilder<Int32Type>,
@@ -45,8 +64,7 @@ struct BatchBuilder {
     response_status: UInt16Builder,
     prices_status: Decimal128Builder,
 
-    /// optional  number of rows produced
-    row_limit: Option<usize>,
+    options: GeneratorOptions,
     row_count: usize,
 }
 
@@ -79,24 +97,23 @@ impl BatchBuilder {
     }
 
     fn is_finished(&self) -> bool {
-        self.row_limit
-            .as_ref()
-            .map(|x| *x <= self.row_count)
-            .unwrap_or_default()
+        self.options.row_limit <= self.row_count
     }
 
     fn append(&mut self, rng: &mut StdRng, host: &str, service: &str) {
-        let num_pods = rng.gen_range(1..15);
+        let num_pods = rng.gen_range(self.options.pods_per_host.clone());
         let pods = generate_sorted_strings(rng, num_pods, 30..40);
         for pod in pods {
-            for container_idx in 0..rng.gen_range(1..3) {
+            let num_containers = rng.gen_range(self.options.containers_per_pod.clone());
+            for container_idx in 0..num_containers {
                 let container = format!("{}_container_{}", service, container_idx);
                 let image = format!(
                     "{}@sha256:30375999bf03beec2187843017b10c9e88d8b1a91615df4eb6350fb39472edd9",
                     container
                 );
 
-                let num_entries = rng.gen_range(1024..8192);
+                let num_entries =
+                    rng.gen_range(self.options.entries_per_container.clone());
                 for i in 0..num_entries {
                     if self.is_finished() {
                         return;
@@ -184,12 +201,6 @@ impl BatchBuilder {
         )
         .unwrap()
     }
-
-    /// Return up to row_limit rows;
-    pub fn with_row_limit(mut self, row_limit: Option<usize>) -> Self {
-        self.row_limit = row_limit;
-        self
-    }
 }
 
 fn random_string(rng: &mut StdRng, len_range: Range<usize>) -> String {
@@ -241,12 +252,12 @@ pub struct AccessLogGenerator {
     schema: SchemaRef,
     rng: StdRng,
     host_idx: usize,
-    /// optional  number of rows produced
-    row_limit: usize,
     /// maximum rows per batch
     max_batch_size: usize,
     /// How many rows have been returned so far
     row_count: usize,
+    /// Options
+    options: GeneratorOptions,
 }
 
 impl Default for AccessLogGenerator {
@@ -266,9 +277,9 @@ impl AccessLogGenerator {
             schema: BatchBuilder::schema(),
             host_idx: 0,
             rng: StdRng::from_seed(seed),
-            row_limit: usize::MAX,
             max_batch_size: usize::MAX,
             row_count: 0,
+            options: Default::default(),
         }
     }
 
@@ -285,7 +296,25 @@ impl AccessLogGenerator {
 
     /// Return up to row_limit rows;
     pub fn with_row_limit(mut self, row_limit: usize) -> Self {
-        self.row_limit = row_limit;
+        self.options.row_limit = row_limit;
+        self
+    }
+
+    /// Set the number of pods per host
+    pub fn with_pods_per_host(mut self, range: Range<usize>) -> Self {
+        self.options.pods_per_host = range;
+        self
+    }
+
+    /// Set the number of containers per pod
+    pub fn with_containers_per_pod(mut self, range: Range<usize>) -> Self {
+        self.options.containers_per_pod = range;
+        self
+    }
+
+    /// Set the number of log entries per container
+    pub fn with_entries_per_container(mut self, range: Range<usize>) -> Self {
+        self.options.entries_per_container = range;
         self
     }
 }
@@ -294,13 +323,21 @@ impl Iterator for AccessLogGenerator {
     type Item = RecordBatch;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.row_count == self.row_limit {
+        if self.row_count == self.options.row_limit {
             return None;
         }
 
-        let mut builder = BatchBuilder::default().with_row_limit(Some(
-            self.max_batch_size.min(self.row_limit - self.row_count),
-        ));
+        let row_limit = self
+            .max_batch_size
+            .min(self.options.row_limit - self.row_count);
+
+        let mut builder = BatchBuilder {
+            options: GeneratorOptions {
+                row_limit,
+                ..self.options.clone()
+            },
+            ..Default::default()
+        };
 
         let host = format!(
             "i-{:016x}.ec2.internal",

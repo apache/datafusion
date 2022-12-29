@@ -22,6 +22,7 @@ pub mod eliminate_cross_join;
 pub mod eliminate_filter;
 pub mod eliminate_limit;
 pub mod eliminate_outer_join;
+pub mod extract_equijoin_predicate;
 pub mod filter_null_join_keys;
 pub mod inline_table_scan;
 pub mod optimizer;
@@ -32,7 +33,6 @@ pub mod push_down_projection;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
-pub mod subquery_filter_to_join;
 pub mod type_coercion;
 pub mod utils;
 
