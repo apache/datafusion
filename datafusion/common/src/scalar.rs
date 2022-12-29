@@ -46,9 +46,11 @@ use arrow::{
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 
 /// Represents a dynamically typed, nullable single value.
-/// This is the single-valued counter-part of arrow's `Array`.
-/// https://arrow.apache.org/docs/python/api/datatypes.html
-/// https://github.com/apache/arrow/blob/master/format/Schema.fbs#L354-L375
+/// This is the single-valued counter-part to arrow's [`Array`].
+///
+/// See [datatypes](https://arrow.apache.org/docs/python/api/datatypes.html) for
+/// details on datatypes and the [format](https://github.com/apache/arrow/blob/master/format/Schema.fbs#L354-L375)
+/// for the definitive reference.
 #[derive(Clone)]
 pub enum ScalarValue {
     /// represents `DataType::Null` (castable to/from any other type)

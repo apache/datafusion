@@ -88,7 +88,7 @@ pub fn binary_operator_data_type(
 /// when the input argument types do not match the output argument
 /// types
 ///
-/// Tracking issue is https://github.com/apache/arrow-datafusion/issues/3419
+/// Tracking issue is <https://github.com/apache/arrow-datafusion/issues/3419>
 pub fn coerce_types(
     lhs_type: &DataType,
     op: &Operator,
