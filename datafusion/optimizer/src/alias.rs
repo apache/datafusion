@@ -15,32 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod alias;
-pub mod common_subexpr_eliminate;
-pub mod decorrelate_where_exists;
-pub mod decorrelate_where_in;
-pub mod eliminate_cross_join;
-pub mod eliminate_filter;
-pub mod eliminate_limit;
-pub mod eliminate_outer_join;
-pub mod extract_equijoin_predicate;
-pub mod filter_null_join_keys;
-pub mod inline_table_scan;
-pub mod optimizer;
-pub mod propagate_empty_relation;
-pub mod push_down_filter;
-pub mod push_down_limit;
-pub mod push_down_projection;
-pub mod scalar_subquery_to_join;
-pub mod simplify_expressions;
-pub mod single_distinct_to_groupby;
-pub mod type_coercion;
-pub mod utils;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub mod rewrite_disjunctive_predicate;
-#[cfg(test)]
-pub mod test;
-pub mod unwrap_cast_in_comparison;
+/// A utility struct that can be used to generate unique aliases when optimizing queries
+pub struct AliasGenerator {
+    next_id: AtomicUsize,
+}
 
-pub use optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
-pub use utils::optimize_children;
+impl Default for AliasGenerator {
+    fn default() -> Self {
+        Self {
+            next_id: AtomicUsize::new(1),
+        }
+    }
+}
+
+impl AliasGenerator {
+    /// Create a new [`AliasGenerator`]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return a unique alias with the provided prefix
+    pub fn next(&self, prefix: &str) -> String {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        format!("{}_{}", prefix, id)
+    }
+}

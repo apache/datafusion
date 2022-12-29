@@ -41,7 +41,6 @@ use chrono::{DateTime, Utc};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -83,11 +82,6 @@ pub trait OptimizerConfig {
 
     /// How many times to attempt to optimize the plan
     fn max_passes(&self) -> u8;
-
-    /// Return a unique ID
-    ///
-    /// This is useful for assigning unique names to aliases
-    fn next_id(&self) -> usize;
 }
 
 /// A standalone [`OptimizerConfig`] that can be used independently
@@ -97,8 +91,6 @@ pub struct OptimizerContext {
     /// Query execution start time that can be used to rewrite
     /// expressions such as `now()` to use a literal value instead
     query_execution_start_time: DateTime<Utc>,
-    /// id generator for optimizer passes
-    next_id: AtomicUsize,
     /// Option to skip rules that produce errors
     skip_failing_rules: bool,
     /// Specify whether to enable the filter_null_keys rule
@@ -112,7 +104,6 @@ impl OptimizerContext {
     pub fn new() -> Self {
         Self {
             query_execution_start_time: Utc::now(),
-            next_id: AtomicUsize::new(1),
             skip_failing_rules: true,
             filter_null_keys: true,
             max_passes: 3,
@@ -171,12 +162,6 @@ impl OptimizerConfig for OptimizerContext {
 
     fn max_passes(&self) -> u8 {
         self.max_passes
-    }
-
-    fn next_id(&self) -> usize {
-        use std::sync::atomic::Ordering;
-        // Can use relaxed ordering as not used for synchronisation
-        self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 }
 
