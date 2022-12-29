@@ -681,8 +681,8 @@ impl LogicalPlanBuilder {
         let window_expr = normalize_cols(window_expr, &self.plan)?;
         let all_expr = window_expr.iter();
         validate_unique_names("Windows", all_expr.clone())?;
-        let mut window_fields: Vec<DFField> = exprlist_to_fields(all_expr, &self.plan)?;
-        window_fields.extend_from_slice(self.plan.schema().fields());
+        let mut window_fields: Vec<DFField> = self.plan.schema().fields().clone();
+        window_fields.extend_from_slice(&exprlist_to_fields(all_expr, &self.plan)?);
         let metadata = self.plan.schema().metadata().clone();
 
         Ok(Self::from(LogicalPlan::Window(Window {
