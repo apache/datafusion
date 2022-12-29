@@ -906,8 +906,7 @@ async fn explain_nested() {
             .set_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY, explain_phy_plan_flag);
         let ctx = SessionContext::with_config(config);
         let sql = "EXPLAIN explain select 1";
-        let dataframe = ctx.sql(sql).await.unwrap();
-        let err = dataframe.create_physical_plan().await.unwrap_err();
+        let err = ctx.sql(sql).await.unwrap_err();
         assert!(err.to_string().contains("Explain must be root of the plan"));
     }
 
