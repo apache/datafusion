@@ -58,7 +58,7 @@ macro_rules! config_namespace {
 
             fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
                 $(
-                let key = format!("{}.{}", key_prefix, stringify!($field_name));
+                let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
                 let desc = concat!($($d),*).trim();
                 self.$field_name.visit(v, key.as_str(), desc);
                 )*
@@ -273,10 +273,9 @@ impl ConfigOptions {
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let (prefix, key) = key.split_once('.').ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "could not find config namespace for key \"{}\"",
-                key
-            ))
+            DataFusionError::External(format!(
+                "could not find config namespace for key \"{key}\"",
+            ).into())
         })?;
 
         if prefix == "datafusion" {
@@ -285,10 +284,9 @@ impl ConfigOptions {
 
         let e = self.extensions.0.get_mut(prefix);
         let e = e.ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "Could not find config namespace \"{}\"",
-                prefix
-            ))
+            DataFusionError::External(format!(
+                "Could not find config namespace \"{prefix}\"",
+            ).into())
         })?;
         e.0.set(key, value)
     }

@@ -18,28 +18,24 @@
 use datafusion::config::ConfigOptions;
 use std::env;
 
+
 #[test]
-fn get_config_bool_from_env() {
+fn from_env() {
+    // Note: these must be a single test to avoid interference from concurrent execution
     let env_key = "DATAFUSION_OPTIMIZER_FILTER_NULL_JOIN_KEYS";
     env::set_var(env_key, "true");
     let config = ConfigOptions::from_env().unwrap();
     env::remove_var(env_key);
     assert!(config.built_in.optimizer.filter_null_join_keys);
-}
 
-#[test]
-fn get_config_int_from_env() {
     let env_key = "DATAFUSION_EXECUTION_BATCH_SIZE";
     env::set_var(env_key, "4096");
     let config = ConfigOptions::from_env().unwrap();
     env::remove_var(env_key);
     assert_eq!(config.built_in.execution.batch_size, 4096);
-}
 
-#[test]
-fn get_config_int_from_env_invalid() {
     let env_key = "DATAFUSION_EXECUTION_COALESCE_TARGET_BATCH_SIZE";
     env::set_var(env_key, "abc");
     let err = ConfigOptions::from_env().unwrap_err().to_string();
-    assert_eq!(err, "Error parsing abc as usize for config key \ncaused by\nExternal error: invalid digit found in string")
+    assert_eq!(err, "Error parsing abc as usize\ncaused by\nExternal error: invalid digit found in string")
 }
