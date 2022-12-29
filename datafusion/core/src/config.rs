@@ -24,7 +24,7 @@ use std::fmt::Display;
 
 macro_rules! config_namespace {
     (
-     $(#[$meta:meta])*
+     $(#[doc = $struct_d:tt])*
      $vis:vis struct $struct_name:ident {
         $(
         $(#[doc = $d:tt])*
@@ -33,6 +33,7 @@ macro_rules! config_namespace {
     }
     ) => {
 
+        $(#[doc = $struct_d])*
         #[derive(Debug, Clone, PartialEq)]
         #[non_exhaustive]
         $vis struct $struct_name{
@@ -75,6 +76,7 @@ macro_rules! config_namespace {
 }
 
 config_namespace! {
+    /// Options related to catalog and directory scanning
     pub struct CatalogOptions {
         /// Number of partitions for query execution. Increasing partitions can increase
         /// concurrency. Defaults to the number of cpu cores on the system.
@@ -96,6 +98,7 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Options related to query execution
     pub struct ExecutionOptions {
         /// Default batch size while creating new batches, it's especially useful for
         /// buffer-in-memory batches since creating tiny batches would results in too much
@@ -134,6 +137,7 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Options related to reading of parquet files
     pub struct ParquetOptions {
         /// If true, uses parquet data page level metadata (Page Index) statistics
         /// to reduce the number of rows decoded.
@@ -167,6 +171,7 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Options related to query optimization
     pub struct OptimizerOptions {
         /// When set to true, the optimizer will insert filters before a join between
         /// a nullable and non-nullable column to filter out nulls on the nullable side. This
@@ -209,6 +214,7 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// Options controlling explain output
     pub struct ExplainOptions {
         /// When set to true, the explain statement will only print logical plans
         pub logical_plan_only: bool, default = false
@@ -219,6 +225,7 @@ config_namespace! {
 }
 
 config_namespace! {
+    /// All built-in DataFusion options
     pub struct DataFusionOptions {
         /// Catalog options
         pub catalog: CatalogOptions, default = Default::default()
@@ -263,28 +270,6 @@ impl ConfigOptions {
         Self::default()
     }
 
-    /// Create new ConfigOptions struct, taking values from
-    /// environment variables where possible.
-    ///
-    /// For example, setting `DATAFUSION_EXECUTION_BATCH_SIZE` will
-    /// control `datafusion.execution.batch_size`.
-    pub fn from_env() -> Result<Self> {
-        let mut ret = Self::default();
-        for (k, v) in std::env::vars_os() {
-            let k = k.to_string_lossy().to_ascii_lowercase().replace('_', ".");
-            let v = v.to_string_lossy();
-
-            if let Some((prefix, key)) = k.split_once('.') {
-                if prefix == "datafusion" {
-                    ret.built_in.set(key, v.as_ref())?
-                } else if let Some(e) = ret.extensions.0.get_mut(prefix) {
-                    e.0.set(key, v.as_ref())?
-                }
-            }
-        }
-        Ok(ret)
-    }
-
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let (prefix, key) = key.split_once('.').ok_or_else(|| {
@@ -306,6 +291,43 @@ impl ConfigOptions {
             ))
         })?;
         e.0.set(key, value)
+    }
+
+    /// Create new ConfigOptions struct, taking values from
+    /// environment variables where possible.
+    ///
+    /// For example, setting `DATAFUSION_EXECUTION_BATCH_SIZE` will
+    /// control `datafusion.execution.batch_size`.
+    pub fn from_env() -> Result<Self> {
+        struct Visitor(Vec<String>);
+
+        impl Visit for Visitor {
+            fn some<V: Display>(&mut self, key: &str, _: V, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+
+            fn none(&mut self, key: &str, _: &'static str) {
+                self.0.push(key.to_string())
+            }
+        }
+
+        // Extract the names of all fields and then look up the corresponding
+        // environment variables. This isn't hugely efficient but avoids
+        // ambiguity between `a.b` and `a_b` which would both correspond
+        // to an environment variable of `A_B`
+
+        let mut keys = Visitor(vec![]);
+        let mut ret = Self::default();
+        ret.built_in.visit(&mut keys, "datafusion", "");
+
+        for key in keys.0 {
+            let env = key.to_uppercase().replace('.', "_");
+            if let Some(var) = std::env::var_os(env) {
+                ret.set(&key, var.to_string_lossy().as_ref())?;
+            }
+        }
+
+        Ok(ret)
     }
 
     /// Returns the [`ConfigEntry`] stored within this [`ConfigOptions`]
@@ -369,19 +391,34 @@ impl ConfigOptions {
 /// Unfortunately associated constants are not currently object-safe, and so this
 /// extends the object-safe [`ExtensionOptions`]
 pub trait ConfigExtension: ExtensionOptions {
+    /// Configuration namespace prefix to use
+    ///
+    /// All values under this will be prefixed with `$PREFIX + "."`
     const PREFIX: &'static str;
 }
 
 /// An object-safe API for storing arbitrary configuration
 pub trait ExtensionOptions: Send + Sync + std::fmt::Debug + 'static {
+    /// Return `self` as [`Any`]
+    ///
+    /// This is needed until trait upcasting is stabilised
     fn as_any(&self) -> &dyn Any;
 
+    /// Return `self` as [`Any`]
+    ///
+    /// This is needed until trait upcasting is stabilised
     fn as_any_mut(&mut self) -> &mut dyn Any;
 
+    /// Return a deep clone of this [`ExtensionOptions`]
+    ///
+    /// It is important this does not share mutable state to avoid consistency issues
+    /// with configuration changing whilst queries are executing
     fn cloned(&self) -> Box<dyn ExtensionOptions>;
 
+    /// Set the given `key`, `value` pair
     fn set(&mut self, key: &str, value: &str) -> Result<()>;
 
+    /// Returns the [`ConfigEntry`] stored in this [`ExtensionOptions`]
     fn entries(&self) -> Vec<ConfigEntry>;
 }
 
@@ -446,17 +483,10 @@ macro_rules! config_field {
                 v.some(key, self, description)
             }
 
-            fn set(&mut self, key: &str, value: &str) -> Result<()> {
+            fn set(&mut self, _: &str, value: &str) -> Result<()> {
                 *self = value.parse().map_err(|e| {
                     DataFusionError::Context(
-                        format!(
-                            concat!(
-                                "Parsing {} as ",
-                                stringify!($t),
-                                " for config key {}"
-                            ),
-                            value, key
-                        ),
+                        format!(concat!("Error parsing {} as ", stringify!($t),), value),
                         Box::new(DataFusionError::External(Box::new(e))),
                     )
                 })?;

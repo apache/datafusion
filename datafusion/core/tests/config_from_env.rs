@@ -40,7 +40,6 @@ fn get_config_int_from_env() {
 fn get_config_int_from_env_invalid() {
     let env_key = "DATAFUSION_EXECUTION_COALESCE_TARGET_BATCH_SIZE";
     env::set_var(env_key, "abc");
-    let config = ConfigOptions::from_env().unwrap();
-    env::remove_var(env_key);
-    assert_eq!(config.built_in.execution.coalesce_target_batch_size, 4096); // set to its default value
+    let err = ConfigOptions::from_env().unwrap_err().to_string();
+    assert_eq!(err, "Error parsing abc as usize for config key \ncaused by\nExternal error: invalid digit found in string")
 }
