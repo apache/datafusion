@@ -343,7 +343,7 @@ enum OtherErr<'a> {
 impl DataFusionError {
     /// Get deepest underlying [`DataFusionError`]
     ///
-    /// [`DatafusionError`]s sometimes form a chain, such as `DatafusionError::ArrowError()` in order to conform
+    /// [`DataFusionError`]s sometimes form a chain, such as `DataFusionError::ArrowError()` in order to conform
     /// to the correct error signature. Thus sometimes there is a chain several layers deep that can obscure the
     /// original error. This function finds the lowest level DataFusionError possible.
     ///

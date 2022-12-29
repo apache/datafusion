@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SQL Parser
-//!
-//! Declares a SQL parser based on sqlparser that handles custom formats that we need.
+//! DataFusion SQL Parser based on [`sqlparser`]
 
 use datafusion_common::parsers::CompressionTypeVariant;
 use sqlparser::{
@@ -89,7 +87,7 @@ pub struct DescribeTable {
 
 /// DataFusion Statement representations.
 ///
-/// Tokens parsed by `DFParser` are converted into these values.
+/// Tokens parsed by [`DFParser`] are converted into these values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
     /// ANSI SQL AST node
@@ -100,19 +98,24 @@ pub enum Statement {
     DescribeTable(DescribeTable),
 }
 
-/// SQL Parser
+/// DataFusion SQL Parser based on [`sqlparser`]
+///
+/// This parser handles DataFusion specific statements, delegating to
+/// [`Parser`](sqlparser::parser::Parser) for other SQL statements.
 pub struct DFParser<'a> {
     parser: Parser<'a>,
 }
 
 impl<'a> DFParser<'a> {
-    /// Parse the specified tokens
+    /// Create a new parser for the specified tokens using the
+    /// [`GenericDialect`].
     pub fn new(sql: &str) -> Result<Self, ParserError> {
         let dialect = &GenericDialect {};
         DFParser::new_with_dialect(sql, dialect)
     }
 
-    /// Parse the specified tokens with dialect
+    /// Create a new parser for the specified tokens with the
+    /// specified dialect.
     pub fn new_with_dialect(
         sql: &str,
         dialect: &'a dyn Dialect,
@@ -125,13 +128,15 @@ impl<'a> DFParser<'a> {
         })
     }
 
-    /// Parse a SQL statement and produce a set of statements with dialect
+    /// Parse a sql string into one or [`Statement`]s using the
+    /// [`GenericDialect`].
     pub fn parse_sql(sql: &str) -> Result<VecDeque<Statement>, ParserError> {
         let dialect = &GenericDialect {};
         DFParser::parse_sql_with_dialect(sql, dialect)
     }
 
-    /// Parse a SQL statement and produce a set of statements
+    /// Parse a SQL string and produce one or more [`Statement`]s with
+    /// with the specified dialect.
     pub fn parse_sql_with_dialect(
         sql: &str,
         dialect: &dyn Dialect,
@@ -159,7 +164,7 @@ impl<'a> DFParser<'a> {
         Ok(stmts)
     }
 
-    /// Report unexpected token
+    /// Report an unexpected token
     fn expected<T>(&self, expected: &str, found: Token) -> Result<T, ParserError> {
         parser_err!(format!("Expected {}, found: {}", expected, found))
     }
@@ -198,12 +203,13 @@ impl<'a> DFParser<'a> {
         }
     }
 
+    /// Parse a SQL `DESCRIBE` statement
     pub fn parse_describe(&mut self) -> Result<Statement, ParserError> {
         let table_name = self.parser.parse_object_name()?;
         Ok(Statement::DescribeTable(DescribeTable { table_name }))
     }
 
-    /// Parse a SQL CREATE statement
+    /// Parse a SQL `CREATE` statementm handling `CREATE EXTERNAL TABLE`
     pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
         if self.parser.parse_keyword(Keyword::EXTERNAL) {
             self.parse_create_external_table()

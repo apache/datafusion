@@ -1201,7 +1201,7 @@ pub struct DropView {
     pub schema: DFSchemaRef,
 }
 
-/// Set a Variable -- value in [`ConfigOptions`]
+/// Set a Variable's value -- value in [`ConfigOptions`]
 #[derive(Clone)]
 pub struct SetVariable {
     /// The variable name
