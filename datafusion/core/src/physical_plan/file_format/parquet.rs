@@ -229,8 +229,9 @@ impl ParquetExec {
 
     /// Return the value described in [`Self::with_enable_page_index`]
     fn enable_page_index(&self, config_options: &ConfigOptions) -> bool {
-        self.enable_page_index
-            .unwrap_or_else(|| config_options.built_in.execution.parquet.enable_page_index)
+        self.enable_page_index.unwrap_or_else(|| {
+            config_options.built_in.execution.parquet.enable_page_index
+        })
     }
 }
 

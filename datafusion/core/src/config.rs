@@ -20,6 +20,7 @@
 use datafusion_common::{DataFusionError, Result};
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::fmt::Display;
 
 macro_rules! config_namespace {
     (
@@ -42,7 +43,7 @@ macro_rules! config_namespace {
         }
 
         impl ConfigField for $struct_name {
-            fn set<C: ConfigValue>(&mut self, key: &str, value: C) -> Result<()> {
+            fn set(&mut self, key: &str, value: &str) -> Result<()> {
                 let (key, rem) = key.split_once('.').unwrap_or((key, ""));
                 match key {
                     $(
@@ -54,7 +55,7 @@ macro_rules! config_namespace {
                 }
             }
 
-            fn visit<V: FieldVisitor>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
+            fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
                 $(
                 let key = format!("{}.{}", key_prefix, stringify!($field_name));
                 let desc = concat!($($d),*).trim();
@@ -311,11 +312,11 @@ impl ConfigOptions {
     pub fn entries(&self) -> Vec<ConfigEntry> {
         struct Visitor(Vec<ConfigEntry>);
 
-        impl FieldVisitor for Visitor {
-            fn visit_some<C: ConfigValue>(
+        impl Visit for Visitor {
+            fn some<V: Display>(
                 &mut self,
                 key: &str,
-                value: C,
+                value: V,
                 description: &'static str,
             ) {
                 self.0.push(ConfigEntry {
@@ -325,7 +326,7 @@ impl ConfigOptions {
                 })
             }
 
-            fn visit_none(&mut self, key: &str, description: &'static str) {
+            fn none(&mut self, key: &str, description: &'static str) {
                 self.0.push(ConfigEntry {
                     key: key.to_string(),
                     value: None,
@@ -417,117 +418,61 @@ impl Clone for ExtensionBox {
     }
 }
 
-/// A trait that performs fallible coercion into a [`ConfigField`]
-trait ConfigValue: std::fmt::Display {
-    fn parse_usize(&self) -> Result<usize>;
-
-    fn parse_bool(&self) -> Result<bool>;
-}
-
-impl ConfigValue for bool {
-    fn parse_usize(&self) -> Result<usize> {
-        Ok(*self as _)
-    }
-
-    fn parse_bool(&self) -> Result<bool> {
-        Ok(*self)
-    }
-}
-
-impl ConfigValue for usize {
-    fn parse_usize(&self) -> Result<usize> {
-        Ok(*self as _)
-    }
-
-    fn parse_bool(&self) -> Result<bool> {
-        Ok(*self != 0)
-    }
-}
-
-impl ConfigValue for &str {
-    fn parse_usize(&self) -> Result<usize> {
-        self.parse()
-            .map_err(|e| DataFusionError::External(Box::new(e)))
-    }
-
-    fn parse_bool(&self) -> Result<bool> {
-        self.parse()
-            .map_err(|e| DataFusionError::External(Box::new(e)))
-    }
-}
-
-impl ConfigValue for String {
-    fn parse_usize(&self) -> Result<usize> {
-        self.as_str().parse_usize()
-    }
-
-    fn parse_bool(&self) -> Result<bool> {
-        self.as_str().parse_bool()
-    }
-}
-
 /// A trait implemented by `config_namespace` and for field types that provides
 /// the ability to walk and mutate the configuration tree
 trait ConfigField {
-    fn visit<V: FieldVisitor>(&self, v: &mut V, key: &str, description: &'static str);
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str);
 
-    fn set<C: ConfigValue>(&mut self, key: &str, value: C) -> Result<()>;
+    fn set(&mut self, key: &str, value: &str) -> Result<()>;
 }
 
 impl<F: ConfigField + Default> ConfigField for Option<F> {
-    fn visit<V: FieldVisitor>(&self, v: &mut V, key: &str, description: &'static str) {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
         match self {
             Some(s) => s.visit(v, key, description),
-            None => v.visit_none(key, description),
+            None => v.none(key, description),
         }
     }
 
-    fn set<C: ConfigValue>(&mut self, key: &str, value: C) -> Result<()> {
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
         self.get_or_insert_with(Default::default).set(key, value)
     }
 }
 
-impl ConfigField for String {
-    fn visit<V: FieldVisitor>(&self, v: &mut V, key: &str, description: &'static str) {
-        v.visit_some(key, self.as_str(), description)
-    }
+macro_rules! config_field {
+    ($t:ty) => {
+        impl ConfigField for $t {
+            fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+                v.some(key, self, description)
+            }
 
-    fn set<C: ConfigValue>(&mut self, _key: &str, value: C) -> Result<()> {
-        *self = value.to_string();
-        Ok(())
-    }
+            fn set(&mut self, key: &str, value: &str) -> Result<()> {
+                *self = value.parse().map_err(|e| {
+                    DataFusionError::Context(
+                        format!(
+                            concat!(
+                                "Parsing {} as ",
+                                stringify!($t),
+                                " for config key {}"
+                            ),
+                            value, key
+                        ),
+                        Box::new(DataFusionError::External(Box::new(e))),
+                    )
+                })?;
+                Ok(())
+            }
+        }
+    };
 }
 
-impl ConfigField for bool {
-    fn visit<V: FieldVisitor>(&self, v: &mut V, key: &str, description: &'static str) {
-        v.visit_some(key, *self, description)
-    }
-
-    fn set<C: ConfigValue>(&mut self, _key: &str, value: C) -> Result<()> {
-        *self = value.parse_bool()?;
-        Ok(())
-    }
-}
-
-impl ConfigField for usize {
-    fn visit<V: FieldVisitor>(&self, v: &mut V, key: &str, description: &'static str) {
-        v.visit_some(key, *self, description)
-    }
-
-    fn set<C: ConfigValue>(&mut self, _key: &str, value: C) -> Result<()> {
-        *self = value.parse_usize()?;
-        Ok(())
-    }
-}
+config_field!(String);
+config_field!(bool);
+config_field!(usize);
 
 /// An implementation trait used to recursively walk configuration
-trait FieldVisitor {
-    fn visit_some<C: ConfigValue>(
-        &mut self,
-        key: &str,
-        value: C,
-        description: &'static str,
-    );
+trait Visit {
+    fn some<V: Display>(&mut self, key: &str, value: V, description: &'static str);
 
-    fn visit_none(&mut self, key: &str, description: &'static str);
+    fn none(&mut self, key: &str, description: &'static str);
 }
