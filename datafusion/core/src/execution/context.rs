@@ -1456,6 +1456,9 @@ impl SessionState {
         // We need to take care of the rule ordering. They may influence each other.
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> =
             vec![Arc::new(AggregateStatistics::new())];
+
+        let built_in = &config.options.built_in;
+
         // - In order to increase the parallelism, it will change the output partitioning
         // of some operators in the plan tree, which will influence other rules.
         // Therefore, it should be run as soon as possible.
@@ -1464,7 +1467,7 @@ impl SessionState {
         //      - it's conflicted with some parts of the BasicEnforcement, since it will
         //      introduce additional repartitioning while the BasicEnforcement aims at
         //      reducing unnecessary repartitioning.
-        if config.options.built_in.optimizer.enable_round_robin_repartition {
+        if built_in.optimizer.enable_round_robin_repartition {
             physical_optimizers.push(Arc::new(Repartition::new()));
         }
         //- Currently it will depend on the partition number to decide whether to change the
@@ -1496,9 +1499,9 @@ impl SessionState {
         physical_optimizers.push(Arc::new(OptimizeSorts::new()));
         // It will not influence the distribution and ordering of the whole plan tree.
         // Therefore, to avoid influencing other rules, it should be run at last.
-        if config.options.built_in.execution.coalesce_batches {
+        if built_in.execution.coalesce_batches {
             physical_optimizers.push(Arc::new(CoalesceBatches::new(
-                config.options.built_in.execution.coalesce_target_batch_size,
+                built_in.execution.coalesce_target_batch_size,
             )));
         }
         // The PipelineChecker rule will reject non-runnable query plans that use
