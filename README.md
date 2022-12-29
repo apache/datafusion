@@ -88,6 +88,7 @@ Here are some of the projects known to use DataFusion:
 - [datafusion-tui](https://github.com/datafusion-contrib/datafusion-tui) Text UI for DataFusion
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [Flock](https://github.com/flock-lab/flock)
+- [Greptime DB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 - [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
 - [qv](https://github.com/timvw/qv) Quickly view your data
