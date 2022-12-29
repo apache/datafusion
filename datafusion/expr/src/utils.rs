@@ -587,17 +587,12 @@ pub fn from_plan(
             // and the struct of each equi-expr is like `left-expr = right-expr`.
             let new_on:Vec<(Expr,Expr)> = expr.iter().take(equi_expr_count).map(|equi_expr| {
                     // SimplifyExpression rule may add alias to the equi_expr.
-                    let equi_expr = match equi_expr {
-                        Expr::Alias(expr, _) => expr.as_ref(),
-                        _ => equi_expr,
-                    };
-
-                    if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = equi_expr {
-                        assert!(op == &Operator::Eq);
-                        Ok(((**left).clone(), (**right).clone()))
+                    let unalias_expr = equi_expr.clone().unalias();    
+                    if let Expr::BinaryExpr(BinaryExpr { left, op:Operator::Eq, right }) = unalias_expr {
+                        Ok((*left, *right))
                     } else {
                         Err(DataFusionError::Internal(format!(
-                            "The front part expressions should be an binary expression, actual:{}",
+                            "The front part expressions should be an binary equiality expression, actual:{}",
                             equi_expr
                         )))
                     }
