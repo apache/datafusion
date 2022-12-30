@@ -64,10 +64,10 @@ fn subquery_filter_with_cast() -> Result<()> {
     )";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_int32\
-    \n  Filter: CAST(test.col_int32 AS Float64) > __sq_1.__value\
+    \n  Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.__value\
     \n    CrossJoin:\
     \n      TableScan: test projection=[col_int32]\
-    \n      SubqueryAlias: __sq_1\
+    \n      SubqueryAlias: __scalar_sq_1\
     \n        Projection: AVG(test.col_int32) AS __value\
     \n          Aggregate: groupBy=[[]], aggr=[[AVG(test.col_int32)]]\
     \n            Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
