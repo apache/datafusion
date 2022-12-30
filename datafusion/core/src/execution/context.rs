@@ -103,7 +103,6 @@ use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
-use crate::physical_optimizer::use_bounded_window_execs::UseBoundedWindowAggExec;
 use uuid::Uuid;
 
 use super::options::{
@@ -1610,8 +1609,6 @@ impl SessionState {
         // These cases typically arise when we have reversible window expressions or deep subqueries.
         // The rule below performs this analysis and removes unnecessary sorts.
         physical_optimizers.push(Arc::new(OptimizeSorts::new()));
-        // Replace ordinary window executors with bounded-memory variants when possible:
-        physical_optimizers.push(Arc::new(UseBoundedWindowAggExec::new()));
         // The CoalesceBatches rule will not influence the distribution and ordering of the whole
         // plan tree. Therefore, to avoid influencing other rules, it should be run at last.
         if config

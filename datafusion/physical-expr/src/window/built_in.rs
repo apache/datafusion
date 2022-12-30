@@ -32,7 +32,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::WindowFrame;
+use datafusion_expr::{WindowFrame, WindowFrameUnits};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -242,6 +242,8 @@ impl WindowExpr for BuiltInWindowExpr {
         self.expr.supports_bounded_execution()
             && (!self.expr.uses_window_frame()
                 || !(self.window_frame.start_bound.is_unbounded()
-                    || self.window_frame.end_bound.is_unbounded()))
+                    || self.window_frame.end_bound.is_unbounded()
+                        // Currently groups queries cannot use run with bounded memory
+                        || matches!(self.window_frame.units, WindowFrameUnits::Groups)))
     }
 }

@@ -29,7 +29,7 @@ use arrow::{array::ArrayRef, datatypes::Field};
 
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_expr::WindowFrame;
+use datafusion_expr::{WindowFrame, WindowFrameUnits};
 
 use crate::window::window_expr::reverse_order_bys;
 use crate::window::SlidingAggregateWindowExpr;
@@ -164,8 +164,11 @@ impl WindowExpr for AggregateWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
+        // Currently groups queries cannot use run with bounded memory
+        let is_group = matches!(self.window_frame.units, WindowFrameUnits::Groups);
         self.aggregate.supports_bounded_execution()
             && !self.window_frame.start_bound.is_unbounded()
             && !self.window_frame.end_bound.is_unbounded()
+            && !is_group
     }
 }

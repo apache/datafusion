@@ -28,7 +28,6 @@ pub mod optimizer;
 pub mod pipeline_checker;
 pub mod pruning;
 pub mod repartition;
-pub mod use_bounded_window_execs;
 mod utils;
 
 pub mod pipeline_fixer;
