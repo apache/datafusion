@@ -320,7 +320,7 @@ mod tests {
     #[tokio::test]
     async fn test_custom_batch_size() -> Result<()> {
         let mut config = ConfigOptions::new();
-        config.built_in.execution.batch_size = 1234;
+        config.execution.batch_size = 1234;
 
         let ctx = SessionContext::with_config(config.into());
         let plan = create_physical_plan(ctx).await?;
@@ -337,7 +337,7 @@ mod tests {
     #[tokio::test]
     async fn test_disable_coalesce() -> Result<()> {
         let mut config = ConfigOptions::new();
-        config.built_in.execution.coalesce_batches = false;
+        config.execution.coalesce_batches = false;
 
         let ctx = SessionContext::with_config(config.into());
         let plan = create_physical_plan(ctx).await?;

@@ -70,7 +70,6 @@ impl PhysicalOptimizerRule for BasicEnforcement {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = &config.built_in;
         let target_partitions = config.execution.target_partitions;
         let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
         let new_plan = if top_down_join_key_reordering {
@@ -1134,7 +1133,7 @@ mod tests {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
             let mut config = ConfigOptions::new();
-            config.built_in.execution.target_partitions = 10;
+            config.execution.target_partitions = 10;
 
             // run optimizer
             let optimizer = BasicEnforcement {};

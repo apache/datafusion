@@ -1165,7 +1165,7 @@ impl SessionConfig {
     pub fn with_batch_size(mut self, n: usize) -> Self {
         // batch size must be greater than zero
         assert!(n > 0);
-        self.options.built_in.execution.batch_size = n;
+        self.options.execution.batch_size = n;
         self
     }
 
@@ -1173,46 +1173,43 @@ impl SessionConfig {
     pub fn with_target_partitions(mut self, n: usize) -> Self {
         // partition count must be greater than zero
         assert!(n > 0);
-        self.options.built_in.execution.target_partitions = n;
+        self.options.execution.target_partitions = n;
         self
     }
 
     /// get target_partitions
     pub fn target_partitions(&self) -> usize {
-        self.options.built_in.execution.target_partitions
+        self.options.execution.target_partitions
     }
 
     /// Is the information schema enabled?
     pub fn information_schema(&self) -> bool {
-        self.options.built_in.catalog.information_schema
+        self.options.catalog.information_schema
     }
 
     /// Should the context create the default catalog and schema?
     pub fn create_default_catalog_and_schema(&self) -> bool {
-        self.options
-            .built_in
-            .catalog
-            .create_default_catalog_and_schema
+        self.options.catalog.create_default_catalog_and_schema
     }
 
     /// Are joins repartitioned during execution?
     pub fn repartition_joins(&self) -> bool {
-        self.options.built_in.optimizer.repartition_joins
+        self.options.optimizer.repartition_joins
     }
 
     /// Are aggregates repartitioned during execution?
     pub fn repartition_aggregations(&self) -> bool {
-        self.options.built_in.optimizer.repartition_aggregations
+        self.options.optimizer.repartition_aggregations
     }
 
     /// Are window functions repartitioned during execution?
     pub fn repartition_window_functions(&self) -> bool {
-        self.options.built_in.optimizer.repartition_windows
+        self.options.optimizer.repartition_windows
     }
 
     /// Are statistics collected during execution?
     pub fn collect_statistics(&self) -> bool {
-        self.options.built_in.execution.collect_statistics
+        self.options.execution.collect_statistics
     }
 
     /// Selects a name for the default catalog and schema
@@ -1228,57 +1225,54 @@ impl SessionConfig {
 
     /// Controls whether the default catalog and schema will be automatically created
     pub fn with_create_default_catalog_and_schema(mut self, create: bool) -> Self {
-        self.options
-            .built_in
-            .catalog
-            .create_default_catalog_and_schema = create;
+        self.options.catalog.create_default_catalog_and_schema = create;
         self
     }
 
     /// Enables or disables the inclusion of `information_schema` virtual tables
     pub fn with_information_schema(mut self, enabled: bool) -> Self {
-        self.options.built_in.catalog.information_schema = enabled;
+        self.options.catalog.information_schema = enabled;
         self
     }
 
     /// Enables or disables the use of repartitioning for joins to improve parallelism
     pub fn with_repartition_joins(mut self, enabled: bool) -> Self {
-        self.options.built_in.optimizer.repartition_joins = enabled;
+        self.options.optimizer.repartition_joins = enabled;
         self
     }
 
     /// Enables or disables the use of repartitioning for aggregations to improve parallelism
     pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
-        self.options.built_in.optimizer.repartition_aggregations = enabled;
+        self.options.optimizer.repartition_aggregations = enabled;
         self
     }
 
     /// Enables or disables the use of repartitioning for window functions to improve parallelism
     pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
-        self.options.built_in.optimizer.repartition_windows = enabled;
+        self.options.optimizer.repartition_windows = enabled;
         self
     }
 
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
     pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
-        self.options.built_in.execution.parquet.pruning = enabled;
+        self.options.execution.parquet.pruning = enabled;
         self
     }
 
     /// Returns true if pruning predicate should be used to skip parquet row groups
     pub fn parquet_pruning(&self) -> bool {
-        self.options.built_in.execution.parquet.pruning
+        self.options.execution.parquet.pruning
     }
 
     /// Enables or disables the collection of statistics after listing files
     pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
-        self.options.built_in.execution.collect_statistics = enabled;
+        self.options.execution.collect_statistics = enabled;
         self
     }
 
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
-        self.options.built_in.execution.batch_size
+        self.options.execution.batch_size
     }
 
     /// Convert configuration options to name-value pairs with values
@@ -1457,8 +1451,6 @@ impl SessionState {
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> =
             vec![Arc::new(AggregateStatistics::new())];
 
-        let built_in = &config.options.built_in;
-
         // - In order to increase the parallelism, it will change the output partitioning
         // of some operators in the plan tree, which will influence other rules.
         // Therefore, it should be run as soon as possible.
@@ -1467,7 +1459,7 @@ impl SessionState {
         //      - it's conflicted with some parts of the BasicEnforcement, since it will
         //      introduce additional repartitioning while the BasicEnforcement aims at
         //      reducing unnecessary repartitioning.
-        if built_in.optimizer.enable_round_robin_repartition {
+        if config.options.optimizer.enable_round_robin_repartition {
             physical_optimizers.push(Arc::new(Repartition::new()));
         }
         //- Currently it will depend on the partition number to decide whether to change the
@@ -1499,9 +1491,9 @@ impl SessionState {
         physical_optimizers.push(Arc::new(OptimizeSorts::new()));
         // It will not influence the distribution and ordering of the whole plan tree.
         // Therefore, to avoid influencing other rules, it should be run at last.
-        if built_in.execution.coalesce_batches {
+        if config.options.execution.coalesce_batches {
             physical_optimizers.push(Arc::new(CoalesceBatches::new(
-                built_in.execution.batch_size,
+                config.options.execution.batch_size,
             )));
         }
         // The PipelineChecker rule will reject non-runnable query plans that use
@@ -1528,8 +1520,8 @@ impl SessionState {
         runtime: &Arc<RuntimeEnv>,
         default_catalog: &MemoryCatalogProvider,
     ) {
-        let url = config.options.built_in.catalog.location.as_ref();
-        let format = config.options.built_in.catalog.format.as_ref();
+        let url = config.options.catalog.location.as_ref();
+        let format = config.options.catalog.format.as_ref();
         let (url, format) = match (url, format) {
             (Some(url), Some(format)) => (url, format),
             _ => return,
@@ -1537,7 +1529,7 @@ impl SessionState {
         let url = url.to_string();
         let format = format.to_string();
 
-        let has_header = config.options.built_in.catalog.has_header;
+        let has_header = config.options.catalog.has_header;
         let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
         let authority = match url.host_str() {
             Some(host) => format!("{}://{}", url.scheme(), host),
@@ -1654,7 +1646,7 @@ impl SessionState {
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         // TODO: Implement OptimizerContext directly on DataFrame (#4631) (#4626)
         let config = {
-            let config = &self.config_options().built_in.optimizer;
+            let config = &self.config_options().optimizer;
             OptimizerContext::new()
                 .with_skip_failing_rules(config.skip_failed_rules)
                 .with_max_passes(config.max_passes as u8)
@@ -1784,7 +1776,6 @@ impl ContextProvider for SessionState {
             "datafusion.execution.time_zone" => self
                 .config
                 .options
-                .built_in
                 .execution
                 .time_zone
                 .as_ref()

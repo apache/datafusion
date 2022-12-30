@@ -34,7 +34,7 @@ macro_rules! config_namespace {
     ) => {
 
         $(#[doc = $struct_d])*
-        #[derive(Debug, Clone, PartialEq)]
+        #[derive(Debug, Clone)]
         #[non_exhaustive]
         $vis struct $struct_name{
             $(
@@ -221,23 +221,6 @@ config_namespace! {
     }
 }
 
-config_namespace! {
-    /// All built-in DataFusion options
-    pub struct DataFusionOptions {
-        /// Catalog options
-        pub catalog: CatalogOptions, default = Default::default()
-
-        /// Execution options
-        pub execution: ExecutionOptions, default = Default::default()
-
-        /// Explain options
-        pub optimizer: OptimizerOptions, default = Default::default()
-
-        /// Explain options
-        pub explain: ExplainOptions, default = Default::default()
-    }
-}
-
 /// A key value pair, with a corresponding description
 #[derive(Debug)]
 pub struct ConfigEntry {
@@ -252,13 +235,43 @@ pub struct ConfigEntry {
 }
 
 /// Configuration options struct, able to store both built-in configuration and custom options
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct ConfigOptions {
-    /// Built-in DataFusion configuration
-    pub built_in: DataFusionOptions,
-
+    /// Catalog options
+    pub catalog: CatalogOptions,
+    /// Execution options
+    pub execution: ExecutionOptions,
+    /// Explain options
+    pub optimizer: OptimizerOptions,
+    /// Explain options
+    pub explain: ExplainOptions,
     /// Optional extensions registered using [`Extensions::insert`]
     pub extensions: Extensions,
+}
+
+impl ConfigField for ConfigOptions {
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        // Extensions are handled in the public `ConfigOptions::set`
+        let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+        match key {
+            "catalog" => self.catalog.set(rem, value),
+            "execution" => self.execution.set(rem, value),
+            "optimizer" => self.optimizer.set(rem, value),
+            "explain" => self.explain.set(rem, value),
+            _ => Err(DataFusionError::Internal(format!(
+                "Config value \"{}\" not found on ConfigOptions",
+                key
+            ))),
+        }
+    }
+
+    fn visit<V: Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
+        self.catalog.visit(v, "datafusion.catalog", "");
+        self.execution.visit(v, "datafusion.execution", "");
+        self.optimizer.visit(v, "datafusion.optimizer", "");
+        self.explain.visit(v, "datafusion.explain", "");
+    }
 }
 
 impl ConfigOptions {
@@ -276,7 +289,7 @@ impl ConfigOptions {
         })?;
 
         if prefix == "datafusion" {
-            return self.built_in.set(key, value);
+            return ConfigField::set(self, key, value);
         }
 
         let e = self.extensions.0.get_mut(prefix);
@@ -313,7 +326,7 @@ impl ConfigOptions {
 
         let mut keys = Visitor(vec![]);
         let mut ret = Self::default();
-        ret.built_in.visit(&mut keys, "datafusion", "");
+        ret.visit(&mut keys, "datafusion", "");
 
         for key in keys.0 {
             let env = key.to_uppercase().replace('.', "_");
@@ -353,7 +366,7 @@ impl ConfigOptions {
         }
 
         let mut v = Visitor(vec![]);
-        self.built_in.visit(&mut v, "datafusion", "");
+        self.visit(&mut v, "datafusion", "");
 
         v.0.extend(self.extensions.0.values().flat_map(|e| e.0.entries()));
         v.0
@@ -364,7 +377,7 @@ impl ConfigOptions {
         use std::fmt::Write as _;
 
         let mut s = Self::default();
-        s.built_in.execution.target_partitions = 0; // Normalize for display
+        s.execution.target_partitions = 0; // Normalize for display
 
         let mut docs = "| key | default | description |\n".to_string();
         docs += "|-----|---------|-------------|\n";

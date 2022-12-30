@@ -210,7 +210,7 @@ impl PhysicalOptimizerRule for Repartition {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_partitions = config.built_in.execution.target_partitions;
+        let target_partitions = config.execution.target_partitions;
         // Don't run optimizer if target_partitions == 1
         if target_partitions == 1 {
             Ok(plan)
@@ -364,7 +364,7 @@ mod tests {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
             let mut config = ConfigOptions::new();
-            config.built_in.execution.target_partitions = 10;
+            config.execution.target_partitions = 10;
 
             // run optimizer
             let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![

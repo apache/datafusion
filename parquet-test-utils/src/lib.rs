@@ -59,9 +59,9 @@ impl ParquetScanOptions {
     /// Returns a [`SessionConfig`] with the given options
     pub fn config(&self) -> SessionConfig {
         let mut config = ConfigOptions::new();
-        config.built_in.execution.parquet.pushdown_filters = self.pushdown_filters;
-        config.built_in.execution.parquet.reorder_filters = self.reorder_filters;
-        config.built_in.execution.parquet.enable_page_index = self.enable_page_index;
+        config.execution.parquet.pushdown_filters = self.pushdown_filters;
+        config.execution.parquet.reorder_filters = self.reorder_filters;
+        config.execution.parquet.enable_page_index = self.enable_page_index;
         config.into()
     }
 }

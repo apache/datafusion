@@ -571,7 +571,7 @@ fn create_sort_merge_join_context(
     column_right: &str,
 ) -> Result<SessionContext> {
     let mut config = ConfigOptions::new();
-    config.built_in.optimizer.prefer_hash_join = false;
+    config.optimizer.prefer_hash_join = false;
 
     let ctx = SessionContext::with_config(config.into());
 
@@ -620,9 +620,9 @@ fn create_sort_merge_join_context(
 
 fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
     let mut config = ConfigOptions::new();
-    config.built_in.optimizer.prefer_hash_join = false;
-    config.built_in.execution.target_partitions = 2;
-    config.built_in.execution.batch_size = 4096;
+    config.optimizer.prefer_hash_join = false;
+    config.execution.target_partitions = 2;
+    config.execution.batch_size = 4096;
 
     let ctx = SessionContext::with_config(config.into());
 

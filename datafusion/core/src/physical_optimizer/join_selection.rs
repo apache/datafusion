@@ -214,7 +214,7 @@ impl PhysicalOptimizerRule for JoinSelection {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = &config.built_in.optimizer;
+        let config = &config.optimizer;
         let collect_left_threshold = config.hash_join_single_partition_threshold;
         plan.transform_up(&|plan| {
             if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {

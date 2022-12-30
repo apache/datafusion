@@ -85,7 +85,7 @@ impl ParquetFormat {
     /// Return true if pruning is enabled
     pub fn enable_pruning(&self, config_options: &ConfigOptions) -> bool {
         self.enable_pruning
-            .unwrap_or(config_options.built_in.execution.parquet.pruning)
+            .unwrap_or(config_options.execution.parquet.pruning)
     }
 
     /// Provide a hint to the size of the file metadata. If a hint is provided
@@ -101,7 +101,7 @@ impl ParquetFormat {
 
     /// Return the metadata size hint if set
     pub fn metadata_size_hint(&self, config_options: &ConfigOptions) -> Option<usize> {
-        let hint = config_options.built_in.execution.parquet.metadata_size_hint;
+        let hint = config_options.execution.parquet.metadata_size_hint;
         self.metadata_size_hint.or(hint)
     }
 
@@ -119,7 +119,7 @@ impl ParquetFormat {
     /// schema merging.
     pub fn skip_metadata(&self, config_options: &ConfigOptions) -> bool {
         self.skip_metadata
-            .unwrap_or(config_options.built_in.execution.parquet.skip_metadata)
+            .unwrap_or(config_options.execution.parquet.skip_metadata)
     }
 }
 

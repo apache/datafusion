@@ -992,7 +992,7 @@ impl DefaultPhysicalPlanner {
                         _ => None
                     };
 
-                    let prefer_hash_join = session_state.config_options().built_in.optimizer.prefer_hash_join;
+                    let prefer_hash_join = session_state.config_options().optimizer.prefer_hash_join;
                     if join_on.is_empty() {
                         // there is no equal join condition, use the nested loop join
                         // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
@@ -1708,7 +1708,7 @@ impl DefaultPhysicalPlanner {
             use PlanType::*;
             let mut stringified_plans = vec![];
 
-            let config = &session_state.config_options().built_in.explain;
+            let config = &session_state.config_options().explain;
 
             if !config.physical_plan_only {
                 stringified_plans = e.stringified_plans.clone();
