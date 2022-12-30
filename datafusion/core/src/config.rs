@@ -50,10 +50,6 @@ pub const OPT_BATCH_SIZE: &str = "datafusion.execution.batch_size";
 /// Configuration option "datafusion.execution.coalesce_batches"
 pub const OPT_COALESCE_BATCHES: &str = "datafusion.execution.coalesce_batches";
 
-/// Configuration option "datafusion.execution.coalesce_target_batch_size"
-pub const OPT_COALESCE_TARGET_BATCH_SIZE: &str =
-    "datafusion.execution.coalesce_target_batch_size";
-
 /// Configuration option "datafusion.execution.collect_statistics"
 pub const OPT_COLLECT_STATISTICS: &str = "datafusion.execution.collect_statistics";
 
@@ -317,19 +313,13 @@ impl BuiltInConfigs {
                 small batches will be coalesced into larger batches. This is helpful when there \
                 are highly selective filters or joins that could produce tiny output batches. The \
                 target batch size is determined by the configuration setting \
-                '{OPT_COALESCE_TARGET_BATCH_SIZE}'."),
+                '{}'.", OPT_BATCH_SIZE),
                 true,
-            ),
-             ConfigDefinition::new_u64(
-                 OPT_COALESCE_TARGET_BATCH_SIZE,
-                 format!("Target batch size when coalescing batches. Uses in conjunction with the \
-                          configuration setting '{OPT_COALESCE_BATCHES}'."),
-                 4096,
             ),
             ConfigDefinition::new_string(
                 OPT_TIME_ZONE,
                 "The session time zone which some function require \
-                e.g. EXTRACT(HOUR from SOME_TIME) shift the underline datetime according to the time zone,
+                e.g. EXTRACT(HOUR from SOME_TIME) shift the underline datetime according to the time zone, \
                 then extract the hour.",
                 Some("+00:00".into()),
             ),
