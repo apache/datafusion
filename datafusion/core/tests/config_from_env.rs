@@ -32,18 +32,17 @@ fn get_config_bool_from_env() {
 fn get_config_int_from_env() {
     let config_key = "datafusion.execution.batch_size";
     let env_key = "DATAFUSION_EXECUTION_BATCH_SIZE";
+
+    // for valid testing
     env::set_var(env_key, "4096");
     let config = ConfigOptions::from_env();
-    env::remove_var(env_key);
     assert_eq!(config.get_u64(config_key).unwrap_or_default(), 4096);
-}
 
-#[test]
-fn get_config_int_from_env_invalid() {
-    let config_key = "datafusion.execution.coalesce_target_batch_size";
-    let env_key = "DATAFUSION_EXECUTION_COALESCE_TARGET_BATCH_SIZE";
+    // for invalid testing
     env::set_var(env_key, "abc");
     let config = ConfigOptions::from_env();
+    assert_eq!(config.get_u64(config_key).unwrap_or_default(), 8192); // set to its default value
+
+    // To avoid influence other testing, we need to clear this environment variable
     env::remove_var(env_key);
-    assert_eq!(config.get_u64(config_key).unwrap_or_default(), 4096); // set to its default value
 }

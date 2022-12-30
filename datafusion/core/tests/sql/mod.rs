@@ -187,7 +187,8 @@ fn create_join_context(
     let ctx = SessionContext::with_config(
         SessionConfig::new()
             .with_repartition_joins(repartition_joins)
-            .with_target_partitions(2),
+            .with_target_partitions(2)
+            .with_batch_size(4096),
     );
 
     let t1_schema = Arc::new(Schema::new(vec![
@@ -241,7 +242,8 @@ fn create_left_semi_anti_join_context_with_null_ids(
     let ctx = SessionContext::with_config(
         SessionConfig::new()
             .with_repartition_joins(repartition_joins)
-            .with_target_partitions(2),
+            .with_target_partitions(2)
+            .with_batch_size(4096),
     );
 
     let t1_schema = Arc::new(Schema::new(vec![
@@ -313,7 +315,8 @@ fn create_right_semi_anti_join_context_with_null_ids(
     let ctx = SessionContext::with_config(
         SessionConfig::new()
             .with_repartition_joins(repartition_joins)
-            .with_target_partitions(2),
+            .with_target_partitions(2)
+            .with_batch_size(4096),
     );
 
     let t1_schema = Arc::new(Schema::new(vec![
@@ -618,7 +621,8 @@ fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
     let ctx = SessionContext::with_config(
         SessionConfig::new()
             .set_bool(OPT_PREFER_HASH_JOIN, false)
-            .with_target_partitions(2),
+            .with_target_partitions(2)
+            .with_batch_size(4096),
     );
 
     let t1_schema = Schema::new(vec![
