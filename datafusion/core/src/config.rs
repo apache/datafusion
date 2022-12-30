@@ -22,6 +22,82 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 
+/// A macro that wraps a configuration struct and automatically derives
+/// [`Default`] and [`ConfigField`] for it, allowing it to be used
+/// in the [`ConfigOptions`] configuration tree
+///
+/// For example,
+///
+/// ```ignore
+/// config_namespace! {
+///    /// Amazing config
+///    pub struct MyConfig {
+///        /// Field 1 doc
+///        field1: String, default = "".to_string()
+///
+///        /// Field 2 doc
+///        field2: usize, default = 232
+///
+///        /// Field 3 doc
+///        field3: Option<usize>, default = None
+///    }
+///}
+/// ```
+///
+/// Will generate
+///
+/// ```ignore
+/// /// Amazing config
+/// #[derive(Debug, Clone)]
+/// #[non_exhaustive]
+/// pub struct MyConfig {
+///     /// Field 1 doc
+///     field1: String,
+///     /// Field 2 doc
+///     field2: usize,
+///     /// Field 3 doc
+///     field3: Option<usize>,
+/// }
+/// impl ConfigField for MyConfig {
+///     fn set(&mut self, key: &str, value: &str) -> Result<()> {
+///         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+///         match key {
+///             "field1" => self.field1.set(rem, value),
+///             "field2" => self.field2.set(rem, value),
+///             "field3" => self.field3.set(rem, value),
+///             _ => Err(DataFusionError::Internal(format!(
+///                 "Config value \"{}\" not found on MyConfig",
+///                 key
+///             ))),
+///         }
+///     }
+///
+///     fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
+///         let key = format!("{}.field1", key_prefix);
+///         let desc = "Field 1 doc";
+///         self.field1.visit(v, key.as_str(), desc);
+///         let key = format!("{}.field2", key_prefix);
+///         let desc = "Field 2 doc";
+///         self.field2.visit(v, key.as_str(), desc);
+///         let key = format!("{}.field3", key_prefix);
+///         let desc = "Field 3 doc";
+///         self.field3.visit(v, key.as_str(), desc);
+///     }
+/// }
+///
+/// impl Default for MyConfig {
+///     fn default() -> Self {
+///         Self {
+///             field1: "".to_string(),
+///             field2: 232,
+///             field3: None,
+///         }
+///     }
+/// }
+/// ```
+///
+/// NB: Misplaced commas may result in nonsensical errors
+///
 macro_rules! config_namespace {
     (
      $(#[doc = $struct_d:tt])*
