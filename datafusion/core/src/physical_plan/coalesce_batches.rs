@@ -320,7 +320,7 @@ mod tests {
     #[tokio::test]
     async fn test_custom_batch_size() -> Result<()> {
         let mut config = ConfigOptions::new();
-        config.built_in.execution.coalesce_target_batch_size = 1234;
+        config.built_in.execution.batch_size = 1234;
 
         let ctx = SessionContext::with_config(config.into());
         let plan = create_physical_plan(ctx).await?;

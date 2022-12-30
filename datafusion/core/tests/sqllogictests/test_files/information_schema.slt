@@ -109,7 +109,6 @@ datafusion.catalog.information_schema true
 datafusion.catalog.location NULL
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
-datafusion.execution.coalesce_target_batch_size 4096
 datafusion.execution.collect_statistics false
 datafusion.execution.parquet.enable_page_index false
 datafusion.execution.parquet.metadata_size_hint NULL

@@ -28,13 +28,18 @@ fn from_env() {
     assert!(config.built_in.optimizer.filter_null_join_keys);
 
     let env_key = "DATAFUSION_EXECUTION_BATCH_SIZE";
+
+    // for valid testing
     env::set_var(env_key, "4096");
     let config = ConfigOptions::from_env().unwrap();
-    env::remove_var(env_key);
     assert_eq!(config.built_in.execution.batch_size, 4096);
 
-    let env_key = "DATAFUSION_EXECUTION_COALESCE_TARGET_BATCH_SIZE";
+    // for invalid testing
     env::set_var(env_key, "abc");
     let err = ConfigOptions::from_env().unwrap_err().to_string();
-    assert_eq!(err, "Error parsing abc as usize\ncaused by\nExternal error: invalid digit found in string")
+    assert_eq!(err, "Error parsing abc as usize\ncaused by\nExternal error: invalid digit found in string");
+
+    env::remove_var(env_key);
+    let config = ConfigOptions::from_env().unwrap();
+    assert_eq!(config.built_in.execution.batch_size, 8192); // set to its default value
 }

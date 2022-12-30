@@ -23,7 +23,9 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 async fn explain_analyze_baseline_metrics() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
     // and then validate the presence of baseline metrics for supported operators
-    let config = SessionConfig::new().with_target_partitions(3);
+    let config = SessionConfig::new()
+        .with_target_partitions(3)
+        .with_batch_size(4096);
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv_by_sql(&ctx).await;
     // a query with as many operators as we have metrics for
@@ -653,7 +655,9 @@ order by
 #[tokio::test]
 async fn test_physical_plan_display_indent() {
     // Hard code target_partitions as it appears in the RepartitionExec output
-    let config = SessionConfig::new().with_target_partitions(9000);
+    let config = SessionConfig::new()
+        .with_target_partitions(9000)
+        .with_batch_size(4096);
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv(&ctx).await.unwrap();
     let sql = "SELECT c1, MAX(c12), MIN(c12) as the_min \
@@ -695,7 +699,9 @@ async fn test_physical_plan_display_indent() {
 #[tokio::test]
 async fn test_physical_plan_display_indent_multi_children() {
     // Hard code target_partitions as it appears in the RepartitionExec output
-    let config = SessionConfig::new().with_target_partitions(9000);
+    let config = SessionConfig::new()
+        .with_target_partitions(9000)
+        .with_batch_size(4096);
     let ctx = SessionContext::with_config(config);
     // ensure indenting works for nodes with multiple children
     register_aggregate_csv(&ctx).await.unwrap();
@@ -743,7 +749,7 @@ async fn test_physical_plan_display_indent_multi_children() {
 async fn csv_explain() {
     // This test uses the execute function that create full plan cycle: logical, optimized logical, and physical,
     // then execute the physical plan and return the final explain results
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::with_config(SessionConfig::new().with_batch_size(4096));
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > cast(10 as int)";
     let actual = execute(&ctx, sql).await;

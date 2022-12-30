@@ -1501,7 +1501,7 @@ impl SessionState {
         // Therefore, to avoid influencing other rules, it should be run at last.
         if built_in.execution.coalesce_batches {
             physical_optimizers.push(Arc::new(CoalesceBatches::new(
-                built_in.execution.coalesce_target_batch_size,
+                built_in.execution.batch_size,
             )));
         }
         // The PipelineChecker rule will reject non-runnable query plans that use

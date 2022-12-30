@@ -111,9 +111,6 @@ config_namespace! {
         /// target batch size is determined by the configuration setting
         pub coalesce_batches: bool, default = true
 
-        /// Target batch size when coalescing batches. Used in conjunction with `coalesce_batches`
-        pub coalesce_target_batch_size: usize, default = 4096
-
         /// Should DataFusion collect statistics after listing files
         pub collect_statistics: bool, default = false
 
