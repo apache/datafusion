@@ -81,6 +81,23 @@ async fn union_all_with_aggregate() -> Result<()> {
 }
 
 #[tokio::test]
+async fn union_all_with_count() -> Result<()> {
+    let ctx = SessionContext::new();
+    execute_to_batches(&ctx, "CREATE table t as SELECT 1 as a").await;
+    let sql = "SELECT COUNT(*) FROM (SELECT a from t UNION ALL SELECT a from t)";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------------+",
+        "| COUNT(UInt8(1)) |",
+        "+-----------------+",
+        "| 2               |",
+        "+-----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn union_schemas() -> Result<()> {
     let ctx =
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));
