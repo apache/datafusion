@@ -65,7 +65,7 @@ use crate::logical_expr::{
     CreateView, DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder,
     SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
-use crate::optimizer::{OptimizerContext, OptimizerRule};
+use crate::optimizer::OptimizerRule;
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
@@ -103,6 +103,7 @@ use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
+use datafusion_optimizer::OptimizerConfig;
 use uuid::Uuid;
 
 use super::options::{
@@ -1728,37 +1729,13 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        // TODO: Implement OptimizerContext directly on DataFrame (#4631) (#4626)
-        let config = {
-            let config_options = self.config_options();
-            OptimizerContext::new()
-                .with_skip_failing_rules(
-                    config_options
-                        .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
-                        .unwrap_or_default(),
-                )
-                .with_max_passes(
-                    config_options
-                        .get_u64(OPT_OPTIMIZER_MAX_PASSES)
-                        .unwrap_or_default() as u8,
-                )
-                .with_query_execution_start_time(
-                    self.execution_props.query_execution_start_time,
-                )
-                .filter_null_keys(
-                    config_options
-                        .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
-                        .unwrap_or_default(),
-                )
-        };
-
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
 
             // optimize the child plan, capturing the output of each optimizer
             let plan = self.optimizer.optimize(
                 e.plan.as_ref(),
-                &config,
+                self,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
@@ -1773,7 +1750,7 @@ impl SessionState {
                 schema: e.schema.clone(),
             }))
         } else {
-            self.optimizer.optimize(plan, &config, |_, _| {})
+            self.optimizer.optimize(plan, self, |_, _| {})
         }
     }
 
@@ -1894,6 +1871,35 @@ impl FunctionRegistry for SessionState {
                 "There is no UDAF named \"{name}\" in the registry"
             ))
         })
+    }
+}
+
+impl OptimizerConfig for SessionState {
+    fn query_execution_start_time(&self) -> DateTime<Utc> {
+        self.execution_props.query_execution_start_time
+    }
+
+    fn rule_enabled(&self, name: &str) -> bool {
+        use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
+        match name {
+            FilterNullJoinKeys::NAME => self
+                .config_options()
+                .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
+                .unwrap_or_default(),
+            _ => true,
+        }
+    }
+
+    fn skip_failing_rules(&self) -> bool {
+        self.config_options()
+            .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
+            .unwrap_or_default()
+    }
+
+    fn max_passes(&self) -> u8 {
+        self.config_options()
+            .get_u64(OPT_OPTIMIZER_MAX_PASSES)
+            .unwrap_or_default() as u8
     }
 }
 
