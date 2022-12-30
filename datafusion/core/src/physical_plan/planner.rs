@@ -619,26 +619,26 @@ impl DefaultPhysicalPlanner {
 
                     let uses_bounded_memory = window_expr
                         .iter()
-                        .all(|elem| elem.uses_bounded_memory());
-                    // If all window exprs can run with bounded memory choose bounded window variant
-                    if uses_bounded_memory {
-                        Ok(Arc::new(BoundedWindowAggExec::try_new(
+                        .all(|e| e.uses_bounded_memory());
+                    // If all window expressions can run with bounded memory,
+                    // choose the bounded window variant:
+                    Ok(if uses_bounded_memory {
+                        Arc::new(BoundedWindowAggExec::try_new(
                             window_expr,
                             input_exec,
                             physical_input_schema,
                             physical_partition_keys,
                             physical_sort_keys,
-                        )?))
-                    }
-                    else {
-                        Ok(Arc::new(WindowAggExec::try_new(
+                        )?)
+                    } else {
+                        Arc::new(WindowAggExec::try_new(
                             window_expr,
                             input_exec,
                             physical_input_schema,
                             physical_partition_keys,
                             physical_sort_keys,
-                        )?))
-                    }
+                        )?)
+                    })
                 }
                 LogicalPlan::Aggregate(Aggregate {
                     input,

@@ -239,11 +239,11 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 
     fn uses_bounded_memory(&self) -> bool {
+        // NOTE: Currently, groups queries do not support the bounded memory variant.
         self.expr.supports_bounded_execution()
             && (!self.expr.uses_window_frame()
                 || !(self.window_frame.start_bound.is_unbounded()
                     || self.window_frame.end_bound.is_unbounded()
-                        // Currently groups queries cannot use run with bounded memory
-                        || matches!(self.window_frame.units, WindowFrameUnits::Groups)))
+                    || matches!(self.window_frame.units, WindowFrameUnits::Groups)))
     }
 }

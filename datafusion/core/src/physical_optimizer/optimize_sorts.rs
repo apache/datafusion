@@ -182,33 +182,32 @@ fn optimize_sorts(
                         sort_exec.input().equivalence_properties()
                     }) {
                         update_child_to_remove_unnecessary_sort(child, sort_onwards)?;
-                    } else if let Some(window_agg_exec) =
+                    }
+                    // For window expressions, we can remove some sorts when we can
+                    // calculate the result in reverse:
+                    else if let Some(exec) =
                         requirements.plan.as_any().downcast_ref::<WindowAggExec>()
                     {
-                        // For window expressions, we can remove some sorts when we can
-                        // calculate the result in reverse:
-                        if let Some(res) = analyze_window_sort_removal(
-                            window_agg_exec.window_expr(),
-                            &window_agg_exec.partition_keys,
+                        if let Some(result) = analyze_window_sort_removal(
+                            exec.window_expr(),
+                            &exec.partition_keys,
                             sort_exec,
                             sort_onwards,
                         )? {
-                            return Ok(Some(res));
+                            return Ok(Some(result));
                         }
-                    } else if let Some(bounded_window_agg_exec) = requirements
+                    } else if let Some(exec) = requirements
                         .plan
                         .as_any()
                         .downcast_ref::<BoundedWindowAggExec>()
                     {
-                        // For window expressions, we can remove some sorts when we can
-                        // calculate the result in reverse:
-                        if let Some(res) = analyze_window_sort_removal(
-                            bounded_window_agg_exec.window_expr(),
-                            &bounded_window_agg_exec.partition_keys,
+                        if let Some(result) = analyze_window_sort_removal(
+                            exec.window_expr(),
+                            &exec.partition_keys,
                             sort_exec,
                             sort_onwards,
                         )? {
-                            return Ok(Some(res));
+                            return Ok(Some(result));
                         }
                     }
                     // TODO: Once we can ensure that required ordering information propagates with
@@ -290,7 +289,8 @@ fn analyze_immediate_sort_removal(
     Ok(None)
 }
 
-/// Analyzes a `WindowAggExec` or `BoundedWindowAggExec` to determine whether it may allow removing a sort.
+/// Analyzes a [WindowAggExec] or a [BoundedWindowAggExec] to determine whether
+/// it may allow removing a sort.
 fn analyze_window_sort_removal(
     window_expr: &[Arc<dyn WindowExpr>],
     partition_keys: &[Arc<dyn PhysicalExpr>],
@@ -326,8 +326,7 @@ fn analyze_window_sort_removal(
             let new_child = remove_corresponding_sort_from_sub_plan(sort_onward)?;
             let new_schema = new_child.schema();
 
-            let uses_bounded_memory =
-                window_expr.iter().all(|elem| elem.uses_bounded_memory());
+            let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
             // If all window exprs can run with bounded memory choose bounded window variant
             let new_plan = if uses_bounded_memory {
                 Arc::new(BoundedWindowAggExec::try_new(
