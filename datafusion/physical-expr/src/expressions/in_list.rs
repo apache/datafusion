@@ -204,7 +204,7 @@ fn make_set(array: &dyn Array) -> Result<Box<dyn Set>> {
             Box::new(ArraySet::new(array, make_hash_set(array)))
         }
         DataType::Dictionary(_, _) => unreachable!("dictionary should have been flattened"),
-        d => return Err(DataFusionError::NotImplemented(format!("DataType::{} not supported in InList", d)))
+        d => return Err(DataFusionError::NotImplemented(format!("DataType::{d} not supported in InList")))
     })
 }
 
@@ -360,8 +360,7 @@ pub fn in_list(
         let list_expr_data_type = list_expr.data_type(schema)?;
         if !expr_data_type.eq(&list_expr_data_type) {
             return Err(DataFusionError::Internal(format!(
-                "The data type inlist should be same, the value type is {}, one of list expr type is {}",
-                expr_data_type, list_expr_data_type
+                "The data type inlist should be same, the value type is {expr_data_type}, one of list expr type is {list_expr_data_type}"
             )));
         }
     }
@@ -395,8 +394,7 @@ mod tests {
         let result_type = get_coerce_type(expr_type, &list_types);
         match result_type {
             None => Err(DataFusionError::Plan(format!(
-                "Can not find compatible types to compare {:?} with {:?}",
-                expr_type, list_types
+                "Can not find compatible types to compare {expr_type:?} with {list_types:?}"
             ))),
             Some(data_type) => {
                 // find the coerced type

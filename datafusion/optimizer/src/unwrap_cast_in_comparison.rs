@@ -325,8 +325,7 @@ fn try_cast_literal_to_type(
         DataType::Decimal128(_, scale) => 10_i128.pow(*scale as u32),
         other_type => {
             return Err(DataFusionError::Internal(format!(
-                "Error target data type {:?}",
-                other_type
+                "Error target data type {other_type:?}"
             )));
         }
     };
@@ -349,8 +348,7 @@ fn try_cast_literal_to_type(
         ),
         other_type => {
             return Err(DataFusionError::Internal(format!(
-                "Error target data type {:?}",
-                other_type
+                "Error target data type {other_type:?}"
             )));
         }
     };
@@ -388,8 +386,7 @@ fn try_cast_literal_to_type(
         }
         other_value => {
             return Err(DataFusionError::Internal(format!(
-                "Invalid literal value {:?}",
-                other_value
+                "Invalid literal value {other_value:?}"
             )));
         }
     };
@@ -426,8 +423,7 @@ fn try_cast_literal_to_type(
                     }
                     other_type => {
                         return Err(DataFusionError::Internal(format!(
-                            "Error target data type {:?}",
-                            other_type
+                            "Error target data type {other_type:?}"
                         )));
                     }
                 };
@@ -1031,9 +1027,9 @@ mod tests {
         let actual_result = try_cast_literal_to_type(&literal, &target_type);
 
         println!("expect_cast: ");
-        println!("  {:?} --> {:?}", literal, target_type);
-        println!("  expected_result: {:?}", expected_result);
-        println!("  actual_result:   {:?}", actual_result);
+        println!("  {literal:?} --> {target_type:?}");
+        println!("  expected_result: {expected_result:?}");
+        println!("  actual_result:   {actual_result:?}");
 
         match expected_result {
             ExpectedCast::Value(expected_value) => {
@@ -1057,8 +1053,7 @@ mod tests {
 
                 assert_eq!(
                     &expected_array, &cast_array,
-                    "Result of casing {:?} with arrow was\n {:#?}\nbut expected\n{:#?}",
-                    literal, cast_array, expected_array
+                    "Result of casing {literal:?} with arrow was\n {cast_array:#?}\nbut expected\n{expected_array:#?}"
                 );
 
                 // Verify that for timestamp types the timezones are the same
@@ -1077,8 +1072,7 @@ mod tests {
 
                 assert!(
                     actual_value.is_none(),
-                    "Expected no cast value, but got {:?}",
-                    actual_value
+                    "Expected no cast value, but got {actual_value:?}"
                 );
             }
         }

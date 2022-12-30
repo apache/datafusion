@@ -626,11 +626,11 @@ impl Display for GeneratedFunction {
             if i != 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "{}: {}", name, ty)?;
+            write!(f, "{name}: {ty}")?;
         }
         write!(f, ") -> ")?;
         if let Some((name, ty)) = &self.ret {
-            write!(f, "{}: {}", name, ty)?;
+            write!(f, "{name}: {ty}")?;
         } else {
             write!(f, "()")?;
         }

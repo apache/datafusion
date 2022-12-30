@@ -148,8 +148,7 @@ impl ExecutionPlan for GlobalLimitExec {
         // GlobalLimitExec has a single output partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "GlobalLimitExec invalid partition {}",
-                partition
+                "GlobalLimitExec invalid partition {partition}"
             )));
         }
 

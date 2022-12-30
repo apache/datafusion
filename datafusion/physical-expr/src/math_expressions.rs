@@ -170,8 +170,7 @@ pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
         )) as ArrayRef),
 
         other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {:?} for function power",
-            other
+            "Unsupported data type {other:?} for function power"
         ))),
     }
 }
@@ -197,8 +196,7 @@ pub fn atan2(args: &[ArrayRef]) -> Result<ArrayRef> {
         )) as ArrayRef),
 
         other => Err(DataFusionError::Internal(format!(
-            "Unsupported data type {:?} for function atan2",
-            other
+            "Unsupported data type {other:?} for function atan2"
         ))),
     }
 }

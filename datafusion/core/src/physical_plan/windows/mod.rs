@@ -100,7 +100,7 @@ fn get_scalar_value_from_args(
             .as_any()
             .downcast_ref::<Literal>()
             .ok_or_else(|| DataFusionError::NotImplemented(
-                format!("There is only support Literal types for field at idx: {} in Window Function", index),
+                format!("There is only support Literal types for field at idx: {index} in Window Function"),
             ))?
             .value()
             .clone();
@@ -165,7 +165,7 @@ fn create_built_in_window_expr(
             let n: i64 = n
                 .clone()
                 .try_into()
-                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+                .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
             let n: u32 = n as u32;
             let data_type = args[0].data_type(input_schema)?;
             Arc::new(NthValue::nth(name, arg, data_type, n)?)
@@ -265,7 +265,7 @@ mod tests {
                 schema.as_ref(),
             )?],
             input,
-            schema,
+            schema.clone(),
             vec![],
             None,
         )?);
@@ -273,9 +273,10 @@ mod tests {
         let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
         assert_eq!(result.len(), 1);
 
+        let n_schema_fields = schema.fields().len();
         let columns = result[0].columns();
 
-        let count: &Int64Array = as_primitive_array(&columns[0])?;
+        let count: &Int64Array = as_primitive_array(&columns[n_schema_fields])?;
         assert_eq!(count.value(0), 100);
         assert_eq!(count.value(99), 100);
         Ok(())
@@ -326,19 +327,20 @@ mod tests {
         let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
         assert_eq!(result.len(), 1);
 
+        let n_schema_fields = schema.fields().len();
         let columns = result[0].columns();
 
         // c3 is small int
 
-        let count: &Int64Array = as_primitive_array(&columns[0])?;
+        let count: &Int64Array = as_primitive_array(&columns[n_schema_fields])?;
         assert_eq!(count.value(0), 100);
         assert_eq!(count.value(99), 100);
 
-        let max: &Int8Array = as_primitive_array(&columns[1])?;
+        let max: &Int8Array = as_primitive_array(&columns[n_schema_fields + 1])?;
         assert_eq!(max.value(0), 125);
         assert_eq!(max.value(99), 125);
 
-        let min: &Int8Array = as_primitive_array(&columns[2])?;
+        let min: &Int8Array = as_primitive_array(&columns[n_schema_fields + 2])?;
         assert_eq!(min.value(0), -117);
         assert_eq!(min.value(99), -117);
 

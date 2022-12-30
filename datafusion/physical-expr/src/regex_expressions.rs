@@ -71,8 +71,7 @@ pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
         }
         other => Err(DataFusionError::Internal(format!(
-            "regexp_match was called with {} arguments. It requires at least 2 and at most 3.",
-            other
+            "regexp_match was called with {other} arguments. It requires at least 2 and at most 3."
         ))),
     }
 }
@@ -155,7 +154,7 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
                     } else if flags.contains('g') {
                         (format!("(?{}){}", flags.to_string().replace('g', ""), pattern), true)
                     } else {
-                        (format!("(?{}){}", flags, pattern), false)
+                        (format!("(?{flags}){pattern}"), false)
                     };
 
                     // if patterns hashmap already has regexp then use else else create and return
@@ -187,8 +186,7 @@ pub fn regexp_replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef>
             Ok(Arc::new(result) as ArrayRef)
         }
         other => Err(DataFusionError::Internal(format!(
-            "regexp_replace was called with {} arguments. It requires at least 3 and at most 4.",
-            other
+            "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
         ))),
     }
 }
@@ -221,8 +219,7 @@ fn _regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
         4 => Some(fetch_string_arg!(&args[3], "flags", T, _regexp_replace_early_abort)),
         other => {
             return Err(DataFusionError::Internal(format!(
-                "regexp_replace was called with {} arguments. It requires at least 3 and at most 4.",
-                other
+                "regexp_replace was called with {other} arguments. It requires at least 3 and at most 4."
             )))
         }
     };

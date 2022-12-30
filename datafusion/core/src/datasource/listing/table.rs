@@ -109,7 +109,7 @@ impl ListingTableConfig {
     }
 
     fn infer_format(path: &str) -> Result<(Arc<dyn FileFormat>, String)> {
-        let err_msg = format!("Unable to infer file type from path: {}", path);
+        let err_msg = format!("Unable to infer file type from path: {path}");
 
         let mut exts = path.rsplit('.');
 
@@ -146,7 +146,7 @@ impl ListingTableConfig {
     /// Infer `ListingOptions` based on `table_path` suffix.
     pub async fn infer_options(self, state: &SessionState) -> Result<Self> {
         let store = state
-            .runtime_env
+            .runtime_env()
             .object_store(self.table_paths.get(0).unwrap())?;
 
         let file = self
@@ -163,7 +163,7 @@ impl ListingTableConfig {
 
         let listing_options = ListingOptions::new(format)
             .with_file_extension(file_extension)
-            .with_target_partitions(state.config.target_partitions());
+            .with_target_partitions(state.config().target_partitions());
 
         Ok(Self {
             table_paths: self.table_paths,
@@ -388,7 +388,7 @@ impl ListingOptions {
         state: &SessionState,
         table_path: &'a ListingTableUrl,
     ) -> Result<SchemaRef> {
-        let store = state.runtime_env.object_store(table_path)?;
+        let store = state.runtime_env().object_store(table_path)?;
 
         let files: Vec<_> = table_path
             .list_all_files(store.as_ref(), &self.file_extension)
@@ -529,12 +529,12 @@ impl ListingTable {
                     }
                     else {
                         Err(DataFusionError::Plan(
-                            format!("Only support single column references in output_ordering, got {:?}", expr)
+                            format!("Only support single column references in output_ordering, got {expr:?}")
                         ))
                     }
                 } else {
                     Err(DataFusionError::Plan(
-                        format!("Expected Expr::Sort in output_ordering, but got {:?}", expr)
+                        format!("Expected Expr::Sort in output_ordering, but got {expr:?}")
                     ))
                 }
             })
@@ -650,7 +650,7 @@ impl ListingTable {
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
         let store = ctx
-            .runtime_env
+            .runtime_env()
             .object_store(self.table_paths.get(0).unwrap())?;
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
@@ -910,8 +910,7 @@ mod tests {
                 }
                 (expected_result, ordering_result) => {
                     panic!(
-                        "expected: {:#?}\n\nactual:{:#?}",
-                        expected_result, ordering_result
+                        "expected: {expected_result:#?}\n\nactual:{ordering_result:#?}"
                     );
                 }
             }
@@ -1193,7 +1192,7 @@ mod tests {
         name: &str,
     ) -> Result<Arc<dyn TableProvider>> {
         let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/{}", testdata, name);
+        let filename = format!("{testdata}/{name}");
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
         let config = ListingTableConfig::new(table_path)

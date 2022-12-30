@@ -41,12 +41,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let request = tonic::Request::new(FlightDescriptor {
         r#type: flight_descriptor::DescriptorType::Path as i32,
         cmd: vec![],
-        path: vec![format!("{}/alltypes_plain.parquet", testdata)],
+        path: vec![format!("{testdata}/alltypes_plain.parquet")],
     });
 
     let schema_result = client.get_schema(request).await?.into_inner();
     let schema = Schema::try_from(&schema_result)?;
-    println!("Schema: {:?}", schema);
+    println!("Schema: {schema:?}");
 
     // Call do_get to execute a SQL query and receive results
     let request = tonic::Request::new(Ticket {
@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let flight_data = stream.message().await?.unwrap();
     // convert FlightData to a stream
     let schema = Arc::new(Schema::try_from(&flight_data)?);
-    println!("Schema: {:?}", schema);
+    println!("Schema: {schema:?}");
 
     // all the remaining stream messages should be dictionary and record batches
     let mut results = vec![];

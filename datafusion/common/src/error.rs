@@ -182,22 +182,20 @@ impl Display for SchemaError {
             Self::DuplicateQualifiedField { qualifier, name } => {
                 write!(
                     f,
-                    "Schema contains duplicate qualified field name '{}'.'{}'",
-                    qualifier, name
+                    "Schema contains duplicate qualified field name '{qualifier}'.'{name}'"
                 )
             }
             Self::DuplicateUnqualifiedField { name } => {
                 write!(
                     f,
-                    "Schema contains duplicate unqualified field name '{}'",
-                    name
+                    "Schema contains duplicate unqualified field name '{name}'"
                 )
             }
             Self::AmbiguousReference { qualifier, name } => {
                 if let Some(q) = qualifier {
-                    write!(f, "Schema contains qualified field name '{}'.'{}' and unqualified field name '{}' which would be ambiguous", q, name, name)
+                    write!(f, "Schema contains qualified field name '{q}'.'{name}' and unqualified field name '{name}' which would be ambiguous")
                 } else {
-                    write!(f, "Ambiguous reference to unqualified field '{}'", name)
+                    write!(f, "Ambiguous reference to unqualified field '{name}'")
                 }
             }
         }
@@ -276,48 +274,48 @@ impl From<GenericError> for DataFusionError {
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match *self {
-            DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {}", desc),
+            DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {desc}"),
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(ref desc) => {
-                write!(f, "Parquet error: {}", desc)
+                write!(f, "Parquet error: {desc}")
             }
             #[cfg(feature = "avro")]
             DataFusionError::AvroError(ref desc) => {
                 write!(f, "Avro error: {}", desc)
             }
-            DataFusionError::IoError(ref desc) => write!(f, "IO error: {}", desc),
+            DataFusionError::IoError(ref desc) => write!(f, "IO error: {desc}"),
             DataFusionError::SQL(ref desc) => {
-                write!(f, "SQL error: {:?}", desc)
+                write!(f, "SQL error: {desc:?}")
             }
             DataFusionError::NotImplemented(ref desc) => {
-                write!(f, "This feature is not implemented: {}", desc)
+                write!(f, "This feature is not implemented: {desc}")
             }
             DataFusionError::Internal(ref desc) => {
-                write!(f, "Internal error: {}. This was likely caused by a bug in DataFusion's \
-                    code and we would welcome that you file an bug report in our issue tracker", desc)
+                write!(f, "Internal error: {desc}. This was likely caused by a bug in DataFusion's \
+                    code and we would welcome that you file an bug report in our issue tracker")
             }
             DataFusionError::Plan(ref desc) => {
-                write!(f, "Error during planning: {}", desc)
+                write!(f, "Error during planning: {desc}")
             }
             DataFusionError::SchemaError(ref desc) => {
-                write!(f, "Schema error: {}", desc)
+                write!(f, "Schema error: {desc}")
             }
             DataFusionError::Execution(ref desc) => {
-                write!(f, "Execution error: {}", desc)
+                write!(f, "Execution error: {desc}")
             }
             DataFusionError::ResourcesExhausted(ref desc) => {
-                write!(f, "Resources exhausted: {}", desc)
+                write!(f, "Resources exhausted: {desc}")
             }
             DataFusionError::External(ref desc) => {
-                write!(f, "External error: {}", desc)
+                write!(f, "External error: {desc}")
             }
             #[cfg(feature = "jit")]
             DataFusionError::JITError(ref desc) => {
-                write!(f, "JIT error: {}", desc)
+                write!(f, "JIT error: {desc}")
             }
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(ref desc) => {
-                write!(f, "Object Store error: {}", desc)
+                write!(f, "Object Store error: {desc}")
             }
             DataFusionError::Context(ref desc, ref err) => {
                 write!(f, "{}\ncaused by\n{}", desc, *err)
@@ -343,7 +341,7 @@ enum OtherErr<'a> {
 impl DataFusionError {
     /// Get deepest underlying [`DataFusionError`]
     ///
-    /// [`DatafusionError`]s sometimes form a chain, such as `DatafusionError::ArrowError()` in order to conform
+    /// [`DataFusionError`]s sometimes form a chain, such as `DataFusionError::ArrowError()` in order to conform
     /// to the correct error signature. Thus sometimes there is a chain several layers deep that can obscure the
     /// original error. This function finds the lowest level DataFusionError possible.
     ///

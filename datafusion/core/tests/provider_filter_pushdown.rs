@@ -163,22 +163,19 @@ impl TableProvider for CustomProvider {
                             ScalarValue::Int64(Some(v)) => *v,
                             other_value => {
                                 return Err(DataFusionError::NotImplemented(format!(
-                                    "Do not support value {:?}",
-                                    other_value
+                                    "Do not support value {other_value:?}"
                                 )));
                             }
                         },
                         other_expr => {
                             return Err(DataFusionError::NotImplemented(format!(
-                                "Do not support expr {:?}",
-                                other_expr
+                                "Do not support expr {other_expr:?}"
                             )));
                         }
                     },
                     other_expr => {
                         return Err(DataFusionError::NotImplemented(format!(
-                            "Do not support expr {:?}",
-                            other_expr
+                            "Do not support expr {other_expr:?}"
                         )));
                     }
                 };
@@ -222,7 +219,7 @@ async fn assert_provider_row_count(value: i64, expected_count: i64) -> Result<()
 
     ctx.register_table("data", Arc::new(provider))?;
     let sql_results = ctx
-        .sql(&format!("select count(*) from data where flag = {}", value))
+        .sql(&format!("select count(*) from data where flag = {value}"))
         .await?
         .collect()
         .await?;

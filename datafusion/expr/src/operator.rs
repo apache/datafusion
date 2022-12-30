@@ -193,7 +193,7 @@ impl fmt::Display for Operator {
             Operator::BitwiseShiftLeft => "<<",
             Operator::StringConcat => "||",
         };
-        write!(f, "{}", display)
+        write!(f, "{display}")
     }
 }
 

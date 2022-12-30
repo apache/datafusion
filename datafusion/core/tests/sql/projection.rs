@@ -191,7 +191,7 @@ async fn projection_on_table_scan() -> Result<()> {
 
     let expected = "Projection: test.c2\
                     \n  TableScan: test projection=[c2]";
-    assert_eq!(format!("{:?}", optimized_plan), expected);
+    assert_eq!(format!("{optimized_plan:?}"), expected);
 
     let physical_plan = state.create_physical_plan(&optimized_plan).await?;
 
@@ -306,11 +306,10 @@ async fn projection_on_memory_scan() -> Result<()> {
     }
 
     let expected = format!(
-        "Projection: {}.b\
-         \n  TableScan: {} projection=[b]",
-        UNNAMED_TABLE, UNNAMED_TABLE
+        "Projection: {UNNAMED_TABLE}.b\
+         \n  TableScan: {UNNAMED_TABLE} projection=[b]"
     );
-    assert_eq!(format!("{:?}", optimized_plan), expected);
+    assert_eq!(format!("{optimized_plan:?}"), expected);
 
     let physical_plan = state.create_physical_plan(&optimized_plan).await?;
 

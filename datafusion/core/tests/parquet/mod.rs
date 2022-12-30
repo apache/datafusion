@@ -167,7 +167,7 @@ impl ContextWithParquet {
     /// runs a query like "SELECT * from t WHERE <expr> and returns
     /// the number of output rows and normalized execution metrics
     async fn query_with_expr(&mut self, expr: Expr) -> TestOutput {
-        let sql = format!("EXPR only: {:?}", expr);
+        let sql = format!("EXPR only: {expr:?}");
         let logical_plan = LogicalPlanBuilder::scan(
             "t",
             provider_as_source(self.provider.clone()),
@@ -184,7 +184,7 @@ impl ContextWithParquet {
     /// Runs the specified SQL query and returns the number of output
     /// rows and normalized execution metrics
     async fn query(&mut self, sql: &str) -> TestOutput {
-        println!("Planning sql {}", sql);
+        println!("Planning sql {sql}");
         let logical_plan = self
             .ctx
             .sql(sql)
@@ -309,7 +309,7 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
     let names = ts_nanos
         .iter()
         .enumerate()
-        .map(|(i, _)| format!("Row {} + {}", i, offset))
+        .map(|(i, _)| format!("Row {i} + {offset}"))
         .collect::<Vec<_>>();
 
     let arr_nanos = TimestampNanosecondArray::from(ts_nanos);
@@ -400,7 +400,7 @@ fn make_date_batch(offset: Duration) -> RecordBatch {
     let names = date_strings
         .iter()
         .enumerate()
-        .map(|(i, val)| format!("Row {} + {}: {:?}", i, offset, val))
+        .map(|(i, val)| format!("Row {i} + {offset}: {val:?}"))
         .collect::<Vec<_>>();
 
     // Copied from `cast.rs` cast kernel due to lack of temporal kernels
