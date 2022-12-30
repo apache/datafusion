@@ -91,7 +91,7 @@ pub use try_cast::{try_cast, TryCastExpr};
 
 /// returns the name of the state
 pub fn format_state_name(name: &str, state_name: &str) -> String {
-    format!("{}[{}]", name, state_name)
+    format!("{name}[{state_name}]")
 }
 pub use crate::PhysicalSortExpr;
 

@@ -195,8 +195,7 @@ pub fn expand_qualified_wildcard(
         .collect();
     if qualified_fields.is_empty() {
         return Err(DataFusionError::Plan(format!(
-            "Invalid qualifier {}",
-            qualifier
+            "Invalid qualifier {qualifier}"
         )));
     }
     let qualifier_schema =
@@ -258,7 +257,7 @@ pub fn generate_sort_key(
 }
 
 /// Compare the sort expr as PostgreSQL's common_prefix_cmp():
-/// https://github.com/postgres/postgres/blob/master/src/backend/optimizer/plan/planner.c
+/// <https://github.com/postgres/postgres/blob/master/src/backend/optimizer/plan/planner.c>
 pub fn compare_sort_expr(
     sort_expr_a: &Expr,
     sort_expr_b: &Expr,
@@ -339,8 +338,7 @@ pub fn group_window_expr_by_sort_keys(
             Ok(())
         }
         other => Err(DataFusionError::Internal(format!(
-            "Impossibly got non-window expr {:?}",
-            other,
+            "Impossibly got non-window expr {other:?}",
         ))),
     })?;
     Ok(result)
@@ -592,8 +590,7 @@ pub fn from_plan(
                         Ok((*left, *right))
                     } else {
                         Err(DataFusionError::Internal(format!(
-                            "The front part expressions should be an binary equiality expression, actual:{}",
-                            equi_expr
+                            "The front part expressions should be an binary equiality expression, actual:{equi_expr}"
                         )))
                     }
                 }).collect::<Result<Vec<(Expr, Expr)>>>()?;
@@ -707,7 +704,7 @@ pub fn from_plan(
             input: Arc::new(inputs[0].clone()),
         })),
         LogicalPlan::TableScan(ts) => {
-            assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
+            assert!(inputs.is_empty(), "{plan:?}  should have no inputs");
             Ok(LogicalPlan::TableScan(TableScan {
                 filters: expr.to_vec(),
                 ..ts.clone()
@@ -721,8 +718,8 @@ pub fn from_plan(
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_) => {
             // All of these plan types have no inputs / exprs so should not be called
-            assert!(expr.is_empty(), "{:?} should have no exprs", plan);
-            assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
+            assert!(expr.is_empty(), "{plan:?} should have no exprs");
+            assert!(inputs.is_empty(), "{plan:?}  should have no inputs");
             Ok(plan.clone())
         }
     }

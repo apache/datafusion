@@ -112,8 +112,7 @@ impl ExecutionPlan for ExplainExec {
         debug!("Start ExplainExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "ExplainExec invalid partition {}",
-                partition
+                "ExplainExec invalid partition {partition}"
             )));
         }
 

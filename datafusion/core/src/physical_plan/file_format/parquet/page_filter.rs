@@ -168,8 +168,7 @@ impl PagePruningPredicate {
                                 )
                                 .map_err(|e| {
                                     ArrowError::ParquetError(format!(
-                                        "Fail in prune_pages_in_one_row_group: {}",
-                                        e
+                                        "Fail in prune_pages_in_one_row_group: {e}"
                                     ))
                                 }),
                             );

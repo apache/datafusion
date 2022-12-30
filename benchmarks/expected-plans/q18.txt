@@ -1,13 +1,13 @@
 Sort: orders.o_totalprice DESC NULLS FIRST, orders.o_orderdate ASC NULLS LAST
   Projection: customer.c_name, customer.c_custkey, orders.o_orderkey, orders.o_orderdate, orders.o_totalprice, SUM(lineitem.l_quantity)
     Aggregate: groupBy=[[customer.c_name, customer.c_custkey, orders.o_orderkey, orders.o_orderdate, orders.o_totalprice]], aggr=[[SUM(lineitem.l_quantity)]]
-      LeftSemi Join: orders.o_orderkey = __sq_1.l_orderkey
+      LeftSemi Join: orders.o_orderkey = __correlated_sq_1.l_orderkey
         Inner Join: orders.o_orderkey = lineitem.l_orderkey
           Inner Join: customer.c_custkey = orders.o_custkey
             TableScan: customer projection=[c_custkey, c_name]
             TableScan: orders projection=[o_orderkey, o_custkey, o_totalprice, o_orderdate]
           TableScan: lineitem projection=[l_orderkey, l_quantity]
-        SubqueryAlias: __sq_1
+        SubqueryAlias: __correlated_sq_1
           Projection: lineitem.l_orderkey AS l_orderkey
             Filter: SUM(lineitem.l_quantity) > Decimal128(Some(30000),25,2)
               Aggregate: groupBy=[[lineitem.l_orderkey]], aggr=[[SUM(lineitem.l_quantity)]]

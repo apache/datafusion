@@ -222,7 +222,7 @@ async fn topk_plan() -> Result<()> {
         "|                                                       |     TableScan: sales projection=[customer_id,revenue]                                  |",
     ].join("\n");
 
-    let explain_query = format!("EXPLAIN VERBOSE {}", QUERY);
+    let explain_query = format!("EXPLAIN VERBOSE {QUERY}");
     let actual_output = exec_sql(&mut ctx, &explain_query).await?;
 
     // normalize newlines (output on windows uses \r\n)
@@ -235,12 +235,10 @@ async fn topk_plan() -> Result<()> {
         "Expected output not present in actual output\
         \nExpected:\
         \n---------\
-        \n{}\
+        \n{expected}\
         \nActual:\
         \n--------\
-        \n{}",
-        expected,
-        actual_output
+        \n{actual_output}"
     );
     Ok(())
 }
@@ -470,8 +468,7 @@ impl ExecutionPlan for TopKExec {
     ) -> Result<SendableRecordBatchStream> {
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "TopKExec invalid partition {}",
-                partition
+                "TopKExec invalid partition {partition}"
             )));
         }
 

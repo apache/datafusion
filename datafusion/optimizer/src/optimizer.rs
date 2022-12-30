@@ -41,7 +41,6 @@ use chrono::{DateTime, Utc};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -83,11 +82,6 @@ pub trait OptimizerConfig {
 
     /// How many times to attempt to optimize the plan
     fn max_passes(&self) -> u8;
-
-    /// Return a unique ID
-    ///
-    /// This is useful for assigning unique names to aliases
-    fn next_id(&self) -> usize;
 }
 
 /// A standalone [`OptimizerConfig`] that can be used independently
@@ -97,8 +91,6 @@ pub struct OptimizerContext {
     /// Query execution start time that can be used to rewrite
     /// expressions such as `now()` to use a literal value instead
     query_execution_start_time: DateTime<Utc>,
-    /// id generator for optimizer passes
-    next_id: AtomicUsize,
     /// Option to skip rules that produce errors
     skip_failing_rules: bool,
     /// Specify whether to enable the filter_null_keys rule
@@ -112,7 +104,6 @@ impl OptimizerContext {
     pub fn new() -> Self {
         Self {
             query_execution_start_time: Utc::now(),
-            next_id: AtomicUsize::new(1),
             skip_failing_rules: true,
             filter_null_keys: true,
             max_passes: 3,
@@ -171,12 +162,6 @@ impl OptimizerConfig for OptimizerContext {
 
     fn max_passes(&self) -> u8 {
         self.max_passes
-    }
-
-    fn next_id(&self) -> usize {
-        use std::sync::atomic::Ordering;
-        // Can use relaxed ordering as not used for synchronisation
-        self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -291,7 +276,7 @@ impl Optimizer {
         let mut new_plan = plan.clone();
         let mut i = 0;
         while i < config.max_passes() {
-            log_plan(&format!("Optimizer input (pass {})", i), &new_plan);
+            log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
             for rule in &self.rules {
                 if !config.rule_enabled(rule.name()) {
@@ -342,7 +327,7 @@ impl Optimizer {
                     }
                 }
             }
-            log_plan(&format!("Optimized plan (pass {})", i), &new_plan);
+            log_plan(&format!("Optimized plan (pass {i})"), &new_plan);
 
             // TODO this is an expensive way to see if the optimizer did anything and
             // it would be better to change the OptimizerRule trait to return an Option
@@ -531,9 +516,8 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let metadata = [("key".into(), format!("value {}", i))]
-                    .into_iter()
-                    .collect();
+                let metadata =
+                    [("key".into(), format!("value {i}"))].into_iter().collect();
 
                 let new_arrow_field = f.field().clone().with_metadata(metadata);
                 if let Some(qualifier) = f.qualifier() {

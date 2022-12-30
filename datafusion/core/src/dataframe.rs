@@ -1148,7 +1148,7 @@ mod tests {
 
     /// Compare the formatted string representation of two plans for equality
     fn assert_same_plan(plan1: &LogicalPlan, plan2: &LogicalPlan) {
-        assert_eq!(format!("{:?}", plan1), format!("{:?}", plan2));
+        assert_eq!(format!("{plan1:?}"), format!("{plan2:?}"));
     }
 
     /// Create a logical plan from a SQL query
@@ -1176,7 +1176,7 @@ mod tests {
         let testdata = test_util::arrow_test_data();
         ctx.register_csv(
             table_name,
-            &format!("{}/csv/aggregate_test_100.csv", testdata),
+            &format!("{testdata}/csv/aggregate_test_100.csv"),
             CsvReadOptions::new().schema(schema.as_ref()),
         )
         .await?;

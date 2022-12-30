@@ -72,7 +72,7 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::{
-    ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE,
+    ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES,
     OPT_ENABLE_ROUND_ROBIN_REPARTITION, OPT_FILTER_NULL_JOIN_KEYS,
     OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
@@ -309,8 +309,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                        "Table '{}' already exists",
-                        name
+                        "Table '{name}' already exists"
                     ))),
                 }
             }
@@ -340,8 +339,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                        "Table '{}' already exists",
-                        name
+                        "Table '{name}' already exists"
                     ))),
                 }
             }
@@ -354,8 +352,7 @@ impl SessionContext {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
                     (_, _) => Err(DataFusionError::Execution(format!(
-                        "Table '{}' doesn't exist.",
-                        name
+                        "Table '{name}' doesn't exist."
                     ))),
                 }
             }
@@ -368,8 +365,7 @@ impl SessionContext {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
                     (_, _) => Err(DataFusionError::Execution(format!(
-                        "View '{}' doesn't exist.",
-                        name
+                        "View '{name}' doesn't exist."
                     ))),
                 }
             }
@@ -382,8 +378,7 @@ impl SessionContext {
 
                 let old_value = config_options.get(&variable).ok_or_else(|| {
                     DataFusionError::Execution(format!(
-                        "Can not SET variable: Unknown Variable {}",
-                        variable
+                        "Can not SET variable: Unknown Variable {variable}"
                     ))
                 })?;
 
@@ -391,8 +386,7 @@ impl SessionContext {
                     ScalarValue::Boolean(_) => {
                         let new_value = value.parse::<bool>().map_err(|_| {
                             DataFusionError::Execution(format!(
-                                "Failed to parse {} as bool",
-                                value,
+                                "Failed to parse {value} as bool",
                             ))
                         })?;
                         config_options.set_bool(&variable, new_value);
@@ -401,8 +395,7 @@ impl SessionContext {
                     ScalarValue::UInt64(_) => {
                         let new_value = value.parse::<u64>().map_err(|_| {
                             DataFusionError::Execution(format!(
-                                "Failed to parse {} as u64",
-                                value,
+                                "Failed to parse {value} as u64",
                             ))
                         })?;
                         config_options.set_u64(&variable, new_value);
@@ -411,8 +404,7 @@ impl SessionContext {
                     ScalarValue::Utf8(_) => {
                         let new_value = value.parse::<String>().map_err(|_| {
                             DataFusionError::Execution(format!(
-                                "Failed to parse {} as String",
-                                value,
+                                "Failed to parse {value} as String",
                             ))
                         })?;
                         config_options.set_string(&variable, new_value);
@@ -441,14 +433,12 @@ impl SessionContext {
                     1 => Ok((DEFAULT_CATALOG, schema_name.as_str())),
                     2 => Ok((tokens[0], tokens[1])),
                     _ => Err(DataFusionError::Execution(format!(
-                        "Unable to parse catalog from {}",
-                        schema_name
+                        "Unable to parse catalog from {schema_name}"
                     ))),
                 }?;
                 let catalog = self.catalog(catalog).ok_or_else(|| {
                     DataFusionError::Execution(format!(
-                        "Missing '{}' catalog",
-                        DEFAULT_CATALOG
+                        "Missing '{DEFAULT_CATALOG}' catalog"
                     ))
                 })?;
 
@@ -462,8 +452,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                        "Schema '{}' already exists",
-                        schema_name
+                        "Schema '{schema_name}' already exists"
                     ))),
                 }
             }
@@ -485,8 +474,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                        "Catalog '{}' already exists",
-                        catalog_name
+                        "Catalog '{catalog_name}' already exists"
                     ))),
                 }
             }
@@ -1125,19 +1113,6 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 
-/// Session Configuration entry name for 'TARGET_PARTITIONS'
-pub const TARGET_PARTITIONS: &str = "target_partitions";
-/// Session Configuration entry name for 'REPARTITION_JOINS'
-pub const REPARTITION_JOINS: &str = "repartition_joins";
-/// Session Configuration entry name for 'REPARTITION_AGGREGATIONS'
-pub const REPARTITION_AGGREGATIONS: &str = "repartition_aggregations";
-/// Session Configuration entry name for 'REPARTITION_WINDOWS'
-pub const REPARTITION_WINDOWS: &str = "repartition_windows";
-/// Session Configuration entry name for 'PARQUET_PRUNING'
-pub const PARQUET_PRUNING: &str = "parquet_pruning";
-/// Session Configuration entry name for 'COLLECT_STATISTICS'
-pub const COLLECT_STATISTICS: &str = "collect_statistics";
-
 /// Map that holds opaque objects indexed by their type.
 ///
 /// Data is wrapped into an [`Arc`] to enable [`Clone`] while still being [object safe].
@@ -1377,45 +1352,33 @@ impl SessionConfig {
             .unwrap()
     }
 
-    /// Convert configuration options to name-value pairs with values
-    /// converted to strings.
-    ///
-    /// Note that this method will eventually be deprecated and
-    /// replaced by [`config_options`].
-    ///
-    /// [`config_options`]: SessionContext::config_option
-    pub fn to_props(&self) -> HashMap<String, String> {
-        let mut map = HashMap::new();
-        // copy configs from config_options
-        for (k, v) in self.config_options.options() {
-            map.insert(k.to_string(), format!("{}", v));
-        }
-        map.insert(
-            TARGET_PARTITIONS.to_owned(),
-            format!("{}", self.target_partitions()),
-        );
-        map.insert(
-            REPARTITION_JOINS.to_owned(),
-            format!("{}", self.repartition_joins()),
-        );
-        map.insert(
-            REPARTITION_AGGREGATIONS.to_owned(),
-            format!("{}", self.repartition_aggregations()),
-        );
-        map.insert(
-            REPARTITION_WINDOWS.to_owned(),
-            format!("{}", self.repartition_window_functions()),
-        );
-        map.insert(
-            PARQUET_PRUNING.to_owned(),
-            format!("{}", self.parquet_pruning()),
-        );
-        map.insert(
-            COLLECT_STATISTICS.to_owned(),
-            format!("{}", self.collect_statistics()),
-        );
+    /// Enables or disables the coalescence of small batches into larger batches
+    pub fn with_coalesce_batches(mut self, enabled: bool) -> Self {
+        self.config_options.set_bool(OPT_COALESCE_BATCHES, enabled);
+        self
+    }
 
-        map
+    /// Returns true if record batches will be examined between each operator
+    /// and small batches will be coalesced into larger batches.
+    pub fn coalesce_batches(&self) -> bool {
+        self.config_options
+            .get_bool(OPT_COALESCE_BATCHES)
+            .unwrap_or_default()
+    }
+
+    /// Enables or disables the round robin repartition for increasing parallelism
+    pub fn with_round_robin_repartition(mut self, enabled: bool) -> Self {
+        self.config_options
+            .set_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION, enabled);
+        self
+    }
+
+    /// Returns true if the physical plan optimizer will try to
+    /// add round robin repartition to increase parallelism to leverage more CPU cores.
+    pub fn round_robin_repartition(&self) -> bool {
+        self.config_options
+            .get_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION)
+            .unwrap_or_default()
     }
 
     /// Return a handle to the configuration options.
@@ -1575,11 +1538,7 @@ impl SessionState {
         //      - it's conflicted with some parts of the BasicEnforcement, since it will
         //      introduce additional repartitioning while the BasicEnforcement aims at
         //      reducing unnecessary repartitioning.
-        if config
-            .config_options
-            .get_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION)
-            .unwrap_or_default()
-        {
+        if config.round_robin_repartition() {
             physical_optimizers.push(Arc::new(Repartition::new()));
         }
         //- Currently it will depend on the partition number to decide whether to change the
@@ -1609,21 +1568,10 @@ impl SessionState {
         // These cases typically arise when we have reversible window expressions or deep subqueries.
         // The rule below performs this analysis and removes unnecessary sorts.
         physical_optimizers.push(Arc::new(OptimizeSorts::new()));
-        // The CoalesceBatches rule will not influence the distribution and ordering of the whole
-        // plan tree. Therefore, to avoid influencing other rules, it should be run at last.
-        if config
-            .config_options
-            .get_bool(OPT_COALESCE_BATCHES)
-            .unwrap_or_default()
-        {
-            physical_optimizers.push(Arc::new(CoalesceBatches::new(
-                config
-                    .config_options
-                    .get_u64(OPT_COALESCE_TARGET_BATCH_SIZE)
-                    .unwrap_or_default()
-                    .try_into()
-                    .unwrap(),
-            )));
+        // The CoalesceBatches rule will not influence the distribution and ordering of the
+        // whole plan tree. Therefore, to avoid influencing other rules, it should be run last.
+        if config.coalesce_batches() {
+            physical_optimizers.push(Arc::new(CoalesceBatches::new(config.batch_size())));
         }
         // The PipelineChecker rule will reject non-runnable query plans that use
         // pipeline-breaking operators on infinite input(s). The rule generates a
@@ -1933,8 +1881,7 @@ impl FunctionRegistry for SessionState {
 
         result.cloned().ok_or_else(|| {
             DataFusionError::Plan(format!(
-                "There is no UDF named \"{}\" in the registry",
-                name
+                "There is no UDF named \"{name}\" in the registry"
             ))
         })
     }
@@ -1944,8 +1891,7 @@ impl FunctionRegistry for SessionState {
 
         result.cloned().ok_or_else(|| {
             DataFusionError::Plan(format!(
-                "There is no UDAF named \"{}\" in the registry",
-                name
+                "There is no UDAF named \"{name}\" in the registry"
             ))
         })
     }
@@ -1983,30 +1929,46 @@ impl TaskContext {
             SessionConfig::new()
                 .with_batch_size(task_props.get(OPT_BATCH_SIZE).unwrap().parse().unwrap())
                 .with_target_partitions(
-                    task_props.get(TARGET_PARTITIONS).unwrap().parse().unwrap(),
+                    task_props
+                        .get(OPT_TARGET_PARTITIONS)
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
                 )
                 .with_repartition_joins(
-                    task_props.get(REPARTITION_JOINS).unwrap().parse().unwrap(),
+                    task_props
+                        .get(OPT_REPARTITION_JOINS)
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
                 )
                 .with_repartition_aggregations(
                     task_props
-                        .get(REPARTITION_AGGREGATIONS)
+                        .get(OPT_REPARTITION_AGGREGATIONS)
                         .unwrap()
                         .parse()
                         .unwrap(),
                 )
                 .with_repartition_windows(
                     task_props
-                        .get(REPARTITION_WINDOWS)
+                        .get(OPT_REPARTITION_WINDOWS)
                         .unwrap()
                         .parse()
                         .unwrap(),
                 )
                 .with_parquet_pruning(
-                    task_props.get(PARQUET_PRUNING).unwrap().parse().unwrap(),
+                    task_props
+                        .get(OPT_PARQUET_ENABLE_PRUNING)
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
                 )
                 .with_collect_statistics(
-                    task_props.get(COLLECT_STATISTICS).unwrap().parse().unwrap(),
+                    task_props
+                        .get(OPT_COLLECT_STATISTICS)
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
                 )
         };
 
@@ -2082,8 +2044,7 @@ impl FunctionRegistry for TaskContext {
 
         result.cloned().ok_or_else(|| {
             DataFusionError::Internal(format!(
-                "There is no UDF named \"{}\" in the TaskContext",
-                name
+                "There is no UDF named \"{name}\" in the TaskContext"
             ))
         })
     }
@@ -2093,8 +2054,7 @@ impl FunctionRegistry for TaskContext {
 
         result.cloned().ok_or_else(|| {
             DataFusionError::Internal(format!(
-                "There is no UDAF named \"{}\" in the TaskContext",
-                name
+                "There is no UDAF named \"{name}\" in the TaskContext"
             ))
         })
     }
@@ -2465,7 +2425,7 @@ mod tests {
         for table_ref in &["my_catalog.my_schema.test", "my_schema.test", "test"] {
             let result = plan_and_collect(
                 &ctx,
-                &format!("SELECT COUNT(*) AS count FROM {}", table_ref),
+                &format!("SELECT COUNT(*) AS count FROM {table_ref}"),
             )
             .await
             .unwrap();
@@ -2715,7 +2675,7 @@ mod tests {
 
         // generate a partitioned file
         for partition in 0..partition_count {
-            let filename = format!("partition-{}.{}", partition, file_extension);
+            let filename = format!("partition-{partition}.{file_extension}");
             let file_path = tmp_dir.path().join(filename);
             let mut file = File::create(file_path)?;
 

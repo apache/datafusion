@@ -93,7 +93,7 @@ impl TestParquetFile {
         }
         writer.close().unwrap();
 
-        println!("Generated test dataset with {} rows", num_rows);
+        println!("Generated test dataset with {num_rows} rows");
 
         let size = std::fs::metadata(&path)?.len() as usize;
 

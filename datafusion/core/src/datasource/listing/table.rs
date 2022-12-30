@@ -109,7 +109,7 @@ impl ListingTableConfig {
     }
 
     fn infer_format(path: &str) -> Result<(Arc<dyn FileFormat>, String)> {
-        let err_msg = format!("Unable to infer file type from path: {}", path);
+        let err_msg = format!("Unable to infer file type from path: {path}");
 
         let mut exts = path.rsplit('.');
 
@@ -529,12 +529,12 @@ impl ListingTable {
                     }
                     else {
                         Err(DataFusionError::Plan(
-                            format!("Only support single column references in output_ordering, got {:?}", expr)
+                            format!("Only support single column references in output_ordering, got {expr:?}")
                         ))
                     }
                 } else {
                     Err(DataFusionError::Plan(
-                        format!("Expected Expr::Sort in output_ordering, but got {:?}", expr)
+                        format!("Expected Expr::Sort in output_ordering, but got {expr:?}")
                     ))
                 }
             })
@@ -910,8 +910,7 @@ mod tests {
                 }
                 (expected_result, ordering_result) => {
                     panic!(
-                        "expected: {:#?}\n\nactual:{:#?}",
-                        expected_result, ordering_result
+                        "expected: {expected_result:#?}\n\nactual:{ordering_result:#?}"
                     );
                 }
             }
@@ -1193,7 +1192,7 @@ mod tests {
         name: &str,
     ) -> Result<Arc<dyn TableProvider>> {
         let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/{}", testdata, name);
+        let filename = format!("{testdata}/{name}");
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
         let config = ListingTableConfig::new(table_path)

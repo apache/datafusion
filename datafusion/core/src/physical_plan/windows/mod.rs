@@ -102,7 +102,7 @@ fn get_scalar_value_from_args(
             .as_any()
             .downcast_ref::<Literal>()
             .ok_or_else(|| DataFusionError::NotImplemented(
-                format!("There is only support Literal types for field at idx: {} in Window Function", index),
+                format!("There is only support Literal types for field at idx: {index} in Window Function"),
             ))?
             .value()
             .clone();
@@ -167,7 +167,7 @@ fn create_built_in_window_expr(
             let n: i64 = n
                 .clone()
                 .try_into()
-                .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+                .map_err(|e| DataFusionError::Execution(format!("{e:?}")))?;
             let n: u32 = n as u32;
             let data_type = args[0].data_type(input_schema)?;
             Arc::new(NthValue::nth(name, arg, data_type, n)?)

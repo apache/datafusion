@@ -104,8 +104,7 @@ pub trait AggregateExpr: Send + Sync + Debug {
         _start_index: usize,
     ) -> Result<Box<dyn RowAccumulator>> {
         Err(DataFusionError::NotImplemented(format!(
-            "RowAccumulator hasn't been implemented for {:?} yet",
-            self
+            "RowAccumulator hasn't been implemented for {self:?} yet"
         )))
     }
 
@@ -120,8 +119,7 @@ pub trait AggregateExpr: Send + Sync + Debug {
     /// Creates accumulator implementation that supports retract
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Err(DataFusionError::NotImplemented(format!(
-            "Retractable Accumulator hasn't been implemented for {:?} yet",
-            self
+            "Retractable Accumulator hasn't been implemented for {self:?} yet"
         )))
     }
 }

@@ -104,7 +104,7 @@ impl ListingTableUrl {
         } else {
             Url::from_file_path(path)
         }
-        .map_err(|_| DataFusionError::Internal(format!("Can not open path: {}", s)))?;
+        .map_err(|_| DataFusionError::Internal(format!("Can not open path: {s}")))?;
         // TODO: Currently we do not have an IO-related error variant that accepts ()
         //       or a string. Once we have such a variant, change the error type above.
 
@@ -283,8 +283,7 @@ mod tests {
             assert_eq!(
                 split_glob_expression(input),
                 expected,
-                "testing split_glob_expression with {}",
-                input
+                "testing split_glob_expression with {input}"
             );
         }
 

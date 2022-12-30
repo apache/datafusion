@@ -129,9 +129,7 @@ pub fn build_checked_file_list(dir: &str, ext: &str) -> Result<Vec<String>> {
     build_file_list_recurse(dir, &mut filenames, ext)?;
     if filenames.is_empty() {
         return Err(DataFusionError::Plan(format!(
-            "No files found at {path} with file extension {file_extension}",
-            path = dir,
-            file_extension = ext
+            "No files found at {dir} with file extension {ext}"
         )));
     }
     Ok(filenames)
@@ -406,8 +404,7 @@ impl IPCWriter {
     pub fn new(path: &Path, schema: &Schema) -> Result<Self> {
         let file = File::create(path).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed to create partition file at {:?}: {:?}",
-                path, e
+                "Failed to create partition file at {path:?}: {e:?}"
             ))
         })?;
         Ok(Self {
@@ -427,8 +424,7 @@ impl IPCWriter {
     ) -> Result<Self> {
         let file = File::create(path).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed to create partition file at {:?}: {:?}",
-                path, e
+                "Failed to create partition file at {path:?}: {e:?}"
             ))
         })?;
         Ok(Self {

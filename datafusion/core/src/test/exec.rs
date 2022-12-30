@@ -189,7 +189,7 @@ impl ExecutionPlan for MockExec {
             for batch in data {
                 println!("Sending batch via delayed stream");
                 if let Err(e) = tx.send(batch).await {
-                    println!("ERROR batch via delayed stream: {}", e);
+                    println!("ERROR batch via delayed stream: {e}");
                 }
             }
         });
@@ -314,12 +314,12 @@ impl ExecutionPlan for BarrierExec {
         let data = self.data[partition].clone();
         let b = self.barrier.clone();
         let join_handle = tokio::task::spawn(async move {
-            println!("Partition {} waiting on barrier", partition);
+            println!("Partition {partition} waiting on barrier");
             b.wait().await;
             for batch in data {
-                println!("Partition {} sending batch", partition);
+                println!("Partition {partition} sending batch");
                 if let Err(e) = tx.send(Ok(batch)).await {
-                    println!("ERROR batch via barrier stream stream: {}", e);
+                    println!("ERROR batch via barrier stream stream: {e}");
                 }
             }
         });
@@ -407,8 +407,7 @@ impl ExecutionPlan for ErrorExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Err(DataFusionError::Internal(format!(
-            "ErrorExec, unsurprisingly, errored in partition {}",
-            partition
+            "ErrorExec, unsurprisingly, errored in partition {partition}"
         )))
     }
 
@@ -641,8 +640,7 @@ impl ExecutionPlan for BlockingExec {
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Err(DataFusionError::Internal(format!(
-            "Children cannot be replaced in {:?}",
-            self
+            "Children cannot be replaced in {self:?}"
         )))
     }
 

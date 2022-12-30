@@ -225,7 +225,7 @@ mod test {
         assert_eq!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
             but input schema only has 1 columns: [\"foo\"]. This was likely caused by a bug in \
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
-           &format!("{}", error))
+           &format!("{error}"))
     }
 
     #[test]
@@ -236,7 +236,7 @@ mod test {
         assert_eq!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
             but input schema only has 1 columns: [\"foo\"]. This was likely caused by a bug in \
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
-                   &format!("{}", error))
+                   &format!("{error}"))
     }
 
     #[test]
@@ -249,7 +249,7 @@ mod test {
         assert_eq!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
             but input schema only has 1 columns: [\"foo\"]. This was likely caused by a bug in \
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
-                   &format!("{}", error));
+                   &format!("{error}"));
         Ok(())
     }
 

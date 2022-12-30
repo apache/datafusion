@@ -388,7 +388,7 @@ enum VisitRecord {
 
 impl ExprIdentifierVisitor<'_> {
     fn desc_expr(expr: &Expr) -> String {
-        format!("{}", expr)
+        format!("{expr}")
     }
 
     /// Find the first `EnterMark` in the stack, and accumulates every `ExprItem`
@@ -596,7 +596,7 @@ mod test {
             .try_optimize(plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
-        let formatted_plan = format!("{:?}", optimized_plan);
+        let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(expected, formatted_plan);
     }
 
