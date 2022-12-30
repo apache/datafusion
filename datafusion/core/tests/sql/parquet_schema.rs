@@ -170,7 +170,7 @@ fn write_files(table_path: &Path, schemas: Vec<Schema>) {
 
     for (i, schema) in schemas.into_iter().enumerate() {
         let schema = Arc::new(schema);
-        let filename = format!("part-{}.parquet", i);
+        let filename = format!("part-{i}.parquet");
         let path = table_path.join(filename);
         let file = fs::File::create(path).unwrap();
         let mut writer = ArrowWriter::try_new(file, schema.clone(), None).unwrap();

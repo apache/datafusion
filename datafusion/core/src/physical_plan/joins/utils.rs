@@ -85,9 +85,7 @@ fn check_join_set_is_valid(
 
     if !left_missing.is_empty() | !right_missing.is_empty() {
         return Err(DataFusionError::Plan(format!(
-                "The left or right side of the join does not have all columns on \"on\": \nMissing on the left: {:?}\nMissing on the right: {:?}",
-                left_missing,
-                right_missing,
+                "The left or right side of the join does not have all columns on \"on\": \nMissing on the left: {left_missing:?}\nMissing on the right: {right_missing:?}",
             )));
     };
 

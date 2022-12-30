@@ -129,7 +129,7 @@ mod tests {
 
         // create and evaluate a literal expression
         let literal_expr = lit(42i32);
-        assert_eq!("42", format!("{}", literal_expr));
+        assert_eq!("42", format!("{literal_expr}"));
 
         let literal_array = literal_expr.evaluate(&batch)?.into_array(batch.num_rows());
         let literal_array = as_int32_array(&literal_array)?;

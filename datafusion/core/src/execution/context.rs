@@ -101,6 +101,8 @@ use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::memory_pool::MemoryPool;
 use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
+use crate::physical_optimizer::pipeline_checker::PipelineChecker;
+use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
 use uuid::Uuid;
 
 use super::options::{
@@ -307,8 +309,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                        "Table '{}' already exists",
-                        name
+                        "Table '{name}' already exists"
                     ))),
                 }
             }
@@ -338,8 +339,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, Ok(_)) => Err(DataFusionError::Execution(format!(
-                        "Table '{}' already exists",
-                        name
+                        "Table '{name}' already exists"
                     ))),
                 }
             }
@@ -352,8 +352,7 @@ impl SessionContext {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
                     (_, _) => Err(DataFusionError::Execution(format!(
-                        "Table '{}' doesn't exist.",
-                        name
+                        "Table '{name}' doesn't exist."
                     ))),
                 }
             }
@@ -366,8 +365,7 @@ impl SessionContext {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
                     (_, _) => Err(DataFusionError::Execution(format!(
-                        "View '{}' doesn't exist.",
-                        name
+                        "View '{name}' doesn't exist."
                     ))),
                 }
             }
@@ -380,8 +378,7 @@ impl SessionContext {
 
                 let old_value = config_options.get(&variable).ok_or_else(|| {
                     DataFusionError::Execution(format!(
-                        "Can not SET variable: Unknown Variable {}",
-                        variable
+                        "Can not SET variable: Unknown Variable {variable}"
                     ))
                 })?;
 
@@ -389,8 +386,7 @@ impl SessionContext {
                     ScalarValue::Boolean(_) => {
                         let new_value = value.parse::<bool>().map_err(|_| {
                             DataFusionError::Execution(format!(
-                                "Failed to parse {} as bool",
-                                value,
+                                "Failed to parse {value} as bool",
                             ))
                         })?;
                         config_options.set_bool(&variable, new_value);
@@ -399,8 +395,7 @@ impl SessionContext {
                     ScalarValue::UInt64(_) => {
                         let new_value = value.parse::<u64>().map_err(|_| {
                             DataFusionError::Execution(format!(
-                                "Failed to parse {} as u64",
-                                value,
+                                "Failed to parse {value} as u64",
                             ))
                         })?;
                         config_options.set_u64(&variable, new_value);
@@ -409,8 +404,7 @@ impl SessionContext {
                     ScalarValue::Utf8(_) => {
                         let new_value = value.parse::<String>().map_err(|_| {
                             DataFusionError::Execution(format!(
-                                "Failed to parse {} as String",
-                                value,
+                                "Failed to parse {value} as String",
                             ))
                         })?;
                         config_options.set_string(&variable, new_value);
@@ -439,14 +433,12 @@ impl SessionContext {
                     1 => Ok((DEFAULT_CATALOG, schema_name.as_str())),
                     2 => Ok((tokens[0], tokens[1])),
                     _ => Err(DataFusionError::Execution(format!(
-                        "Unable to parse catalog from {}",
-                        schema_name
+                        "Unable to parse catalog from {schema_name}"
                     ))),
                 }?;
                 let catalog = self.catalog(catalog).ok_or_else(|| {
                     DataFusionError::Execution(format!(
-                        "Missing '{}' catalog",
-                        DEFAULT_CATALOG
+                        "Missing '{DEFAULT_CATALOG}' catalog"
                     ))
                 })?;
 
@@ -460,8 +452,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                        "Schema '{}' already exists",
-                        schema_name
+                        "Schema '{schema_name}' already exists"
                     ))),
                 }
             }
@@ -483,8 +474,7 @@ impl SessionContext {
                         self.return_empty_dataframe()
                     }
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
-                        "Catalog '{}' already exists",
-                        catalog_name
+                        "Catalog '{catalog_name}' already exists"
                     ))),
                 }
             }
@@ -630,12 +620,18 @@ impl SessionContext {
 
         let listing_options = options.to_listing_options(target_partitions);
 
-        let resolved_schema = match options.schema {
-            Some(s) => s,
-            None => {
+        let resolved_schema = match (options.schema, options.infinite) {
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, false) => {
                 listing_options
                     .infer_schema(&self.state(), &table_path)
                     .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
             }
         };
 
@@ -657,12 +653,18 @@ impl SessionContext {
 
         let listing_options = options.to_listing_options(target_partitions);
 
-        let resolved_schema = match options.schema {
-            Some(s) => s,
-            None => {
+        let resolved_schema = match (options.schema, options.infinite) {
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, false) => {
                 listing_options
                     .infer_schema(&self.state(), &table_path)
                     .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
             }
         };
         let config = ListingTableConfig::new(table_path)
@@ -690,12 +692,18 @@ impl SessionContext {
         let table_path = ListingTableUrl::parse(table_path)?;
         let target_partitions = self.copied_config().target_partitions();
         let listing_options = options.to_listing_options(target_partitions);
-        let resolved_schema = match options.schema {
-            Some(s) => Arc::new(s.to_owned()),
-            None => {
+        let resolved_schema = match (options.schema, options.infinite) {
+            (Some(s), _) => Arc::new(s.to_owned()),
+            (None, false) => {
                 listing_options
                     .infer_schema(&self.state(), &table_path)
                     .await?
+            }
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
             }
         };
         let config = ListingTableConfig::new(table_path.clone())
@@ -767,9 +775,15 @@ impl SessionContext {
         sql_definition: Option<String>,
     ) -> Result<()> {
         let table_path = ListingTableUrl::parse(table_path)?;
-        let resolved_schema = match provided_schema {
-            None => options.infer_schema(&self.state(), &table_path).await?,
-            Some(s) => s,
+        let resolved_schema = match (provided_schema, options.infinite_source) {
+            (Some(s), _) => s,
+            (None, false) => options.infer_schema(&self.state(), &table_path).await?,
+            (None, true) => {
+                return Err(DataFusionError::Plan(
+                    "Schema inference for infinite data sources is not supported."
+                        .to_string(),
+                ))
+            }
         };
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options)
@@ -817,7 +831,7 @@ impl SessionContext {
             name,
             table_path,
             listing_options,
-            options.schema,
+            options.schema.map(|s| Arc::new(s.to_owned())),
             None,
         )
         .await?;
@@ -854,7 +868,7 @@ impl SessionContext {
             name,
             table_path,
             listing_options,
-            options.schema,
+            options.schema.map(|s| Arc::new(s.to_owned())),
             None,
         )
         .await?;
@@ -993,11 +1007,17 @@ impl SessionContext {
     }
 
     /// Optimizes the logical plan by applying optimizer rules.
+    #[deprecated(
+        note = "Use SessionState::optimize to ensure a consistent state for planning and execution"
+    )]
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         self.state.read().optimize(plan)
     }
 
     /// Creates a physical plan from a logical plan.
+    #[deprecated(
+        note = "Use SessionState::create_physical_plan or DataFrame::create_physical_plan to ensure a consistent state for planning and execution"
+    )]
     pub async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -1448,25 +1468,25 @@ impl SessionConfig {
 #[derive(Clone)]
 pub struct SessionState {
     /// Uuid for the session
-    pub session_id: String,
+    session_id: String,
     /// Responsible for optimizing a logical plan
-    pub optimizer: Optimizer,
+    optimizer: Optimizer,
     /// Responsible for optimizing a physical execution plan
-    pub physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
     /// Responsible for planning `LogicalPlan`s, and `ExecutionPlan`
-    pub query_planner: Arc<dyn QueryPlanner + Send + Sync>,
+    query_planner: Arc<dyn QueryPlanner + Send + Sync>,
     /// Collection of catalogs containing schemas and ultimately TableProviders
-    pub catalog_list: Arc<dyn CatalogList>,
+    catalog_list: Arc<dyn CatalogList>,
     /// Scalar functions that are registered with the context
-    pub scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions registered in the context
-    pub aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+    aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Session configuration
-    pub config: SessionConfig,
+    config: SessionConfig,
     /// Execution properties
-    pub execution_props: ExecutionProps,
+    execution_props: ExecutionProps,
     /// Runtime environment
-    pub runtime_env: Arc<RuntimeEnv>,
+    runtime_env: Arc<RuntimeEnv>,
 }
 
 impl Debug for SessionState {
@@ -1533,6 +1553,12 @@ impl SessionState {
         // and local sort to meet the distribution and ordering requirements.
         // Therefore, it should be run before BasicEnforcement
         physical_optimizers.push(Arc::new(JoinSelection::new()));
+        // If the query is processing infinite inputs, the PipelineFixer rule applies the
+        // necessary transformations to make the query runnable (if it is not already runnable).
+        // If the query can not be made runnable, the rule emits an error with a diagnostic message.
+        // Since the transformations it applies may alter output partitioning properties of operators
+        // (e.g. by swapping hash join sides), this rule runs before BasicEnforcement.
+        physical_optimizers.push(Arc::new(PipelineFixer::new()));
         // It's for adding essential repartition and local sorting operator to satisfy the
         // required distribution and local sort.
         // Please make sure that the whole plan tree is determined.
@@ -1547,7 +1573,11 @@ impl SessionState {
         if config.coalesce_batches() {
             physical_optimizers.push(Arc::new(CoalesceBatches::new(config.batch_size())));
         }
-
+        // The PipelineChecker rule will reject non-runnable query plans that use
+        // pipeline-breaking operators on infinite input(s). The rule generates a
+        // diagnostic error message when this happens. It makes no changes to the
+        // given query plan; i.e. it only acts as a final gatekeeping rule.
+        physical_optimizers.push(Arc::new(PipelineChecker::new()));
         SessionState {
             session_id,
             optimizer: Optimizer::new(),
@@ -1758,6 +1788,31 @@ impl SessionState {
             .await
     }
 
+    /// Return the session ID
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// Return the runtime env
+    pub fn runtime_env(&self) -> &Arc<RuntimeEnv> {
+        &self.runtime_env
+    }
+
+    /// Return the execution properties
+    pub fn execution_props(&self) -> &ExecutionProps {
+        &self.execution_props
+    }
+
+    /// Return the [`SessionConfig`]
+    pub fn config(&self) -> &SessionConfig {
+        &self.config
+    }
+
+    /// Return the physical optimizers
+    pub fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        &self.physical_optimizers
+    }
+
     /// return the configuration options
     pub fn config_options(&self) -> &ConfigOptions {
         self.config.config_options()
@@ -1826,8 +1881,7 @@ impl FunctionRegistry for SessionState {
 
         result.cloned().ok_or_else(|| {
             DataFusionError::Plan(format!(
-                "There is no UDF named \"{}\" in the registry",
-                name
+                "There is no UDF named \"{name}\" in the registry"
             ))
         })
     }
@@ -1837,8 +1891,7 @@ impl FunctionRegistry for SessionState {
 
         result.cloned().ok_or_else(|| {
             DataFusionError::Plan(format!(
-                "There is no UDAF named \"{}\" in the registry",
-                name
+                "There is no UDAF named \"{name}\" in the registry"
             ))
         })
     }
@@ -1991,8 +2044,7 @@ impl FunctionRegistry for TaskContext {
 
         result.cloned().ok_or_else(|| {
             DataFusionError::Internal(format!(
-                "There is no UDF named \"{}\" in the TaskContext",
-                name
+                "There is no UDF named \"{name}\" in the TaskContext"
             ))
         })
     }
@@ -2002,8 +2054,7 @@ impl FunctionRegistry for TaskContext {
 
         result.cloned().ok_or_else(|| {
             DataFusionError::Internal(format!(
-                "There is no UDAF named \"{}\" in the TaskContext",
-                name
+                "There is no UDAF named \"{name}\" in the TaskContext"
             ))
         })
     }
@@ -2374,7 +2425,7 @@ mod tests {
         for table_ref in &["my_catalog.my_schema.test", "my_schema.test", "test"] {
             let result = plan_and_collect(
                 &ctx,
-                &format!("SELECT COUNT(*) AS count FROM {}", table_ref),
+                &format!("SELECT COUNT(*) AS count FROM {table_ref}"),
             )
             .await
             .unwrap();
@@ -2624,7 +2675,7 @@ mod tests {
 
         // generate a partitioned file
         for partition in 0..partition_count {
-            let filename = format!("partition-{}.{}", partition, file_extension);
+            let filename = format!("partition-{partition}.{file_extension}");
             let file_path = tmp_dir.path().join(filename);
             let mut file = File::create(file_path)?;
 

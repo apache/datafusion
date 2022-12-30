@@ -85,17 +85,15 @@ impl TestParquetFile {
         let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props)).unwrap();
 
         writer.write(&first_batch).unwrap();
-        writer.flush()?;
         let mut num_rows = first_batch.num_rows();
 
         for batch in batches {
             writer.write(&batch).unwrap();
-            writer.flush()?;
             num_rows += batch.num_rows();
         }
         writer.close().unwrap();
 
-        println!("Generated test dataset with {} rows", num_rows);
+        println!("Generated test dataset with {num_rows} rows");
 
         let size = std::fs::metadata(&path)?.len() as usize;
 
@@ -144,6 +142,7 @@ impl TestParquetFile {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: None,
+            infinite_source: false,
         };
 
         let df_schema = self.schema.clone().to_dfschema_ref()?;

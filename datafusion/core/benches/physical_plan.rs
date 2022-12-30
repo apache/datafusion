@@ -97,9 +97,9 @@ fn batches(
                 j = i;
             }
 
-            col_a.push(Some(format!("a-{:?}", j)));
-            col_b.push(Some(format!("b-{:?}", j)));
-            col_c.push(Some(format!("c-{:?}", j)));
+            col_a.push(Some(format!("a-{j:?}")));
+            col_b.push(Some(format!("b-{j:?}")));
+            col_c.push(Some(format!("c-{j:?}")));
             col_d.push(Some((i + curr_batch_offset) as i64));
 
             current_rows_per_sort_key += 1;

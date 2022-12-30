@@ -62,12 +62,12 @@ impl Default for JIT {
         flag_builder.set("use_colocated_libcalls", "false").unwrap();
         flag_builder.set("is_pic", "false").unwrap();
         let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
-            panic!("host machine is not supported: {}", msg);
+            panic!("host machine is not supported: {msg}");
         });
         let isa = isa_builder
             .finish(settings::Flags::new(flag_builder))
             .unwrap_or_else(|msg| {
-                panic!("host machine is not supported: {}", msg);
+                panic!("host machine is not supported: {msg}");
             });
         let builder =
             JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
@@ -99,7 +99,7 @@ impl JIT {
         flag_builder.set("opt_level", "speed").unwrap();
         flag_builder.set("enable_simd", "true").unwrap();
         let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
-            panic!("host machine is not supported: {}", msg);
+            panic!("host machine is not supported: {msg}");
         });
         let isa = isa_builder
             .finish(settings::Flags::new(flag_builder))

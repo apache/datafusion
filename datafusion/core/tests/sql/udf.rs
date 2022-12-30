@@ -86,14 +86,11 @@ async fn scalar_udf() -> Result<()> {
         .build()?;
 
     assert_eq!(
-        format!("{:?}", plan),
+        format!("{plan:?}"),
         "Projection: t.a, t.b, my_add(t.a, t.b)\n  TableScan: t projection=[a, b]"
     );
 
-    let plan = ctx.optimize(&plan)?;
-    let plan = ctx.create_physical_plan(&plan).await?;
-    let task_ctx = ctx.task_ctx();
-    let result = collect(plan, task_ctx).await?;
+    let result = DataFrame::new(ctx.state(), plan).collect().await?;
 
     let expected = vec![
         "+-----+-----+-----------------+",

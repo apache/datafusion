@@ -268,8 +268,7 @@ impl ExprSchemable for Expr {
             Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone())))
         } else {
             Err(DataFusionError::Plan(format!(
-                "Cannot automatically convert {:?} to {:?}",
-                this_type, cast_to_type
+                "Cannot automatically convert {this_type:?} to {cast_to_type:?}"
             )))
         }
     }

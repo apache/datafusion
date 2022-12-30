@@ -504,6 +504,11 @@ impl DataFrame {
         &self.plan
     }
 
+    /// Returns both the [`LogicalPlan`] and [`SessionState`] that comprise this [`DataFrame`]
+    pub fn into_parts(self) -> (SessionState, LogicalPlan) {
+        (self.session_state, self.plan)
+    }
+
     /// Return the logical plan represented by this DataFrame without running the optimizers
     ///
     /// Note: This method should not be used outside testing, as it loses the snapshot
@@ -1143,7 +1148,7 @@ mod tests {
 
     /// Compare the formatted string representation of two plans for equality
     fn assert_same_plan(plan1: &LogicalPlan, plan2: &LogicalPlan) {
-        assert_eq!(format!("{:?}", plan1), format!("{:?}", plan2));
+        assert_eq!(format!("{plan1:?}"), format!("{plan2:?}"));
     }
 
     /// Create a logical plan from a SQL query
@@ -1171,7 +1176,7 @@ mod tests {
         let testdata = test_util::arrow_test_data();
         ctx.register_csv(
             table_name,
-            &format!("{}/csv/aggregate_test_100.csv", testdata),
+            &format!("{testdata}/csv/aggregate_test_100.csv"),
             CsvReadOptions::new().schema(schema.as_ref()),
         )
         .await?;

@@ -232,7 +232,7 @@ mod tests {
         let optimized_plan = optimizer
             .optimize(plan, config, observe)
             .expect("failed to optimize plan");
-        let formatted_plan = format!("{:?}", optimized_plan);
+        let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(formatted_plan, expected);
         assert_eq!(plan.schema(), optimized_plan.schema());
         Ok(())

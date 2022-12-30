@@ -319,7 +319,7 @@ impl BuiltInConfigs {
             ConfigDefinition::new_string(
                 OPT_TIME_ZONE,
                 "The session time zone which some function require \
-                e.g. EXTRACT(HOUR from SOME_TIME) shift the underline datetime according to the time zone,
+                e.g. EXTRACT(HOUR from SOME_TIME) shift the underline datetime according to the time zone, \
                 then extract the hour.",
                 Some("+00:00".into()),
             ),

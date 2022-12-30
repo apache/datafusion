@@ -130,8 +130,7 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             Ok(AggregateFunction::ApproxMedian.into())
         } else {
             Err(DataFusionError::NotImplemented(format!(
-                "Aggregate function not supported: {:?}",
-                a
+                "Aggregate function not supported: {a:?}"
             )))
         }?;
         let expressions: Vec<protobuf::PhysicalExprNode> = a
@@ -333,8 +332,7 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
             })
         } else {
             Err(DataFusionError::Internal(format!(
-                "physical_plan::to_proto() unsupported expression {:?}",
-                value
+                "physical_plan::to_proto() unsupported expression {value:?}"
             )))
         }
     }

@@ -70,8 +70,7 @@ impl FilterExec {
                 metrics: ExecutionPlanMetricsSet::new(),
             }),
             other => Err(DataFusionError::Plan(format!(
-                "Filter predicate must return boolean values, not {:?}",
-                other
+                "Filter predicate must return boolean values, not {other:?}"
             ))),
         }
     }
@@ -106,6 +105,13 @@ impl ExecutionPlan for FilterExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         self.input.output_partitioning()
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        Ok(children[0])
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {

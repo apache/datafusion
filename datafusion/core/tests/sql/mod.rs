@@ -132,7 +132,7 @@ where
             if l.is_nan() || r.is_nan() {
                 assert!(l.is_nan() && r.is_nan());
             } else if (l - r).abs() > 2.0 * f64::EPSILON {
-                panic!("{} != {}", l, r)
+                panic!("{l} != {r}")
             }
         });
 }
@@ -788,7 +788,7 @@ async fn register_tpch_csv(ctx: &SessionContext, table: &str) -> Result<()> {
 
     ctx.register_csv(
         table,
-        format!("tests/tpch-csv/{}.csv", table).as_str(),
+        format!("tests/tpch-csv/{table}.csv").as_str(),
         CsvReadOptions::new().schema(&schema),
     )
     .await?;
@@ -917,9 +917,8 @@ async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
     )
     STORED AS CSV
     WITH HEADER ROW
-    LOCATION '{}/csv/aggregate_test_100.csv'
-    ",
-            testdata
+    LOCATION '{testdata}/csv/aggregate_test_100.csv'
+    "
         ))
         .await
         .expect("Creating dataframe for CREATE EXTERNAL TABLE");
@@ -1007,7 +1006,7 @@ async fn register_aggregate_csv(ctx: &SessionContext) -> Result<()> {
     let schema = test_util::aggr_test_schema();
     ctx.register_csv(
         "aggregate_test_100",
-        &format!("{}/csv/aggregate_test_100.csv", testdata),
+        &format!("{testdata}/csv/aggregate_test_100.csv"),
         CsvReadOptions::new().schema(&schema),
     )
     .await?;
@@ -1026,13 +1025,11 @@ async fn try_execute_to_batches(
 ) -> Result<Vec<RecordBatch>> {
     let dataframe = ctx.sql(sql).await?;
     let logical_schema = dataframe.schema().clone();
+    let (state, plan) = dataframe.into_parts();
 
-    let optimized = ctx.optimize(dataframe.logical_plan())?;
-    let optimized_logical_schema = optimized.schema();
-    let results = dataframe.collect().await?;
-
-    assert_eq!(&logical_schema, optimized_logical_schema.as_ref());
-    Ok(results)
+    let optimized = state.optimize(&plan)?;
+    assert_eq!(&logical_schema, optimized.schema().as_ref());
+    DataFrame::new(state, optimized).collect().await
 }
 
 /// Execute query and return results as a Vec of RecordBatches
@@ -1101,7 +1098,7 @@ fn populate_csv_partitions(
 
     // generate a partitioned file
     for partition in 0..partition_count {
-        let filename = format!("partition-{}.{}", partition, file_extension);
+        let filename = format!("partition-{partition}.{file_extension}");
         let file_path = tmp_dir.path().join(filename);
         let mut file = File::create(file_path)?;
 
@@ -1207,7 +1204,7 @@ async fn register_alltypes_parquet(ctx: &SessionContext) {
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "alltypes_plain",
-        &format!("{}/alltypes_plain.parquet", testdata),
+        &format!("{testdata}/alltypes_plain.parquet"),
         ParquetReadOptions::default(),
     )
     .await
@@ -1382,7 +1379,7 @@ pub fn make_timestamps() -> RecordBatch {
     let names = ts_nanos
         .iter()
         .enumerate()
-        .map(|(i, _)| format!("Row {}", i))
+        .map(|(i, _)| format!("Row {i}"))
         .collect::<Vec<_>>();
 
     let arr_nanos = TimestampNanosecondArray::from(ts_nanos);
@@ -1475,7 +1472,7 @@ pub fn make_times() -> RecordBatch {
     let names = ts_nanos
         .iter()
         .enumerate()
-        .map(|(i, _)| format!("Row {}", i))
+        .map(|(i, _)| format!("Row {i}"))
         .collect::<Vec<_>>();
 
     let arr_nanos = Time64NanosecondArray::from(ts_nanos);

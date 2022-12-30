@@ -67,7 +67,7 @@ struct Opt {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt: Opt = Opt::from_args();
-    println!("Running benchmarks with the following options: {:?}", opt);
+    println!("Running benchmarks with the following options: {opt:?}");
 
     let path = opt.path.join("logs.parquet");
 
@@ -137,9 +137,9 @@ async fn run_benchmarks(opt: Opt, test_file: &TestParquetFile) -> Result<()> {
     ];
 
     for filter_expr in &filter_matrix {
-        println!("Executing with filter '{}'", filter_expr);
+        println!("Executing with filter '{filter_expr}'");
         for scan_options in &scan_options_matrix {
-            println!("Using scan options {:?}", scan_options);
+            println!("Using scan options {scan_options:?}");
             for i in 0..opt.iterations {
                 let start = Instant::now();
 

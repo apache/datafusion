@@ -164,7 +164,7 @@ impl PartialEq for Time {
 impl Display for Time {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let duration = std::time::Duration::from_nanos(self.value() as u64);
-        write!(f, "{:?}", duration)
+        write!(f, "{duration:?}")
     }
 }
 
@@ -294,7 +294,7 @@ impl Display for Timestamp {
         match self.value() {
             None => write!(f, "NONE"),
             Some(v) => {
-                write!(f, "{}", v)
+                write!(f, "{v}")
             }
         }
     }
@@ -542,22 +542,22 @@ impl std::fmt::Display for MetricValue {
             | Self::SpillCount(count)
             | Self::SpilledBytes(count)
             | Self::Count { count, .. } => {
-                write!(f, "{}", count)
+                write!(f, "{count}")
             }
             Self::CurrentMemoryUsage(gauge) | Self::Gauge { gauge, .. } => {
-                write!(f, "{}", gauge)
+                write!(f, "{gauge}")
             }
             Self::ElapsedCompute(time) | Self::Time { time, .. } => {
                 // distinguish between no time recorded and very small
                 // amount of time recorded
                 if time.value() > 0 {
-                    write!(f, "{}", time)
+                    write!(f, "{time}")
                 } else {
                     write!(f, "NOT RECORDED")
                 }
             }
             Self::StartTimestamp(timestamp) | Self::EndTimestamp(timestamp) => {
-                write!(f, "{}", timestamp)
+                write!(f, "{timestamp}")
             }
         }
     }
@@ -581,12 +581,12 @@ mod tests {
         ];
 
         for value in &values {
-            assert_eq!("0", value.to_string(), "value {:?}", value);
+            assert_eq!("0", value.to_string(), "value {value:?}");
         }
 
         count.add(42);
         for value in &values {
-            assert_eq!("42", value.to_string(), "value {:?}", value);
+            assert_eq!("42", value.to_string(), "value {value:?}");
         }
     }
 
@@ -603,12 +603,12 @@ mod tests {
 
         // if time is not set, it should not be reported as zero
         for value in &values {
-            assert_eq!("NOT RECORDED", value.to_string(), "value {:?}", value);
+            assert_eq!("NOT RECORDED", value.to_string(), "value {value:?}");
         }
 
         time.add_duration(Duration::from_nanos(1042));
         for value in &values {
-            assert_eq!("1.042µs", value.to_string(), "value {:?}", value);
+            assert_eq!("1.042µs", value.to_string(), "value {value:?}");
         }
     }
 
@@ -622,7 +622,7 @@ mod tests {
 
         // if time is not set, it should not be reported as zero
         for value in &values {
-            assert_eq!("NONE", value.to_string(), "value {:?}", value);
+            assert_eq!("NONE", value.to_string(), "value {value:?}");
         }
 
         timestamp.set(Utc.timestamp_nanos(1431648000000000));
@@ -630,8 +630,7 @@ mod tests {
             assert_eq!(
                 "1970-01-17 13:40:48 UTC",
                 value.to_string(),
-                "value {:?}",
-                value
+                "value {value:?}"
             );
         }
     }

@@ -109,6 +109,10 @@ impl ExecutionPlan for CsvExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
+    fn unbounded_output(&self, _: &[bool]) -> Result<bool> {
+        Ok(self.base_config().infinite_source)
+    }
+
     /// See comments on `impl ExecutionPlan for ParquetExec`: output order can't be
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         get_output_ordering(&self.base_config)
@@ -249,7 +253,7 @@ pub async fn plan_to_csv(
             let mut tasks = vec![];
             for i in 0..plan.output_partitioning().partition_count() {
                 let plan = plan.clone();
-                let filename = format!("part-{}.csv", i);
+                let filename = format!("part-{i}.csv");
                 let path = fs_path.join(filename);
                 let file = fs::File::create(path)?;
                 let mut writer = csv::Writer::new(file);
@@ -268,13 +272,12 @@ pub async fn plan_to_csv(
                 .await
                 .into_iter()
                 .try_for_each(|result| {
-                    result.map_err(|e| DataFusionError::Execution(format!("{}", e)))?
+                    result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
                 })?;
             Ok(())
         }
         Err(e) => Err(DataFusionError::Execution(format!(
-            "Could not create directory {}: {:?}",
-            path, e
+            "Could not create directory {path}: {e:?}"
         ))),
     }
 }
@@ -542,7 +545,7 @@ mod tests {
 
         // generate a partitioned file
         for partition in 0..partition_count {
-            let filename = format!("partition-{}.{}", partition, file_extension);
+            let filename = format!("partition-{partition}.{file_extension}");
             let file_path = tmp_dir.path().join(filename);
             let mut file = File::create(file_path)?;
 
@@ -625,7 +628,7 @@ mod tests {
             .write_csv(&out_dir)
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{}", e));
+        assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
         Ok(())
     }
 
@@ -663,7 +666,7 @@ mod tests {
         let csv_read_option = CsvReadOptions::new().schema(&schema);
         ctx.register_csv(
             "part0",
-            &format!("{}/part-0.csv", out_dir),
+            &format!("{out_dir}/part-0.csv"),
             csv_read_option.clone(),
         )
         .await?;

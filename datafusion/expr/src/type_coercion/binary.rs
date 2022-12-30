@@ -88,7 +88,7 @@ pub fn binary_operator_data_type(
 /// when the input argument types do not match the output argument
 /// types
 ///
-/// Tracking issue is https://github.com/apache/arrow-datafusion/issues/3419
+/// Tracking issue is <https://github.com/apache/arrow-datafusion/issues/3419>
 pub fn coerce_types(
     lhs_type: &DataType,
     op: &Operator,
@@ -131,9 +131,8 @@ pub fn coerce_types(
                 DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
                     return Err(DataFusionError::Plan(
                         format!(
-                            "'{:?} {} {:?}' is an unsupported operation. \
-                                addition/subtraction on dates/timestamps only supported with interval types",
-                            lhs_type, op, rhs_type
+                            "'{lhs_type:?} {op} {rhs_type:?}' is an unsupported operation. \
+                                addition/subtraction on dates/timestamps only supported with interval types"
                         ),
                     ));
                 }
@@ -162,8 +161,7 @@ pub fn coerce_types(
     match result {
         None => Err(DataFusionError::Plan(
             format!(
-                "'{:?} {} {:?}' can't be evaluated because there isn't a common type to coerce the types to",
-                lhs_type, op, rhs_type
+                "'{lhs_type:?} {op} {rhs_type:?}' can't be evaluated because there isn't a common type to coerce the types to"
             ),
         )),
         Some(t) => Ok(t)
@@ -575,6 +573,7 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         },
         (Timestamp(_, tz), Utf8) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
         (Utf8, Timestamp(_, tz)) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
+        // TODO: need to investigate the result type for the comparison between timestamp and date
         (Timestamp(_, _), Date32) => Some(Date32),
         (Timestamp(_, _), Date64) => Some(Date64),
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {

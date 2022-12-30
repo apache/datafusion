@@ -18,7 +18,9 @@
 //! Enforcement optimizer rules are used to make sure the plan's Distribution and Ordering
 //! requirements are met by inserting necessary [[RepartitionExec]] and [[SortExec]].
 //!
-use crate::config::OPT_TOP_DOWN_JOIN_KEY_REORDERING;
+use crate::config::{
+    ConfigOptions, OPT_TARGET_PARTITIONS, OPT_TOP_DOWN_JOIN_KEY_REORDERING,
+};
 use crate::error::Result;
 use crate::physical_optimizer::utils::{add_sort_above_child, ordering_satisfy};
 use crate::physical_optimizer::PhysicalOptimizerRule;
@@ -34,7 +36,6 @@ use crate::physical_plan::sorts::sort::SortOptions;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
-use crate::prelude::SessionConfig;
 use arrow::datatypes::SchemaRef;
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
@@ -69,11 +70,10 @@ impl PhysicalOptimizerRule for BasicEnforcement {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &SessionConfig,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_partitions = config.target_partitions();
+        let target_partitions = config.get_usize(OPT_TARGET_PARTITIONS).unwrap();
         let top_down_join_key_reordering = config
-            .config_options()
             .get_bool(OPT_TOP_DOWN_JOIN_KEY_REORDERING)
             .unwrap_or_default();
         let new_plan = if top_down_join_key_reordering {
@@ -1021,6 +1021,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering,
+                infinite_source: false,
             },
             None,
             None,
@@ -1135,10 +1136,12 @@ mod tests {
         ($EXPECTED_LINES: expr, $PLAN: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
+            let mut config = ConfigOptions::new();
+            config.set_usize(OPT_TARGET_PARTITIONS, 10);
+
             // run optimizer
             let optimizer = BasicEnforcement {};
-            let optimized = optimizer
-                .optimize($PLAN, &SessionConfig::new().with_target_partitions(10))?;
+            let optimized = optimizer.optimize($PLAN, &config)?;
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent().to_string();
@@ -1198,7 +1201,7 @@ mod tests {
         for join_type in join_types {
             let join = hash_join_exec(left.clone(), right.clone(), &join_on, &join_type);
             let join_plan =
-                format!("HashJoinExec: mode=Partitioned, join_type={}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"b1\", index: 1 }})]", join_type);
+                format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"b1\", index: 1 }})]");
 
             match join_type {
                 JoinType::Inner
@@ -1219,7 +1222,7 @@ mod tests {
                         &join_type,
                     );
                     let top_join_plan =
-                        format!("HashJoinExec: mode=Partitioned, join_type={}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"c\", index: 2 }})]", join_type);
+                        format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"c\", index: 2 }})]");
 
                     let expected = match join_type {
                         // Should include 3 RepartitionExecs
@@ -1271,9 +1274,9 @@ mod tests {
                         hash_join_exec(join, parquet_exec(), &top_join_on, &join_type);
                     let top_join_plan = match join_type {
                         JoinType::RightSemi | JoinType::RightAnti =>
-                            format!("HashJoinExec: mode=Partitioned, join_type={}, on=[(Column {{ name: \"b1\", index: 1 }}, Column {{ name: \"c\", index: 2 }})]", join_type),
+                            format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(Column {{ name: \"b1\", index: 1 }}, Column {{ name: \"c\", index: 2 }})]"),
                         _ =>
-                            format!("HashJoinExec: mode=Partitioned, join_type={}, on=[(Column {{ name: \"b1\", index: 6 }}, Column {{ name: \"c\", index: 2 }})]", join_type),
+                            format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(Column {{ name: \"b1\", index: 6 }}, Column {{ name: \"c\", index: 2 }})]"),
                     };
 
                     let expected = match join_type {
@@ -1906,7 +1909,7 @@ mod tests {
             let join =
                 sort_merge_join_exec(left.clone(), right.clone(), &join_on, &join_type);
             let join_plan =
-                format!("SortMergeJoin: join_type={}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"b1\", index: 1 }})]", join_type);
+                format!("SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"b1\", index: 1 }})]");
 
             // Top join on (a == c)
             let top_join_on = vec![(
@@ -1920,7 +1923,7 @@ mod tests {
                 &join_type,
             );
             let top_join_plan =
-                format!("SortMergeJoin: join_type={}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"c\", index: 2 }})]", join_type);
+                format!("SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"c\", index: 2 }})]");
 
             let expected = match join_type {
                 // Should include 3 RepartitionExecs 3 SortExecs
@@ -1974,7 +1977,7 @@ mod tests {
                         &join_type,
                     );
                     let top_join_plan =
-                        format!("SortMergeJoin: join_type={}, on=[(Column {{ name: \"b1\", index: 6 }}, Column {{ name: \"c\", index: 2 }})]", join_type);
+                        format!("SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"b1\", index: 6 }}, Column {{ name: \"c\", index: 2 }})]");
 
                     let expected = match join_type {
                         // Should include 3 RepartitionExecs and 3 SortExecs

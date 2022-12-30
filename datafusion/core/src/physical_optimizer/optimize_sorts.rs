@@ -25,6 +25,7 @@
 //! "  SortExec: [non_nullable_col@1 ASC]",
 //! in the physical plan. The first sort is unnecessary since its result is overwritten
 //! by another SortExec. Therefore, this rule removes it from the physical plan.
+use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
     add_sort_above_child, ordering_satisfy, ordering_satisfy_concrete,
@@ -34,7 +35,6 @@ use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
-use crate::prelude::SessionConfig;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{reverse_sort_options, DataFusionError};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
@@ -122,7 +122,7 @@ impl PhysicalOptimizerRule for OptimizeSorts {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &SessionConfig,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Execute a post-order traversal to adjust input key ordering:
         let plan_requirements = PlanWithCorrespondingSort::new(plan);
@@ -557,7 +557,7 @@ mod tests {
     #[tokio::test]
     async fn test_remove_unnecessary_sort() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -585,11 +585,10 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -599,8 +598,7 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }
@@ -608,7 +606,7 @@ mod tests {
     #[tokio::test]
     async fn test_remove_unnecessary_sort_window_multilayer() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -677,7 +675,7 @@ mod tests {
             vec![
                 "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
                 "  FilterExec: NOT non_nullable_col@1",
-                "    SortExec: [non_nullable_col@2 ASC NULLS LAST]",
+                "    SortExec: [non_nullable_col@1 ASC NULLS LAST]",
                 "      WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
                 "        SortExec: [non_nullable_col@1 DESC]",
                 "          MemoryExec: partitions=0, partition_sizes=[]",
@@ -686,11 +684,10 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -706,8 +703,7 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }
@@ -715,7 +711,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_required_sort() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -732,11 +728,10 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -751,8 +746,7 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }
@@ -760,7 +754,7 @@ mod tests {
     #[tokio::test]
     async fn test_remove_unnecessary_sort1() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -799,11 +793,10 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -818,8 +811,7 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }
@@ -827,7 +819,7 @@ mod tests {
     #[tokio::test]
     async fn test_change_wrong_sorting() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -861,11 +853,10 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -879,8 +870,7 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }

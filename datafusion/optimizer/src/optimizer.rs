@@ -35,7 +35,6 @@ use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
-use crate::subquery_filter_to_join::SubqueryFilterToJoin;
 use crate::type_coercion::TypeCoercion;
 use crate::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use chrono::{DateTime, Utc};
@@ -244,7 +243,6 @@ impl Optimizer {
             Arc::new(DecorrelateWhereExists::new()),
             Arc::new(DecorrelateWhereIn::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
-            Arc::new(SubqueryFilterToJoin::new()),
             // simplify expressions does not simplify expressions in subqueries, so we
             // run it again after running the optimizations that potentially converted
             // subqueries to joins
@@ -293,7 +291,7 @@ impl Optimizer {
         let mut new_plan = plan.clone();
         let mut i = 0;
         while i < config.max_passes() {
-            log_plan(&format!("Optimizer input (pass {})", i), &new_plan);
+            log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
             for rule in &self.rules {
                 if !config.rule_enabled(rule.name()) {
@@ -344,7 +342,7 @@ impl Optimizer {
                     }
                 }
             }
-            log_plan(&format!("Optimized plan (pass {})", i), &new_plan);
+            log_plan(&format!("Optimized plan (pass {i})"), &new_plan);
 
             // TODO this is an expensive way to see if the optimizer did anything and
             // it would be better to change the OptimizerRule trait to return an Option
@@ -533,9 +531,8 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let metadata = [("key".into(), format!("value {}", i))]
-                    .into_iter()
-                    .collect();
+                let metadata =
+                    [("key".into(), format!("value {i}"))].into_iter().collect();
 
                 let new_arrow_field = f.field().clone().with_metadata(metadata);
                 if let Some(qualifier) = f.qualifier() {

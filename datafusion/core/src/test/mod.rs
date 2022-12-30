@@ -96,7 +96,7 @@ pub fn partitioned_file_groups(
     file_type: FileType,
     file_compression_type: FileCompressionType,
 ) -> Result<Vec<Vec<PartitionedFile>>> {
-    let path = format!("{}/{}", path, filename);
+    let path = format!("{path}/{filename}");
 
     let tmp_dir = TempDir::new()?.into_path();
 
@@ -182,6 +182,7 @@ pub fn partitioned_csv_config(
         limit: None,
         table_partition_cols: vec![],
         output_ordering: None,
+        infinite_source: false,
     })
 }
 

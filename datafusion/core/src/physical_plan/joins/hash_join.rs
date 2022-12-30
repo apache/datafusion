@@ -309,6 +309,37 @@ impl ExecutionPlan for HashJoinExec {
         }
     }
 
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.    
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        let (left, right) = (children[0], children[1]);
+        // If left is unbounded, or right is unbounded with JoinType::Right,
+        // JoinType::Full, JoinType::RightAnti types.
+        let breaking = left
+            || (right
+                && matches!(
+                    self.join_type,
+                    JoinType::Left
+                        | JoinType::Full
+                        | JoinType::LeftAnti
+                        | JoinType::LeftSemi
+                ));
+
+        if breaking {
+            Err(DataFusionError::Plan(format!(
+                "Join Error: The join with cannot be executed with unbounded inputs. {}",
+                if left && right {
+                    "Currently, we do not support unbounded inputs on both sides."
+                } else {
+                    "Please consider a different type of join or sources."
+                }
+            )))
+        } else {
+            Ok(left || right)
+        }
+    }
+
     fn output_partitioning(&self) -> Partitioning {
         let left_columns_len = self.left.schema().fields.len();
         match self.mode {
@@ -1100,8 +1131,7 @@ fn equal_rows(
             other => {
                 // This is internal because we should have caught this before.
                 err = Some(Err(DataFusionError::Internal(format!(
-                    "Unsupported data type in hasher: {}",
-                    other
+                    "Unsupported data type in hasher: {other}"
                 ))));
                 false
             }
@@ -2977,8 +3007,7 @@ mod tests {
                 .to_string();
             assert!(
                 result_string.contains("bad data error"),
-                "actual: {}",
-                result_string
+                "actual: {result_string}"
             );
         }
     }
