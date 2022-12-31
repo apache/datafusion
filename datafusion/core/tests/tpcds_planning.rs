@@ -43,7 +43,6 @@ async fn tpcds_logical_q3() -> Result<()> {
     create_logical_plan(3).await
 }
 
-#[ignore] // thread 'q4' has overflowed its stack
 #[tokio::test]
 async fn tpcds_logical_q4() -> Result<()> {
     create_logical_plan(4).await
