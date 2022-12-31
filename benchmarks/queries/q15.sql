@@ -1,3 +1,5 @@
+-- SQLBench-H query 15 derived from TPC-H query 15 under the terms of the TPC Fair Use Policy.
+-- TPC-H queries are Copyright 1993-2022 Transaction Processing Performance Council.
 create view revenue0 (supplier_no, total_revenue) as
 	select
 		l_suppkey,
@@ -5,12 +7,10 @@ create view revenue0 (supplier_no, total_revenue) as
 	from
 		lineitem
 	where
-		l_shipdate >= date '1996-01-01'
-		and l_shipdate < date '1996-01-01' + interval '3' month
+		l_shipdate >= date '1996-08-01'
+		and l_shipdate < date '1996-08-01' + interval '3' month
 	group by
 		l_suppkey;
-
-
 select
 	s_suppkey,
 	s_name,
@@ -30,5 +30,4 @@ where
 	)
 order by
 	s_suppkey;
-
 drop view revenue0;
