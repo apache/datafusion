@@ -132,7 +132,7 @@ where
             if l.is_nan() || r.is_nan() {
                 assert!(l.is_nan() && r.is_nan());
             } else if (l - r).abs() > 2.0 * f64::EPSILON {
-                panic!("{} != {}", l, r)
+                panic!("{l} != {r}")
             }
         });
 }
@@ -187,7 +187,8 @@ fn create_join_context(
     let ctx = SessionContext::with_config(
         SessionConfig::new()
             .with_repartition_joins(repartition_joins)
-            .with_target_partitions(2),
+            .with_target_partitions(2)
+            .with_batch_size(4096),
     );
 
     let t1_schema = Arc::new(Schema::new(vec![
@@ -241,7 +242,8 @@ fn create_left_semi_anti_join_context_with_null_ids(
     let ctx = SessionContext::with_config(
         SessionConfig::new()
             .with_repartition_joins(repartition_joins)
-            .with_target_partitions(2),
+            .with_target_partitions(2)
+            .with_batch_size(4096),
     );
 
     let t1_schema = Arc::new(Schema::new(vec![
@@ -313,7 +315,8 @@ fn create_right_semi_anti_join_context_with_null_ids(
     let ctx = SessionContext::with_config(
         SessionConfig::new()
             .with_repartition_joins(repartition_joins)
-            .with_target_partitions(2),
+            .with_target_partitions(2)
+            .with_batch_size(4096),
     );
 
     let t1_schema = Arc::new(Schema::new(vec![
@@ -618,7 +621,8 @@ fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
     let ctx = SessionContext::with_config(
         SessionConfig::new()
             .set_bool(OPT_PREFER_HASH_JOIN, false)
-            .with_target_partitions(2),
+            .with_target_partitions(2)
+            .with_batch_size(4096),
     );
 
     let t1_schema = Schema::new(vec![
@@ -784,7 +788,7 @@ async fn register_tpch_csv(ctx: &SessionContext, table: &str) -> Result<()> {
 
     ctx.register_csv(
         table,
-        format!("tests/tpch-csv/{}.csv", table).as_str(),
+        format!("tests/tpch-csv/{table}.csv").as_str(),
         CsvReadOptions::new().schema(&schema),
     )
     .await?;
@@ -913,9 +917,8 @@ async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
     )
     STORED AS CSV
     WITH HEADER ROW
-    LOCATION '{}/csv/aggregate_test_100.csv'
-    ",
-            testdata
+    LOCATION '{testdata}/csv/aggregate_test_100.csv'
+    "
         ))
         .await
         .expect("Creating dataframe for CREATE EXTERNAL TABLE");
@@ -1003,7 +1006,7 @@ async fn register_aggregate_csv(ctx: &SessionContext) -> Result<()> {
     let schema = test_util::aggr_test_schema();
     ctx.register_csv(
         "aggregate_test_100",
-        &format!("{}/csv/aggregate_test_100.csv", testdata),
+        &format!("{testdata}/csv/aggregate_test_100.csv"),
         CsvReadOptions::new().schema(&schema),
     )
     .await?;
@@ -1095,7 +1098,7 @@ fn populate_csv_partitions(
 
     // generate a partitioned file
     for partition in 0..partition_count {
-        let filename = format!("partition-{}.{}", partition, file_extension);
+        let filename = format!("partition-{partition}.{file_extension}");
         let file_path = tmp_dir.path().join(filename);
         let mut file = File::create(file_path)?;
 
@@ -1201,7 +1204,7 @@ async fn register_alltypes_parquet(ctx: &SessionContext) {
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "alltypes_plain",
-        &format!("{}/alltypes_plain.parquet", testdata),
+        &format!("{testdata}/alltypes_plain.parquet"),
         ParquetReadOptions::default(),
     )
     .await
@@ -1376,7 +1379,7 @@ pub fn make_timestamps() -> RecordBatch {
     let names = ts_nanos
         .iter()
         .enumerate()
-        .map(|(i, _)| format!("Row {}", i))
+        .map(|(i, _)| format!("Row {i}"))
         .collect::<Vec<_>>();
 
     let arr_nanos = TimestampNanosecondArray::from(ts_nanos);
@@ -1469,7 +1472,7 @@ pub fn make_times() -> RecordBatch {
     let names = ts_nanos
         .iter()
         .enumerate()
-        .map(|(i, _)| format!("Row {}", i))
+        .map(|(i, _)| format!("Row {i}"))
         .collect::<Vec<_>>();
 
     let arr_nanos = Time64NanosecondArray::from(ts_nanos);

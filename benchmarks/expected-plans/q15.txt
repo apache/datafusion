@@ -1,7 +1,7 @@
 EmptyRelation
 Sort: supplier.s_suppkey ASC NULLS LAST
   Projection: supplier.s_suppkey, supplier.s_name, supplier.s_address, supplier.s_phone, revenue0.total_revenue
-    Inner Join: revenue0.total_revenue = __sq_1.__value
+    Inner Join: revenue0.total_revenue = __scalar_sq_1.__value
       Inner Join: supplier.s_suppkey = revenue0.supplier_no
         TableScan: supplier projection=[s_suppkey, s_name, s_address, s_phone]
         SubqueryAlias: revenue0
@@ -10,7 +10,7 @@ Sort: supplier.s_suppkey ASC NULLS LAST
               Aggregate: groupBy=[[lineitem.l_suppkey]], aggr=[[SUM(CAST(lineitem.l_extendedprice AS Decimal128(38, 4)) * CAST(Decimal128(Some(100),23,2) - CAST(lineitem.l_discount AS Decimal128(23, 2)) AS Decimal128(38, 4))) AS SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
                 Filter: lineitem.l_shipdate >= Date32("9496") AND lineitem.l_shipdate < Date32("9587")
                   TableScan: lineitem projection=[l_suppkey, l_extendedprice, l_discount, l_shipdate]
-      SubqueryAlias: __sq_1
+      SubqueryAlias: __scalar_sq_1
         Projection: MAX(revenue0.total_revenue) AS __value
           Aggregate: groupBy=[[]], aggr=[[MAX(revenue0.total_revenue)]]
             SubqueryAlias: revenue0

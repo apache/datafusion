@@ -922,8 +922,7 @@ mod tests {
 
         assert_eq!(
             evaluated_expr, expected_expr,
-            "Mismatch evaluating {}\n  Expected:{}\n  Got:{}",
-            input_expr, expected_expr, evaluated_expr
+            "Mismatch evaluating {input_expr}\n  Expected:{expected_expr}\n  Got:{evaluated_expr}"
         );
     }
 

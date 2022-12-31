@@ -117,8 +117,7 @@ impl ExecutionPlan for AnalyzeExec {
     ) -> Result<SendableRecordBatchStream> {
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "AnalyzeExec invalid partition. Expected 0, got {}",
-                partition
+                "AnalyzeExec invalid partition. Expected 0, got {partition}"
             )));
         }
 
@@ -126,8 +125,7 @@ impl ExecutionPlan for AnalyzeExec {
         let input_partitions = self.input.output_partitioning().partition_count();
         if input_partitions != 1 {
             return Err(DataFusionError::Internal(format!(
-                "AnalyzeExec invalid number of input partitions. Expected 1, got {}",
-                input_partitions
+                "AnalyzeExec invalid number of input partitions. Expected 1, got {input_partitions}"
             )));
         }
 

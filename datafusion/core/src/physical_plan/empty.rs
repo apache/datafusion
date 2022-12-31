@@ -76,7 +76,7 @@ impl EmptyExec {
                     (0..n_field)
                         .into_iter()
                         .map(|i| {
-                            Field::new(format!("placeholder_{}", i), DataType::Null, true)
+                            Field::new(format!("placeholder_{i}"), DataType::Null, true)
                         })
                         .collect(),
                 )),

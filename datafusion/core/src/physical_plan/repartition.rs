@@ -103,8 +103,7 @@ impl BatchPartitioner {
             },
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported repartitioning scheme {:?}",
-                    other
+                    "Unsupported repartitioning scheme {other:?}"
                 )))
             }
         };
@@ -776,8 +775,7 @@ mod tests {
         assert!(
             result_string
                 .contains("Unsupported repartitioning scheme UnknownPartitioning(1)"),
-            "actual: {}",
-            result_string
+            "actual: {result_string}"
         );
     }
 
@@ -803,8 +801,7 @@ mod tests {
             .to_string();
         assert!(
             result_string.contains("ErrorExec, unsurprisingly, errored in partition 0"),
-            "actual: {}",
-            result_string
+            "actual: {result_string}"
         );
     }
 
@@ -838,8 +835,7 @@ mod tests {
             .to_string();
         assert!(
             result_string.contains("bad data error"),
-            "actual: {}",
-            result_string
+            "actual: {result_string}"
         );
     }
 

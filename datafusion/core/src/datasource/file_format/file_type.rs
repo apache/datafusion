@@ -78,7 +78,7 @@ impl FromStr for FileCompressionType {
 
     fn from_str(s: &str) -> Result<Self> {
         let variant = CompressionTypeVariant::from_str(s).map_err(|_| {
-            DataFusionError::NotImplemented(format!("Unknown FileCompressionType: {}", s))
+            DataFusionError::NotImplemented(format!("Unknown FileCompressionType: {s}"))
         })?;
         Ok(Self { variant })
     }
@@ -208,8 +208,7 @@ impl FromStr for FileType {
             "CSV" => Ok(FileType::CSV),
             "JSON" | "NDJSON" => Ok(FileType::JSON),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unknown FileType: {}",
-                s
+                "Unknown FileType: {s}"
             ))),
         }
     }

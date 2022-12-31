@@ -336,7 +336,7 @@ pub fn with_new_children_if_necessary(
 ///   let plan_string = plan_string.replace(normalized.as_ref(), "WORKING_DIR");
 ///
 ///   assert_eq!("ProjectionExec: expr=[a@0 as a]\
-///              \n  CoalesceBatchesExec: target_batch_size=4096\
+///              \n  CoalesceBatchesExec: target_batch_size=8192\
 ///              \n    FilterExec: a@0 < 5\
 ///              \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
 ///              \n        CsvExec: files={1 group: [[WORKING_DIR/tests/example.csv]]}, has_header=true, limit=None, projection=[a]",

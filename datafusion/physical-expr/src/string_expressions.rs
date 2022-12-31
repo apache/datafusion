@@ -99,8 +99,7 @@ where
                 )?)))
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, name,
+                "Unsupported data type {other:?} for function {name}",
             ))),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -113,8 +112,7 @@ where
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, name,
+                "Unsupported data type {other:?} for function {name}",
             ))),
         },
     }
@@ -180,8 +178,7 @@ pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => Err(DataFusionError::Internal(format!(
-            "btrim was called with {} arguments. It requires at least 1 and at most 2.",
-            other
+            "btrim was called with {other} arguments. It requires at least 1 and at most 2."
         ))),
     }
 }
@@ -337,9 +334,9 @@ pub fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     } else {
                         char_vector.push(c.to_ascii_uppercase());
                     }
-                    previous_character_letter_or_number = ('A'..='Z').contains(&c)
-                        || ('a'..='z').contains(&c)
-                        || ('0'..='9').contains(&c);
+                    previous_character_letter_or_number = c.is_ascii_uppercase()
+                        || c.is_ascii_lowercase()
+                        || c.is_ascii_digit();
                 }
                 char_vector.iter().collect::<String>()
             })
@@ -388,8 +385,7 @@ pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => Err(DataFusionError::Internal(format!(
-            "ltrim was called with {} arguments. It requires at least 1 and at most 2.",
-            other
+            "ltrim was called with {other} arguments. It requires at least 1 and at most 2."
         ))),
     }
 }
@@ -465,8 +461,7 @@ pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => Err(DataFusionError::Internal(format!(
-            "rtrim was called with {} arguments. It requires at least 1 and at most 2.",
-            other
+            "rtrim was called with {other} arguments. It requires at least 1 and at most 2."
         ))),
     }
 }
@@ -533,13 +528,12 @@ where
         .map(|integer| {
             if let Some(value) = integer {
                 if let Some(value_usize) = value.to_usize() {
-                    Ok(Some(format!("{:x}", value_usize)))
+                    Ok(Some(format!("{value_usize:x}")))
                 } else if let Some(value_isize) = value.to_isize() {
-                    Ok(Some(format!("{:x}", value_isize)))
+                    Ok(Some(format!("{value_isize:x}")))
                 } else {
                     Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function to_hex",
-                        integer,
+                        "Unsupported data type {integer:?} for function to_hex",
                     )))
                 }
             } else {

@@ -105,7 +105,7 @@ impl SchedulerBuilder {
         let builder = ThreadPoolBuilder::new()
             .num_threads(num_threads)
             .panic_handler(|p| error!("{}", format_worker_panic(p)))
-            .thread_name(|idx| format!("df-worker-{}", idx));
+            .thread_name(|idx| format!("df-worker-{idx}"));
 
         Self { inner: builder }
     }
@@ -181,7 +181,7 @@ fn format_worker_panic(panic: Box<dyn std::any::Any + Send>) -> String {
         "UNKNOWN"
     };
 
-    format!("worker {} panicked with: {}", worker, message)
+    format!("worker {worker} panicked with: {message}")
 }
 
 /// Returns `true` if the current thread is a rayon worker thread
@@ -373,8 +373,7 @@ mod tests {
 
             assert_eq!(
                 expected, scheduled,
-                "\n\nexpected:\n\n{}\nactual:\n\n{}\n\n",
-                expected, scheduled
+                "\n\nexpected:\n\n{expected}\nactual:\n\n{scheduled}\n\n"
             );
         }
     }

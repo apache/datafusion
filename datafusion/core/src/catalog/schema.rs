@@ -108,8 +108,7 @@ impl SchemaProvider for MemorySchemaProvider {
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         if self.table_exist(name.as_str()) {
             return Err(DataFusionError::Execution(format!(
-                "The table {} already exists",
-                name
+                "The table {name} already exists"
             )));
         }
         Ok(self.tables.insert(name, table))
@@ -160,9 +159,9 @@ mod tests {
     async fn test_schema_register_listing_table() {
         let testdata = crate::test_util::parquet_test_data();
         let testdir = if testdata.starts_with('/') {
-            format!("file://{}", testdata)
+            format!("file://{testdata}")
         } else {
-            format!("file:///{}", testdata)
+            format!("file:///{testdata}")
         };
         let filename = if testdir.ends_with('/') {
             format!("{}{}", testdir, "alltypes_plain.parquet")
