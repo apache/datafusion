@@ -2293,21 +2293,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let fun = match trim_where {
-            Some(TrimWhereField::Leading) => {
-                BuiltinScalarFunction::Ltrim
-            }
-            Some(TrimWhereField::Trailing) => {
-                BuiltinScalarFunction::Rtrim
-            }
-            Some(TrimWhereField::Both) => {
-                BuiltinScalarFunction::Btrim
-            }
-            None => BuiltinScalarFunction::Trim
+            Some(TrimWhereField::Leading) => BuiltinScalarFunction::Ltrim,
+            Some(TrimWhereField::Trailing) => BuiltinScalarFunction::Rtrim,
+            Some(TrimWhereField::Both) => BuiltinScalarFunction::Btrim,
+            None => BuiltinScalarFunction::Trim,
         };
         let arg = self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
         let args = match trim_what {
             Some(to_trim) => {
-                let to_trim = self.sql_expr_to_logical_expr(*to_trim, schema, planner_context)?;
+                let to_trim =
+                    self.sql_expr_to_logical_expr(*to_trim, schema, planner_context)?;
                 vec![arg, to_trim]
             }
             None => vec![arg],
@@ -2322,12 +2317,27 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-                match self.sql_expr_to_logical_expr(*expr, schema, planner_context)? {
-                    Expr::AggregateFunction(expr::AggregateFunction {
-                        fun, args, distinct, ..
-                    }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new( fun, args, distinct, Some(Box::new(self.sql_expr_to_logical_expr(*filter, schema, planner_context)?)) ))),
-                    _ => Err(DataFusionError::Internal("AggregateExpressionWithFilter expression was not an AggregateFunction".to_string()))
-                }
+        match self.sql_expr_to_logical_expr(*expr, schema, planner_context)? {
+            Expr::AggregateFunction(expr::AggregateFunction {
+                fun,
+                args,
+                distinct,
+                ..
+            }) => Ok(Expr::AggregateFunction(expr::AggregateFunction::new(
+                fun,
+                args,
+                distinct,
+                Some(Box::new(self.sql_expr_to_logical_expr(
+                    *filter,
+                    schema,
+                    planner_context,
+                )?)),
+            ))),
+            _ => Err(DataFusionError::Internal(
+                "AggregateExpressionWithFilter expression was not an AggregateFunction"
+                    .to_string(),
+            )),
+        }
     }
 
     fn sql_identifier_to_expr(&self, id: Ident) -> Result<Expr> {
