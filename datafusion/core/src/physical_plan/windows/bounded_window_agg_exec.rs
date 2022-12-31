@@ -49,7 +49,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::physical_plan::common::combine_batches;
+use crate::physical_plan::common::merge_batches;
 use datafusion_physical_expr::window::{
     PartitionBatchState, PartitionBatches, PartitionKey, PartitionWindowAggStates,
     WindowAggState, WindowState,
@@ -386,15 +386,11 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
                 if let Some(partition_batch_state) =
                     self.partition_buffers.get_mut(&partition_row)
                 {
-                    partition_batch_state.record_batch = combine_batches(
-                        &[&partition_batch_state.record_batch, &partition_batch],
+                    partition_batch_state.record_batch = merge_batches(
+                        &partition_batch_state.record_batch,
+                        &partition_batch,
                         self.input.schema(),
-                    )?
-                    .ok_or_else(|| {
-                        DataFusionError::Execution(
-                            "Should contain at least one entry".to_string(),
-                        )
-                    })?;
+                    )?;
                 } else {
                     let partition_batch_state = PartitionBatchState {
                         record_batch: partition_batch,
@@ -414,12 +410,7 @@ impl PartitionByHandler for SortedPartitionByBoundedWindowStream {
         self.input_buffer = if self.input_buffer.num_rows() == 0 {
             record_batch
         } else {
-            combine_batches(&[&self.input_buffer, &record_batch], self.input.schema())?
-                .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "Should contain at least one entry".to_string(),
-                    )
-                })?
+            merge_batches(&self.input_buffer, &record_batch, self.input.schema())?
         };
 
         Ok(())
