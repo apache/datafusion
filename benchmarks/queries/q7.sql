@@ -1,5 +1,6 @@
--- SQLBench-H query 7 derived from TPC-H query 7 under the terms of the TPC Fair Use Policy.
+-- DataFusion benchmark query 7 derived from TPC-H query 7 under the terms of the TPC Fair Use Policy.
 -- TPC-H queries are Copyright 1993-2022 Transaction Processing Performance Council.
+-- This query was generated at scale factor 1
 select
 	supp_nation,
 	cust_nation,

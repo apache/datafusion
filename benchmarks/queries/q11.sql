@@ -1,5 +1,6 @@
--- SQLBench-H query 11 derived from TPC-H query 11 under the terms of the TPC Fair Use Policy.
+-- DataFusion benchmark query 11 derived from TPC-H query 11 under the terms of the TPC Fair Use Policy.
 -- TPC-H queries are Copyright 1993-2022 Transaction Processing Performance Council.
+-- This query was generated at scale factor 1
 select
 	ps_partkey,
 	sum(ps_supplycost * ps_availqty) as value

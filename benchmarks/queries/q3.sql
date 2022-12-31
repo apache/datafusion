@@ -1,5 +1,6 @@
--- SQLBench-H query 3 derived from TPC-H query 3 under the terms of the TPC Fair Use Policy.
+-- DataFusion benchmark query 3 derived from TPC-H query 3 under the terms of the TPC Fair Use Policy.
 -- TPC-H queries are Copyright 1993-2022 Transaction Processing Performance Council.
+-- This query was generated at scale factor 1
 select
 	l_orderkey,
 	sum(l_extendedprice * (1 - l_discount)) as revenue,

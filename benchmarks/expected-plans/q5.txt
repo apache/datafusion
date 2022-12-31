@@ -12,5 +12,5 @@ Sort: revenue DESC NULLS FIRST
               TableScan: lineitem projection=[l_orderkey, l_suppkey, l_extendedprice, l_discount]
             TableScan: supplier projection=[s_suppkey, s_nationkey]
           TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
-        Filter: region.r_name = Utf8("ASIA")
+        Filter: region.r_name = Utf8("AFRICA")
           TableScan: region projection=[r_regionkey, r_name]
