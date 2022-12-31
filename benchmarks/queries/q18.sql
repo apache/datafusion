@@ -1,6 +1,6 @@
--- DataFusion benchmark query 18 derived from TPC-H query 18 under the terms of the TPC Fair Use Policy.
+-- SQLBench-H query 18 derived from TPC-H query 18 under the terms of the TPC Fair Use Policy.
 -- TPC-H queries are Copyright 1993-2022 Transaction Processing Performance Council.
--- This query was generated at scale factor 1
+-- This query was generated at scale factor 1.
 select
 	c_name,
 	c_custkey,

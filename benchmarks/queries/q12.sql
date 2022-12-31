@@ -1,6 +1,6 @@
--- DataFusion benchmark query 12 derived from TPC-H query 12 under the terms of the TPC Fair Use Policy.
+-- SQLBench-H query 12 derived from TPC-H query 12 under the terms of the TPC Fair Use Policy.
 -- TPC-H queries are Copyright 1993-2022 Transaction Processing Performance Council.
--- This query was generated at scale factor 1
+-- This query was generated at scale factor 1.
 select
 	l_shipmode,
 	sum(case
