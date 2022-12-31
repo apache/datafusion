@@ -165,7 +165,11 @@ impl<'a> DFParser<'a> {
     }
 
     /// Report an unexpected token
-    fn expected<T>(&self, expected: &str, found: TokenWithLocation) -> Result<T, ParserError> {
+    fn expected<T>(
+        &self,
+        expected: &str,
+        found: TokenWithLocation,
+    ) -> Result<T, ParserError> {
         parser_err!(format!("Expected {expected}, found: {found}"))
     }
 
