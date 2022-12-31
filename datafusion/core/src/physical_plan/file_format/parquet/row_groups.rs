@@ -663,13 +663,9 @@ mod tests {
             &schema_descr,
             vec![ParquetStatistics::byte_array(
                 // 5.00
-                Some(ByteArray::from(
-                    500i128.to_be_bytes().to_vec(),
-                )),
+                Some(ByteArray::from(500i128.to_be_bytes().to_vec())),
                 // 80.00
-                Some(ByteArray::from(
-                    8000i128.to_be_bytes().to_vec(),
-                )),
+                Some(ByteArray::from(8000i128.to_be_bytes().to_vec())),
                 None,
                 0,
                 false,
@@ -679,13 +675,9 @@ mod tests {
             &schema_descr,
             vec![ParquetStatistics::byte_array(
                 // 5.00
-                Some(ByteArray::from(
-                    500i128.to_be_bytes().to_vec(),
-                )),
+                Some(ByteArray::from(500i128.to_be_bytes().to_vec())),
                 // 200.00
-                Some(ByteArray::from(
-                    20000i128.to_be_bytes().to_vec(),
-                )),
+                Some(ByteArray::from(20000i128.to_be_bytes().to_vec())),
                 None,
                 0,
                 false,
