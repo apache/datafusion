@@ -2332,34 +2332,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
 
-            SQLExpr::Rollup(exprs) => {
-                let args: Result<Vec<_>> = exprs.into_iter().map(|v| {
-                    if v.len() != 1 {
-                        Err(DataFusionError::Internal("Tuple expressions are not supported for Rollup expressions".to_string()))
-                    } else {
-                        self.sql_expr_to_logical_expr(v[0].clone(), schema, planner_context)
-                    }
-                }).collect();
-                Ok(Expr::GroupingSet(GroupingSet::Rollup(args?)))
-            }
-
-            SQLExpr::Cube(exprs) => {
-                let args: Result<Vec<_>> = exprs.into_iter().map(|v| {
-                    if v.len() != 1 {
-                        Err(DataFusionError::Internal("Tuple expressions not are supported for Cube expressions".to_string()))
-                    } else {
-                        self.sql_expr_to_logical_expr(v[0].clone(), schema, planner_context)
-                    }
-                }).collect();
-                Ok(Expr::GroupingSet(GroupingSet::Cube(args?)))
-            }
-
-            SQLExpr::GroupingSets(exprs) => {
-                let args: Result<Vec<Vec<_>>> = exprs.into_iter().map(|v| {
-                    v.into_iter().map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context)).collect()
-                }).collect();
-                Ok(Expr::GroupingSet(GroupingSet::GroupingSets(args?)))
-            }
+            SQLExpr::Rollup(exprs) => self.sql_rollup_to_expr(exprs, schema, planner_context),
+            SQLExpr::Cube(exprs) => self.sql_cube_to_expr(exprs,schema, planner_context),
+            SQLExpr::GroupingSets(exprs) => self.sql_grouping_sets_to_expr(exprs, schema, planner_context),
 
             SQLExpr::Floor { expr, field: _field } => {
                 let fun = BuiltinScalarFunction::Floor;
@@ -2399,6 +2374,67 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .ok_or_else(|| {
                 DataFusionError::Plan(format!("There is no window function named {name}"))
             })
+    }
+
+    fn sql_rollup_to_expr(
+        &self,
+        exprs: Vec<Vec<SQLExpr>>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let args: Result<Vec<_>> = exprs
+            .into_iter()
+            .map(|v| {
+                if v.len() != 1 {
+                    Err(DataFusionError::Internal(
+                        "Tuple expressions are not supported for Rollup expressions"
+                            .to_string(),
+                    ))
+                } else {
+                    self.sql_expr_to_logical_expr(v[0].clone(), schema, planner_context)
+                }
+            })
+            .collect();
+        Ok(Expr::GroupingSet(GroupingSet::Rollup(args?)))
+    }
+
+    fn sql_cube_to_expr(
+        &self,
+        exprs: Vec<Vec<SQLExpr>>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let args: Result<Vec<_>> = exprs
+            .into_iter()
+            .map(|v| {
+                if v.len() != 1 {
+                    Err(DataFusionError::Internal(
+                        "Tuple expressions not are supported for Cube expressions"
+                            .to_string(),
+                    ))
+                } else {
+                    self.sql_expr_to_logical_expr(v[0].clone(), schema, planner_context)
+                }
+            })
+            .collect();
+        Ok(Expr::GroupingSet(GroupingSet::Cube(args?)))
+    }
+
+    fn sql_grouping_sets_to_expr(
+        &self,
+        exprs: Vec<Vec<SQLExpr>>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let args: Result<Vec<Vec<_>>> = exprs
+            .into_iter()
+            .map(|v| {
+                v.into_iter()
+                    .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
+                    .collect()
+            })
+            .collect();
+        Ok(Expr::GroupingSet(GroupingSet::GroupingSets(args?)))
     }
 
     fn parse_exists_subquery(
