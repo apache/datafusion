@@ -1724,6 +1724,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    fn parse_value(&self, value: Value, param_data_types: &[DataType]) -> Result<Expr> {
+        match value {
+            Value::Number(n, _) => self.parse_sql_number(&n),
+            Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => Ok(lit(s)),
+            Value::Null => Ok(Expr::Literal(ScalarValue::Null)),
+            Value::Boolean(n) => Ok(lit(n)),
+            Value::Placeholder(param) => {
+                Self::create_placeholder_expr(param, param_data_types)
+            }
+            _ => Err(DataFusionError::Plan(format!(
+                "Unsupported Value '{:?}'",
+                value,
+            ))),
+        }
+    }
+
     fn sql_values_to_plan(
         &self,
         values: SQLValues,
@@ -1741,16 +1757,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|row| {
                 row.into_iter()
                     .map(|v| match v {
-                        SQLExpr::Value(Value::Number(n, _)) => self.parse_sql_number(&n),
-                        SQLExpr::Value(
-                            Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
-                        ) => Ok(lit(s)),
-                        SQLExpr::Value(Value::Null) => {
-                            Ok(Expr::Literal(ScalarValue::Null))
-                        }
-                        SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
-                        SQLExpr::Value(Value::Placeholder(param)) => {
-                            Self::create_placeholder_expr(param, param_data_types)
+                        SQLExpr::Value(value) => {
+                            self.parse_value(value, param_data_types)
                         }
                         SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(
                             op,
@@ -1833,11 +1841,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         match sql {
-            SQLExpr::Value(Value::Number(n, _)) => self.parse_sql_number(&n),
-            SQLExpr::Value(Value::SingleQuotedString(ref s) | Value::DoubleQuotedString(ref s)) => Ok(lit(s.clone())),
-            SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
-            SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Null)),
-            SQLExpr::Value(Value::Placeholder(param)) => Self::create_placeholder_expr(param, &planner_context.prepare_param_data_types),
+            SQLExpr::Value(value) => {
+                self.parse_value(value, &planner_context.prepare_param_data_types)
+            }
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::DatePart,
                 args: vec![
