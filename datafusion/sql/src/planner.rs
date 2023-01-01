@@ -1840,6 +1840,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
+        // Minimize stack space required in debug builds to plan
+        // deeply nested binary operators by special casing binary op.
+        //
+        // see https://github.com/apache/arrow-datafusion/issues/4065
+        match sql {
+            SQLExpr::BinaryOp {
+                left,
+                op,
+                right,
+            }  => self.parse_sql_binary_op(*left, op, *right, schema, planner_context),
+            _ => self.sql_expr_to_logical_expr_general(sql, schema, planner_context)
+        }
+    }
+
+    fn sql_expr_to_logical_expr_general(
+        &self,
+        sql: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
         match sql {
             SQLExpr::Value(value) => {
                 self.parse_value(value, &planner_context.prepare_param_data_types)
