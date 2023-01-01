@@ -1966,13 +1966,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 list,
                 negated,
-            } => self.sql_in_list_to_expr(expr, list, negated, schema, planner_context),
+            } => self.sql_in_list_to_expr(*expr, list, negated, schema, planner_context),
 
-            SQLExpr::Like { negated, expr, pattern, escape_char } => self.sql_like_to_expr(negated, expr, pattern, escape_char, schema, planner_context),
+            SQLExpr::Like { negated, expr, pattern, escape_char } => self.sql_like_to_expr(negated, *expr, *pattern, escape_char, schema, planner_context),
 
-            SQLExpr::ILike { negated, expr, pattern, escape_char } =>  self.sql_ilike_to_expr(negated, expr, pattern, escape_char, schema, planner_context),
+            SQLExpr::ILike { negated, expr, pattern, escape_char } =>  self.sql_ilike_to_expr(negated, *expr, *pattern, escape_char, schema, planner_context),
 
-            SQLExpr::SimilarTo { negated, expr, pattern, escape_char } => self.sql_similarto_to_expr(negated, expr, pattern, escape_char, schema, planner_context),
+            SQLExpr::SimilarTo { negated, expr, pattern, escape_char } => self.sql_similarto_to_expr(negated, *expr, *pattern, escape_char, schema, planner_context),
 
 
             SQLExpr::BinaryOp {
@@ -2038,11 +2038,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ))
             }
 
-            SQLExpr::Trim { expr, trim_where, trim_what } => self.sql_trim_to_expr(expr, trim_where, trim_what, schema, planner_context),
+            SQLExpr::Trim { expr, trim_where, trim_what } => self.sql_trim_to_expr(*expr, trim_where, trim_what, schema, planner_context),
 
-            SQLExpr::AggregateExpressionWithFilter { expr, filter } => self.sql_agg_with_filter_to_expr(expr, filter, schema, planner_context),
+            SQLExpr::AggregateExpressionWithFilter { expr, filter } => self.sql_agg_with_filter_to_expr(*expr, *filter, schema, planner_context),
 
             SQLExpr::Function(function) => self.sql_function_to_expr(function, schema, planner_context),
+
+            SQLExpr::Rollup(exprs) => self.sql_rollup_to_expr(exprs, schema, planner_context),
+            SQLExpr::Cube(exprs) => self.sql_cube_to_expr(exprs,schema, planner_context),
+            SQLExpr::GroupingSets(exprs) => self.sql_grouping_sets_to_expr(exprs, schema, planner_context),
 
             SQLExpr::Floor { expr, field: _field } => {
                 let fun = BuiltinScalarFunction::Floor;
@@ -2085,15 +2089,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             normalize_ident(function.name.0[0].clone())
         };
-
-        // first, check SQL reserved words
-        if name == "rollup" {
-            let args = self.function_args_to_expr(function.args, schema)?;
-            return Ok(Expr::GroupingSet(GroupingSet::Rollup(args)));
-        } else if name == "cube" {
-            let args = self.function_args_to_expr(function.args, schema)?;
-            return Ok(Expr::GroupingSet(GroupingSet::Cube(args)));
-        }
 
         // next, scalar built-in
         if let Ok(fun) = BuiltinScalarFunction::from_str(&name) {
@@ -2190,7 +2185,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn sql_in_list_to_expr(
         &self,
-        expr: Box<SQLExpr>,
+        expr: SQLExpr,
         list: Vec<SQLExpr>,
         negated: bool,
         schema: &DFSchema,
@@ -2203,7 +2198,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         Ok(Expr::InList {
             expr: Box::new(self.sql_expr_to_logical_expr(
-                *expr,
+                expr,
                 schema,
                 planner_context,
             )?),
@@ -2215,13 +2210,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn sql_like_to_expr(
         &self,
         negated: bool,
-        expr: Box<SQLExpr>,
-        pattern: Box<SQLExpr>,
+        expr: SQLExpr,
+        pattern: SQLExpr,
         escape_char: Option<char>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let pattern = self.sql_expr_to_logical_expr(*pattern, schema, planner_context)?;
+        let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
             return Err(DataFusionError::Plan(
@@ -2230,7 +2225,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
         Ok(Expr::Like(Like::new(
             negated,
-            Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
+            Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
             Box::new(pattern),
             escape_char,
         )))
@@ -2239,13 +2234,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn sql_ilike_to_expr(
         &self,
         negated: bool,
-        expr: Box<SQLExpr>,
-        pattern: Box<SQLExpr>,
+        expr: SQLExpr,
+        pattern: SQLExpr,
         escape_char: Option<char>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let pattern = self.sql_expr_to_logical_expr(*pattern, schema, planner_context)?;
+        let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
             return Err(DataFusionError::Plan(
@@ -2254,7 +2249,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
         Ok(Expr::ILike(Like::new(
             negated,
-            Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
+            Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
             Box::new(pattern),
             escape_char,
         )))
@@ -2263,13 +2258,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn sql_similarto_to_expr(
         &self,
         negated: bool,
-        expr: Box<SQLExpr>,
-        pattern: Box<SQLExpr>,
+        expr: SQLExpr,
+        pattern: SQLExpr,
         escape_char: Option<char>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let pattern = self.sql_expr_to_logical_expr(*pattern, schema, planner_context)?;
+        let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
         if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
             return Err(DataFusionError::Plan(
@@ -2278,7 +2273,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
         Ok(Expr::SimilarTo(Like::new(
             negated,
-            Box::new(self.sql_expr_to_logical_expr(*expr, schema, planner_context)?),
+            Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
             Box::new(pattern),
             escape_char,
         )))
@@ -2286,7 +2281,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn sql_trim_to_expr(
         &self,
-        expr: Box<SQLExpr>,
+        expr: SQLExpr,
         trim_where: Option<TrimWhereField>,
         trim_what: Option<Box<SQLExpr>>,
         schema: &DFSchema,
@@ -2298,7 +2293,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Some(TrimWhereField::Both) => BuiltinScalarFunction::Btrim,
             None => BuiltinScalarFunction::Trim,
         };
-        let arg = self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
+        let arg = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
         let args = match trim_what {
             Some(to_trim) => {
                 let to_trim =
@@ -2312,12 +2307,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn sql_agg_with_filter_to_expr(
         &self,
-        expr: Box<SQLExpr>,
-        filter: Box<SQLExpr>,
+        expr: SQLExpr,
+        filter: SQLExpr,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        match self.sql_expr_to_logical_expr(*expr, schema, planner_context)? {
+        match self.sql_expr_to_logical_expr(expr, schema, planner_context)? {
             Expr::AggregateFunction(expr::AggregateFunction {
                 fun,
                 args,
@@ -2328,7 +2323,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 args,
                 distinct,
                 Some(Box::new(self.sql_expr_to_logical_expr(
-                    *filter,
+                    filter,
                     schema,
                     planner_context,
                 )?)),
@@ -2481,6 +2476,67 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .ok_or_else(|| {
                 DataFusionError::Plan(format!("There is no window function named {name}"))
             })
+    }
+
+    fn sql_rollup_to_expr(
+        &self,
+        exprs: Vec<Vec<SQLExpr>>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let args: Result<Vec<_>> = exprs
+            .into_iter()
+            .map(|v| {
+                if v.len() != 1 {
+                    Err(DataFusionError::Internal(
+                        "Tuple expressions are not supported for Rollup expressions"
+                            .to_string(),
+                    ))
+                } else {
+                    self.sql_expr_to_logical_expr(v[0].clone(), schema, planner_context)
+                }
+            })
+            .collect();
+        Ok(Expr::GroupingSet(GroupingSet::Rollup(args?)))
+    }
+
+    fn sql_cube_to_expr(
+        &self,
+        exprs: Vec<Vec<SQLExpr>>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let args: Result<Vec<_>> = exprs
+            .into_iter()
+            .map(|v| {
+                if v.len() != 1 {
+                    Err(DataFusionError::Internal(
+                        "Tuple expressions not are supported for Cube expressions"
+                            .to_string(),
+                    ))
+                } else {
+                    self.sql_expr_to_logical_expr(v[0].clone(), schema, planner_context)
+                }
+            })
+            .collect();
+        Ok(Expr::GroupingSet(GroupingSet::Cube(args?)))
+    }
+
+    fn sql_grouping_sets_to_expr(
+        &self,
+        exprs: Vec<Vec<SQLExpr>>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let args: Result<Vec<Vec<_>>> = exprs
+            .into_iter()
+            .map(|v| {
+                v.into_iter()
+                    .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
+                    .collect()
+            })
+            .collect();
+        Ok(Expr::GroupingSet(GroupingSet::GroupingSets(args?)))
     }
 
     fn parse_exists_subquery(
@@ -2730,6 +2786,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Identifier(i) => i.to_string(),
             SQLExpr::Value(v) => match v {
                 Value::SingleQuotedString(s) => s.to_string(),
+                Value::DollarQuotedString(s) => s.to_string(),
                 Value::Number(_, _) | Value::Boolean(_) => v.to_string(),
                 Value::DoubleQuotedString(_)
                 | Value::UnQuotedString(_)
@@ -5760,11 +5817,12 @@ mod tests {
         quick_test(sql, expected);
     }
 
-    #[ignore] // see https://github.com/apache/arrow-datafusion/issues/2469
     #[test]
     fn aggregate_with_grouping_sets() {
         let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
-        let expected = "TBD";
+        let expected = "Projection: person.id, person.state, person.age, COUNT(UInt8(1))\
+        \n  Aggregate: groupBy=[[person.id, GROUPING SETS ((person.state), (person.state, person.age), (person.id, person.state))]], aggr=[[COUNT(UInt8(1))]]\
+        \n    TableScan: person";
         quick_test(sql, expected);
     }
 
