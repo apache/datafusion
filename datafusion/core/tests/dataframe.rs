@@ -17,7 +17,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{
-    array::{Int32Array, StringArray},
+    array::{Int32Array, StringArray, UInt32Array},
     record_batch::RecordBatch,
 };
 use datafusion::from_slice::FromSlice;
@@ -30,8 +30,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::JoinType;
 use datafusion_expr::expr::{GroupingSet, Sort};
-use datafusion_expr::{avg, count, lit, sum};
-use datafusion_expr::{col, Expr};
+use datafusion_expr::{avg, col, count, lit, sum, Expr, ExprSchemable};
 
 #[tokio::test]
 async fn join() -> Result<()> {
@@ -352,6 +351,62 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn join_with_alias_filter() -> Result<()> {
+    let join_ctx = create_join_context()?;
+    let t1 = join_ctx.table("t1")?;
+    let t2 = join_ctx.table("t2")?;
+    let t1_schema = t1.schema().clone();
+    let t2_schema = t2.schema().clone();
+
+    // filter: t1.a + CAST(Int64(1), UInt32) = t2.a + CAST(Int64(2), UInt32) as t1.a + 1 = t2.a + 2
+    let filter = Expr::eq(
+        col("t1.a") + lit(3i64).cast_to(&DataType::UInt32, &t1_schema)?,
+        col("t2.a") + lit(1i32).cast_to(&DataType::UInt32, &t2_schema)?,
+    )
+    .alias("t1.b + 1 = t2.a + 2");
+
+    let df = t1
+        .join(t2, JoinType::Inner, &[], &[], Some(filter))?
+        .select(vec![
+            col("t1.a"),
+            col("t2.a"),
+            col("t1.b"),
+            col("t1.c"),
+            col("t2.b"),
+            col("t2.c"),
+        ])?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+
+    let expected = vec![
+        "Projection: t1.a, t2.a, t1.b, t1.c, t2.b, t2.c [a:UInt32, a:UInt32, b:Utf8, c:Int32, b:Utf8, c:Int32]",
+        "  Inner Join: t1.a + UInt32(3) = t2.a + UInt32(1) [a:UInt32, b:Utf8, c:Int32, a:UInt32, b:Utf8, c:Int32]",
+        "    TableScan: t1 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
+        "    TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
+    ];
+
+    let formatted = optimized_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let results = df.collect().await?;
+    let expected: Vec<&str> = vec![
+        "+----+----+---+----+---+---+",
+        "| a  | a  | b | c  | b | c |",
+        "+----+----+---+----+---+---+",
+        "| 11 | 13 | c | 30 | c | 3 |",
+        "| 1  | 3  | a | 10 | a | 1 |",
+        "+----+----+---+----+---+---+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
 fn create_test_table() -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
@@ -387,4 +442,43 @@ async fn aggregates_table(ctx: &SessionContext) -> Result<DataFrame> {
         CsvReadOptions::default(),
     )
     .await
+}
+
+fn create_join_context() -> Result<SessionContext> {
+    let t1 = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::UInt32, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Int32, false),
+    ]));
+    let t2 = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::UInt32, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Int32, false),
+    ]));
+
+    // define data.
+    let batch1 = RecordBatch::try_new(
+        t1,
+        vec![
+            Arc::new(UInt32Array::from_slice([1, 10, 11, 100])),
+            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from_slice([10, 20, 30, 40])),
+        ],
+    )?;
+    // define data.
+    let batch2 = RecordBatch::try_new(
+        t2,
+        vec![
+            Arc::new(UInt32Array::from_slice([3, 10, 13, 100])),
+            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from_slice([1, 2, 3, 4])),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("t1", batch1)?;
+    ctx.register_batch("t2", batch2)?;
+
+    Ok(ctx)
 }
