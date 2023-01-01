@@ -23,12 +23,12 @@ use arrow::{
 use datafusion::from_slice::FromSlice;
 use std::sync::Arc;
 
-use datafusion::assert_batches_eq;
 use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::JoinType;
+use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::{avg, col, count, lit, sum, Expr, ExprSchemable};
 
@@ -402,7 +402,7 @@ async fn join_with_alias_filter() -> Result<()> {
         "+----+----+---+----+---+---+",
     ];
 
-    assert_batches_eq!(expected, &results);
+    assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
 }
