@@ -851,7 +851,7 @@ async fn tpcds_physical_q63() -> Result<()> {
     create_physical_plan(63).await
 }
 
-#[ignore] // thread 'q64' has overflowed its stack]
+#[ignore] // thread 'q64' has overflowed its stack
 #[tokio::test]
 async fn tpcds_physical_q64() -> Result<()> {
     create_physical_plan(64).await
