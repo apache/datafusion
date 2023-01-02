@@ -170,17 +170,6 @@ impl fmt::Debug for WindowFn {
     }
 }
 
-impl Clone for WindowFn {
-    fn clone(&self) -> Self {
-        match self {
-            WindowFn::Builtin(builtin) => WindowFn::Builtin(builtin.clone_dyn().unwrap()),
-            WindowFn::Aggregate(aggregate) => {
-                WindowFn::Aggregate(aggregate.clone_dyn().unwrap())
-            }
-        }
-    }
-}
-
 /// State for RANK(percent_rank, rank, dense_rank)
 /// builtin window function
 #[derive(Debug, Clone, Default)]
@@ -218,7 +207,7 @@ pub enum BuiltinWindowState {
     #[default]
     Default,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum WindowFunctionState {
     /// Different Aggregate functions may have different state definitions
     /// In [Accumulator] trait, [fn state(&self) -> Result<Vec<ScalarValue>>] implementation
@@ -228,7 +217,7 @@ pub enum WindowFunctionState {
     BuiltinWindowState(BuiltinWindowState),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct WindowAggState {
     /// The range that we calculate the window function
     pub window_frame_range: Range<usize>,
@@ -248,7 +237,7 @@ pub struct WindowAggState {
 }
 
 /// State for each unique partition determined according to PARTITION BY column(s)
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PartitionBatchState {
     /// The record_batch belonging to current partition
     pub record_batch: RecordBatch,
@@ -261,7 +250,7 @@ pub struct PartitionBatchState {
 /// PartitionKey would consist of unique [a,b] pairs
 pub type PartitionKey = Vec<ScalarValue>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct WindowState {
     pub state: WindowAggState,
     pub window_fn: WindowFn,

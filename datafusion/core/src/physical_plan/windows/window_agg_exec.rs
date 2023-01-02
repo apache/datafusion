@@ -278,13 +278,9 @@ fn create_schema(
     let mut fields = Vec::with_capacity(input_schema.fields().len() + window_expr.len());
     fields.extend_from_slice(input_schema.fields());
     // append results to the schema
-    window_expr
-        .iter()
-        .map(|e| {
-            fields.push(e.field()?);
-            Ok(())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    for expr in window_expr {
+        fields.push(expr.field()?);
+    }
     Ok(Schema::new(fields))
 }
 

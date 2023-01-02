@@ -89,10 +89,4 @@ pub trait PartitionEvaluator: Debug + Send + Sync {
             "evaluate_inside_range is not implemented by default".into(),
         ))
     }
-
-    fn clone_dyn(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        Err(DataFusionError::NotImplemented(
-            "clone_dyn is not implemented by default for this evaluator".into(),
-        ))
-    }
 }

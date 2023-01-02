@@ -85,10 +85,4 @@ pub trait Accumulator: Send + Sync + Debug {
     /// Allocated means that for internal containers such as `Vec`, the `capacity` should be used
     /// not the `len`
     fn size(&self) -> usize;
-
-    fn clone_dyn(&self) -> Result<Box<dyn Accumulator>> {
-        Err(DataFusionError::NotImplemented(
-            "clone_dyn is not implemented by default for this accumulator".into(),
-        ))
-    }
 }
