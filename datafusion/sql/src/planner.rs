@@ -1840,6 +1840,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
+        // Workaround for https://github.com/apache/arrow-datafusion/issues/4065
+        //
+        // Minimize stack space required in debug builds to plan
+        // deeply nested binary operators by keeping the stack space
+        // needed for sql_expr_to_logical_expr minimal for BinaryOp
+        //
+        // The reason this reduces stack size in debug builds is
+        // explained in the "Technical Backstory" heading of
+        // https://github.com/apache/arrow-datafusion/pull/1047
+        //
+        // A likely better way to support deeply nested expressions
+        // would be to avoid recursion all together and use an
+        // iterative algorithm.
+        match sql {
+            SQLExpr::BinaryOp { left, op, right } => {
+                self.parse_sql_binary_op(*left, op, *right, schema, planner_context)
+            }
+            // since this function requires more space per frame
+            // avoid calling it for binary ops
+            _ => self.sql_expr_to_logical_expr_internal(sql, schema, planner_context),
+        }
+    }
+
+    /// Internal implementation. Use
+    /// [`Self::sql_expr_to_logical_expr`] to plan exprs.
+    fn sql_expr_to_logical_expr_internal(
+        &self,
+        sql: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
         match sql {
             SQLExpr::Value(value) => {
                 self.parse_value(value, &planner_context.prepare_param_data_types)
@@ -1976,10 +2007,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
 
             SQLExpr::BinaryOp {
-                left,
-                op,
-                right,
-            } => self.parse_sql_binary_op(*left, op, *right, schema, planner_context),
+                ..
+            } => {
+                Err(DataFusionError::Internal(
+                    "binary_op should be handled by sql_expr_to_logical_expr.".to_string()
+                ))
+            }
+
 
             #[cfg(feature = "unicode_expressions")]
             SQLExpr::Substring {
