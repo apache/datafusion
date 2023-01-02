@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Enforcement optimizer rules are used to make sure the plan's Distribution and Ordering
-//! requirements are met by inserting necessary [[RepartitionExec]] and [[SortExec]].
+//! Enforcement optimizer rules are used to make sure the plan's Distribution
+//! requirements are met by inserting necessary [[RepartitionExec]].
 //!
 use crate::config::{
     ConfigOptions, OPT_TARGET_PARTITIONS, OPT_TOP_DOWN_JOIN_KEY_REORDERING,
 };
 use crate::error::Result;
-use crate::physical_optimizer::utils::{add_sort_above_child, ordering_satisfy};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -48,7 +47,7 @@ use datafusion_physical_expr::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// BasicEnforcement rule, it ensures the Distribution and Ordering requirements are met
+/// EnforceDistribution rule, it ensures the Distribution requirements are met
 /// in the strictest way. It might add additional [[RepartitionExec]] to the plan tree
 /// and give a non-optimal plan, but it can avoid the possible data skew in joins.
 ///
@@ -57,16 +56,16 @@ use std::sync::Arc;
 ///
 /// This rule only chooses the exactly match and satisfies the Distribution(a, b, c) by a HashPartition(a, b, c).
 #[derive(Default)]
-pub struct BasicEnforcement {}
+pub struct EnforceDistribution {}
 
-impl BasicEnforcement {
+impl EnforceDistribution {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl PhysicalOptimizerRule for BasicEnforcement {
+impl PhysicalOptimizerRule for EnforceDistribution {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -93,16 +92,13 @@ impl PhysicalOptimizerRule for BasicEnforcement {
                 } else {
                     plan
                 };
-                Ok(Some(ensure_distribution_and_ordering(
-                    adjusted,
-                    target_partitions,
-                )?))
+                Ok(Some(ensure_distribution(adjusted, target_partitions)?))
             }
         })
     }
 
     fn name(&self) -> &str {
-        "BasicEnforcement"
+        "EnforceDistribution"
     }
 
     fn schema_check(&self) -> bool {
@@ -836,7 +832,7 @@ fn new_join_conditions(
 /// Within this function, it checks whether we need to add additional plan operators
 /// of data exchanging and data ordering to satisfy the required distribution and ordering.
 /// And we should avoid to manually add plan operators of data exchanging and data ordering in other places
-fn ensure_distribution_and_ordering(
+fn ensure_distribution(
     plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
     target_partitions: usize,
 ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
@@ -845,13 +841,11 @@ fn ensure_distribution_and_ordering(
     }
 
     let required_input_distributions = plan.required_input_distribution();
-    let required_input_orderings = plan.required_input_ordering();
     let children: Vec<Arc<dyn ExecutionPlan>> = plan.children();
     assert_eq!(children.len(), required_input_distributions.len());
-    assert_eq!(children.len(), required_input_orderings.len());
 
     // Add RepartitionExec to guarantee output partitioning
-    let children = children
+    let new_children: Result<Vec<Arc<dyn ExecutionPlan>>> = children
         .into_iter()
         .zip(required_input_distributions.into_iter())
         .map(|(child, required)| {
@@ -874,24 +868,8 @@ fn ensure_distribution_and_ordering(
                 };
                 new_child
             }
-        });
-
-    // Add local SortExec to guarantee output ordering within each partition
-    let new_children: Result<Vec<Arc<dyn ExecutionPlan>>> = children
-        .zip(required_input_orderings.into_iter())
-        .map(|(child_result, required)| {
-            let child = child_result?;
-            if ordering_satisfy(child.output_ordering(), required, || {
-                child.equivalence_properties()
-            }) {
-                Ok(child)
-            } else {
-                let sort_expr = required.unwrap().to_vec();
-                add_sort_above_child(&child, sort_expr)
-            }
         })
         .collect();
-
     with_new_children_if_necessary(plan, new_children?)
 }
 
@@ -983,6 +961,7 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::physical_optimizer::sort_enforcement::EnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -1140,8 +1119,10 @@ mod tests {
             config.set_usize(OPT_TARGET_PARTITIONS, 10);
 
             // run optimizer
-            let optimizer = BasicEnforcement {};
+            let optimizer = EnforceDistribution {};
             let optimized = optimizer.optimize($PLAN, &config)?;
+            let optimizer = EnforceSorting {};
+            let optimized = optimizer.optimize(optimized, &config)?;
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent().to_string();
@@ -1660,7 +1641,7 @@ mod tests {
                 Column::new_with_schema("c1", &right.schema()).unwrap(),
             ),
         ];
-        let bottom_left_join = ensure_distribution_and_ordering(
+        let bottom_left_join = ensure_distribution(
             hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
             10,
         )?;
@@ -1690,7 +1671,7 @@ mod tests {
                 Column::new_with_schema("a1", &right.schema()).unwrap(),
             ),
         ];
-        let bottom_right_join = ensure_distribution_and_ordering(
+        let bottom_right_join = ensure_distribution(
             hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
             10,
         )?;
@@ -1779,7 +1760,7 @@ mod tests {
                 Column::new_with_schema("b1", &right.schema()).unwrap(),
             ),
         ];
-        let bottom_left_join = ensure_distribution_and_ordering(
+        let bottom_left_join = ensure_distribution(
             hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
             10,
         )?;
@@ -1809,7 +1790,7 @@ mod tests {
                 Column::new_with_schema("a1", &right.schema()).unwrap(),
             ),
         ];
-        let bottom_right_join = ensure_distribution_and_ordering(
+        let bottom_right_join = ensure_distribution(
             hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
             10,
         )?;

@@ -77,7 +77,7 @@ use crate::config::{
     OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
 };
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
-use crate::physical_optimizer::enforcement::BasicEnforcement;
+use crate::physical_optimizer::enforcement::EnforceDistribution;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
@@ -100,9 +100,9 @@ use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::memory_pool::MemoryPool;
 use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
-use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
+use crate::physical_optimizer::sort_enforcement::EnforceSorting;
 use uuid::Uuid;
 
 use super::options::{
@@ -1562,12 +1562,12 @@ impl SessionState {
         // It's for adding essential repartition and local sorting operator to satisfy the
         // required distribution and local sort.
         // Please make sure that the whole plan tree is determined.
-        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
+        physical_optimizers.push(Arc::new(EnforceDistribution::new()));
         // `BasicEnforcement` stage conservatively inserts `SortExec`s to satisfy ordering requirements.
         // However, a deeper analysis may sometimes reveal that such a `SortExec` is actually unnecessary.
         // These cases typically arise when we have reversible `WindowAggExec`s or deep subqueries. The
         // rule below performs this analysis and removes unnecessary `SortExec`s.
-        physical_optimizers.push(Arc::new(OptimizeSorts::new()));
+        physical_optimizers.push(Arc::new(EnforceSorting::new()));
         // It will not influence the distribution and ordering of the whole plan tree.
         // Therefore, to avoid influencing other rules, it should be run at last.
         if config.coalesce_batches() {
