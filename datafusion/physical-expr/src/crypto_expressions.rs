@@ -123,7 +123,7 @@ impl DigestAlgorithm {
             Self::Blake3 => ScalarValue::Binary(value.map(|v| {
                 let mut digest = Blake3::default();
                 digest.update(v);
-                digest.finalize().as_bytes().to_vec()
+                Blake3::finalize(&digest).as_bytes().to_vec()
             })),
         })
     }
@@ -149,7 +149,7 @@ impl DigestAlgorithm {
                         opt.map(|x| {
                             let mut digest = Blake3::default();
                             digest.update(x);
-                            digest.finalize().as_bytes().to_vec()
+                            Blake3::finalize(&digest).as_bytes().to_vec()
                         })
                     })
                     .collect();
@@ -180,7 +180,7 @@ impl DigestAlgorithm {
                         opt.map(|x| {
                             let mut digest = Blake3::default();
                             digest.update(x.as_bytes());
-                            digest.finalize().as_bytes().to_vec()
+                            Blake3::finalize(&digest).as_bytes().to_vec()
                         })
                     })
                     .collect();
