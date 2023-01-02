@@ -21,7 +21,7 @@ use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     expr::{Between, BinaryExpr},
     expr_fn::{and, concat_ws, or},
-    lit, BuiltinScalarFunction, Expr, Operator,
+    lit, BuiltinScalarFunction, Expr, Like, Operator,
 };
 
 pub static POWS_OF_TEN: [i128; 38] = [
@@ -231,6 +231,20 @@ pub fn negate_clause(expr: Expr) -> Expr {
             !between.negated,
             between.low,
             between.high,
+        )),
+        // not (A like B) ===> A not like B
+        Expr::Like(like) => Expr::Like(Like::new(
+            !like.negated,
+            like.expr,
+            like.pattern,
+            like.escape_char,
+        )),
+        // not (A ilike B) ===> A not ilike B
+        Expr::ILike(like) => Expr::ILike(Like::new(
+            !like.negated,
+            like.expr,
+            like.pattern,
+            like.escape_char,
         )),
         // use not clause
         _ => Expr::Not(Box::new(expr)),

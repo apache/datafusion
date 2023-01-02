@@ -1274,7 +1274,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1323,6 +1323,8 @@ pub mod physical_expr_node {
         DateTimeIntervalExpr(
             ::prost::alloc::boxed::Box<super::PhysicalDateTimeIntervalExprNode>,
         ),
+        #[prost(message, tag = "18")]
+        LikeExpr(::prost::alloc::boxed::Box<super::PhysicalLikeExprNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1402,6 +1404,17 @@ pub struct PhysicalDateTimeIntervalExprNode {
     pub r: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(string, tag = "3")]
     pub op: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalLikeExprNode {
+    #[prost(bool, tag = "1")]
+    pub negated: bool,
+    #[prost(bool, tag = "2")]
+    pub case_insensitive: bool,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "4")]
+    pub pattern: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalSortExprNode {
