@@ -26,6 +26,7 @@ use crate::datasource::{empty::EmptyTable, provider_as_source, TableProvider};
 use crate::execution::context::SessionState;
 use crate::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::ExecutionPlan;
+use crate::prelude::{CsvReadOptions, SessionContext};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::DataFusionError;
@@ -382,4 +383,44 @@ mod tests {
         let res = parquet_test_data();
         assert!(PathBuf::from(res).is_dir());
     }
+}
+/// It creates unbounded sorted files for tests
+pub async fn test_create_unbounded_sorted_file(
+    ctx: &SessionContext,
+    file_path: PathBuf,
+    table_name: &str,
+) -> datafusion_common::Result<()> {
+    // Register table
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("a1", DataType::UInt32, false),
+        Field::new("a2", DataType::UInt32, false),
+    ]));
+    // The sort order is specified
+    let file_sort_order = [datafusion_expr::col("a1")]
+        .into_iter()
+        .map(|e| {
+            let ascending = true;
+            let nulls_first = false;
+            e.sort(ascending, nulls_first)
+        })
+        .collect::<Vec<_>>();
+    // Mark infinite and provide schema
+    let fifo_options = CsvReadOptions::new()
+        .schema(right_schema.as_ref())
+        .has_header(false)
+        .mark_infinite(true);
+    // Get listing options
+    let options_sort = fifo_options
+        .to_listing_options(ctx.copied_config().target_partitions())
+        .with_file_sort_order(Some(file_sort_order));
+    // Register table
+    ctx.register_listing_table(
+        table_name,
+        file_path.as_os_str().to_str().unwrap(),
+        options_sort.clone(),
+        Some(right_schema),
+        None,
+    )
+    .await?;
+    Ok(())
 }

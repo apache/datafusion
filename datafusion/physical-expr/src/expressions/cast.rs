@@ -38,11 +38,11 @@ pub const DEFAULT_DATAFUSION_CAST_OPTIONS: CastOptions = CastOptions { safe: fal
 #[derive(Debug)]
 pub struct CastExpr {
     /// The expression to cast
-    expr: Arc<dyn PhysicalExpr>,
+    pub expr: Arc<dyn PhysicalExpr>,
     /// The data type to cast to
-    cast_type: DataType,
+    pub cast_type: DataType,
     /// Cast options
-    cast_options: CastOptions,
+    pub cast_options: CastOptions,
 }
 
 impl CastExpr {
@@ -67,6 +67,10 @@ impl CastExpr {
     /// The data type to cast to
     pub fn cast_type(&self) -> &DataType {
         &self.cast_type
+    }
+    /// The data type to cast to
+    pub fn cast_options(&self) -> &CastOptions {
+        &self.cast_options
     }
 }
 

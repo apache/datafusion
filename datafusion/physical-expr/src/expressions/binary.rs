@@ -81,9 +81,9 @@ use datafusion_expr::{ColumnarValue, Operator};
 /// Binary expression
 #[derive(Debug)]
 pub struct BinaryExpr {
-    left: Arc<dyn PhysicalExpr>,
-    op: Operator,
-    right: Arc<dyn PhysicalExpr>,
+    pub left: Arc<dyn PhysicalExpr>,
+    pub op: Operator,
+    pub right: Arc<dyn PhysicalExpr>,
 }
 
 impl BinaryExpr {

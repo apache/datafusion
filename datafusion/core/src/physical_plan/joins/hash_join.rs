@@ -18,50 +18,38 @@
 //! Defines the join plan for executing partitions in parallel and then joining the results
 //! into a set of partitions.
 
-use ahash::RandomState;
-
-use arrow::{
-    array::{
-        ArrayData, ArrayRef, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        DictionaryArray, LargeStringArray, PrimitiveArray, Time32MillisecondArray,
-        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
-        UInt32BufferBuilder, UInt64BufferBuilder,
-    },
-    datatypes::{
-        Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
-        UInt8Type,
-    },
-};
-use smallvec::{smallvec, SmallVec};
+use std::fmt;
 use std::sync::Arc;
+use std::task::Poll;
 use std::{any::Any, usize};
 use std::{time::Instant, vec};
 
-use futures::{ready, Stream, StreamExt, TryStreamExt};
+use ahash::RandomState;
 
-use arrow::array::Array;
-use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 
-use arrow::array::{
-    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
-};
-
-use datafusion_common::cast::{as_dictionary_array, as_string_array};
-
+use futures::{ready, Stream, StreamExt, TryStreamExt};
 use hashbrown::raw::RawTable;
+use log::debug;
 
+use crate::arrow::array::BooleanBufferBuilder;
+
+use crate::error::{DataFusionError, Result};
+use crate::execution::context::TaskContext;
+use crate::logical_expr::JoinType;
+use crate::physical_plan::joins::hash_join_utils;
+use crate::physical_plan::joins::hash_join_utils::JoinHashMap;
+use crate::physical_plan::joins::utils::{
+    adjust_indices_by_join_type, build_batch_from_indices,
+    get_final_indices_from_bit_map, need_produce_result_in_final, JoinSide,
+};
 use crate::physical_plan::{
     coalesce_batches::concat_batches,
     coalesce_partitions::CoalescePartitionsExec,
     expressions::Column,
     expressions::PhysicalSortExpr,
-    hash_utils::create_hashes,
     joins::utils::{
         adjust_right_output_partitioning, build_join_schema, check_join_is_valid,
         combine_join_equivalence_properties, estimate_join_statistics,
@@ -72,44 +60,10 @@ use crate::physical_plan::{
     PhysicalExpr, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use crate::error::{DataFusionError, Result};
-use crate::logical_expr::JoinType;
-
-use crate::arrow::array::BooleanBufferBuilder;
-use crate::arrow::datatypes::TimeUnit;
-use crate::execution::context::TaskContext;
-
 use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
 };
-use crate::physical_plan::joins::utils::{
-    adjust_indices_by_join_type, apply_join_filter_to_indices, build_batch_from_indices,
-    get_final_indices_from_bit_map, need_produce_result_in_final,
-};
-use log::debug;
-use std::fmt;
-use std::task::Poll;
-
-// Maps a `u64` hash value based on the left ["on" values] to a list of indices with this key's value.
-//
-// Note that the `u64` keys are not stored in the hashmap (hence the `()` as key), but are only used
-// to put the indices in a certain bucket.
-// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the left side,
-// we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
-// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
-// As the key is a hash value, we need to check possible hash collisions in the probe stage
-// During this stage it might be the case that a row is contained the same hashmap value,
-// but the values don't match. Those are checked in the [equal_rows] macro
-// TODO: speed up collision check and move away from using a hashbrown HashMap
-// https://github.com/apache/arrow-datafusion/issues/50
-struct JoinHashMap(RawTable<(u64, SmallVec<[u64; 1]>)>);
-
-impl fmt::Debug for JoinHashMap {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-        Ok(())
-    }
-}
 
 type JoinLeftData = (JoinHashMap, RecordBatch);
 
@@ -529,7 +483,7 @@ async fn collect_left_input(
     for batch in batches.iter() {
         hashes_buffer.clear();
         hashes_buffer.resize(batch.num_rows(), 0);
-        update_hash(
+        hash_join_utils::update_hash(
             &on_left,
             batch,
             &mut hashmap,
@@ -584,7 +538,7 @@ async fn partitioned_left_input(
     for batch in batches.iter() {
         hashes_buffer.clear();
         hashes_buffer.resize(batch.num_rows(), 0);
-        update_hash(
+        hash_join_utils::update_hash(
             &on_left,
             batch,
             &mut hashmap,
@@ -606,43 +560,6 @@ async fn partitioned_left_input(
     );
 
     Ok((hashmap, single_batch))
-}
-
-/// Updates `hash` with new entries from [RecordBatch] evaluated against the expressions `on`,
-/// assuming that the [RecordBatch] corresponds to the `index`th
-fn update_hash(
-    on: &[Column],
-    batch: &RecordBatch,
-    hash_map: &mut JoinHashMap,
-    offset: usize,
-    random_state: &RandomState,
-    hashes_buffer: &mut Vec<u64>,
-) -> Result<()> {
-    // evaluate the keys
-    let keys_values = on
-        .iter()
-        .map(|c| Ok(c.evaluate(batch)?.into_array(batch.num_rows())))
-        .collect::<Result<Vec<_>>>()?;
-
-    // calculate the hash values
-    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
-
-    // insert hashes to key of the hashmap
-    for (row, hash_value) in hash_values.iter().enumerate() {
-        let item = hash_map
-            .0
-            .get_mut(*hash_value, |(hash, _)| *hash_value == *hash);
-        if let Some((_, indices)) = item {
-            indices.push((row + offset) as u64);
-        } else {
-            hash_map.0.insert(
-                *hash_value,
-                (*hash_value, smallvec![(row + offset) as u64]),
-                |(hash, _)| *hash,
-            );
-        }
-    }
-    Ok(())
 }
 
 /// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
@@ -681,465 +598,6 @@ impl RecordBatchStream for HashJoinStream {
     }
 }
 
-// Get left and right indices which is satisfies the on condition (include equal_conditon and filter_in_join) in the Join
-#[allow(clippy::too_many_arguments)]
-fn build_join_indices(
-    batch: &RecordBatch,
-    left_data: &JoinLeftData,
-    on_left: &[Column],
-    on_right: &[Column],
-    filter: Option<&JoinFilter>,
-    random_state: &RandomState,
-    null_equals_null: &bool,
-) -> Result<(UInt64Array, UInt32Array)> {
-    // Get the indices which is satisfies the equal join condition, like `left.a1 = right.a2`
-    let (left_indices, right_indices) = build_equal_condition_join_indices(
-        left_data,
-        batch,
-        on_left,
-        on_right,
-        random_state,
-        null_equals_null,
-    )?;
-    if let Some(filter) = filter {
-        // Filter the indices which is satisfies the non-equal join condition, like `left.b1 = 10`
-        apply_join_filter_to_indices(
-            &left_data.1,
-            batch,
-            left_indices,
-            right_indices,
-            filter,
-        )
-    } else {
-        Ok((left_indices, right_indices))
-    }
-}
-
-// Returns the index of equal condition join result: left_indices and right_indices
-// On LEFT.b1 = RIGHT.b2
-// LEFT Table:
-//  a1  b1  c1
-//  1   1   10
-//  3   3   30
-//  5   5   50
-//  7   7   70
-//  9   8   90
-//  11  8   110
-// 13   10  130
-// RIGHT Table:
-//  a2   b2  c2
-//  2    2   20
-//  4    4   40
-//  6    6   60
-//  8    8   80
-// 10   10  100
-// 12   10  120
-// The result is
-// "+----+----+-----+----+----+-----+",
-// "| a1 | b1 | c1  | a2 | b2 | c2  |",
-// "+----+----+-----+----+----+-----+",
-// "| 11 | 8  | 110 | 8  | 8  | 80  |",
-// "| 13 | 10 | 130 | 10 | 10 | 100 |",
-// "| 13 | 10 | 130 | 12 | 10 | 120 |",
-// "| 9  | 8  | 90  | 8  | 8  | 80  |",
-// "+----+----+-----+----+----+-----+"
-// And the result of left and right indices
-// left indices:  5, 6, 6, 4
-// right indices: 3, 4, 5, 3
-fn build_equal_condition_join_indices(
-    left_data: &JoinLeftData,
-    right: &RecordBatch,
-    left_on: &[Column],
-    right_on: &[Column],
-    random_state: &RandomState,
-    null_equals_null: &bool,
-) -> Result<(UInt64Array, UInt32Array)> {
-    let keys_values = right_on
-        .iter()
-        .map(|c| Ok(c.evaluate(right)?.into_array(right.num_rows())))
-        .collect::<Result<Vec<_>>>()?;
-    let left_join_values = left_on
-        .iter()
-        .map(|c| Ok(c.evaluate(&left_data.1)?.into_array(left_data.1.num_rows())))
-        .collect::<Result<Vec<_>>>()?;
-    let hashes_buffer = &mut vec![0; keys_values[0].len()];
-    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
-    let left = &left_data.0;
-    // Using a buffer builder to avoid slower normal builder
-    let mut left_indices = UInt64BufferBuilder::new(0);
-    let mut right_indices = UInt32BufferBuilder::new(0);
-
-    // Visit all of the right rows
-    for (row, hash_value) in hash_values.iter().enumerate() {
-        // Get the hash and find it in the build index
-
-        // For every item on the left and right we check if it matches
-        // This possibly contains rows with hash collisions,
-        // So we have to check here whether rows are equal or not
-        if let Some((_, indices)) =
-            left.0.get(*hash_value, |(hash, _)| *hash_value == *hash)
-        {
-            for &i in indices {
-                // Check hash collisions
-                if equal_rows(
-                    i as usize,
-                    row,
-                    &left_join_values,
-                    &keys_values,
-                    *null_equals_null,
-                )? {
-                    left_indices.append(i);
-                    right_indices.append(row as u32);
-                }
-            }
-        }
-    }
-    let left = ArrayData::builder(DataType::UInt64)
-        .len(left_indices.len())
-        .add_buffer(left_indices.finish())
-        .build()
-        .unwrap();
-    let right = ArrayData::builder(DataType::UInt32)
-        .len(right_indices.len())
-        .add_buffer(right_indices.finish())
-        .build()
-        .unwrap();
-
-    Ok((
-        PrimitiveArray::<UInt64Type>::from(left),
-        PrimitiveArray::<UInt32Type>::from(right),
-    ))
-}
-
-macro_rules! equal_rows_elem {
-    ($array_type:ident, $l: ident, $r: ident, $left: ident, $right: ident, $null_equals_null: ident) => {{
-        let left_array = $l.as_any().downcast_ref::<$array_type>().unwrap();
-        let right_array = $r.as_any().downcast_ref::<$array_type>().unwrap();
-
-        match (left_array.is_null($left), right_array.is_null($right)) {
-            (false, false) => left_array.value($left) == right_array.value($right),
-            (true, true) => $null_equals_null,
-            _ => false,
-        }
-    }};
-}
-
-macro_rules! equal_rows_elem_with_string_dict {
-    ($key_array_type:ident, $l: ident, $r: ident, $left: ident, $right: ident, $null_equals_null: ident) => {{
-        let left_array: &DictionaryArray<$key_array_type> =
-            as_dictionary_array::<$key_array_type>($l).unwrap();
-        let right_array: &DictionaryArray<$key_array_type> =
-            as_dictionary_array::<$key_array_type>($r).unwrap();
-
-        let (left_values, left_values_index) = {
-            let keys_col = left_array.keys();
-            if keys_col.is_valid($left) {
-                let values_index = keys_col
-                    .value($left)
-                    .to_usize()
-                    .expect("Can not convert index to usize in dictionary");
-
-                (
-                    as_string_array(left_array.values()).unwrap(),
-                    Some(values_index),
-                )
-            } else {
-                (as_string_array(left_array.values()).unwrap(), None)
-            }
-        };
-        let (right_values, right_values_index) = {
-            let keys_col = right_array.keys();
-            if keys_col.is_valid($right) {
-                let values_index = keys_col
-                    .value($right)
-                    .to_usize()
-                    .expect("Can not convert index to usize in dictionary");
-
-                (
-                    as_string_array(right_array.values()).unwrap(),
-                    Some(values_index),
-                )
-            } else {
-                (as_string_array(right_array.values()).unwrap(), None)
-            }
-        };
-
-        match (left_values_index, right_values_index) {
-            (Some(left_values_index), Some(right_values_index)) => {
-                left_values.value(left_values_index)
-                    == right_values.value(right_values_index)
-            }
-            (None, None) => $null_equals_null,
-            _ => false,
-        }
-    }};
-}
-
-/// Left and right row have equal values
-/// If more data types are supported here, please also add the data types in can_hash function
-/// to generate hash join logical plan.
-fn equal_rows(
-    left: usize,
-    right: usize,
-    left_arrays: &[ArrayRef],
-    right_arrays: &[ArrayRef],
-    null_equals_null: bool,
-) -> Result<bool> {
-    let mut err = None;
-    let res = left_arrays
-        .iter()
-        .zip(right_arrays)
-        .all(|(l, r)| match l.data_type() {
-            DataType::Null => {
-                // lhs and rhs are both `DataType::Null`, so the equal result
-                // is dependent on `null_equals_null`
-                null_equals_null
-            }
-            DataType::Boolean => {
-                equal_rows_elem!(BooleanArray, l, r, left, right, null_equals_null)
-            }
-            DataType::Int8 => {
-                equal_rows_elem!(Int8Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Int16 => {
-                equal_rows_elem!(Int16Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Int32 => {
-                equal_rows_elem!(Int32Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Int64 => {
-                equal_rows_elem!(Int64Array, l, r, left, right, null_equals_null)
-            }
-            DataType::UInt8 => {
-                equal_rows_elem!(UInt8Array, l, r, left, right, null_equals_null)
-            }
-            DataType::UInt16 => {
-                equal_rows_elem!(UInt16Array, l, r, left, right, null_equals_null)
-            }
-            DataType::UInt32 => {
-                equal_rows_elem!(UInt32Array, l, r, left, right, null_equals_null)
-            }
-            DataType::UInt64 => {
-                equal_rows_elem!(UInt64Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Float32 => {
-                equal_rows_elem!(Float32Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Float64 => {
-                equal_rows_elem!(Float64Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Date32 => {
-                equal_rows_elem!(Date32Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Date64 => {
-                equal_rows_elem!(Date64Array, l, r, left, right, null_equals_null)
-            }
-            DataType::Time32(time_unit) => match time_unit {
-                TimeUnit::Second => {
-                    equal_rows_elem!(Time32SecondArray, l, r, left, right, null_equals_null)
-                }
-                TimeUnit::Millisecond => {
-                    equal_rows_elem!(Time32MillisecondArray, l, r, left, right, null_equals_null)
-                }
-                _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
-                    false
-                }
-            }
-            DataType::Time64(time_unit) => match time_unit {
-                TimeUnit::Microsecond => {
-                    equal_rows_elem!(Time64MicrosecondArray, l, r, left, right, null_equals_null)
-                }
-                TimeUnit::Nanosecond => {
-                    equal_rows_elem!(Time64NanosecondArray, l, r, left, right, null_equals_null)
-                }
-                _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
-                    false
-                }
-            }
-            DataType::Timestamp(time_unit, None) => match time_unit {
-                TimeUnit::Second => {
-                    equal_rows_elem!(
-                        TimestampSecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-                TimeUnit::Millisecond => {
-                    equal_rows_elem!(
-                        TimestampMillisecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-                TimeUnit::Microsecond => {
-                    equal_rows_elem!(
-                        TimestampMicrosecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-                TimeUnit::Nanosecond => {
-                    equal_rows_elem!(
-                        TimestampNanosecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-            },
-            DataType::Utf8 => {
-                equal_rows_elem!(StringArray, l, r, left, right, null_equals_null)
-            }
-            DataType::LargeUtf8 => {
-                equal_rows_elem!(LargeStringArray, l, r, left, right, null_equals_null)
-            }
-            DataType::Decimal128(_, lscale) => match r.data_type() {
-                DataType::Decimal128(_, rscale) => {
-                    if lscale == rscale {
-                        equal_rows_elem!(
-                            Decimal128Array,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                    } else {
-                        err = Some(Err(DataFusionError::Internal(
-                            "Inconsistent Decimal data type in hasher, the scale should be same".to_string(),
-                        )));
-                        false
-                    }
-                }
-                _ => {
-                    err = Some(Err(DataFusionError::Internal(
-                        "Unsupported data type in hasher".to_string(),
-                    )));
-                    false
-                }
-            },
-            DataType::Dictionary(key_type, value_type)
-            if *value_type.as_ref() == DataType::Utf8 =>
-                {
-                    match key_type.as_ref() {
-                        DataType::Int8 => {
-                            equal_rows_elem_with_string_dict!(
-                            Int8Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::Int16 => {
-                            equal_rows_elem_with_string_dict!(
-                            Int16Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::Int32 => {
-                            equal_rows_elem_with_string_dict!(
-                            Int32Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::Int64 => {
-                            equal_rows_elem_with_string_dict!(
-                            Int64Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::UInt8 => {
-                            equal_rows_elem_with_string_dict!(
-                            UInt8Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::UInt16 => {
-                            equal_rows_elem_with_string_dict!(
-                            UInt16Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::UInt32 => {
-                            equal_rows_elem_with_string_dict!(
-                            UInt32Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        DataType::UInt64 => {
-                            equal_rows_elem_with_string_dict!(
-                            UInt64Type,
-                            l,
-                            r,
-                            left,
-                            right,
-                            null_equals_null
-                        )
-                        }
-                        _ => {
-                            // should not happen
-                            err = Some(Err(DataFusionError::Internal(
-                                "Unsupported data type in hasher".to_string(),
-                            )));
-                            false
-                        }
-                    }
-                }
-            other => {
-                // This is internal because we should have caught this before.
-                err = Some(Err(DataFusionError::Internal(format!(
-                    "Unsupported data type in hasher: {other}"
-                ))));
-                false
-            }
-        });
-
-    err.unwrap_or(Ok(res))
-}
-
 impl HashJoinStream {
     /// Separate implementation function that unpins the [`HashJoinStream`] so
     /// that partial borrows work correctly
@@ -1169,7 +627,7 @@ impl HashJoinStream {
                 BooleanBufferBuilder::new(0)
             }
         });
-
+        let mut hashes_buffer = vec![];
         self.right
             .poll_next_unpin(cx)
             .map(|maybe_batch| match maybe_batch {
@@ -1180,14 +638,18 @@ impl HashJoinStream {
                     let timer = self.join_metrics.probe_time.timer();
 
                     // get the matched two indices for the on condition
-                    let left_right_indices = build_join_indices(
+                    let left_right_indices = hash_join_utils::build_join_indices(
                         &batch,
-                        left_data,
+                        &left_data.0,
+                        &left_data.1,
                         &self.on_left,
                         &self.on_right,
                         self.filter.as_ref(),
                         &self.random_state,
                         &self.null_equals_null,
+                        &mut hashes_buffer,
+                        None,
+                        JoinSide::Left,
                     );
 
                     let result = match left_right_indices {
@@ -1215,6 +677,7 @@ impl HashJoinStream {
                                 left_side,
                                 right_side,
                                 &self.column_indices,
+                                JoinSide::Left,
                             );
                             self.join_metrics.output_batches.add(1);
                             self.join_metrics.output_rows.add(batch.num_rows());
@@ -1249,6 +712,7 @@ impl HashJoinStream {
                             left_side,
                             right_side,
                             &self.column_indices,
+                            JoinSide::Left,
                         );
 
                         if let Ok(ref batch) = result {
@@ -1284,27 +748,31 @@ impl Stream for HashJoinStream {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use super::*;
     use crate::physical_expr::expressions::BinaryExpr;
+    use crate::physical_plan::joins::hash_join_utils::build_equal_condition_join_indices;
+    use crate::physical_plan::joins::utils::JoinSide;
+    use crate::prelude::SessionContext;
     use crate::{
         assert_batches_sorted_eq,
         physical_plan::{
-            common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
+            common, expressions::Column, hash_utils::create_hashes, memory::MemoryExec,
+            repartition::RepartitionExec,
         },
         test::exec::MockExec,
         test::{build_table_i32, columns},
     };
     use arrow::array::UInt32Builder;
     use arrow::array::UInt64Builder;
-    use arrow::datatypes::Field;
+    use arrow::array::{ArrayRef, Date32Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
     use arrow::error::ArrowError;
-    use datafusion_expr::Operator;
-
-    use super::*;
-    use crate::physical_plan::joins::utils::JoinSide;
-    use crate::prelude::SessionContext;
     use datafusion_common::ScalarValue;
+    use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::Literal;
-    use std::sync::Arc;
+    use smallvec::smallvec;
 
     fn build_table(
         a: (&str, &Vec<i32>),
@@ -2648,12 +2116,15 @@ mod tests {
 
         let left_data = (JoinHashMap(hashmap_left), left);
         let (l, r) = build_equal_condition_join_indices(
-            &left_data,
+            &left_data.0,
+            &left_data.1,
             &right,
             &[Column::new("a", 0)],
             &[Column::new("a", 0)],
             &random_state,
             &false,
+            &mut vec![0; right.num_rows()],
+            None,
         )?;
 
         let mut left_ids = UInt64Builder::with_capacity(0);

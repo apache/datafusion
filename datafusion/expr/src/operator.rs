@@ -110,6 +110,41 @@ impl Operator {
         }
     }
 
+    /// Return true if the operator is a comparison operator.
+    ///
+    /// For example, 'Binary(a, >, b)' would be a comparison.
+    pub fn is_comparison_operator(&self) -> bool {
+        matches!(
+            self,
+            Operator::Eq
+                | Operator::NotEq
+                | Operator::Lt
+                | Operator::LtEq
+                | Operator::Gt
+                | Operator::GtEq
+                | Operator::RegexMatch
+                | Operator::RegexIMatch
+                | Operator::RegexNotMatch
+                | Operator::RegexNotIMatch
+        )
+    }
+
+    /// Return true if the operator is a logic operator.
+    ///
+    /// For example, 'Binary(Binary(a, >, b), AND, Binary(a, <, b + 3))' would be a logic.
+    pub fn is_logic_operator(&self) -> bool {
+        matches!(
+            self,
+            Operator::And
+                | Operator::Or
+                | Operator::BitwiseAnd
+                | Operator::BitwiseOr
+                | Operator::BitwiseXor
+                | Operator::BitwiseShiftRight
+                | Operator::BitwiseShiftLeft
+        )
+    }
+
     /// Return the operator where swapping lhs and rhs wouldn't change the result.
     ///
     /// For example `Binary(50, >=, a)` could also be represented as `Binary(a, <=, 50)`.

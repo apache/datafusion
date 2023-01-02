@@ -236,6 +236,7 @@ impl CoalesceBatchesStream {
                                 // reset buffer state
                                 self.buffer.clear();
                                 self.buffered_rows = 0;
+                                println!("coalesce yolluyor {}", batch.num_rows());
                                 // return batch
                                 return Poll::Ready(Some(Ok(batch)));
                             }

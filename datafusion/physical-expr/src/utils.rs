@@ -16,16 +16,18 @@
 // under the License.
 
 use crate::equivalence::EquivalentClass;
-use crate::expressions::BinaryExpr;
 use crate::expressions::Column;
 use crate::expressions::UnKnownColumn;
+use crate::expressions::{BinaryExpr, Literal};
 use crate::rewrite::TreeNodeRewritable;
 use crate::PhysicalExpr;
 use crate::PhysicalSortExpr;
+use arrow::datatypes::SchemaRef;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 
-use arrow::datatypes::SchemaRef;
-
+use petgraph::graph::NodeIndex;
+use petgraph::stable_graph::StableGraph;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -183,6 +185,186 @@ pub fn normalize_sort_expr_with_equivalence_properties(
     } else {
         sort_expr
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct ExprTreeNode {
+    expr: Arc<dyn PhysicalExpr>,
+    node: Option<NodeIndex>,
+    child_nodes: Vec<Arc<ExprTreeNode>>,
+}
+
+impl PartialEq for ExprTreeNode {
+    fn eq(&self, other: &ExprTreeNode) -> bool {
+        self.expr.eq(&other.expr)
+    }
+}
+
+impl ExprTreeNode {
+    pub fn new(plan: Arc<dyn PhysicalExpr>) -> Self {
+        ExprTreeNode {
+            expr: plan,
+            node: None,
+            child_nodes: vec![],
+        }
+    }
+
+    pub fn node(&self) -> &Option<NodeIndex> {
+        &self.node
+    }
+
+    pub fn child_nodes(&self) -> &Vec<Arc<ExprTreeNode>> {
+        &self.child_nodes
+    }
+
+    pub fn expr(&self) -> Arc<dyn PhysicalExpr> {
+        self.expr.clone()
+    }
+
+    pub fn children(&self) -> Vec<Arc<ExprTreeNode>> {
+        let plan_children = self.expr.children();
+        let child_intervals: Vec<Arc<ExprTreeNode>> = self.child_nodes.to_vec();
+        if plan_children.len() == child_intervals.len() {
+            child_intervals
+        } else {
+            plan_children
+                .into_iter()
+                .map(|child| {
+                    Arc::new(ExprTreeNode {
+                        expr: child.clone(),
+                        node: None,
+                        child_nodes: vec![],
+                    })
+                })
+                .collect()
+        }
+    }
+}
+
+impl TreeNodeRewritable for Arc<ExprTreeNode> {
+    fn map_children<F>(self, transform: F) -> Result<Self>
+    where
+        F: FnMut(Self) -> Result<Self>,
+    {
+        let children = self.children();
+        if !children.is_empty() {
+            let new_children: Vec<Arc<ExprTreeNode>> = children
+                .into_iter()
+                .map(transform)
+                .collect::<Result<Vec<Arc<ExprTreeNode>>>>()
+                .unwrap();
+            Ok(Arc::new(ExprTreeNode {
+                expr: self.expr.clone(),
+                node: None,
+                child_nodes: new_children,
+            }))
+        } else {
+            Ok(self)
+        }
+    }
+}
+
+fn add_physical_expr_to_graph<T>(
+    input: Arc<ExprTreeNode>,
+    visited: &mut Vec<(Arc<dyn PhysicalExpr>, NodeIndex)>,
+    graph: &mut StableGraph<T, usize>,
+    input_node: T,
+) -> NodeIndex {
+    match visited
+        .iter()
+        .find(|(visited_expr, _node)| visited_expr.eq(&input.expr()))
+    {
+        Some((_, idx)) => *idx,
+        None => {
+            let node_idx = graph.add_node(input_node);
+            visited.push((input.expr().clone(), node_idx));
+            input.child_nodes().iter().for_each(|expr_node| {
+                graph.add_edge(node_idx, expr_node.node().unwrap(), 0);
+            });
+            node_idx
+        }
+    }
+}
+
+fn post_order_tree_traverse_graph_create<T, F>(
+    input: Arc<ExprTreeNode>,
+    graph: &mut StableGraph<T, usize>,
+    constructor: F,
+    visited: &mut Vec<(Arc<dyn PhysicalExpr>, NodeIndex)>,
+) -> Result<Option<Arc<ExprTreeNode>>>
+where
+    F: Fn(Arc<ExprTreeNode>) -> T,
+{
+    let node = constructor(input.clone());
+    let node_idx = add_physical_expr_to_graph(input.clone(), visited, graph, node);
+    Ok(Some(Arc::new(ExprTreeNode {
+        expr: input.expr.clone(),
+        node: Some(node_idx),
+        child_nodes: input.child_nodes.to_vec(),
+    })))
+}
+
+pub fn build_physical_expr_graph<T, F>(
+    expr: Arc<dyn PhysicalExpr>,
+    constructor: &F,
+) -> Result<(NodeIndex, StableGraph<T, usize>)>
+where
+    F: Fn(Arc<ExprTreeNode>) -> T,
+{
+    let init = Arc::new(ExprTreeNode::new(expr.clone()));
+    let mut graph: StableGraph<T, usize> = StableGraph::new();
+    // TODO: Make membership check O(1)
+    let mut visited_plans: Vec<(Arc<dyn PhysicalExpr>, NodeIndex)> = vec![];
+    // Create a graph
+    let root_tree_node = init.mutable_transform_up(&mut |expr| {
+        post_order_tree_traverse_graph_create(
+            expr,
+            &mut graph,
+            constructor,
+            &mut visited_plans,
+        )
+    })?;
+    Ok((root_tree_node.node.unwrap(), graph))
+}
+
+#[allow(clippy::too_many_arguments)]
+/// left_col (op_1) a  > right_col (op_2) b AND left_col (op_3) c < right_col (op_4) d
+pub fn filter_numeric_expr_generation(
+    left_col: Arc<dyn PhysicalExpr>,
+    right_col: Arc<dyn PhysicalExpr>,
+    op_1: Operator,
+    op_2: Operator,
+    op_3: Operator,
+    op_4: Operator,
+    a: i32,
+    b: i32,
+    c: i32,
+    d: i32,
+) -> Arc<dyn PhysicalExpr> {
+    let left_and_1 = Arc::new(BinaryExpr::new(
+        left_col.clone(),
+        op_1,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(a)))),
+    ));
+    let left_and_2 = Arc::new(BinaryExpr::new(
+        right_col.clone(),
+        op_2,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(b)))),
+    ));
+
+    let right_and_1 = Arc::new(BinaryExpr::new(
+        left_col.clone(),
+        op_3,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(c)))),
+    ));
+    let right_and_2 = Arc::new(BinaryExpr::new(
+        right_col.clone(),
+        op_4,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(d)))),
+    ));
+    let left_expr = Arc::new(BinaryExpr::new(left_and_1, Operator::Gt, left_and_2));
+    let right_expr = Arc::new(BinaryExpr::new(right_and_1, Operator::Lt, right_and_2));
+    Arc::new(BinaryExpr::new(left_expr, Operator::And, right_expr))
 }
 
 #[cfg(test)]

@@ -138,7 +138,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 // least one result in an attempt to maximize
                 // parallelism.
                 let (sender, receiver) =
-                    mpsc::channel::<ArrowResult<RecordBatch>>(input_partitions);
+                    mpsc::channel::<ArrowResult<RecordBatch>>(100000000000);
 
                 // spawn independent tasks whose resulting streams (of batches)
                 // are sent to the channel for consumption.

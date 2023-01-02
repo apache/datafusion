@@ -24,7 +24,7 @@ use crate::physical_plan::joins::utils::{
     apply_join_filter_to_indices, build_batch_from_indices, build_join_schema,
     check_join_is_valid, combine_join_equivalence_properties, estimate_join_statistics,
     get_final_indices_from_bit_map, need_produce_result_in_final, ColumnIndex,
-    JoinFilter, OnceAsync, OnceFut,
+    JoinFilter, JoinSide, OnceAsync, OnceFut,
 };
 use crate::physical_plan::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning, RecordBatchStream,
@@ -346,6 +346,7 @@ fn build_join_indices(
             left_indices,
             right_indices,
             filter,
+            JoinSide::Left,
         )
     } else {
         Ok((left_indices, right_indices))
@@ -447,6 +448,7 @@ impl NestedLoopJoinStream {
                                 left_side,
                                 right_side,
                                 &self.column_indices,
+                                JoinSide::Left,
                             );
                             Some(result)
                         }
@@ -473,6 +475,7 @@ impl NestedLoopJoinStream {
                             left_side,
                             right_side,
                             &self.column_indices,
+                            JoinSide::Left,
                         );
                         self.is_exhausted = true;
                         Some(result)
