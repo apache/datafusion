@@ -2020,48 +2020,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 expr,
                 substring_from,
                 substring_for,
-            } => {
-                let args = match (substring_from, substring_for) {
-                    (Some(from_expr), Some(for_expr)) => {
-                        let arg = self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
-                        let from_logic =
-                            self.sql_expr_to_logical_expr(*from_expr, schema, planner_context)?;
-                        let for_logic =
-                            self.sql_expr_to_logical_expr(*for_expr, schema, planner_context)?;
-                        vec![arg, from_logic, for_logic]
-                    }
-                    (Some(from_expr), None) => {
-                        let arg = self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
-                        let from_logic =
-                            self.sql_expr_to_logical_expr(*from_expr, schema, planner_context)?;
-                        vec![arg, from_logic]
-                    }
-                    (None, Some(for_expr)) => {
-                        let arg = self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
-                        let from_logic = Expr::Literal(ScalarValue::Int64(Some(1)));
-                        let for_logic =
-                            self.sql_expr_to_logical_expr(*for_expr, schema, planner_context)?;
-                        vec![arg, from_logic, for_logic]
-                    }
-                    (None, None) => {
-                        let orig_sql = SQLExpr::Substring {
-                            expr,
-                            substring_from: None,
-                            substring_for: None,
-                        };
-
-                        return Err(DataFusionError::Plan(format!(
-                            "Substring without for/from is not valid {orig_sql:?}"
-                        )));
-                    }
-                };
-
-
-                Ok(Expr::ScalarFunction {
-                    fun: BuiltinScalarFunction::Substr,
-                    args,
-                })
-            }
+            } => self.sql_substring_to_expr(expr, substring_from, substring_for, schema, planner_context),
 
             #[cfg(not(feature = "unicode_expressions"))]
             SQLExpr::Substring {
@@ -2082,17 +2041,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Cube(exprs) => self.sql_cube_to_expr(exprs,schema, planner_context),
             SQLExpr::GroupingSets(exprs) => self.sql_grouping_sets_to_expr(exprs, schema, planner_context),
 
-            SQLExpr::Floor { expr, field: _field } => {
-                let fun = BuiltinScalarFunction::Floor;
-                let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
-                Ok(Expr::ScalarFunction { fun, args })
-            }
+            SQLExpr::Floor { expr, field: _field } => self.sql_named_function_to_expr(*expr, BuiltinScalarFunction::Floor, schema, planner_context),
 
-            SQLExpr::Ceil { expr, field: _field } => {
-                let fun = BuiltinScalarFunction::Ceil;
-                let args = vec![self.sql_expr_to_logical_expr(*expr, schema, planner_context)?];
-                Ok(Expr::ScalarFunction { fun, args })
-            }
+            SQLExpr::Ceil { expr, field: _field } => self.sql_named_function_to_expr(*expr, BuiltinScalarFunction::Ceil, schema, planner_context),
 
             SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(*e, schema, planner_context),
 
@@ -2215,6 +2166,69 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 _ => Err(DataFusionError::Plan(format!("Invalid function '{name}'"))),
             },
         }
+    }
+
+    fn sql_named_function_to_expr(
+        &self,
+        expr: SQLExpr,
+        fun: BuiltinScalarFunction,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let args = vec![self.sql_expr_to_logical_expr(expr, schema, planner_context)?];
+        Ok(Expr::ScalarFunction { fun, args })
+    }
+
+    fn sql_substring_to_expr(
+        &self,
+        expr: Box<SQLExpr>,
+        substring_from: Option<Box<SQLExpr>>,
+        substring_for: Option<Box<SQLExpr>>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let args = match (substring_from, substring_for) {
+            (Some(from_expr), Some(for_expr)) => {
+                let arg =
+                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
+                let from_logic =
+                    self.sql_expr_to_logical_expr(*from_expr, schema, planner_context)?;
+                let for_logic =
+                    self.sql_expr_to_logical_expr(*for_expr, schema, planner_context)?;
+                vec![arg, from_logic, for_logic]
+            }
+            (Some(from_expr), None) => {
+                let arg =
+                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
+                let from_logic =
+                    self.sql_expr_to_logical_expr(*from_expr, schema, planner_context)?;
+                vec![arg, from_logic]
+            }
+            (None, Some(for_expr)) => {
+                let arg =
+                    self.sql_expr_to_logical_expr(*expr, schema, planner_context)?;
+                let from_logic = Expr::Literal(ScalarValue::Int64(Some(1)));
+                let for_logic =
+                    self.sql_expr_to_logical_expr(*for_expr, schema, planner_context)?;
+                vec![arg, from_logic, for_logic]
+            }
+            (None, None) => {
+                let orig_sql = SQLExpr::Substring {
+                    expr,
+                    substring_from: None,
+                    substring_for: None,
+                };
+
+                return Err(DataFusionError::Plan(format!(
+                    "Substring without for/from is not valid {orig_sql:?}"
+                )));
+            }
+        };
+
+        Ok(Expr::ScalarFunction {
+            fun: BuiltinScalarFunction::Substr,
+            args,
+        })
     }
 
     fn sql_in_list_to_expr(
