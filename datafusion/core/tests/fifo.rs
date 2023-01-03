@@ -85,12 +85,7 @@ mod unix_test {
         fifo_path: &Path,
         with_unbounded_execution: bool,
     ) -> Result<SessionContext> {
-        let config = SessionConfig::new()
-            .with_batch_size(TEST_BATCH_SIZE)
-            .set_u64(
-                "datafusion.execution.coalesce_target_batch_size",
-                TEST_BATCH_SIZE as u64,
-            );
+        let config = SessionConfig::new().with_batch_size(TEST_BATCH_SIZE);
         let ctx = SessionContext::with_config(config);
         // Register left table
         let left_schema = Arc::new(Schema::new(vec![

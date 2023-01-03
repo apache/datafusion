@@ -96,7 +96,7 @@ pub async fn main() -> Result<()> {
         env::set_current_dir(p).unwrap();
     };
 
-    let mut session_config = SessionConfig::from_env().with_information_schema(true);
+    let mut session_config = SessionConfig::from_env()?.with_information_schema(true);
 
     if let Some(batch_size) = args.batch_size {
         session_config = session_config.with_batch_size(batch_size);

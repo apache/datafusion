@@ -380,15 +380,28 @@ macro_rules! get_min_max_values_for_page_index {
                     vec.iter().map(|x| x.$func().cloned()),
                 )))
             }
-            Index::BYTE_ARRAY(index) => {
-                let vec = &index.indexes;
-                let array: StringArray = vec
-                    .iter()
-                    .map(|x| x.$func())
-                    .map(|x| x.and_then(|x| std::str::from_utf8(x).ok()))
-                    .collect();
-                Some(Arc::new(array))
-            }
+            Index::BYTE_ARRAY(index) => match $self.target_type {
+                Some(DataType::Decimal128(precision, scale)) => {
+                    let vec = &index.indexes;
+                    Decimal128Array::from(
+                        vec.iter()
+                            .map(|x| x.$func().and_then(|x| Some(from_bytes_to_i128(x))))
+                            .collect::<Vec<Option<i128>>>(),
+                    )
+                    .with_precision_and_scale(*precision, *scale)
+                    .ok()
+                    .map(|arr| Arc::new(arr) as ArrayRef)
+                }
+                _ => {
+                    let vec = &index.indexes;
+                    let array: StringArray = vec
+                        .iter()
+                        .map(|x| x.$func())
+                        .map(|x| x.and_then(|x| std::str::from_utf8(x).ok()))
+                        .collect();
+                    Some(Arc::new(array))
+                }
+            },
             Index::INT96(_) => {
                 //Todo support these type
                 None
