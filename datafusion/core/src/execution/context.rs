@@ -18,11 +18,6 @@
 //! SessionContext contains methods for registering data sources and executing queries
 use crate::{
     catalog::catalog::{CatalogList, MemoryCatalogList},
-    config::{
-        OPT_COLLECT_STATISTICS, OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA,
-        OPT_INFORMATION_SCHEMA, OPT_PARQUET_ENABLE_PRUNING, OPT_REPARTITION_AGGREGATIONS,
-        OPT_REPARTITION_JOINS, OPT_REPARTITION_WINDOWS, OPT_TARGET_PARTITIONS,
-    },
     datasource::listing::{ListingOptions, ListingTable},
     datasource::{MemTable, ViewTable},
     logical_expr::{PlanType, ToStringifiedPlan},
@@ -35,7 +30,6 @@ use crate::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
@@ -65,17 +59,13 @@ use crate::logical_expr::{
     CreateView, DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder,
     SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
-use crate::optimizer::{OptimizerContext, OptimizerRule};
+use crate::optimizer::OptimizerRule;
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::repartition::Repartition;
 
-use crate::config::{
-    ConfigOptions, OPT_BATCH_SIZE, OPT_COALESCE_BATCHES,
-    OPT_ENABLE_ROUND_ROBIN_REPARTITION, OPT_FILTER_NULL_JOIN_KEYS,
-    OPT_OPTIMIZER_MAX_PASSES, OPT_OPTIMIZER_SKIP_FAILED_RULES,
-};
+use crate::config::ConfigOptions;
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
 use crate::physical_optimizer::enforcement::BasicEnforcement;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
@@ -103,6 +93,7 @@ use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
+use datafusion_optimizer::OptimizerConfig;
 use uuid::Uuid;
 
 use super::options::{
@@ -374,48 +365,8 @@ impl SessionContext {
                 variable, value, ..
             }) => {
                 let mut state = self.state.write();
-                let config_options = &mut state.config.config_options;
-
-                let old_value = config_options.get(&variable).ok_or_else(|| {
-                    DataFusionError::Execution(format!(
-                        "Can not SET variable: Unknown Variable {variable}"
-                    ))
-                })?;
-
-                match old_value {
-                    ScalarValue::Boolean(_) => {
-                        let new_value = value.parse::<bool>().map_err(|_| {
-                            DataFusionError::Execution(format!(
-                                "Failed to parse {value} as bool",
-                            ))
-                        })?;
-                        config_options.set_bool(&variable, new_value);
-                    }
-
-                    ScalarValue::UInt64(_) => {
-                        let new_value = value.parse::<u64>().map_err(|_| {
-                            DataFusionError::Execution(format!(
-                                "Failed to parse {value} as u64",
-                            ))
-                        })?;
-                        config_options.set_u64(&variable, new_value);
-                    }
-
-                    ScalarValue::Utf8(_) => {
-                        let new_value = value.parse::<String>().map_err(|_| {
-                            DataFusionError::Execution(format!(
-                                "Failed to parse {value} as String",
-                            ))
-                        })?;
-                        config_options.set_string(&variable, new_value);
-                    }
-
-                    _ => {
-                        return Err(DataFusionError::Execution(
-                            "Unsupported Scalar Value Type".to_string(),
-                        ))
-                    }
-                }
+                let config_options = &mut state.config.options;
+                config_options.set(&variable, &value)?;
                 drop(state);
 
                 self.return_empty_dataframe()
@@ -1153,7 +1104,7 @@ pub struct SessionConfig {
     /// due to `resolve_table_ref` which passes back references)
     default_schema: String,
     /// Configuration options
-    config_options: ConfigOptions,
+    options: ConfigOptions,
     /// Opaque extensions.
     extensions: AnyMap,
 }
@@ -1163,7 +1114,7 @@ impl Default for SessionConfig {
         Self {
             default_catalog: DEFAULT_CATALOG.to_owned(),
             default_schema: DEFAULT_SCHEMA.to_owned(),
-            config_options: ConfigOptions::new(),
+            options: ConfigOptions::new(),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
                 0,
@@ -1180,16 +1131,13 @@ impl SessionConfig {
     }
 
     /// Create an execution config with config options read from the environment
-    pub fn from_env() -> Self {
-        Self {
-            config_options: ConfigOptions::from_env(),
-            ..Default::default()
-        }
+    pub fn from_env() -> Result<Self> {
+        Ok(ConfigOptions::from_env()?.into())
     }
 
     /// Set a configuration option
     pub fn set(mut self, key: &str, value: ScalarValue) -> Self {
-        self.config_options.set(key, value);
+        self.options.set(key, &value.to_string()).unwrap();
         self
     }
 
@@ -1215,66 +1163,54 @@ impl SessionConfig {
     }
 
     /// Customize batch size
-    pub fn with_batch_size(self, n: usize) -> Self {
+    pub fn with_batch_size(mut self, n: usize) -> Self {
         // batch size must be greater than zero
         assert!(n > 0);
-        self.set_u64(OPT_BATCH_SIZE, n.try_into().unwrap())
+        self.options.execution.batch_size = n;
+        self
     }
 
     /// Customize [`OPT_TARGET_PARTITIONS`]
-    pub fn with_target_partitions(self, n: usize) -> Self {
+    pub fn with_target_partitions(mut self, n: usize) -> Self {
         // partition count must be greater than zero
         assert!(n > 0);
-        self.set_usize(OPT_TARGET_PARTITIONS, n)
+        self.options.execution.target_partitions = n;
+        self
     }
 
     /// get target_partitions
     pub fn target_partitions(&self) -> usize {
-        self.config_options
-            .get_usize(OPT_TARGET_PARTITIONS)
-            .expect("target partitions must be set")
+        self.options.execution.target_partitions
     }
 
     /// Is the information schema enabled?
     pub fn information_schema(&self) -> bool {
-        self.config_options
-            .get_bool(OPT_INFORMATION_SCHEMA)
-            .unwrap_or_default()
+        self.options.catalog.information_schema
     }
 
     /// Should the context create the default catalog and schema?
     pub fn create_default_catalog_and_schema(&self) -> bool {
-        self.config_options
-            .get_bool(OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA)
-            .unwrap_or_default()
+        self.options.catalog.create_default_catalog_and_schema
     }
 
     /// Are joins repartitioned during execution?
     pub fn repartition_joins(&self) -> bool {
-        self.config_options
-            .get_bool(OPT_REPARTITION_JOINS)
-            .unwrap_or_default()
+        self.options.optimizer.repartition_joins
     }
 
     /// Are aggregates repartitioned during execution?
     pub fn repartition_aggregations(&self) -> bool {
-        self.config_options
-            .get_bool(OPT_REPARTITION_AGGREGATIONS)
-            .unwrap_or_default()
+        self.options.optimizer.repartition_aggregations
     }
 
     /// Are window functions repartitioned during execution?
     pub fn repartition_window_functions(&self) -> bool {
-        self.config_options
-            .get_bool(OPT_REPARTITION_WINDOWS)
-            .unwrap_or_default()
+        self.options.optimizer.repartition_windows
     }
 
     /// Are statistics collected during execution?
     pub fn collect_statistics(&self) -> bool {
-        self.config_options
-            .get_bool(OPT_COLLECT_STATISTICS)
-            .unwrap_or_default()
+        self.options.execution.collect_statistics
     }
 
     /// Selects a name for the default catalog and schema
@@ -1290,109 +1226,85 @@ impl SessionConfig {
 
     /// Controls whether the default catalog and schema will be automatically created
     pub fn with_create_default_catalog_and_schema(mut self, create: bool) -> Self {
-        self.config_options
-            .set_bool(OPT_CREATE_DEFAULT_CATALOG_AND_SCHEMA, create);
+        self.options.catalog.create_default_catalog_and_schema = create;
         self
     }
 
     /// Enables or disables the inclusion of `information_schema` virtual tables
     pub fn with_information_schema(mut self, enabled: bool) -> Self {
-        self.config_options
-            .set_bool(OPT_INFORMATION_SCHEMA, enabled);
+        self.options.catalog.information_schema = enabled;
         self
     }
 
     /// Enables or disables the use of repartitioning for joins to improve parallelism
     pub fn with_repartition_joins(mut self, enabled: bool) -> Self {
-        self.config_options.set_bool(OPT_REPARTITION_JOINS, enabled);
+        self.options.optimizer.repartition_joins = enabled;
         self
     }
 
     /// Enables or disables the use of repartitioning for aggregations to improve parallelism
     pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
-        self.config_options
-            .set_bool(OPT_REPARTITION_AGGREGATIONS, enabled);
+        self.options.optimizer.repartition_aggregations = enabled;
         self
     }
 
     /// Enables or disables the use of repartitioning for window functions to improve parallelism
     pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
-        self.config_options
-            .set_bool(OPT_REPARTITION_WINDOWS, enabled);
+        self.options.optimizer.repartition_windows = enabled;
         self
     }
 
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
     pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
-        self.config_options
-            .set_bool(OPT_PARQUET_ENABLE_PRUNING, enabled);
+        self.options.execution.parquet.pruning = enabled;
         self
     }
 
     /// Returns true if pruning predicate should be used to skip parquet row groups
     pub fn parquet_pruning(&self) -> bool {
-        self.config_options
-            .get_bool(OPT_PARQUET_ENABLE_PRUNING)
-            .unwrap_or(false)
+        self.options.execution.parquet.pruning
     }
 
     /// Enables or disables the collection of statistics after listing files
     pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
-        self.config_options
-            .set_bool(OPT_COLLECT_STATISTICS, enabled);
+        self.options.execution.collect_statistics = enabled;
         self
     }
 
     /// Get the currently configured batch size
     pub fn batch_size(&self) -> usize {
-        self.config_options
-            .get_u64(OPT_BATCH_SIZE)
-            .unwrap_or_default()
-            .try_into()
-            .unwrap()
+        self.options.execution.batch_size
     }
 
-    /// Enables or disables the coalescence of small batches into larger batches
-    pub fn with_coalesce_batches(mut self, enabled: bool) -> Self {
-        self.config_options.set_bool(OPT_COALESCE_BATCHES, enabled);
-        self
-    }
+    /// Convert configuration options to name-value pairs with values
+    /// converted to strings.
+    ///
+    /// Note that this method will eventually be deprecated and
+    /// replaced by [`config_options`].
+    ///
+    /// [`config_options`]: SessionContext::config_option
+    pub fn to_props(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        // copy configs from config_options
+        for entry in self.options.entries() {
+            map.insert(entry.key, entry.value.unwrap_or_default());
+        }
 
-    /// Returns true if record batches will be examined between each operator
-    /// and small batches will be coalesced into larger batches.
-    pub fn coalesce_batches(&self) -> bool {
-        self.config_options
-            .get_bool(OPT_COALESCE_BATCHES)
-            .unwrap_or_default()
-    }
-
-    /// Enables or disables the round robin repartition for increasing parallelism
-    pub fn with_round_robin_repartition(mut self, enabled: bool) -> Self {
-        self.config_options
-            .set_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION, enabled);
-        self
-    }
-
-    /// Returns true if the physical plan optimizer will try to
-    /// add round robin repartition to increase parallelism to leverage more CPU cores.
-    pub fn round_robin_repartition(&self) -> bool {
-        self.config_options
-            .get_bool(OPT_ENABLE_ROUND_ROBIN_REPARTITION)
-            .unwrap_or_default()
+        map
     }
 
     /// Return a handle to the configuration options.
     ///
     /// [`config_options`]: SessionContext::config_option
     pub fn config_options(&self) -> &ConfigOptions {
-        &self.config_options
+        &self.options
     }
 
     /// Return a mutable handle to the configuration options.
     ///
     /// [`config_options`]: SessionContext::config_option
     pub fn config_options_mut(&mut self) -> &mut ConfigOptions {
-        &mut self.config_options
+        &mut self.options
     }
 
     /// Add extensions.
@@ -1464,6 +1376,15 @@ impl SessionConfig {
     }
 }
 
+impl From<ConfigOptions> for SessionConfig {
+    fn from(options: ConfigOptions) -> Self {
+        Self {
+            options,
+            ..Default::default()
+        }
+    }
+}
+
 /// Execution context for registering data sources and executing queries
 #[derive(Clone)]
 pub struct SessionState {
@@ -1530,6 +1451,7 @@ impl SessionState {
         // We need to take care of the rule ordering. They may influence each other.
         let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> =
             vec![Arc::new(AggregateStatistics::new())];
+
         // - In order to increase the parallelism, it will change the output partitioning
         // of some operators in the plan tree, which will influence other rules.
         // Therefore, it should be run as soon as possible.
@@ -1538,7 +1460,7 @@ impl SessionState {
         //      - it's conflicted with some parts of the BasicEnforcement, since it will
         //      introduce additional repartitioning while the BasicEnforcement aims at
         //      reducing unnecessary repartitioning.
-        if config.round_robin_repartition() {
+        if config.options.optimizer.enable_round_robin_repartition {
             physical_optimizers.push(Arc::new(Repartition::new()));
         }
         //- Currently it will depend on the partition number to decide whether to change the
@@ -1570,8 +1492,10 @@ impl SessionState {
         physical_optimizers.push(Arc::new(OptimizeSorts::new()));
         // It will not influence the distribution and ordering of the whole plan tree.
         // Therefore, to avoid influencing other rules, it should be run at last.
-        if config.coalesce_batches() {
-            physical_optimizers.push(Arc::new(CoalesceBatches::new(config.batch_size())));
+        if config.options.execution.coalesce_batches {
+            physical_optimizers.push(Arc::new(CoalesceBatches::new(
+                config.options.execution.batch_size,
+            )));
         }
         // The PipelineChecker rule will reject non-runnable query plans that use
         // pipeline-breaking operators on infinite input(s). The rule generates a
@@ -1597,23 +1521,16 @@ impl SessionState {
         runtime: &Arc<RuntimeEnv>,
         default_catalog: &MemoryCatalogProvider,
     ) {
-        let url = config.config_options.get("datafusion.catalog.location");
-        let format = config.config_options.get("datafusion.catalog.type");
+        let url = config.options.catalog.location.as_ref();
+        let format = config.options.catalog.format.as_ref();
         let (url, format) = match (url, format) {
             (Some(url), Some(format)) => (url, format),
             _ => return,
         };
-        if url.is_null() || format.is_null() {
-            return;
-        }
         let url = url.to_string();
         let format = format.to_string();
 
-        let has_header = config.config_options.get("datafusion.catalog.has_header");
-        let has_header: bool = has_header
-            .map(|x| FromStr::from_str(&x.to_string()).unwrap_or_default())
-            .unwrap_or_default();
-
+        let has_header = config.options.catalog.has_header;
         let url = Url::parse(url.as_str()).expect("Invalid default catalog location!");
         let authority = match url.host_str() {
             Some(host) => format!("{}://{}", url.scheme(), host),
@@ -1728,37 +1645,13 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        // TODO: Implement OptimizerContext directly on DataFrame (#4631) (#4626)
-        let config = {
-            let config_options = self.config_options();
-            OptimizerContext::new()
-                .with_skip_failing_rules(
-                    config_options
-                        .get_bool(OPT_OPTIMIZER_SKIP_FAILED_RULES)
-                        .unwrap_or_default(),
-                )
-                .with_max_passes(
-                    config_options
-                        .get_u64(OPT_OPTIMIZER_MAX_PASSES)
-                        .unwrap_or_default() as u8,
-                )
-                .with_query_execution_start_time(
-                    self.execution_props.query_execution_start_time,
-                )
-                .filter_null_keys(
-                    config_options
-                        .get_bool(OPT_FILTER_NULL_JOIN_KEYS)
-                        .unwrap_or_default(),
-                )
-        };
-
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
 
             // optimize the child plan, capturing the output of each optimizer
             let plan = self.optimizer.optimize(
                 e.plan.as_ref(),
-                &config,
+                self,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
@@ -1773,7 +1666,7 @@ impl SessionState {
                 schema: e.schema.clone(),
             }))
         } else {
-            self.optimizer.optimize(plan, &config, |_, _| {})
+            self.optimizer.optimize(plan, self, |_, _| {})
         }
     }
 
@@ -1867,7 +1760,17 @@ impl ContextProvider for SessionState {
     }
 
     fn get_config_option(&self, variable: &str) -> Option<ScalarValue> {
-        self.config_options().get(variable)
+        // TOOD: Move ConfigOptions into common crate
+        match variable {
+            "datafusion.execution.time_zone" => self
+                .config
+                .options
+                .execution
+                .time_zone
+                .as_ref()
+                .map(|s| ScalarValue::Utf8(Some(s.clone()))),
+            _ => unimplemented!(),
+        }
     }
 }
 
@@ -1897,6 +1800,30 @@ impl FunctionRegistry for SessionState {
     }
 }
 
+impl OptimizerConfig for SessionState {
+    fn query_execution_start_time(&self) -> DateTime<Utc> {
+        self.execution_props.query_execution_start_time
+    }
+
+    fn rule_enabled(&self, name: &str) -> bool {
+        use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
+        match name {
+            FilterNullJoinKeys::NAME => {
+                self.config_options().optimizer.filter_null_join_keys
+            }
+            _ => true,
+        }
+    }
+
+    fn skip_failing_rules(&self) -> bool {
+        self.config_options().optimizer.skip_failed_rules
+    }
+
+    fn max_passes(&self) -> u8 {
+        self.config_options().optimizer.max_passes as _
+    }
+}
+
 /// Task Execution Context
 pub struct TaskContext {
     /// Session Id
@@ -1923,59 +1850,15 @@ impl TaskContext {
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
-        let session_config = if task_props.is_empty() {
-            SessionConfig::new()
-        } else {
-            SessionConfig::new()
-                .with_batch_size(task_props.get(OPT_BATCH_SIZE).unwrap().parse().unwrap())
-                .with_target_partitions(
-                    task_props
-                        .get(OPT_TARGET_PARTITIONS)
-                        .unwrap()
-                        .parse()
-                        .unwrap(),
-                )
-                .with_repartition_joins(
-                    task_props
-                        .get(OPT_REPARTITION_JOINS)
-                        .unwrap()
-                        .parse()
-                        .unwrap(),
-                )
-                .with_repartition_aggregations(
-                    task_props
-                        .get(OPT_REPARTITION_AGGREGATIONS)
-                        .unwrap()
-                        .parse()
-                        .unwrap(),
-                )
-                .with_repartition_windows(
-                    task_props
-                        .get(OPT_REPARTITION_WINDOWS)
-                        .unwrap()
-                        .parse()
-                        .unwrap(),
-                )
-                .with_parquet_pruning(
-                    task_props
-                        .get(OPT_PARQUET_ENABLE_PRUNING)
-                        .unwrap()
-                        .parse()
-                        .unwrap(),
-                )
-                .with_collect_statistics(
-                    task_props
-                        .get(OPT_COLLECT_STATISTICS)
-                        .unwrap()
-                        .parse()
-                        .unwrap(),
-                )
-        };
+        let mut config = ConfigOptions::new();
+        for (k, v) in task_props {
+            let _ = config.set(&k, &v);
+        }
 
         Self {
             task_id: Some(task_id),
             session_id,
-            session_config,
+            session_config: config.into(),
             scalar_functions,
             aggregate_functions,
             runtime,
@@ -2329,7 +2212,7 @@ mod tests {
         let runtime = Arc::new(RuntimeEnv::new(rt_cfg).unwrap());
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())
-            .set_str("datafusion.catalog.type", "CSV")
+            .set_str("datafusion.catalog.format", "CSV")
             .set_str("datafusion.catalog.has_header", "true");
         let session_state = SessionState::with_config_rt(cfg, runtime);
         let ctx = SessionContext::with_state(session_state);

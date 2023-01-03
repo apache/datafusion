@@ -25,9 +25,7 @@ use std::fs;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::config::OPT_PARQUET_PUSHDOWN_FILTERS;
-use crate::config::OPT_PARQUET_REORDER_FILTERS;
-use crate::config::{ConfigOptions, OPT_PARQUET_ENABLE_PAGE_INDEX};
+use crate::config::ConfigOptions;
 use crate::datasource::file_format::parquet::fetch_parquet_metadata;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -202,9 +200,7 @@ impl ParquetExec {
     /// Return the value described in [`Self::with_pushdown_filters`]
     fn pushdown_filters(&self, config_options: &ConfigOptions) -> bool {
         self.pushdown_filters
-            .or_else(|| config_options.get_bool(OPT_PARQUET_PUSHDOWN_FILTERS))
-            // default to false
-            .unwrap_or_default()
+            .unwrap_or(config_options.execution.parquet.pushdown_filters)
     }
 
     /// If true, the `RowFilter` made by `pushdown_filters` may try to
@@ -219,9 +215,7 @@ impl ParquetExec {
     /// Return the value described in [`Self::with_reorder_filters`]
     fn reorder_filters(&self, config_options: &ConfigOptions) -> bool {
         self.reorder_filters
-            .or_else(|| config_options.get_bool(OPT_PARQUET_REORDER_FILTERS))
-            // default to false
-            .unwrap_or_default()
+            .unwrap_or(config_options.execution.parquet.reorder_filters)
     }
 
     /// If enabled, the reader will read the page index
@@ -236,9 +230,7 @@ impl ParquetExec {
     /// Return the value described in [`Self::with_enable_page_index`]
     fn enable_page_index(&self, config_options: &ConfigOptions) -> bool {
         self.enable_page_index
-            .or_else(|| config_options.get_bool(OPT_PARQUET_ENABLE_PAGE_INDEX))
-            // default to false
-            .unwrap_or_default()
+            .unwrap_or(config_options.execution.parquet.enable_page_index)
     }
 }
 

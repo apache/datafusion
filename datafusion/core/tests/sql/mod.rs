@@ -25,7 +25,7 @@ use arrow::{
 use chrono::prelude::*;
 use chrono::Duration;
 
-use datafusion::config::OPT_PREFER_HASH_JOIN;
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::TableProvider;
 use datafusion::from_slice::FromSlice;
 use datafusion::logical_expr::{Aggregate, LogicalPlan, Projection, TableScan};
@@ -570,9 +570,10 @@ fn create_sort_merge_join_context(
     column_left: &str,
     column_right: &str,
 ) -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(
-        SessionConfig::new().set_bool(OPT_PREFER_HASH_JOIN, false),
-    );
+    let mut config = ConfigOptions::new();
+    config.optimizer.prefer_hash_join = false;
+
+    let ctx = SessionContext::with_config(config.into());
 
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new(column_left, DataType::UInt32, true),
@@ -618,12 +619,12 @@ fn create_sort_merge_join_context(
 }
 
 fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(
-        SessionConfig::new()
-            .set_bool(OPT_PREFER_HASH_JOIN, false)
-            .with_target_partitions(2)
-            .with_batch_size(4096),
-    );
+    let mut config = ConfigOptions::new();
+    config.optimizer.prefer_hash_join = false;
+    config.execution.target_partitions = 2;
+    config.execution.batch_size = 4096;
+
+    let ctx = SessionContext::with_config(config.into());
 
     let t1_schema = Schema::new(vec![
         Field::new("c1", DataType::Date32, true),
