@@ -19,6 +19,7 @@
 //!
 //! Information Schema]<https://en.wikipedia.org/wiki/Information_schema>
 
+use async_trait::async_trait;
 use std::{any::Any, sync::Arc};
 
 use arrow::{
@@ -42,6 +43,9 @@ pub const TABLES: &str = "tables";
 pub const VIEWS: &str = "views";
 pub const COLUMNS: &str = "columns";
 pub const DF_SETTINGS: &str = "df_settings";
+
+/// All information schema tables
+pub const INFORMATION_SCHEMA_TABLES: &[&str] = &[TABLES, VIEWS, COLUMNS, DF_SETTINGS];
 
 /// Implements the `information_schema` virtual schema and tables
 ///
@@ -69,7 +73,7 @@ struct InformationSchemaConfig {
 
 impl InformationSchemaConfig {
     /// Construct the `information_schema.tables` virtual table
-    fn make_tables(&self, builder: &mut InformationSchemaTablesBuilder) {
+    async fn make_tables(&self, builder: &mut InformationSchemaTablesBuilder) {
         // create a mem table with the names of tables
 
         for catalog_name in self.catalog_list.catalog_names() {
@@ -79,7 +83,7 @@ impl InformationSchemaConfig {
                 if schema_name != INFORMATION_SCHEMA {
                     let schema = catalog.schema(&schema_name).unwrap();
                     for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).unwrap();
+                        let table = schema.table(&table_name).await.unwrap();
                         builder.add_table(
                             &catalog_name,
                             &schema_name,
@@ -108,7 +112,7 @@ impl InformationSchemaConfig {
         }
     }
 
-    fn make_views(&self, builder: &mut InformationSchemaViewBuilder) {
+    async fn make_views(&self, builder: &mut InformationSchemaViewBuilder) {
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
@@ -116,7 +120,7 @@ impl InformationSchemaConfig {
                 if schema_name != INFORMATION_SCHEMA {
                     let schema = catalog.schema(&schema_name).unwrap();
                     for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).unwrap();
+                        let table = schema.table(&table_name).await.unwrap();
                         builder.add_view(
                             &catalog_name,
                             &schema_name,
@@ -130,7 +134,7 @@ impl InformationSchemaConfig {
     }
 
     /// Construct the `information_schema.columns` virtual table
-    fn make_columns(&self, builder: &mut InformationSchemaColumnsBuilder) {
+    async fn make_columns(&self, builder: &mut InformationSchemaColumnsBuilder) {
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
@@ -138,7 +142,7 @@ impl InformationSchemaConfig {
                 if schema_name != INFORMATION_SCHEMA {
                     let schema = catalog.schema(&schema_name).unwrap();
                     for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).unwrap();
+                        let table = schema.table(&table_name).await.unwrap();
                         for (i, field) in table.schema().fields().iter().enumerate() {
                             builder.add_column(
                                 &catalog_name,
@@ -168,6 +172,7 @@ impl InformationSchemaConfig {
     }
 }
 
+#[async_trait]
 impl SchemaProvider for InformationSchemaProvider {
     fn as_any(&self) -> &(dyn Any + 'static) {
         self
@@ -182,7 +187,7 @@ impl SchemaProvider for InformationSchemaProvider {
         ]
     }
 
-    fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
         let config = self.config.clone();
         let table: Arc<dyn PartitionStream> = if name.eq_ignore_ascii_case("tables") {
             Arc::new(InformationSchemaTables::new(config))
@@ -246,7 +251,7 @@ impl PartitionStream for InformationSchemaTables {
             self.schema.clone(),
             // TODO: Stream this
             futures::stream::once(async move {
-                config.make_tables(&mut builder);
+                config.make_tables(&mut builder).await;
                 Ok(builder.finish())
             }),
         ))
@@ -337,7 +342,7 @@ impl PartitionStream for InformationSchemaViews {
             self.schema.clone(),
             // TODO: Stream this
             futures::stream::once(async move {
-                config.make_views(&mut builder);
+                config.make_views(&mut builder).await;
                 Ok(builder.finish())
             }),
         ))
@@ -451,7 +456,7 @@ impl PartitionStream for InformationSchemaColumns {
             self.schema.clone(),
             // TODO: Stream this
             futures::stream::once(async move {
-                config.make_columns(&mut builder);
+                config.make_columns(&mut builder).await;
                 Ok(builder.finish())
             }),
         ))

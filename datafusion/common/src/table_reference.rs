@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::{Display, Formatter};
+
 /// A resolved path to a table of the form "catalog.schema.table"
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub struct ResolvedTableReference<'a> {
     /// The catalog (aka database) containing the table
     pub catalog: &'a str,
@@ -24,6 +26,12 @@ pub struct ResolvedTableReference<'a> {
     pub schema: &'a str,
     /// The table name
     pub table: &'a str,
+}
+
+impl<'a> Display for ResolvedTableReference<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.catalog, self.schema, self.table)
+    }
 }
 
 /// Represents a path to a table that may require further resolution

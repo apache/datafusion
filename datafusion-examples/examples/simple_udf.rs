@@ -122,7 +122,7 @@ async fn main() -> Result<()> {
     let expr = pow.call(vec![col("a"), col("b")]);
 
     // get a DataFrame from the context
-    let df = ctx.table("t")?;
+    let df = ctx.table("t").await?;
 
     // if we do not have `pow` in the scope and we registered it, we can get it from the registry
     let pow = df.registry().udf("pow")?;

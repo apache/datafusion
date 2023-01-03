@@ -30,6 +30,7 @@ use crate::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
@@ -94,6 +95,7 @@ use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
 use datafusion_optimizer::OptimizerConfig;
+use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
 
 use super::options::{
@@ -244,20 +246,8 @@ impl SessionContext {
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
     /// might require the schema to be inferred.
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
-        let mut statements = DFParser::parse_sql(sql)?;
-        if statements.len() != 1 {
-            return Err(DataFusionError::NotImplemented(
-                "The context currently only supports a single SQL statement".to_string(),
-            ));
-        }
-
         // create a query planner
-        let plan = {
-            // TODO: Move catalog off SessionState onto SessionContext
-            let state = self.state.read();
-            let query_planner = SqlToRel::new(&*state);
-            query_planner.statement_to_plan(statements.pop_front().unwrap())?
-        };
+        let plan = self.state().create_logical_plan(sql).await?;
 
         match plan {
             LogicalPlan::CreateExternalTable(cmd) => {
@@ -271,7 +261,7 @@ impl SessionContext {
                 or_replace,
             }) => {
                 let input = Arc::try_unwrap(input).unwrap_or_else(|e| e.as_ref().clone());
-                let table = self.table(&name);
+                let table = self.table(&name).await;
 
                 match (if_not_exists, or_replace, table) {
                     (true, false, Ok(_)) => self.return_empty_dataframe(),
@@ -311,7 +301,7 @@ impl SessionContext {
                 or_replace,
                 definition,
             }) => {
-                let view = self.table(&name);
+                let view = self.table(&name).await;
 
                 match (or_replace, view) {
                     (true, Ok(_)) => {
@@ -338,7 +328,7 @@ impl SessionContext {
             LogicalPlan::DropTable(DropTable {
                 name, if_exists, ..
             }) => {
-                let result = self.find_and_deregister(&name, TableType::Base);
+                let result = self.find_and_deregister(&name, TableType::Base).await;
                 match (result, if_exists) {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
@@ -351,7 +341,7 @@ impl SessionContext {
             LogicalPlan::DropView(DropView {
                 name, if_exists, ..
             }) => {
-                let result = self.find_and_deregister(&name, TableType::View);
+                let result = self.find_and_deregister(&name, TableType::View).await;
                 match (result, if_exists) {
                     (Ok(true), _) => self.return_empty_dataframe(),
                     (_, true) => self.return_empty_dataframe(),
@@ -447,7 +437,7 @@ impl SessionContext {
         let table_provider: Arc<dyn TableProvider> =
             self.create_custom_table(cmd).await?;
 
-        let table = self.table(&cmd.name);
+        let table = self.table(&cmd.name).await;
         match (cmd.if_not_exists, table) {
             (true, Ok(_)) => self.return_empty_dataframe(),
             (_, Err(_)) => {
@@ -481,43 +471,31 @@ impl SessionContext {
         Ok(table)
     }
 
-    fn find_and_deregister<'a>(
+    async fn find_and_deregister<'a>(
         &self,
         table_ref: impl Into<TableReference<'a>>,
         table_type: TableType,
     ) -> Result<bool> {
         let table_ref = table_ref.into();
-        let table_provider = self
-            .state
-            .read()
-            .schema_for_ref(table_ref)?
-            .table(table_ref.table());
+        let maybe_schema = {
+            let state = self.state.read();
+            let resolved = state.resolve_table_ref(table_ref);
+            state
+                .catalog_list
+                .catalog(resolved.catalog)
+                .and_then(|c| c.schema(resolved.schema))
+        };
 
-        if let Some(table_provider) = table_provider {
-            if table_provider.table_type() == table_type {
-                self.deregister_table(table_ref)?;
-                return Ok(true);
+        if let Some(schema) = maybe_schema {
+            if let Some(table_provider) = schema.table(table_ref.table()).await {
+                if table_provider.table_type() == table_type {
+                    schema.deregister_table(table_ref.table())?;
+                    return Ok(true);
+                }
             }
         }
+
         Ok(false)
-    }
-    /// Creates a logical plan.
-    ///
-    /// This function is intended for internal use and should not be called directly.
-    #[deprecated(note = "Use SessionContext::sql which snapshots the SessionState")]
-    pub fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
-        let mut statements = DFParser::parse_sql(sql)?;
-
-        if statements.len() != 1 {
-            return Err(DataFusionError::NotImplemented(
-                "The context currently only supports a single SQL statement".to_string(),
-            ));
-        }
-
-        // create a query planner
-        let state = self.state.read().clone();
-        let query_planner = SqlToRel::new(&state);
-        query_planner.statement_to_plan(statements.pop_front().unwrap())
     }
 
     /// Registers a variable provider within this context.
@@ -905,12 +883,12 @@ impl SessionContext {
     /// provided reference.
     ///
     /// [`register_table`]: SessionContext::register_table
-    pub fn table<'a>(
+    pub async fn table<'a>(
         &self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<DataFrame> {
         let table_ref = table_ref.into();
-        let provider = self.table_provider(table_ref)?;
+        let provider = self.table_provider(table_ref).await?;
         let plan = LogicalPlanBuilder::scan(
             table_ref.table(),
             provider_as_source(Arc::clone(&provider)),
@@ -920,14 +898,14 @@ impl SessionContext {
         Ok(DataFrame::new(self.state(), plan))
     }
 
-    /// Return a [`TabelProvider`] for the specified table.
-    pub fn table_provider<'a>(
+    /// Return a [`TableProvider`] for the specified table.
+    pub async fn table_provider<'a>(
         &self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn TableProvider>> {
         let table_ref = table_ref.into();
         let schema = self.state.read().schema_for_ref(table_ref)?;
-        match schema.table(table_ref.table()) {
+        match schema.table(table_ref.table()).await {
             Some(ref provider) => Ok(Arc::clone(provider)),
             _ => Err(DataFusionError::Plan(format!(
                 "No table named '{}'",
@@ -1643,6 +1621,72 @@ impl SessionState {
         self
     }
 
+    /// Creates a [`LogicalPlan`] from the provided SQL string
+    ///
+    /// See [`SessionContext::sql`] for a higher-level interface that also handles DDL
+    pub async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
+        use crate::catalog::information_schema::INFORMATION_SCHEMA_TABLES;
+        use datafusion_sql::parser::Statement as DFStatement;
+        use sqlparser::ast::{visit_relations, Ident, ObjectName};
+        use std::collections::hash_map::Entry;
+
+        let mut statements = DFParser::parse_sql(sql)?;
+        if statements.len() != 1 {
+            return Err(DataFusionError::NotImplemented(
+                "The context currently only supports a single SQL statement".to_string(),
+            ));
+        }
+        let statement = statements.pop_front().unwrap();
+
+        let mut relations = hashbrown::HashSet::with_capacity(10);
+
+        match &statement {
+            DFStatement::Statement(s) => {
+                visit_relations(s.as_ref(), |relation| {
+                    relations.get_or_insert_with(relation, |_| relation.clone());
+                    ControlFlow::<(), ()>::Continue(())
+                });
+            }
+            DFStatement::CreateExternalTable(table) => {
+                relations.insert(ObjectName(vec![Ident::from(table.name.as_str())]));
+            }
+            DFStatement::DescribeTable(table) => {
+                relations
+                    .get_or_insert_with(&table.table_name, |_| table.table_name.clone());
+            }
+        }
+
+        // Always include information_schema if available
+        if self.config.information_schema() {
+            for s in INFORMATION_SCHEMA_TABLES {
+                relations.insert(ObjectName(vec![
+                    Ident::new(INFORMATION_SCHEMA),
+                    Ident::new(*s),
+                ]));
+            }
+        }
+
+        let mut provider = SessionContextProvider {
+            state: self,
+            tables: HashMap::with_capacity(relations.len()),
+        };
+
+        for relation in relations {
+            let reference = object_name_to_table_reference(relation)?;
+            let resolved = self.resolve_table_ref(reference.as_table_reference());
+            if let Entry::Vacant(v) = provider.tables.entry(resolved.to_string()) {
+                if let Ok(schema) = self.schema_for_ref(resolved) {
+                    if let Some(table) = schema.table(resolved.table).await {
+                        v.insert(provider_as_source(table));
+                    }
+                }
+            }
+        }
+
+        let query = SqlToRel::new(&provider);
+        query.statement_to_plan(statement)
+    }
+
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         if let LogicalPlan::Explain(e) = plan {
@@ -1671,6 +1715,8 @@ impl SessionState {
     }
 
     /// Creates a physical plan from a logical plan.
+    ///
+    /// Note: this first calls [`Self::optimize`] on the provided plan
     pub async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -1717,29 +1763,26 @@ impl SessionState {
     }
 }
 
-impl ContextProvider for SessionState {
+struct SessionContextProvider<'a> {
+    state: &'a SessionState,
+    tables: HashMap<String, Arc<dyn TableSource>>,
+}
+
+impl<'a> ContextProvider for SessionContextProvider<'a> {
     fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
-        let resolved_ref = self.resolve_table_ref(name);
-        match self.schema_for_ref(resolved_ref) {
-            Ok(schema) => {
-                let provider = schema.table(resolved_ref.table).ok_or_else(|| {
-                    DataFusionError::Plan(format!(
-                        "table '{}.{}.{}' not found",
-                        resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
-                    ))
-                })?;
-                Ok(provider_as_source(provider))
-            }
-            Err(e) => Err(e),
-        }
+        let name = self.state.resolve_table_ref(name).to_string();
+        self.tables
+            .get(&name)
+            .cloned()
+            .ok_or_else(|| DataFusionError::Plan(format!("table '{name}' not found")))
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.scalar_functions.get(name).cloned()
+        self.state.scalar_functions.get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.aggregate_functions.get(name).cloned()
+        self.state.aggregate_functions.get(name).cloned()
     }
 
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
@@ -1753,7 +1796,8 @@ impl ContextProvider for SessionState {
             VarType::UserDefined
         };
 
-        self.execution_props
+        self.state
+            .execution_props
             .var_providers
             .as_ref()
             .and_then(|provider| provider.get(&provider_type)?.get_type(variable_names))
@@ -1763,6 +1807,7 @@ impl ContextProvider for SessionState {
         // TOOD: Move ConfigOptions into common crate
         match variable {
             "datafusion.execution.time_zone" => self
+                .state
                 .config
                 .options
                 .execution

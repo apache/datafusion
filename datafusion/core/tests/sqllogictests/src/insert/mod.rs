@@ -54,8 +54,8 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: SQLStatement) -> Result<D
     }
 
     // Second, get batches in table and destroy the old table
-    let mut origin_batches = ctx.table(&table_reference)?.collect().await?;
-    let schema = ctx.table_provider(&table_reference)?.schema();
+    let mut origin_batches = ctx.table(&table_reference).await?.collect().await?;
+    let schema = ctx.table_provider(&table_reference).await?.schema();
     ctx.deregister_table(&table_reference)?;
 
     // Third, transfer insert values to `RecordBatch`
