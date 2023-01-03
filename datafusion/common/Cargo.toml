@@ -47,3 +47,4 @@ object_store = { version = "0.5.0", default-features = false, optional = true }
 parquet = { version = "29.0.0", default-features = false, optional = true }
 pyo3 = { version = "0.17.1", optional = true }
 sqlparser = "0.29"
+num_cpus = "1.13.0"

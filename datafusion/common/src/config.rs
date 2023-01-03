@@ -17,7 +17,7 @@
 
 //! DataFusion Configuration Options
 
-use datafusion_common::{DataFusionError, Result};
+use crate::{DataFusionError, Result};
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt::Display;

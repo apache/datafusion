@@ -33,6 +33,7 @@ use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
 use sqlparser::ast::{TimezoneInfo, WildcardAdditionalOptions};
 use sqlparser::parser::ParserError::ParserError;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::ToDFSchema;
 use datafusion_common::{
@@ -82,8 +83,9 @@ pub trait ContextProvider {
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>>;
     /// Getter for system/user-defined variable type
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType>;
-    /// Getter for config_options
-    fn get_config_option(&self, variable: &str) -> Option<ScalarValue>;
+
+    /// Get configuration options
+    fn options(&self) -> &ConfigOptions;
 }
 
 /// SQL parser options
@@ -1813,22 +1815,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp With Time Zone
                     // INPUT : [SQLDataType]   TimestampTz + [RuntimeConfig] Time Zone
                     // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
-                    match self
-                        .schema_provider
-                        .get_config_option("datafusion.execution.time_zone")
-                    {
-                        Some(ScalarValue::Utf8(s)) => s,
-                        Some(v) => {
-                            return Err(DataFusionError::Internal(format!(
-                                "Incorrect data type for time_zone: {}",
-                                v.get_datatype(),
-                            )));
-                        }
-                        None => return Err(DataFusionError::Internal(
-                            "Config Option datafusion.execution.time_zone doesn't exist"
-                                .to_string(),
-                        )),
-                    }
+                    self.schema_provider.options().execution.time_zone.clone()
                 } else {
                     // Timestamp Without Time zone
                     None
@@ -4162,6 +4149,7 @@ mod tests {
 
     #[derive(Default)]
     struct MockContextProvider {
+        options: ConfigOptions,
         udafs: HashMap<String, Arc<AggregateUDF>>,
     }
 
@@ -4257,8 +4245,8 @@ mod tests {
             unimplemented!()
         }
 
-        fn get_config_option(&self, _: &str) -> Option<ScalarValue> {
-            unimplemented!()
+        fn options(&self) -> &ConfigOptions {
+            &self.options
         }
     }
 

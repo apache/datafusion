@@ -1759,18 +1759,8 @@ impl ContextProvider for SessionState {
             .and_then(|provider| provider.get(&provider_type)?.get_type(variable_names))
     }
 
-    fn get_config_option(&self, variable: &str) -> Option<ScalarValue> {
-        // TOOD: Move ConfigOptions into common crate
-        match variable {
-            "datafusion.execution.time_zone" => self
-                .config
-                .options
-                .execution
-                .time_zone
-                .as_ref()
-                .map(|s| ScalarValue::Utf8(Some(s.clone()))),
-            _ => unimplemented!(),
-        }
+    fn options(&self) -> &ConfigOptions {
+        self.config_options()
     }
 }
 
@@ -1805,22 +1795,8 @@ impl OptimizerConfig for SessionState {
         self.execution_props.query_execution_start_time
     }
 
-    fn rule_enabled(&self, name: &str) -> bool {
-        use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
-        match name {
-            FilterNullJoinKeys::NAME => {
-                self.config_options().optimizer.filter_null_join_keys
-            }
-            _ => true,
-        }
-    }
-
-    fn skip_failing_rules(&self) -> bool {
-        self.config_options().optimizer.skip_failed_rules
-    }
-
-    fn max_passes(&self) -> u8 {
-        self.config_options().optimizer.max_passes as _
+    fn options(&self) -> &ConfigOptions {
+        self.config_options()
     }
 }
 
