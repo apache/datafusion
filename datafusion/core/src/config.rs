@@ -158,6 +158,12 @@ config_namespace! {
         /// concurrency. Defaults to the number of cpu cores on the system.
         pub create_default_catalog_and_schema: bool, default = true
 
+        /// The default catalog name - this impacts what SQL queries use if not specified
+        pub default_catalog: String, default = "datafusion".to_string()
+
+        /// The default schema name - this impacts what SQL queries use if not specified
+        pub default_schema: String, default = "public".to_string()
+
         /// Should DataFusion provide access to `information_schema`
         /// virtual tables for displaying schema information
         pub information_schema: bool, default = false

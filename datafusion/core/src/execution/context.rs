@@ -99,11 +99,6 @@ use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
 
-/// The default catalog name - this impacts what SQL queries use if not specified
-const DEFAULT_CATALOG: &str = "datafusion";
-/// The default schema name - this impacts what SQL queries use if not specified
-const DEFAULT_SCHEMA: &str = "public";
-
 /// SessionContext is the main interface for executing queries with DataFusion. It stands for
 /// the connection between user and DataFusion/Ballista cluster.
 /// The context provides the following functionality
@@ -380,18 +375,32 @@ impl SessionContext {
                 // so for now, we default to default catalog
                 let tokens: Vec<&str> = schema_name.split('.').collect();
                 let (catalog, schema_name) = match tokens.len() {
-                    1 => Ok((DEFAULT_CATALOG, schema_name.as_str())),
-                    2 => Ok((tokens[0], tokens[1])),
-                    _ => Err(DataFusionError::Execution(format!(
-                        "Unable to parse catalog from {schema_name}"
-                    ))),
-                }?;
-                let catalog = self.catalog(catalog).ok_or_else(|| {
-                    DataFusionError::Execution(format!(
-                        "Missing '{DEFAULT_CATALOG}' catalog"
-                    ))
-                })?;
-
+                    1 => {
+                        let state = self.state.read();
+                        let name = &state.config.options.catalog.default_catalog;
+                        let catalog =
+                            state.catalog_list.catalog(name).ok_or_else(|| {
+                                DataFusionError::Execution(format!(
+                                    "Missing default catalog '{name}'"
+                                ))
+                            })?;
+                        (catalog, tokens[0])
+                    }
+                    2 => {
+                        let name = &tokens[0];
+                        let catalog = self.catalog(name).ok_or_else(|| {
+                            DataFusionError::Execution(format!(
+                                "Missing catalog '{name}'"
+                            ))
+                        })?;
+                        (catalog, tokens[1])
+                    }
+                    _ => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Unable to parse catalog from {schema_name}"
+                        )))
+                    }
+                };
                 let schema = catalog.schema(schema_name);
 
                 match (if_not_exists, schema) {
@@ -1097,11 +1106,6 @@ impl Hasher for IdHasher {
 /// Configuration options for session context
 #[derive(Clone)]
 pub struct SessionConfig {
-    /// Default catalog name for table resolution
-    default_catalog: String,
-    /// Default schema name for table resolution (not in ConfigOptions
-    /// due to `resolve_table_ref` which passes back references)
-    default_schema: String,
     /// Configuration options
     options: ConfigOptions,
     /// Opaque extensions.
@@ -1111,8 +1115,6 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            default_catalog: DEFAULT_CATALOG.to_owned(),
-            default_schema: DEFAULT_SCHEMA.to_owned(),
             options: ConfigOptions::new(),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
@@ -1218,8 +1220,8 @@ impl SessionConfig {
         catalog: impl Into<String>,
         schema: impl Into<String>,
     ) -> Self {
-        self.default_catalog = catalog.into();
-        self.default_schema = schema.into();
+        self.options.catalog.default_catalog = catalog.into();
+        self.options.catalog.default_schema = schema.into();
         self
     }
 
@@ -1434,7 +1436,7 @@ impl SessionState {
 
             default_catalog
                 .register_schema(
-                    &config.default_schema,
+                    &config.config_options().catalog.default_schema,
                     Arc::new(MemorySchemaProvider::new()),
                 )
                 .expect("memory catalog provider can register schema");
@@ -1442,7 +1444,7 @@ impl SessionState {
             Self::register_default_schema(&config, &runtime, &default_catalog);
 
             catalog_list.register_catalog(
-                config.default_catalog.clone(),
+                config.config_options().catalog.default_catalog.clone(),
                 Arc::new(default_catalog),
             );
         }
@@ -1564,9 +1566,10 @@ impl SessionState {
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> ResolvedTableReference<'a> {
+        let catalog = &self.config_options().catalog;
         table_ref
             .into()
-            .resolve(&self.config.default_catalog, &self.config.default_schema)
+            .resolve(&catalog.default_catalog, &catalog.default_schema)
     }
 
     fn schema_for_ref<'a>(
