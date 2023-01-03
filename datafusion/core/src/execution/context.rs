@@ -1627,7 +1627,7 @@ impl SessionState {
     pub async fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
         use crate::catalog::information_schema::INFORMATION_SCHEMA_TABLES;
         use datafusion_sql::parser::Statement as DFStatement;
-        use sqlparser::ast::{visit_relations, Ident, ObjectName};
+        use sqlparser::ast::*;
         use std::collections::hash_map::Entry;
 
         let mut statements = DFParser::parse_sql(sql)?;
@@ -1642,10 +1642,37 @@ impl SessionState {
 
         match &statement {
             DFStatement::Statement(s) => {
-                visit_relations(s.as_ref(), |relation| {
-                    relations.get_or_insert_with(relation, |_| relation.clone());
-                    ControlFlow::<(), ()>::Continue(())
-                });
+                struct RelationVisitor<'a>(&'a mut hashbrown::HashSet<ObjectName>);
+
+                impl<'a> Visitor for RelationVisitor<'a> {
+                    type Break = ();
+
+                    fn pre_visit_relation(
+                        &mut self,
+                        relation: &ObjectName,
+                    ) -> ControlFlow<()> {
+                        self.0.get_or_insert_with(relation, |_| relation.clone());
+                        ControlFlow::Continue(())
+                    }
+
+                    fn pre_visit_statement(
+                        &mut self,
+                        statement: &Statement,
+                    ) -> ControlFlow<()> {
+                        match statement {
+                            Statement::ShowCreate {
+                                obj_type: ShowCreateObject::Table | ShowCreateObject::View,
+                                obj_name,
+                            } => {
+                                self.0.get_or_insert_with(obj_name, |_| obj_name.clone());
+                            }
+                            _ => {}
+                        }
+                        ControlFlow::Continue(())
+                    }
+                }
+                let mut visitor = RelationVisitor(&mut relations);
+                let _ = s.as_ref().visit(&mut visitor);
             }
             DFStatement::CreateExternalTable(table) => {
                 relations.insert(ObjectName(vec![Ident::from(table.name.as_str())]));
