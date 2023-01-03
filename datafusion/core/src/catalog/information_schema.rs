@@ -27,7 +27,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::config::ConfigOptions;
+use crate::config::{ConfigEntry, ConfigOptions};
 use crate::datasource::streaming::{PartitionStream, StreamingTable};
 use crate::datasource::TableProvider;
 use crate::execution::context::TaskContext;
@@ -162,8 +162,8 @@ impl InformationSchemaConfig {
         config_options: &ConfigOptions,
         builder: &mut InformationSchemaDfSettingsBuilder,
     ) {
-        for (name, setting) in config_options.options() {
-            builder.add_setting(name, setting.to_string());
+        for entry in config_options.entries() {
+            builder.add_setting(entry);
         }
     }
 }
@@ -611,7 +611,7 @@ impl InformationSchemaDfSettings {
     fn new(config: InformationSchemaConfig) -> Self {
         let schema = Arc::new(Schema::new(vec![
             Field::new("name", DataType::Utf8, false),
-            Field::new("setting", DataType::Utf8, false),
+            Field::new("setting", DataType::Utf8, true),
         ]));
 
         Self { schema, config }
@@ -656,9 +656,9 @@ struct InformationSchemaDfSettingsBuilder {
 }
 
 impl InformationSchemaDfSettingsBuilder {
-    fn add_setting(&mut self, name: impl AsRef<str>, setting: impl AsRef<str>) {
-        self.names.append_value(name.as_ref());
-        self.settings.append_value(setting.as_ref());
+    fn add_setting(&mut self, entry: ConfigEntry) {
+        self.names.append_value(entry.key);
+        self.settings.append_option(entry.value);
     }
 
     fn finish(&mut self) -> RecordBatch {

@@ -18,12 +18,13 @@
 //! DataFusion h2o benchmarks
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::datasource::MemTable;
-use datafusion::prelude::{CsvReadOptions, SessionConfig};
+use datafusion::prelude::CsvReadOptions;
 use datafusion::{arrow::util::pretty, error::Result, prelude::SessionContext};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -63,9 +64,10 @@ async fn main() -> Result<()> {
 
 async fn group_by(opt: &GroupBy) -> Result<()> {
     let path = opt.path.to_str().unwrap();
-    let config = SessionConfig::from_env().with_batch_size(65535);
+    let mut config = ConfigOptions::from_env()?;
+    config.execution.batch_size = 65535;
 
-    let ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::with_config(config.into());
 
     let schema = Schema::new(vec![
         Field::new("id1", DataType::Utf8, false),
