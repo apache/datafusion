@@ -32,24 +32,25 @@ use std::sync::Arc;
 /// Optimizer rule that introduces CoalesceBatchesExec to avoid overhead with small batches that
 /// are produced by highly selective filters
 #[derive(Default)]
-pub struct CoalesceBatches {
-    /// Target batch size
-    target_batch_size: usize,
-}
+pub struct CoalesceBatches {}
 
 impl CoalesceBatches {
     #[allow(missing_docs)]
-    pub fn new(target_batch_size: usize) -> Self {
-        Self { target_batch_size }
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 impl PhysicalOptimizerRule for CoalesceBatches {
     fn optimize(
         &self,
         plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
-        let target_batch_size = self.target_batch_size;
+        if !config.execution.coalesce_batches {
+            return Ok(plan);
+        }
+
+        let target_batch_size = config.execution.batch_size;
         plan.transform_up(&|plan| {
             let plan_any = plan.as_any();
             // The goal here is to detect operators that could produce small batches and only
