@@ -1659,14 +1659,12 @@ impl SessionState {
                         &mut self,
                         statement: &Statement,
                     ) -> ControlFlow<()> {
-                        match statement {
-                            Statement::ShowCreate {
-                                obj_type: ShowCreateObject::Table | ShowCreateObject::View,
-                                obj_name,
-                            } => {
-                                self.0.get_or_insert_with(obj_name, |_| obj_name.clone());
-                            }
-                            _ => {}
+                        if let Statement::ShowCreate {
+                            obj_type: ShowCreateObject::Table | ShowCreateObject::View,
+                            obj_name,
+                        } = statement
+                        {
+                            self.0.get_or_insert_with(obj_name, |_| obj_name.clone());
                         }
                         ControlFlow::Continue(())
                     }
