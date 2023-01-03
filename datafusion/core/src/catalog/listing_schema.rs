@@ -94,16 +94,23 @@ impl ListingSchemaProvider {
         let base = Path::new(self.path.as_ref());
         let mut tables = HashSet::new();
         for file in entries.iter() {
+            // The listing will initially be a file. However if we've recursed up to match our base, we know our path is a directory.
+            let mut is_dir = false;
             let mut parent = Path::new(file.location.as_ref());
             while let Some(p) = parent.parent() {
                 if p == base {
-                    tables.insert(parent);
+                    tables.insert(TablePath {
+                        is_dir,
+                        path: parent,
+                    });
                 }
                 parent = p;
+                is_dir = true;
             }
         }
         for table in tables.iter() {
             let file_name = table
+                .path
                 .file_name()
                 .ok_or_else(|| {
                     DataFusionError::Internal("Cannot parse file name!".to_string())
@@ -113,7 +120,7 @@ impl ListingSchemaProvider {
                     DataFusionError::Internal("Cannot parse file name!".to_string())
                 })?;
             let table_name = file_name.split('.').collect_vec()[0];
-            let table_path = table.to_str().ok_or_else(|| {
+            let table_path = table.to_string().ok_or_else(|| {
                 DataFusionError::Internal("Cannot parse file name!".to_string())
             })?;
 
@@ -195,5 +202,50 @@ impl SchemaProvider for ListingSchemaProvider {
             .lock()
             .expect("Can't lock tables")
             .contains_key(name)
+    }
+}
+
+/// Stores metadata along with a table's path.
+/// Primarily whether the path is a directory or not.
+#[derive(Eq, PartialEq, Hash, Debug)]
+struct TablePath<'a> {
+    path: &'a Path,
+    is_dir: bool,
+}
+
+impl TablePath<'_> {
+    /// Format the path with a '/' appended if its a directory.
+    /// Clients (eg. object_store listing) can and will use the presence of trailing slash as a heuristic
+    fn to_string(&self) -> Option<String> {
+        self.path.to_str().map(|path| {
+            if self.is_dir {
+                format!("{path}/")
+            } else {
+                path.to_string()
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_path_ends_with_slash_when_is_dir() {
+        let table_path = TablePath {
+            path: Path::new("/file"),
+            is_dir: true,
+        };
+        assert!(table_path.to_string().expect("table path").ends_with("/"));
+    }
+
+    #[test]
+    fn dir_table_path_str_does_not_end_with_slash_when_not_is_dir() {
+        let table_path = TablePath {
+            path: Path::new("/file"),
+            is_dir: false,
+        };
+        assert!(!table_path.to_string().expect("table_path").ends_with("/"));
     }
 }
