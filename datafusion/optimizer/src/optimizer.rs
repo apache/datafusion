@@ -92,9 +92,12 @@ pub struct OptimizerContext {
 impl OptimizerContext {
     /// Create optimizer config
     pub fn new() -> Self {
+        let mut options = ConfigOptions::default();
+        options.optimizer.filter_null_join_keys = true;
+
         Self {
             query_execution_start_time: Utc::now(),
-            options: Default::default(),
+            options,
         }
     }
 
