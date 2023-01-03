@@ -15,68 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use async_trait::async_trait;
-use datafusion::arrow::record_batch::RecordBatch;
+use std::error::Error;
 use datafusion::prelude::SessionContext;
-use datafusion_sql::parser::{DFParser, Statement};
 use log::info;
-use normalize::convert_batches;
-use sqllogictest::DBOutput;
-use sqlparser::ast::Statement as SQLStatement;
 use std::path::Path;
-use std::time::Duration;
+use crate::engines::datafusion::DataFusion;
 
-use crate::error::{DFSqlLogicTestError, Result};
-use crate::insert::insert;
 
-mod error;
-mod insert;
-mod normalize;
 mod setup;
 mod utils;
+mod engines;
 
 const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files";
 
-pub struct DataFusion {
-    ctx: SessionContext,
-    file_name: String,
-}
-
-#[async_trait]
-impl sqllogictest::AsyncDB for DataFusion {
-    type Error = DFSqlLogicTestError;
-
-    async fn run(&mut self, sql: &str) -> Result<DBOutput> {
-        println!("[{}] Running query: \"{}\"", self.file_name, sql);
-        let result = run_query(&self.ctx, sql).await?;
-        Ok(result)
-    }
-
-    /// Engine name of current database.
-    fn engine_name(&self) -> &str {
-        "DataFusion"
-    }
-
-    /// [`Runner`] calls this function to perform sleep.
-    ///
-    /// The default implementation is `std::thread::sleep`, which is universial to any async runtime
-    /// but would block the current thread. If you are running in tokio runtime, you should override
-    /// this by `tokio::time::sleep`.
-    async fn sleep(dur: Duration) {
-        tokio::time::sleep(dur).await;
-    }
-}
-
 #[tokio::main]
 #[cfg(target_family = "windows")]
-pub async fn main() -> Result<()> {
+pub async fn main() -> Result<(), Box<dyn Error>> {
     println!("Skipping test on windows");
     Ok(())
 }
 
 #[tokio::main]
 #[cfg(not(target_family = "windows"))]
-pub async fn main() -> Result<()> {
+pub async fn main() -> Result<(), Box<dyn Error>> {
     // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
 
     use sqllogictest::{default_validator, update_test_file};
@@ -100,7 +61,7 @@ pub async fn main() -> Result<()> {
 
         // Create the test runner
         let ctx = context_for_test_file(&file_name).await;
-        let mut runner = sqllogictest::Runner::new(DataFusion { ctx, file_name });
+        let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name));
 
         // run each file using its own new DB
         //
@@ -135,24 +96,6 @@ async fn context_for_test_file(file_name: &str) -> SessionContext {
             SessionContext::new()
         }
     }
-}
-
-async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DBOutput> {
-    let sql = sql.into();
-    // Check if the sql is `insert`
-    if let Ok(mut statements) = DFParser::parse_sql(&sql) {
-        let statement0 = statements.pop_front().expect("at least one SQL statement");
-        if let Statement::Statement(statement) = statement0 {
-            let statement = *statement;
-            if matches!(&statement, SQLStatement::Insert { .. }) {
-                return insert(ctx, statement).await;
-            }
-        }
-    }
-    let df = ctx.sql(sql.as_str()).await?;
-    let results: Vec<RecordBatch> = df.collect().await?;
-    let formatted_batches = convert_batches(results)?;
-    Ok(formatted_batches)
 }
 
 /// Parsed command line options

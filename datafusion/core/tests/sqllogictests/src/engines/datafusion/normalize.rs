@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::{DFSqlLogicTestError, Result};
+use super::error::{DFSqlLogicTestError, Result};
 use arrow::{array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
 use datafusion::error::DataFusionError;
 use sqllogictest::{ColumnType, DBOutput};
