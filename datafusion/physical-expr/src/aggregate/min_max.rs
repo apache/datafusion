@@ -17,7 +17,10 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
+use std::alloc;
+use std::alloc::Layout;
 use std::any::Any;
+use std::cell::RefCell;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
@@ -39,13 +42,14 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{downcast_value, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
-use crate::aggregate::row_accumulator::{
-    is_row_accumulator_support_dtype, RowAccumulator,
-};
+use crate::aggregate::row_accumulator::is_row_accumulator_support_dtype;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
+use arrow_schema::Schema;
 use datafusion_row::accessor::RowAccessor;
+use datafusion_row::layout::RowLayout;
+use datafusion_row::RowType;
 
 use super::moving_min_max;
 
@@ -124,14 +128,16 @@ impl AggregateExpr for Max {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn create_row_accumulator(
+    fn create_row_accumulator<'b>(
         &self,
+        accessor: RowAccessor<'b>,
         start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(MaxRowAccumulator::new(
+    ) -> Result<Box<dyn Accumulator + 'b>> {
+        Ok(Box::new(MaxRowAccumulator::try_new(
+            &self.data_type,
+            accessor,
             start_index,
-            self.data_type.clone(),
-        )))
+        )?))
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
@@ -629,48 +635,6 @@ impl Accumulator for SlidingMaxAccumulator {
     }
 }
 
-#[derive(Debug)]
-struct MaxRowAccumulator {
-    index: usize,
-    data_type: DataType,
-}
-
-impl MaxRowAccumulator {
-    pub fn new(index: usize, data_type: DataType) -> Self {
-        Self { index, data_type }
-    }
-}
-
-impl RowAccumulator for MaxRowAccumulator {
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        let values = &values[0];
-        let delta = &max_batch(values)?;
-        max_row(self.index, accessor, delta)?;
-        Ok(())
-    }
-
-    fn merge_batch(
-        &mut self,
-        states: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        self.update_batch(states, accessor)
-    }
-
-    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(accessor.get_as_scalar(&self.data_type, self.index))
-    }
-
-    #[inline(always)]
-    fn state_index(&self) -> usize {
-        self.index
-    }
-}
-
 /// MIN aggregate expression
 #[derive(Debug)]
 pub struct Min {
@@ -734,14 +698,16 @@ impl AggregateExpr for Min {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn create_row_accumulator(
+    fn create_row_accumulator<'b>(
         &self,
+        accessor: RowAccessor<'b>,
         start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(MinRowAccumulator::new(
+    ) -> Result<Box<dyn Accumulator + 'b>> {
+        Ok(Box::new(MinRowAccumulator::try_new(
+            &self.data_type,
+            accessor,
             start_index,
-            self.data_type.clone(),
-        )))
+        )?))
     }
 
     fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
@@ -850,45 +816,113 @@ impl Accumulator for SlidingMinAccumulator {
     }
 }
 
+/// An accumulator to compute the maximum value
 #[derive(Debug)]
-struct MinRowAccumulator {
+pub struct MaxRowAccumulator<'a> {
+    accessor: RowAccessor<'a>,
     index: usize,
     data_type: DataType,
 }
 
-impl MinRowAccumulator {
-    pub fn new(index: usize, data_type: DataType) -> Self {
-        Self { index, data_type }
+impl<'a> MaxRowAccumulator<'a> {
+    /// new max accumulator
+    pub fn try_new<'b>(
+        datatype: &DataType,
+        accessor: RowAccessor<'b>,
+        index: usize,
+    ) -> Result<Self>
+    where
+        'b: 'a,
+    {
+        // println!("using Row accumulator MAX, index:{:?}", index);
+        Ok(Self {
+            accessor,
+            index,
+            data_type: datatype.clone(),
+        })
     }
 }
 
-impl RowAccumulator for MinRowAccumulator {
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
+impl Accumulator for MaxRowAccumulator<'_> {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // self.max_row_accumulator
+        //     .update_batch(values, &mut self.accessor)
         let values = &values[0];
-        let delta = &min_batch(values)?;
-        min_row(self.index, accessor, delta)?;
+        let delta = &max_batch(values)?;
+        max_row(self.index, &mut self.accessor, delta)?;
         Ok(())
     }
 
-    fn merge_batch(
-        &mut self,
-        states: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        self.update_batch(states, accessor)
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
     }
 
-    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(accessor.get_as_scalar(&self.data_type, self.index))
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        // println!("state is called");
+        Ok(vec![self.evaluate()?])
     }
 
-    #[inline(always)]
-    fn state_index(&self) -> usize {
-        self.index
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Ok(self.accessor.get_as_scalar(&self.data_type, self.index))
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+    }
+}
+
+/// An accumulator to compute the maximum value
+#[derive(Debug)]
+pub struct MinRowAccumulator<'a> {
+    accessor: RowAccessor<'a>,
+    index: usize,
+    data_type: DataType,
+}
+
+impl<'a> MinRowAccumulator<'a> {
+    /// new max accumulator
+    pub fn try_new<'b>(
+        datatype: &DataType,
+        accessor: RowAccessor<'b>,
+        index: usize,
+    ) -> Result<Self>
+    where
+        'b: 'a,
+    {
+        // println!("using Row accumulator MIN, index:{:?}", index);
+        Ok(Self {
+            accessor,
+            index,
+            data_type: datatype.clone(),
+        })
+    }
+}
+
+impl Accumulator for MinRowAccumulator<'_> {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // self.max_row_accumulator
+        //     .update_batch(values, &mut self.accessor)
+        let values = &values[0];
+        let delta = &min_batch(values)?;
+        min_row(self.index, &mut self.accessor, delta)?;
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
+    }
+
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        // println!("state is called");
+        Ok(vec![self.evaluate()?])
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Ok(self.accessor.get_as_scalar(&self.data_type, self.index))
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
     }
 }
 

@@ -15,12 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::PhysicalExpr;
 use arrow::datatypes::Field;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
+use datafusion_row::accessor::RowAccessor;
 use std::any::Any;
+use std::cell::RefCell;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -93,10 +94,11 @@ pub trait AggregateExpr: Send + Sync + Debug {
     ///
     /// We recommend implementing `RowAccumulator` along with the standard `Accumulator`,
     /// when its state is of fixed size, as RowAccumulator is more memory efficient and CPU-friendly.
-    fn create_row_accumulator(
+    fn create_row_accumulator<'b>(
         &self,
-        _start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
+        accessor: RowAccessor<'b>,
+        start_index: usize,
+    ) -> Result<Box<dyn Accumulator + 'b>> {
         Err(DataFusionError::NotImplemented(format!(
             "RowAccumulator hasn't been implemented for {self:?} yet"
         )))

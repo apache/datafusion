@@ -127,6 +127,10 @@ impl RowLayout {
     pub fn fixed_part_width(&self) -> usize {
         self.null_width + self.values_width
     }
+
+    pub fn field_offsets(&self) -> Vec<usize> {
+        self.field_offsets.clone()
+    }
 }
 
 /// Get relative offsets for each field and total width for values

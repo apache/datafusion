@@ -21,9 +21,7 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::aggregate::row_accumulator::{
-    is_row_accumulator_support_dtype, RowAccumulator,
-};
+use crate::aggregate::row_accumulator::is_row_accumulator_support_dtype;
 use crate::aggregate::sum;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
@@ -110,14 +108,16 @@ impl AggregateExpr for Avg {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn create_row_accumulator(
+    fn create_row_accumulator<'b>(
         &self,
+        accessor: RowAccessor<'b>,
         start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(AvgRowAccumulator::new(
+    ) -> Result<Box<dyn Accumulator + 'b>> {
+        Ok(Box::new(AvgRowAccumulator::try_new(
+            &self.data_type,
+            accessor,
             start_index,
-            self.data_type.clone(),
-        )))
+        )?))
     }
 }
 
@@ -194,74 +194,83 @@ impl Accumulator for AvgAccumulator {
 }
 
 #[derive(Debug)]
-struct AvgRowAccumulator {
-    state_index: usize,
+struct AvgRowAccumulator<'a> {
+    accessor: RowAccessor<'a>,
+    index: usize,
     sum_datatype: DataType,
 }
 
-impl AvgRowAccumulator {
-    pub fn new(start_index: usize, sum_datatype: DataType) -> Self {
-        Self {
-            state_index: start_index,
-            sum_datatype,
-        }
+impl<'a> AvgRowAccumulator<'a> {
+    pub fn try_new<'b>(
+        datatype: &DataType,
+        accessor: RowAccessor<'b>,
+        index: usize,
+    ) -> Result<Self>
+    where
+        'b: 'a,
+    {
+        // println!("using Row accumulator AVG");
+        Ok(Self {
+            accessor,
+            index,
+            sum_datatype: datatype.clone(),
+        })
     }
 }
 
-impl RowAccumulator for AvgRowAccumulator {
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
+impl Accumulator for AvgRowAccumulator<'_> {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         // count
         let delta = (values.len() - values.data().null_count()) as u64;
-        accessor.add_u64(self.state_index(), delta);
+        self.accessor.add_u64(self.index, delta);
 
         // sum
         sum::add_to_row(
-            self.state_index() + 1,
-            accessor,
+            self.index + 1,
+            &mut self.accessor,
             &sum::sum_batch(values, &self.sum_datatype)?,
         )?;
         Ok(())
     }
 
-    fn merge_batch(
-        &mut self,
-        states: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let counts = downcast_value!(states[0], UInt64Array);
         // count
         let delta = compute::sum(counts).unwrap_or(0);
-        accessor.add_u64(self.state_index(), delta);
+        self.accessor.add_u64(self.index, delta);
 
         // sum
         let difference = sum::sum_batch(&states[1], &self.sum_datatype)?;
-        sum::add_to_row(self.state_index() + 1, accessor, &difference)?;
+        sum::add_to_row(self.index + 1, &mut self.accessor, &difference)?;
         Ok(())
     }
 
-    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
+    fn evaluate(&self) -> Result<ScalarValue> {
         assert_eq!(self.sum_datatype, DataType::Float64);
-        Ok(match accessor.get_u64_opt(self.state_index()) {
+        Ok(match self.accessor.get_u64_opt(self.index) {
             None => ScalarValue::Float64(None),
             Some(0) => ScalarValue::Float64(Some(0.0)),
             Some(n) => ScalarValue::Float64(
-                accessor
-                    .get_f64_opt(self.state_index() + 1)
+                self.accessor
+                    .get_f64_opt(self.index + 1)
                     .map(|f| f / n as f64),
             ),
         })
     }
 
-    #[inline(always)]
-    fn state_index(&self) -> usize {
-        self.state_index
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        let count = ScalarValue::UInt64(self.accessor.get_u64_opt(self.index));
+        let avg = ScalarValue::Float64(self.accessor.get_f64_opt(self.index + 1));
+        // println!("state is called");
+        Ok(vec![count, avg])
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
     }
 }
+
 
 #[cfg(test)]
 mod tests {

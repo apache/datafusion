@@ -21,7 +21,6 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::Int64Array;
 use arrow::compute;
@@ -98,11 +97,15 @@ impl AggregateExpr for Count {
         true
     }
 
-    fn create_row_accumulator(
+    fn create_row_accumulator<'b>(
         &self,
+        accessor: RowAccessor<'b>,
         start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(CountRowAccumulator::new(start_index)))
+    ) -> Result<Box<dyn Accumulator + 'b>> {
+        Ok(Box::new(CountRowAccumulator::try_new(
+            accessor,
+            start_index,
+        )?))
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -162,50 +165,55 @@ impl Accumulator for CountAccumulator {
 }
 
 #[derive(Debug)]
-struct CountRowAccumulator {
-    state_index: usize,
+struct CountRowAccumulator<'a> {
+    accessor: RowAccessor<'a>,
+    index: usize,
 }
 
-impl CountRowAccumulator {
-    pub fn new(index: usize) -> Self {
-        Self { state_index: index }
+impl<'a> CountRowAccumulator<'a> {
+    pub fn try_new<'b>(accessor: RowAccessor<'b>, index: usize) -> Result<Self>
+    where
+        'b: 'a,
+    {
+        // println!("using Row accumulator COUNT, index:{:?}", index);
+        Ok(Self { accessor, index })
     }
 }
 
-impl RowAccumulator for CountRowAccumulator {
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
+impl Accumulator for CountRowAccumulator<'_> {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
         let delta = (array.len() - array.data().null_count()) as u64;
-        accessor.add_u64(self.state_index, delta);
+        self.accessor.add_u64(self.index, delta);
         Ok(())
     }
 
-    fn merge_batch(
-        &mut self,
-        states: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let counts = downcast_value!(states[0], Int64Array);
         let delta = &compute::sum(counts);
         if let Some(d) = delta {
-            accessor.add_i64(self.state_index, *d);
+            self.accessor.add_i64(self.index, *d);
         }
         Ok(())
     }
 
-    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(accessor.get_as_scalar(&DataType::Int64, self.state_index))
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        // println!("state is called");
+        Ok(vec![self.evaluate()?])
     }
 
-    #[inline(always)]
-    fn state_index(&self) -> usize {
-        self.state_index
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Ok(match self.accessor.get_u64_opt(self.index){
+            Some(cnt) => ScalarValue::Int64(Some(cnt as i64)),
+            None => ScalarValue::Int64(Some(0)),
+        })
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
     }
 }
+
 
 #[cfg(test)]
 mod tests {

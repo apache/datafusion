@@ -43,27 +43,6 @@ use std::fmt::Debug;
 ///                 |
 ///           avg(c) state_index = 1
 ///
-pub trait RowAccumulator: Send + Sync + Debug {
-    /// updates the accumulator's state from a vector of arrays.
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()>;
-
-    /// updates the accumulator's state from a vector of states.
-    fn merge_batch(
-        &mut self,
-        states: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()>;
-
-    /// returns its value based on its current state.
-    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue>;
-
-    /// State's starting field index in the row.
-    fn state_index(&self) -> usize;
-}
 
 /// Returns if `data_type` is supported with `RowAccumulator`
 pub fn is_row_accumulator_support_dtype(data_type: &DataType) -> bool {

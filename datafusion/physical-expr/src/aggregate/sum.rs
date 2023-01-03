@@ -34,9 +34,7 @@ use arrow::{
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-use crate::aggregate::row_accumulator::{
-    is_row_accumulator_support_dtype, RowAccumulator,
-};
+use crate::aggregate::row_accumulator::is_row_accumulator_support_dtype;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
@@ -113,14 +111,16 @@ impl AggregateExpr for Sum {
         is_row_accumulator_support_dtype(&self.data_type)
     }
 
-    fn create_row_accumulator(
+    fn create_row_accumulator<'b>(
         &self,
+        accessor: RowAccessor<'b>,
         start_index: usize,
-    ) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(SumRowAccumulator::new(
+    ) -> Result<Box<dyn Accumulator + 'b>> {
+        Ok(Box::new(SumRowAccumulator::try_new(
+            &self.data_type,
+            accessor,
             start_index,
-            self.data_type.clone(),
-        )))
+        )?))
     }
 
     fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
@@ -278,44 +278,54 @@ impl Accumulator for SumAccumulator {
 }
 
 #[derive(Debug)]
-struct SumRowAccumulator {
+struct SumRowAccumulator<'a> {
+    accessor: RowAccessor<'a>,
     index: usize,
     datatype: DataType,
 }
 
-impl SumRowAccumulator {
-    pub fn new(index: usize, datatype: DataType) -> Self {
-        Self { index, datatype }
+impl<'a> SumRowAccumulator<'a> {
+    pub fn try_new<'b>(
+        datatype: &DataType,
+        accessor: RowAccessor<'b>,
+        index: usize,
+    ) -> Result<Self>
+    where
+        'b: 'a,
+    {
+        // println!("using Row accumulator SUM, index:{:?}", index);
+        Ok(Self {
+            accessor,
+            index,
+            datatype: datatype.clone(),
+        })
     }
 }
 
-impl RowAccumulator for SumRowAccumulator {
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
+impl Accumulator for SumRowAccumulator<'_> {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = sum_batch(values, &self.datatype)?;
-        add_to_row(self.index, accessor, &delta)?;
+        add_to_row(self.index, &mut self.accessor, &delta)?;
         Ok(())
     }
 
-    fn merge_batch(
-        &mut self,
-        states: &[ArrayRef],
-        accessor: &mut RowAccessor,
-    ) -> Result<()> {
-        self.update_batch(states, accessor)
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
     }
 
-    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(accessor.get_as_scalar(&self.datatype, self.index))
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        let sum = self.accessor.get_as_scalar(&self.datatype, self.index);
+        let count = ScalarValue::UInt64(self.accessor.get_u64_opt(self.index + 1));
+        Ok(vec![sum, count])
     }
 
-    #[inline(always)]
-    fn state_index(&self) -> usize {
-        self.index
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Ok(self.accessor.get_as_scalar(&self.datatype, self.index))
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
     }
 }
 
