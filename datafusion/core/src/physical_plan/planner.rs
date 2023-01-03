@@ -22,9 +22,6 @@ use super::{
     aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
 };
-use crate::config::{
-    OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY, OPT_PREFER_HASH_JOIN,
-};
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -773,12 +770,19 @@ impl DefaultPhysicalPlanner {
                     )?;
                     Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?))
                 }
-                LogicalPlan::Union(Union { inputs, .. }) => {
+                LogicalPlan::Union(Union { inputs, schema }) => {
                     let physical_plans = futures::stream::iter(inputs)
                         .then(|lp| self.create_initial_plan(lp, session_state))
                         .try_collect::<Vec<_>>()
                         .await?;
-                    Ok(Arc::new(UnionExec::new(physical_plans)))
+                    if schema.fields().len() < physical_plans[0].schema().fields().len() {
+                        // `schema` could be a subset of the child schema. For example
+                        // for query "select count(*) from (select a from t union all select a from t)"
+                        // `schema` is empty but child schema contains one field `a`.
+                        Ok(Arc::new(UnionExec::try_new_with_schema(physical_plans, schema.clone())?))
+                    } else {
+                        Ok(Arc::new(UnionExec::new(physical_plans)))
+                    }
                 }
                 LogicalPlan::Repartition(Repartition {
                     input,
@@ -995,9 +999,7 @@ impl DefaultPhysicalPlanner {
                         _ => None
                     };
 
-                    let prefer_hash_join = session_state.config().config_options()
-                        .get_bool(OPT_PREFER_HASH_JOIN)
-                        .unwrap_or_default();
+                    let prefer_hash_join = session_state.config_options().optimizer.prefer_hash_join;
                     if join_on.is_empty() {
                         // there is no equal join condition, use the nested loop join
                         // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
@@ -1713,21 +1715,14 @@ impl DefaultPhysicalPlanner {
             use PlanType::*;
             let mut stringified_plans = vec![];
 
-            if !session_state
-                .config_options()
-                .get_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY)
-                .unwrap_or_default()
-            {
-                stringified_plans = e.stringified_plans.clone();
+            let config = &session_state.config_options().explain;
 
+            if !config.physical_plan_only {
+                stringified_plans = e.stringified_plans.clone();
                 stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
             }
 
-            if !session_state
-                .config_options()
-                .get_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY)
-                .unwrap_or_default()
-            {
+            if !config.logical_plan_only {
                 let input = self
                     .create_initial_plan(e.plan.as_ref(), session_state)
                     .await?;

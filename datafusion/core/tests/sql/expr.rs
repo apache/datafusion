@@ -1296,11 +1296,10 @@ async fn test_extract_date_part() -> Result<()> {
         "EXTRACT(microsecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
         "12123456.78"
     );
-    // Depends on https://github.com/apache/arrow-datafusion/issues/4528
-    // test_expression!(
-    //     "EXTRACT(nanosecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-    //     "1212345678"
-    // );
+    test_expression!(
+        "EXTRACT(nanosecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "12123456780"
+    );
     test_expression!(
         "date_part('second', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
         "12.12345678"
@@ -1389,8 +1388,13 @@ async fn test_extract_date_part_func() -> Result<()> {
         ),
         "true"
     );
-    // Depends on https://github.com/apache/arrow-datafusion/issues/4528
-    //test_expression!(format!("(date_part('{0}', now()) = EXTRACT({0} FROM now()))", "nanosecond"), "true");
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "nanosecond"
+        ),
+        "true"
+    );
 
     Ok(())
 }
