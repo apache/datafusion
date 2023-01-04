@@ -591,68 +591,6 @@ async fn explain_analyze_runs_optimizers() {
 }
 
 #[tokio::test]
-async fn tpch_explain_q10() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    register_tpch_csv(&ctx, "customer").await?;
-    register_tpch_csv(&ctx, "orders").await?;
-    register_tpch_csv(&ctx, "lineitem").await?;
-    register_tpch_csv(&ctx, "nation").await?;
-
-    let sql = "select
-    c_custkey,
-    c_name,
-    sum(l_extendedprice * (1 - l_discount)) as revenue,
-    c_acctbal,
-    n_name,
-    c_address,
-    c_phone,
-    c_comment
-from
-    customer,
-    orders,
-    lineitem,
-    nation
-where
-        c_custkey = o_custkey
-  and l_orderkey = o_orderkey
-  and o_orderdate >= date '1993-10-01'
-  and o_orderdate < date '1994-01-01'
-  and l_returnflag = 'R'
-  and c_nationkey = n_nationkey
-group by
-    c_custkey,
-    c_name,
-    c_acctbal,
-    c_phone,
-    n_name,
-    c_address,
-    c_comment
-order by
-    revenue desc;";
-
-    let dataframe = ctx.sql(sql).await.unwrap();
-    let plan = dataframe.into_optimized_plan().unwrap();
-
-    let expected = "\
-    Sort: revenue DESC NULLS FIRST\
-    \n  Projection: customer.c_custkey, customer.c_name, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS revenue, customer.c_acctbal, nation.n_name, customer.c_address, customer.c_phone, customer.c_comment\
-    \n    Aggregate: groupBy=[[customer.c_custkey, customer.c_name, customer.c_acctbal, customer.c_phone, nation.n_name, customer.c_address, customer.c_comment]], aggr=[[SUM(CAST(lineitem.l_extendedprice AS Decimal128(38, 4)) * CAST(Decimal128(Some(100),23,2) - CAST(lineitem.l_discount AS Decimal128(23, 2)) AS Decimal128(38, 4))) AS SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]\
-    \n      Inner Join: customer.c_nationkey = nation.n_nationkey\
-    \n        Inner Join: orders.o_orderkey = lineitem.l_orderkey\
-    \n          Inner Join: customer.c_custkey = orders.o_custkey\
-    \n            TableScan: customer projection=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_comment]\
-    \n            Filter: orders.o_orderdate >= Date32(\"8674\") AND orders.o_orderdate < Date32(\"8766\")\
-    \n              TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate], partial_filters=[orders.o_orderdate >= Date32(\"8674\"), orders.o_orderdate < Date32(\"8766\")]\
-    \n          Filter: lineitem.l_returnflag = Utf8(\"R\")\
-    \n            TableScan: lineitem projection=[l_orderkey, l_extendedprice, l_discount, l_returnflag], partial_filters=[lineitem.l_returnflag = Utf8(\"R\")]\
-    \n        TableScan: nation projection=[n_nationkey, n_name]";
-    assert_eq!(expected, format!("{plan:?}"));
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_physical_plan_display_indent() {
     // Hard code target_partitions as it appears in the RepartitionExec output
     let config = SessionConfig::new()

@@ -1478,11 +1478,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let WildcardAdditionalOptions {
             opt_exclude,
             opt_except,
+            opt_rename,
         } = options;
 
-        if opt_exclude.is_some() || opt_except.is_some() {
+        if opt_exclude.is_some() || opt_except.is_some() || opt_rename.is_some() {
             Err(DataFusionError::NotImplemented(
-                "wildcard * with EXCLUDE or EXCEPT not supported ".to_string(),
+                "wildcard * with EXCLUDE, EXCEPT or RENAME not supported ".to_string(),
             ))
         } else {
             Ok(())
