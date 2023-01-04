@@ -98,6 +98,8 @@ pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatc
 
 /// Merge two record batch references into a single record batch.
 /// All the record batches inside the slice must have the same schema.
+///
+/// Can use concat_batches after https://github.com/apache/arrow-rs/issues/3456
 pub fn merge_batches(
     first: &RecordBatch,
     second: &RecordBatch,
@@ -116,6 +118,8 @@ pub fn merge_batches(
 /// Merge a slice of record batch references into a single record batch, or
 /// return None if the slice itself is empty. All the record batches inside the
 /// slice must have the same schema.
+///
+/// Can use concat_batches after https://github.com/apache/arrow-rs/issues/3456
 pub fn merge_multiple_batches(
     batches: &[&RecordBatch],
     schema: SchemaRef,
