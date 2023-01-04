@@ -445,7 +445,10 @@ mod tests {
 
         let mut it = csv.execute(0, task_ctx)?;
         let err = it.next().await.unwrap().unwrap_err().to_string();
-        assert_eq!(err, "Csv error: incorrect number of fields, expected 14 got 13");
+        assert_eq!(
+            err,
+            "Csv error: incorrect number of fields, expected 14 got 13"
+        );
         Ok(())
     }
 
