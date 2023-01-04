@@ -26,7 +26,7 @@ use std::fmt::Debug;
 use std::ops::Range;
 
 /// Partition evaluator
-pub trait PartitionEvaluator: Debug + Send + Sync {
+pub trait PartitionEvaluator: Debug + Send {
     /// Whether the evaluator should be evaluated with rank
     fn include_rank(&self) -> bool {
         false

@@ -24,7 +24,6 @@ use arrow::util::pretty::pretty_format_batches;
 use hashbrown::HashMap;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use tokio::runtime::Builder;
 
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::memory::MemoryExec;
@@ -46,74 +45,48 @@ use test_utils::add_empty_batches;
 mod tests {
     use super::*;
 
-    #[test]
-    fn single_order_by_test() {
-        let rt = Builder::new_multi_thread()
-            .worker_threads(8)
-            .build()
-            .unwrap();
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn single_order_by_test() {
         let n = 100;
-        let handles_low_cardinality = (1..n).map(|i| {
-            rt.spawn(run_window_test(
-                make_staggered_batches::<true, 1>(1000, i),
-                i,
-                vec!["a"],
-                vec![],
-            ))
-        });
-        let handles_high_cardinality = (1..n).map(|i| {
-            rt.spawn(run_window_test(
-                make_staggered_batches::<true, 100>(1000, i),
-                i,
-                vec!["a"],
-                vec![],
-            ))
-        });
-        let handles = handles_low_cardinality
-            .into_iter()
-            .chain(handles_high_cardinality.into_iter())
-            .collect::<Vec<tokio::task::JoinHandle<_>>>();
-        rt.block_on(async {
-            for handle in handles {
-                handle.await.unwrap();
+        let distincts = vec![1, 100];
+        for distinct in distincts {
+            let mut handles = Vec::new();
+            for i in 1..n {
+                let job = tokio::spawn(run_window_test(
+                    make_staggered_batches::<true>(1000, distinct, i),
+                    i,
+                    vec!["a"],
+                    vec![],
+                ));
+                handles.push(job);
             }
-        });
+            for job in handles {
+                job.await.unwrap();
+            }
+        }
     }
 
-    #[test]
-    fn order_by_with_partition_test() {
-        let rt = Builder::new_multi_thread()
-            .worker_threads(8)
-            .build()
-            .unwrap();
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn order_by_with_partition_test() {
         let n = 100;
-        // since we have sorted pairs (a,b) to not violate per partition soring
-        // partition should be field a, order by should be field b
-        let handles_low_cardinality = (1..n).map(|i| {
-            rt.spawn(run_window_test(
-                make_staggered_batches::<true, 1>(1000, i),
-                i,
-                vec!["b"],
-                vec!["a"],
-            ))
-        });
-        let handles_high_cardinality = (1..n).map(|i| {
-            rt.spawn(run_window_test(
-                make_staggered_batches::<true, 100>(1000, i),
-                i,
-                vec!["b"],
-                vec!["a"],
-            ))
-        });
-        let handles = handles_low_cardinality
-            .into_iter()
-            .chain(handles_high_cardinality.into_iter())
-            .collect::<Vec<tokio::task::JoinHandle<_>>>();
-        rt.block_on(async {
-            for handle in handles {
-                handle.await.unwrap();
+        let distincts = vec![1, 100];
+        for distinct in distincts {
+            // since we have sorted pairs (a,b) to not violate per partition soring
+            // partition should be field a, order by should be field b
+            let mut handles = Vec::new();
+            for i in 1..n {
+                let job = tokio::spawn(run_window_test(
+                    make_staggered_batches::<true>(1000, distinct, i),
+                    i,
+                    vec!["b"],
+                    vec!["a"],
+                ));
+                handles.push(job);
             }
-        });
+            for job in handles {
+                job.await.unwrap();
+            }
+        }
     }
 }
 
@@ -358,8 +331,9 @@ async fn run_window_test(
 /// Return randomly sized record batches with:
 /// two sorted int32 columns 'a', 'b' ranged from 0..len / DISTINCT as columns
 /// two random int32 columns 'x', 'y' as other columns
-fn make_staggered_batches<const STREAM: bool, const DISTINCT: usize>(
+fn make_staggered_batches<const STREAM: bool>(
     len: usize,
+    distinct: usize,
     random_seed: u64,
 ) -> Vec<RecordBatch> {
     // use a random number generator to pick a random sized output
@@ -369,8 +343,8 @@ fn make_staggered_batches<const STREAM: bool, const DISTINCT: usize>(
     let mut input4: Vec<i32> = vec![0; len];
     input12.iter_mut().for_each(|v| {
         *v = (
-            rng.gen_range(0..(len / DISTINCT)) as i32,
-            rng.gen_range(0..(len / DISTINCT)) as i32,
+            rng.gen_range(0..(len / distinct)) as i32,
+            rng.gen_range(0..(len / distinct)) as i32,
         )
     });
     rng.fill(&mut input3[..]);

@@ -26,7 +26,6 @@ use datafusion_common::{reverse_sort_options, DataFusionError, Result, ScalarVal
 use datafusion_expr::{Accumulator, WindowFrame};
 use indexmap::IndexMap;
 use std::any::Any;
-use std::fmt;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
@@ -71,9 +70,10 @@ pub trait WindowExpr: Send + Sync + Debug {
         _partition_batches: &PartitionBatches,
         _window_agg_state: &mut PartitionWindowAggStates,
     ) -> Result<()> {
-        Err(DataFusionError::Internal(
-            "evaluate_stateful is not implemented".to_string(),
-        ))
+        Err(DataFusionError::Internal(format!(
+            "evaluate_stateful is not implemented for {}",
+            self.name()
+        )))
     }
 
     /// evaluate the partition points given the sort columns; if the sort columns are
@@ -152,22 +152,10 @@ pub fn reverse_order_bys(order_bys: &[PhysicalSortExpr]) -> Vec<PhysicalSortExpr
         .collect()
 }
 
+#[derive(Debug)]
 pub enum WindowFn {
     Builtin(Box<dyn PartitionEvaluator>),
     Aggregate(Box<dyn Accumulator>),
-}
-
-impl fmt::Debug for WindowFn {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            WindowFn::Builtin(builtin, ..) => {
-                write!(f, "partition evaluator: {:?}", builtin)
-            }
-            WindowFn::Aggregate(aggregate, ..) => {
-                write!(f, "accumulator: {:?}", aggregate)
-            }
-        }
-    }
 }
 
 /// State for RANK(percent_rank, rank, dense_rank)
@@ -225,7 +213,8 @@ pub struct WindowAggState {
     pub last_calculated_index: usize,
     /// The offset of the deleted row number
     pub offset_pruned_rows: usize,
-    ///
+    /// State of the window function, required to calculate its result
+    // For instance, for ROW_NUMBER we keep the row index counter to generate correct result
     pub window_function_state: WindowFunctionState,
     /// Stores the results calculated by window frame
     pub out_col: ArrayRef,

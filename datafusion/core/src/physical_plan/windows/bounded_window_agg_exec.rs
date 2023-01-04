@@ -128,7 +128,7 @@ impl BoundedWindowAggExec {
             if let Some(a) = sort_keys.iter().find(|&e| e.expr.eq(item)) {
                 result.push(a.clone());
             } else {
-                return Err(DataFusionError::Execution(
+                return Err(DataFusionError::Internal(
                     "Partition key not found in sort keys".to_string(),
                 ));
             }
