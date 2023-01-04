@@ -237,7 +237,7 @@ mod tests {
             path: Path::new("/file"),
             is_dir: true,
         };
-        assert!(table_path.to_string().expect("table path").ends_with("/"));
+        assert!(table_path.to_string().expect("table path").ends_with('/'));
     }
 
     #[test]
@@ -246,6 +246,6 @@ mod tests {
             path: Path::new("/file"),
             is_dir: false,
         };
-        assert!(!table_path.to_string().expect("table_path").ends_with("/"));
+        assert!(!table_path.to_string().expect("table_path").ends_with('/'));
     }
 }
