@@ -749,7 +749,7 @@ mod tests {
     use crate::{assert_batches_sorted_eq, physical_plan::common};
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::error::{ArrowError, Result as ArrowResult};
+    use arrow::error::Result as ArrowResult;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
@@ -1210,18 +1210,11 @@ mod tests {
             let err = common::collect(stream).await.unwrap_err();
 
             // error root cause traversal is a bit complicated, see #4172.
-            if let DataFusionError::ArrowError(ArrowError::ExternalError(err)) = err {
-                if let Some(err) = err.downcast_ref::<DataFusionError>() {
-                    assert!(
-                        matches!(err, DataFusionError::ResourcesExhausted(_)),
-                        "Wrong inner error type: {err}",
-                    );
-                } else {
-                    panic!("Wrong arrow error type: {err}")
-                }
-            } else {
-                panic!("Wrong outer error type: {err}")
-            }
+            let err = err.find_root();
+            assert!(
+                matches!(err, DataFusionError::ResourcesExhausted(_)),
+                "Wrong error type: {err}",
+            );
         }
 
         Ok(())
