@@ -1453,26 +1453,25 @@ impl SessionState {
         // We need to take care of the rule ordering. They may influence each other.
         let physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
             Arc::new(AggregateStatistics::new()),
-            // - In order to increase the parallelism, it will change the output partitioning
-            // of some operators in the plan tree, which will influence other rules.
-            // Therefore, it should be run as soon as possible.
-            // - The reason to make it optional is
-            //      - it's not used for the distributed engine, Ballista.
-            //      - it's conflicted with some parts of the BasicEnforcement, since it will
-            //      introduce additional repartitioning while the BasicEnforcement aims at
-            //      reducing unnecessary repartitioning.
+            // In order to increase the parallelism, the Repartition rule will change the
+            // output partitioning of some operators in the plan tree, which will influence
+            // other rules. Therefore, it should run as soon as possible. It is optional because:
+            // - It's not used for the distributed engine, Ballista.
+            // - It's conflicted with some parts of the BasicEnforcement, since it will
+            //   introduce additional repartitioning while the BasicEnforcement aims at
+            //   reducing unnecessary repartitioning.
             Arc::new(Repartition::new()),
-            //- Currently it will depend on the partition number to decide whether to change the
-            // single node sort to parallel local sort and merge. Therefore, it should be run
-            // after the Repartition.
-            // - Since it will change the output ordering of some operators, it should be run
+            // - Currently it will depend on the partition number to decide whether to change the
+            // single node sort to parallel local sort and merge. Therefore, GlobalSortSelection
+            // should run after the Repartition.
+            // - Since it will change the output ordering of some operators, it should run
             // before JoinSelection and BasicEnforcement, which may depend on that.
             Arc::new(GlobalSortSelection::new()),
-            // Statistics-base join selection will change the Auto mode to real join implementation,
+            // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will
             // influence the BasicEnforcement to decide whether to add additional repartition
             // and local sort to meet the distribution and ordering requirements.
-            // Therefore, it should be run before BasicEnforcement
+            // Therefore, it should run before BasicEnforcement.
             Arc::new(JoinSelection::new()),
             // If the query is processing infinite inputs, the PipelineFixer rule applies the
             // necessary transformations to make the query runnable (if it is not already runnable).
@@ -1480,17 +1479,17 @@ impl SessionState {
             // Since the transformations it applies may alter output partitioning properties of operators
             // (e.g. by swapping hash join sides), this rule runs before BasicEnforcement.
             Arc::new(PipelineFixer::new()),
-            // It's for adding essential repartition and local sorting operator to satisfy the
-            // required distribution and local sort.
+            // BasicEnforcement is for adding essential repartition and local sorting operators
+            // to satisfy the required distribution and local sort requirements.
             // Please make sure that the whole plan tree is determined.
             Arc::new(BasicEnforcement::new()),
-            // `BasicEnforcement` stage conservatively inserts `SortExec`s to satisfy ordering requirements.
-            // However, a deeper analysis may sometimes reveal that such a `SortExec` is actually unnecessary.
-            // These cases typically arise when we have reversible `WindowAggExec`s or deep subqueries. The
-            // rule below performs this analysis and removes unnecessary `SortExec`s.
+            // The BasicEnforcement stage conservatively inserts sorts to satisfy ordering requirements.
+            // However, a deeper analysis may sometimes reveal that such a sort is actually unnecessary.
+            // These cases typically arise when we have reversible window expressions or deep subqueries.
+            // The rule below performs this analysis and removes unnecessary sorts.
             Arc::new(OptimizeSorts::new()),
-            // It will not influence the distribution and ordering of the whole plan tree.
-            // Therefore, to avoid influencing other rules, it should be run at last.
+            // The CoalesceBatches rule will not influence the distribution and ordering of the
+            // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),
             // The PipelineChecker rule will reject non-runnable query plans that use
             // pipeline-breaking operators on infinite input(s). The rule generates a
