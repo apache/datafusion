@@ -17,6 +17,7 @@
 
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
+use arrow::datatypes::{DataType, Field};
 use std::{
     fs::File,
     io::Write,
@@ -402,7 +403,6 @@ async fn get_table(
                 unimplemented!("Invalid file format '{}'", other);
             }
         };
-    let schema = Arc::new(get_tpch_table_schema(table));
 
     let options = ListingOptions::new(format)
         .with_file_extension(extension)
@@ -412,10 +412,11 @@ async fn get_table(
     let table_path = ListingTableUrl::parse(path)?;
     let config = ListingTableConfig::new(table_path).with_listing_options(options);
 
-    let config = if table_format == "parquet" {
-        config.infer_schema(&state).await?
-    } else {
-        config.with_schema(schema)
+    let config = match table_format {
+        "parquet" => config.infer_schema(&state).await?,
+        "tbl" => config.with_schema(Arc::new(get_tbl_tpch_table_schema(table))),
+        "csv" => config.with_schema(Arc::new(get_tpch_table_schema(table))),
+        _ => unreachable!(),
     };
 
     Ok(Arc::new(ListingTable::try_new(config)?))
@@ -1086,7 +1087,6 @@ mod ci {
     ///  * the correct number of rows are returned
     ///  * the content of the rows is correct
     async fn verify_query(n: usize) -> Result<()> {
-        use datafusion::arrow::datatypes::{DataType, Field};
         use datafusion::common::ScalarValue;
         use datafusion::logical_expr::expr::Cast;
 
