@@ -211,8 +211,9 @@ impl PhysicalOptimizerRule for Repartition {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let target_partitions = config.execution.target_partitions;
+        let enabled = config.optimizer.enable_round_robin_repartition;
         // Don't run optimizer if target_partitions == 1
-        if target_partitions == 1 {
+        if !enabled || target_partitions == 1 {
             Ok(plan)
         } else {
             optimize_partitions(

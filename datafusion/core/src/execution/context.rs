@@ -59,7 +59,7 @@ use crate::logical_expr::{
     CreateView, DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder,
     SetVariable, TableSource, TableType, UNNAMED_TABLE,
 };
-use crate::optimizer::{OptimizerContext, OptimizerRule};
+use crate::optimizer::OptimizerRule;
 use datafusion_sql::{ResolvedTableReference, TableReference};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
@@ -93,16 +93,12 @@ use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
+use datafusion_optimizer::OptimizerConfig;
 use uuid::Uuid;
 
 use super::options::{
     AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
-
-/// The default catalog name - this impacts what SQL queries use if not specified
-const DEFAULT_CATALOG: &str = "datafusion";
-/// The default schema name - this impacts what SQL queries use if not specified
-const DEFAULT_SCHEMA: &str = "public";
 
 /// SessionContext is the main interface for executing queries with DataFusion. It stands for
 /// the connection between user and DataFusion/Ballista cluster.
@@ -380,18 +376,32 @@ impl SessionContext {
                 // so for now, we default to default catalog
                 let tokens: Vec<&str> = schema_name.split('.').collect();
                 let (catalog, schema_name) = match tokens.len() {
-                    1 => Ok((DEFAULT_CATALOG, schema_name.as_str())),
-                    2 => Ok((tokens[0], tokens[1])),
-                    _ => Err(DataFusionError::Execution(format!(
-                        "Unable to parse catalog from {schema_name}"
-                    ))),
-                }?;
-                let catalog = self.catalog(catalog).ok_or_else(|| {
-                    DataFusionError::Execution(format!(
-                        "Missing '{DEFAULT_CATALOG}' catalog"
-                    ))
-                })?;
-
+                    1 => {
+                        let state = self.state.read();
+                        let name = &state.config.options.catalog.default_catalog;
+                        let catalog =
+                            state.catalog_list.catalog(name).ok_or_else(|| {
+                                DataFusionError::Execution(format!(
+                                    "Missing default catalog '{name}'"
+                                ))
+                            })?;
+                        (catalog, tokens[0])
+                    }
+                    2 => {
+                        let name = &tokens[0];
+                        let catalog = self.catalog(name).ok_or_else(|| {
+                            DataFusionError::Execution(format!(
+                                "Missing catalog '{name}'"
+                            ))
+                        })?;
+                        (catalog, tokens[1])
+                    }
+                    _ => {
+                        return Err(DataFusionError::Execution(format!(
+                            "Unable to parse catalog from {schema_name}"
+                        )))
+                    }
+                };
                 let schema = catalog.schema(schema_name);
 
                 match (if_not_exists, schema) {
@@ -1097,11 +1107,6 @@ impl Hasher for IdHasher {
 /// Configuration options for session context
 #[derive(Clone)]
 pub struct SessionConfig {
-    /// Default catalog name for table resolution
-    default_catalog: String,
-    /// Default schema name for table resolution (not in ConfigOptions
-    /// due to `resolve_table_ref` which passes back references)
-    default_schema: String,
     /// Configuration options
     options: ConfigOptions,
     /// Opaque extensions.
@@ -1111,8 +1116,6 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            default_catalog: DEFAULT_CATALOG.to_owned(),
-            default_schema: DEFAULT_SCHEMA.to_owned(),
             options: ConfigOptions::new(),
             // Assume no extensions by default.
             extensions: HashMap::with_capacity_and_hasher(
@@ -1218,8 +1221,8 @@ impl SessionConfig {
         catalog: impl Into<String>,
         schema: impl Into<String>,
     ) -> Self {
-        self.default_catalog = catalog.into();
-        self.default_schema = schema.into();
+        self.options.catalog.default_catalog = catalog.into();
+        self.options.catalog.default_schema = schema.into();
         self
     }
 
@@ -1434,7 +1437,7 @@ impl SessionState {
 
             default_catalog
                 .register_schema(
-                    &config.default_schema,
+                    &config.config_options().catalog.default_schema,
                     Arc::new(MemorySchemaProvider::new()),
                 )
                 .expect("memory catalog provider can register schema");
@@ -1442,65 +1445,60 @@ impl SessionState {
             Self::register_default_schema(&config, &runtime, &default_catalog);
 
             catalog_list.register_catalog(
-                config.default_catalog.clone(),
+                config.config_options().catalog.default_catalog.clone(),
                 Arc::new(default_catalog),
             );
         }
 
         // We need to take care of the rule ordering. They may influence each other.
-        let mut physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> =
-            vec![Arc::new(AggregateStatistics::new())];
+        let physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
+            Arc::new(AggregateStatistics::new()),
+            // - In order to increase the parallelism, it will change the output partitioning
+            // of some operators in the plan tree, which will influence other rules.
+            // Therefore, it should be run as soon as possible.
+            // - The reason to make it optional is
+            //      - it's not used for the distributed engine, Ballista.
+            //      - it's conflicted with some parts of the BasicEnforcement, since it will
+            //      introduce additional repartitioning while the BasicEnforcement aims at
+            //      reducing unnecessary repartitioning.
+            Arc::new(Repartition::new()),
+            //- Currently it will depend on the partition number to decide whether to change the
+            // single node sort to parallel local sort and merge. Therefore, it should be run
+            // after the Repartition.
+            // - Since it will change the output ordering of some operators, it should be run
+            // before JoinSelection and BasicEnforcement, which may depend on that.
+            Arc::new(GlobalSortSelection::new()),
+            // Statistics-base join selection will change the Auto mode to real join implementation,
+            // like collect left, or hash join, or future sort merge join, which will
+            // influence the BasicEnforcement to decide whether to add additional repartition
+            // and local sort to meet the distribution and ordering requirements.
+            // Therefore, it should be run before BasicEnforcement
+            Arc::new(JoinSelection::new()),
+            // If the query is processing infinite inputs, the PipelineFixer rule applies the
+            // necessary transformations to make the query runnable (if it is not already runnable).
+            // If the query can not be made runnable, the rule emits an error with a diagnostic message.
+            // Since the transformations it applies may alter output partitioning properties of operators
+            // (e.g. by swapping hash join sides), this rule runs before BasicEnforcement.
+            Arc::new(PipelineFixer::new()),
+            // It's for adding essential repartition and local sorting operator to satisfy the
+            // required distribution and local sort.
+            // Please make sure that the whole plan tree is determined.
+            Arc::new(BasicEnforcement::new()),
+            // `BasicEnforcement` stage conservatively inserts `SortExec`s to satisfy ordering requirements.
+            // However, a deeper analysis may sometimes reveal that such a `SortExec` is actually unnecessary.
+            // These cases typically arise when we have reversible `WindowAggExec`s or deep subqueries. The
+            // rule below performs this analysis and removes unnecessary `SortExec`s.
+            Arc::new(OptimizeSorts::new()),
+            // It will not influence the distribution and ordering of the whole plan tree.
+            // Therefore, to avoid influencing other rules, it should be run at last.
+            Arc::new(CoalesceBatches::new()),
+            // The PipelineChecker rule will reject non-runnable query plans that use
+            // pipeline-breaking operators on infinite input(s). The rule generates a
+            // diagnostic error message when this happens. It makes no changes to the
+            // given query plan; i.e. it only acts as a final gatekeeping rule.
+            Arc::new(PipelineChecker::new()),
+        ];
 
-        // - In order to increase the parallelism, it will change the output partitioning
-        // of some operators in the plan tree, which will influence other rules.
-        // Therefore, it should be run as soon as possible.
-        // - The reason to make it optional is
-        //      - it's not used for the distributed engine, Ballista.
-        //      - it's conflicted with some parts of the BasicEnforcement, since it will
-        //      introduce additional repartitioning while the BasicEnforcement aims at
-        //      reducing unnecessary repartitioning.
-        if config.options.optimizer.enable_round_robin_repartition {
-            physical_optimizers.push(Arc::new(Repartition::new()));
-        }
-        //- Currently it will depend on the partition number to decide whether to change the
-        // single node sort to parallel local sort and merge. Therefore, it should be run
-        // after the Repartition.
-        // - Since it will change the output ordering of some operators, it should be run
-        // before JoinSelection and BasicEnforcement, which may depend on that.
-        physical_optimizers.push(Arc::new(GlobalSortSelection::new()));
-        // Statistics-base join selection will change the Auto mode to real join implementation,
-        // like collect left, or hash join, or future sort merge join, which will
-        // influence the BasicEnforcement to decide whether to add additional repartition
-        // and local sort to meet the distribution and ordering requirements.
-        // Therefore, it should be run before BasicEnforcement
-        physical_optimizers.push(Arc::new(JoinSelection::new()));
-        // If the query is processing infinite inputs, the PipelineFixer rule applies the
-        // necessary transformations to make the query runnable (if it is not already runnable).
-        // If the query can not be made runnable, the rule emits an error with a diagnostic message.
-        // Since the transformations it applies may alter output partitioning properties of operators
-        // (e.g. by swapping hash join sides), this rule runs before BasicEnforcement.
-        physical_optimizers.push(Arc::new(PipelineFixer::new()));
-        // BasicEnforcement is for adding essential repartition and local sorting operators
-        // to satisfy the required distribution and local sort requirements.
-        // Please make sure that the whole plan tree is determined.
-        physical_optimizers.push(Arc::new(BasicEnforcement::new()));
-        // The BasicEnforcement stage conservatively inserts sorts to satisfy ordering requirements.
-        // However, a deeper analysis may sometimes reveal that such a sort is actually unnecessary.
-        // These cases typically arise when we have reversible window expressions or deep subqueries.
-        // The rule below performs this analysis and removes unnecessary sorts.
-        physical_optimizers.push(Arc::new(OptimizeSorts::new()));
-        // It will not influence the distribution and ordering of the whole plan tree.
-        // Therefore, to avoid influencing other rules, it should be run at last.
-        if config.options.execution.coalesce_batches {
-            physical_optimizers.push(Arc::new(CoalesceBatches::new(
-                config.options.execution.batch_size,
-            )));
-        }
-        // The PipelineChecker rule will reject non-runnable query plans that use
-        // pipeline-breaking operators on infinite input(s). The rule generates a
-        // diagnostic error message when this happens. It makes no changes to the
-        // given query plan; i.e. it only acts as a final gatekeeping rule.
-        physical_optimizers.push(Arc::new(PipelineChecker::new()));
         SessionState {
             session_id,
             optimizer: Optimizer::new(),
@@ -1564,9 +1562,10 @@ impl SessionState {
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> ResolvedTableReference<'a> {
+        let catalog = &self.config_options().catalog;
         table_ref
             .into()
-            .resolve(&self.config.default_catalog, &self.config.default_schema)
+            .resolve(&catalog.default_catalog, &catalog.default_schema)
     }
 
     fn schema_for_ref<'a>(
@@ -1644,25 +1643,13 @@ impl SessionState {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        // TODO: Implement OptimizerContext directly on DataFrame (#4631) (#4626)
-        let config = {
-            let config = &self.config_options().optimizer;
-            OptimizerContext::new()
-                .with_skip_failing_rules(config.skip_failed_rules)
-                .with_max_passes(config.max_passes as u8)
-                .with_query_execution_start_time(
-                    self.execution_props.query_execution_start_time,
-                )
-                .filter_null_keys(config.filter_null_join_keys)
-        };
-
         if let LogicalPlan::Explain(e) = plan {
             let mut stringified_plans = e.stringified_plans.clone();
 
             // optimize the child plan, capturing the output of each optimizer
             let plan = self.optimizer.optimize(
                 e.plan.as_ref(),
-                &config,
+                self,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
@@ -1677,7 +1664,7 @@ impl SessionState {
                 schema: e.schema.clone(),
             }))
         } else {
-            self.optimizer.optimize(plan, &config, |_, _| {})
+            self.optimizer.optimize(plan, self, |_, _| {})
         }
     }
 
@@ -1808,6 +1795,30 @@ impl FunctionRegistry for SessionState {
                 "There is no UDAF named \"{name}\" in the registry"
             ))
         })
+    }
+}
+
+impl OptimizerConfig for SessionState {
+    fn query_execution_start_time(&self) -> DateTime<Utc> {
+        self.execution_props.query_execution_start_time
+    }
+
+    fn rule_enabled(&self, name: &str) -> bool {
+        use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
+        match name {
+            FilterNullJoinKeys::NAME => {
+                self.config_options().optimizer.filter_null_join_keys
+            }
+            _ => true,
+        }
+    }
+
+    fn skip_failing_rules(&self) -> bool {
+        self.config_options().optimizer.skip_failed_rules
+    }
+
+    fn max_passes(&self) -> u8 {
+        self.config_options().optimizer.max_passes as _
     }
 }
 
