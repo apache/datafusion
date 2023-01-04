@@ -1480,14 +1480,14 @@ impl SessionState {
             // Since the transformations it applies may alter output partitioning properties of operators
             // (e.g. by swapping hash join sides), this rule runs before BasicEnforcement.
             Arc::new(PipelineFixer::new()),
-            // It's for adding essential repartition and local sorting operator to satisfy the
-            // required distribution and local sort.
+            // BasicEnforcement is for adding essential repartition and local sorting operators
+            // to satisfy the required distribution and local sort requirements.
             // Please make sure that the whole plan tree is determined.
             Arc::new(BasicEnforcement::new()),
-            // `BasicEnforcement` stage conservatively inserts `SortExec`s to satisfy ordering requirements.
-            // However, a deeper analysis may sometimes reveal that such a `SortExec` is actually unnecessary.
-            // These cases typically arise when we have reversible `WindowAggExec`s or deep subqueries. The
-            // rule below performs this analysis and removes unnecessary `SortExec`s.
+            // The BasicEnforcement stage conservatively inserts sorts to satisfy ordering requirements.
+            // However, a deeper analysis may sometimes reveal that such a sort is actually unnecessary.
+            // These cases typically arise when we have reversible window expressions or deep subqueries.
+            // The rule below performs this analysis and removes unnecessary sorts.
             Arc::new(OptimizeSorts::new()),
             // It will not influence the distribution and ordering of the whole plan tree.
             // Therefore, to avoid influencing other rules, it should be run at last.
