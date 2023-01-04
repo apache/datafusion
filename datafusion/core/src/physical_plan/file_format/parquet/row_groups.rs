@@ -37,6 +37,13 @@ use crate::{
 
 use super::ParquetFileMetrics;
 
+/// Returns a vector of indexes into `groups` which should be scanned.
+///
+/// If an index is NOT present in the returned Vec it means the
+/// predicate filtered all the row group.
+///
+/// If an index IS present in the returned Vec it means the predicate
+/// did not filter out that row group.
 pub(crate) fn prune_row_groups(
     groups: &[RowGroupMetaData],
     range: Option<FileRange>,
