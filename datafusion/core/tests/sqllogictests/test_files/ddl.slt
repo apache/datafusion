@@ -83,7 +83,7 @@ select * from "foo.bar";
 2 3
 
 # Can not select from non existent foo.bar table
-statement error failed to resolve schema: foo
+statement error DataFusion error: Error during planning: table 'datafusion.foo.bar' not found
 select * from foo.bar;
 
 # Error if wrong capitalization to select
@@ -125,7 +125,7 @@ select * from "foo.bar";
 2 3
 
 # Can not select from non existent foo.bar view
-statement error failed to resolve schema: foo
+statement error DataFusion error: Error during planning: table 'datafusion.foo.bar' not found
 select * from foo.bar;
 
 # Error if wrong capitalization to select
