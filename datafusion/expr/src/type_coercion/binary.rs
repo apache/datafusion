@@ -850,13 +850,6 @@ mod tests {
         }};
     }
 
-    macro_rules! test_coercion_like_rule {
-        ($A_TYPE:expr, $B_TYPE:expr, $C_TYPE:expr) => {{
-            let result = like_coercion(&$A_TYPE, &$B_TYPE);
-            assert_eq!(result, Some($C_TYPE));
-        }};
-    }
-
     #[test]
     fn test_date_timestamp_arithmetic_error() -> Result<()> {
         let err = coerce_types(
@@ -878,7 +871,10 @@ mod tests {
 
     #[test]
     fn test_type_coercion() -> Result<()> {
-        test_coercion_like_rule!(DataType::Utf8, DataType::Utf8, DataType::Utf8);
+        // test like coercion rule
+        let result = like_coercion(&DataType::Utf8, &DataType::Utf8);
+        assert_eq!(result, Some(DataType::Utf8));
+
         test_coercion_binary_rule!(
             DataType::Utf8,
             DataType::Date32,

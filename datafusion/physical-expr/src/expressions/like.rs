@@ -216,7 +216,7 @@ macro_rules! binary_string_array_op_scalar {
 }
 
 impl LikeExpr {
-    /// Evaluate the expression of the input is an array and
+    /// Evaluate the expression if the input is an array and
     /// pattern is literal - use scalar operations
     fn evaluate_array_scalar(
         &self,
@@ -266,9 +266,7 @@ impl LikeExpr {
     }
 }
 
-/// Create a like expression whose arguments are correctly coerced.
-/// This function errors if it is not possible to coerce the arguments
-/// to computational types supported by the operator.
+/// Create a like expression, erroring if the argument types are not compatible.
 pub fn like(
     negated: bool,
     case_insensitive: bool,
@@ -300,10 +298,10 @@ mod test {
     use datafusion_common::cast::as_boolean_array;
 
     macro_rules! test_like {
-        ($A_VEC:expr, $B_VEC:expr, $VEC:expr, $NEGATED:expr, $CASE_INSENSITIVE:expr,) => {{
+        ($A_VEC:expr, $B_VEC:expr, $VEC:expr, $NULLABLE: expr, $NEGATED:expr, $CASE_INSENSITIVE:expr,) => {{
             let schema = Schema::new(vec![
-                Field::new("a", DataType::Utf8, false),
-                Field::new("b", DataType::Utf8, false),
+                Field::new("a", DataType::Utf8, $NULLABLE),
+                Field::new("b", DataType::Utf8, $NULLABLE),
             ]);
             let a = StringArray::from($A_VEC);
             let b = StringArray::from($B_VEC);
@@ -337,11 +335,13 @@ mod test {
             vec![true, false],
             false,
             false,
+            false,
         ); // like
         test_like!(
-            vec!["hello world", "world"],
-            vec!["%hello%", "%hello%"],
-            vec![false, true],
+            vec![Some("hello world"), None, Some("world")],
+            vec![Some("%hello%"), None, Some("%hello%")],
+            vec![Some(false), None, Some(true)],
+            true,
             true,
             false,
         ); // not like
@@ -350,12 +350,14 @@ mod test {
             vec!["%helLo%", "%helLo%"],
             vec![true, false],
             false,
+            false,
             true,
         ); // ilike
         test_like!(
-            vec!["hello world", "world"],
-            vec!["%helLo%", "%helLo%"],
-            vec![false, true],
+            vec![Some("hello world"), None, Some("world")],
+            vec![Some("%helLo%"), None, Some("%helLo%")],
+            vec![Some(false), None, Some(true)],
+            true,
             true,
             true,
         ); // not ilike

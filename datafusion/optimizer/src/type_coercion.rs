@@ -179,7 +179,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let right_type = pattern.get_type(&self.schema)?;
                 let coerced_type = like_coercion(&left_type,  &right_type).ok_or_else(|| {
                     DataFusionError::Plan(format!(
-                        "There isn't a common type to concrete {left_type} and {right_type} in LIKE expression"
+                        "There isn't a common type to coerce {left_type} and {right_type} in LIKE expression"
                     ))
                 })?;
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
@@ -197,7 +197,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let right_type = pattern.get_type(&self.schema)?;
                 let coerced_type = like_coercion(&left_type,  &right_type).ok_or_else(|| {
                     DataFusionError::Plan(format!(
-                        "There isn't a common type to concrete {left_type} and {right_type} in ILIKE expression"
+                        "There isn't a common type to coerce {left_type} and {right_type} in ILIKE expression"
                     ))
                 })?;
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
@@ -941,7 +941,7 @@ mod test {
         let err = assert_optimized_plan_eq(&plan, expected);
         assert!(err.is_err());
         assert!(err.unwrap_err().to_string().contains(
-            "There isn't a common type to concrete Int64 and Utf8 in LIKE expression"
+            "There isn't a common type to coerce Int64 and Utf8 in LIKE expression"
         ));
         Ok(())
     }
