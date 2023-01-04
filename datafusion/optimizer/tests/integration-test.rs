@@ -17,6 +17,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use chrono::{DateTime, NaiveDateTime, Utc};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource};
 use datafusion_optimizer::optimizer::Optimizer;
@@ -323,7 +324,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let statement = &ast[0];
 
     // create a logical query plan
-    let schema_provider = MySchemaProvider {};
+    let schema_provider = MySchemaProvider::default();
     let sql_to_rel = SqlToRel::new(&schema_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
@@ -338,7 +339,10 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     optimizer.optimize(&plan, &config, &observe)
 }
 
-struct MySchemaProvider {}
+#[derive(Default)]
+struct MySchemaProvider {
+    options: ConfigOptions,
+}
 
 impl ContextProvider for MySchemaProvider {
     fn get_table_provider(
@@ -390,11 +394,8 @@ impl ContextProvider for MySchemaProvider {
         None
     }
 
-    fn get_config_option(
-        &self,
-        _variable: &str,
-    ) -> Option<datafusion_common::ScalarValue> {
-        None
+    fn options(&self) -> &ConfigOptions {
+        &self.options
     }
 }
 

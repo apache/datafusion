@@ -717,6 +717,7 @@ version = "15.0.0"
 dependencies = [
  "arrow",
  "chrono",
+ "num_cpus",
  "object_store",
  "parquet",
  "sqlparser",
