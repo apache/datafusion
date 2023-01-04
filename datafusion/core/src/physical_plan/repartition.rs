@@ -555,20 +555,29 @@ impl Stream for RepartitionStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        match self.input.poll_next_unpin(cx) {
-            Poll::Ready(Some(Some(v))) => Poll::Ready(Some(v)),
-            Poll::Ready(Some(None)) => {
-                self.num_input_partitions_processed += 1;
-                if self.num_input_partitions == self.num_input_partitions_processed {
-                    // all input partitions have finished sending batches
-                    Poll::Ready(None)
-                } else {
-                    // other partitions still have data to send
-                    self.poll_next(cx)
+        loop {
+            match self.input.poll_next_unpin(cx) {
+                Poll::Ready(Some(Some(v))) => {
+                    return Poll::Ready(Some(v));
+                }
+                Poll::Ready(Some(None)) => {
+                    self.num_input_partitions_processed += 1;
+
+                    if self.num_input_partitions == self.num_input_partitions_processed {
+                        // all input partitions have finished sending batches
+                        return Poll::Ready(None);
+                    } else {
+                        // other partitions still have data to send
+                        continue;
+                    }
+                }
+                Poll::Ready(None) => {
+                    return Poll::Ready(None);
+                }
+                Poll::Pending => {
+                    return Poll::Pending;
                 }
             }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
         }
     }
 }
