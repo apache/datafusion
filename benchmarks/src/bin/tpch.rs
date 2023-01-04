@@ -827,6 +827,7 @@ mod tests {
 #[cfg(feature = "ci")]
 mod ci {
     use super::*;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
 
     async fn serde_round_trip(query: usize) -> Result<()> {
@@ -1213,7 +1214,8 @@ mod ci {
     }
 
     fn get_tpch_data_path() -> Result<String> {
-        let path = std::env::var("TPCH_DATA").unwrap_or("benchmarks/data".to_string());
+        let path =
+            std::env::var("TPCH_DATA").unwrap_or_else(|_| "benchmarks/data".to_string());
         if !Path::new(&path).exists() {
             return Err(DataFusionError::Execution(format!(
                 "Benchmark data not found (set TPCH_DATA env var to override): {}",
