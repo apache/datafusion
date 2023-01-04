@@ -17,7 +17,6 @@
 
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
-use arrow::datatypes::{DataType, Field};
 use std::{
     fs::File,
     io::Write,
