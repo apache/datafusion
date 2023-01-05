@@ -1021,6 +1021,8 @@ message PhysicalExprNode {
     PhysicalScalarUdfNode scalar_udf = 16;
 
     PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
+
+    PhysicalLikeExprNode like_expr = 18;
   }
 }
 
@@ -1072,6 +1074,13 @@ message PhysicalDateTimeIntervalExprNode {
   PhysicalExprNode l = 1;
   PhysicalExprNode r = 2;
   string op = 3;
+}
+
+message PhysicalLikeExprNode {
+  bool negated = 1;
+  bool case_insensitive = 2;
+  PhysicalExprNode expr = 3;
+  PhysicalExprNode pattern = 4;
 }
 
 message PhysicalSortExprNode {
