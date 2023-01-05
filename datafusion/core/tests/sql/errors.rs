@@ -139,7 +139,6 @@ async fn unsupported_sql_returns_error() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     let state = ctx.state();
 
-
     // create view
     let sql = "create view test_view as select * from aggregate_test_100";
     let plan = state.create_logical_plan(sql).await;
