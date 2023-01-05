@@ -475,10 +475,21 @@ mod tests {
             // c1 > 5, this row group will not be included in the results.
             vec![ParquetStatistics::int32(Some(10), Some(20), None, 0, false)],
         );
+        let rgm3 = get_row_group_meta_data(
+            &schema_descr,
+            // [1, None]
+            // c1 > 5, this row group can not be filtered out, so will be included in the results.
+            vec![ParquetStatistics::int32(Some(100), None, None, 0, false)],
+        );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
-            vec![0]
+            prune_row_groups(
+                &[rgm1, rgm2, rgm3],
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
+            vec![0, 2]
         );
 
         // INT32: c1 > 5, but parquet decimal type has different precision or scale to arrow decimal
@@ -528,15 +539,21 @@ mod tests {
             // c1 > 5, this row group will not be included in the results.
             vec![ParquetStatistics::int32(Some(0), Some(2), None, 0, false)],
         );
+        let rgm4 = get_row_group_meta_data(
+            &schema_descr,
+            // [None, 2]
+            // c1 > 5, this row group can not be filtered out, so will be included in the results.
+            vec![ParquetStatistics::int32(None, Some(2), None, 0, false)],
+        );
         let metrics = parquet_file_metrics();
         assert_eq!(
             prune_row_groups(
-                &[rgm1, rgm2, rgm3],
+                &[rgm1, rgm2, rgm3, rgm4],
                 None,
                 Some(&pruning_predicate),
                 &metrics
             ),
-            vec![0, 1]
+            vec![0, 1, 3]
         );
 
         // INT64: c1 < 5, the c1 is decimal(18,2)
@@ -572,10 +589,20 @@ mod tests {
             // [0.1, 0.2]
             vec![ParquetStatistics::int64(Some(10), Some(20), None, 0, false)],
         );
+        let rgm3 = get_row_group_meta_data(
+            &schema_descr,
+            // [0.1, 0.2]
+            vec![ParquetStatistics::int64(None, None, None, 0, false)],
+        );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
-            vec![1]
+            prune_row_groups(
+                &[rgm1, rgm2, rgm3],
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
+            vec![1, 2]
         );
 
         // FIXED_LENGTH_BYTE_ARRAY: c1 = decimal128(100000, 28, 3), the c1 is decimal(18,2)
@@ -631,13 +658,24 @@ mod tests {
                 false,
             )],
         );
+
+        let rgm3 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::fixed_len_byte_array(
+                None, None, None, 0, false,
+            )],
+        );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
-            vec![1]
+            prune_row_groups(
+                &[rgm1, rgm2, rgm3],
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
+            vec![1, 2]
         );
 
-        // TODO: BYTE_ARRAY support read decimal from parquet, after the 20.0.0 arrow-rs release
         // BYTE_ARRAY: c1 = decimal128(100000, 28, 3), the c1 is decimal(18,2)
         // the type of parquet is decimal(18,2)
         let schema =
@@ -683,10 +721,19 @@ mod tests {
                 false,
             )],
         );
+        let rgm3 = get_row_group_meta_data(
+            &schema_descr,
+            vec![ParquetStatistics::byte_array(None, None, None, 0, false)],
+        );
         let metrics = parquet_file_metrics();
         assert_eq!(
-            prune_row_groups(&[rgm1, rgm2], None, Some(&pruning_predicate), &metrics),
-            vec![1]
+            prune_row_groups(
+                &[rgm1, rgm2, rgm3],
+                None,
+                Some(&pruning_predicate),
+                &metrics
+            ),
+            vec![1, 2]
         );
     }
 
