@@ -478,7 +478,7 @@ mod tests {
         let rgm3 = get_row_group_meta_data(
             &schema_descr,
             // [1, None]
-            // c1 > 5, this row group will not be included in the results.
+            // c1 > 5, this row group can not be filtered out, so will be included in the results.
             vec![ParquetStatistics::int32(Some(100), None, None, 0, false)],
         );
         let metrics = parquet_file_metrics();
@@ -542,7 +542,7 @@ mod tests {
         let rgm4 = get_row_group_meta_data(
             &schema_descr,
             // [None, 2]
-            // c1 > 5, this row group will not be included in the results.
+            // c1 > 5, this row group can not be filtered out, so will be included in the results.
             vec![ParquetStatistics::int32(None, Some(2), None, 0, false)],
         );
         let metrics = parquet_file_metrics();
