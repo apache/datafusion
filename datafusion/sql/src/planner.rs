@@ -1973,43 +1973,44 @@ fn ensure_any_column_reference_is_unambiguous(
     if schemas.len() == 1 {
         return Ok(());
     }
-
-    // extract columns both in one more schemas.
-    let mut column_count_map: HashMap<&str, usize> = HashMap::new();
-    schemas
+    // all referenced columns in the expression that don't have relation
+    let referenced_cols = expr.to_columns()?;
+    let mut no_relation_cols = referenced_cols
+        .iter()
+        .filter_map(|col| {
+            if col.relation.is_none() {
+                Some((col.name.as_str(), 0))
+            } else {
+                None
+            }
+        })
+        .collect::<HashMap<&str, u8>>();
+    // find the name of the column existing in multi schemas.
+    let ambiguous_col_name = schemas
         .iter()
         .flat_map(|schema| schema.fields())
-        .for_each(|field| {
-            column_count_map
-                .entry(field.name())
-                .and_modify(|v| *v += 1)
-                .or_insert(1usize);
+        .map(|field| field.name())
+        .find(|col_name| {
+            no_relation_cols.entry(col_name).and_modify(|v| *v += 1);
+            matches!(
+                no_relation_cols.get_key_value(col_name.as_str()),
+                Some((_, 2..))
+            )
         });
 
-    let duplicated_column_set = column_count_map
-        .into_iter()
-        .filter_map(|(column, count)| if count > 1 { Some(column) } else { None })
-        .collect::<HashSet<&str>>();
-
-    // check if there is ambiguous column.
-    let using_columns = expr.to_columns()?;
-    let ambiguous_column = using_columns.iter().find(|column| {
-        column.relation.is_none() && duplicated_column_set.contains(column.name.as_str())
-    });
-
-    if let Some(column) = ambiguous_column {
+    if let Some(col_name) = ambiguous_col_name {
         let maybe_field = schemas
             .iter()
             .flat_map(|schema| {
                 schema
-                    .field_with_unqualified_name(&column.name)
+                    .field_with_unqualified_name(col_name)
                     .map(|f| f.qualified_name())
                     .ok()
             })
             .collect::<Vec<_>>();
         Err(DataFusionError::Plan(format!(
             "reference \'{}\' is ambiguous, could be {};",
-            column.name,
+            col_name,
             maybe_field.join(","),
         )))
     } else {
