@@ -38,6 +38,7 @@ use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::type_coercion::TypeCoercion;
 use crate::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use chrono::{DateTime, Utc};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
@@ -74,14 +75,7 @@ pub trait OptimizerConfig {
     /// time is used as the value for now()
     fn query_execution_start_time(&self) -> DateTime<Utc>;
 
-    /// Returns false if the given rule should be skipped
-    fn rule_enabled(&self, name: &str) -> bool;
-
-    /// The optimizer will skip failing rules if this returns true
-    fn skip_failing_rules(&self) -> bool;
-
-    /// How many times to attempt to optimize the plan
-    fn max_passes(&self) -> u8;
+    fn options(&self) -> &ConfigOptions;
 }
 
 /// A standalone [`OptimizerConfig`] that can be used independently
@@ -91,28 +85,25 @@ pub struct OptimizerContext {
     /// Query execution start time that can be used to rewrite
     /// expressions such as `now()` to use a literal value instead
     query_execution_start_time: DateTime<Utc>,
-    /// Option to skip rules that produce errors
-    skip_failing_rules: bool,
-    /// Specify whether to enable the filter_null_keys rule
-    filter_null_keys: bool,
-    /// Maximum number of times to run optimizer against a plan
-    max_passes: u8,
+
+    options: ConfigOptions,
 }
 
 impl OptimizerContext {
     /// Create optimizer config
     pub fn new() -> Self {
+        let mut options = ConfigOptions::default();
+        options.optimizer.filter_null_join_keys = true;
+
         Self {
             query_execution_start_time: Utc::now(),
-            skip_failing_rules: true,
-            filter_null_keys: true,
-            max_passes: 3,
+            options,
         }
     }
 
     /// Specify whether to enable the filter_null_keys rule
     pub fn filter_null_keys(mut self, filter_null_keys: bool) -> Self {
-        self.filter_null_keys = filter_null_keys;
+        self.options.optimizer.filter_null_join_keys = filter_null_keys;
         self
     }
 
@@ -129,13 +120,13 @@ impl OptimizerContext {
     /// Specify whether the optimizer should skip rules that produce
     /// errors, or fail the query
     pub fn with_skip_failing_rules(mut self, b: bool) -> Self {
-        self.skip_failing_rules = b;
+        self.options.optimizer.skip_failed_rules = b;
         self
     }
 
     /// Specify how many times to attempt to optimize the plan
     pub fn with_max_passes(mut self, v: u8) -> Self {
-        self.max_passes = v;
+        self.options.optimizer.max_passes = v as usize;
         self
     }
 }
@@ -152,16 +143,8 @@ impl OptimizerConfig for OptimizerContext {
         self.query_execution_start_time
     }
 
-    fn rule_enabled(&self, name: &str) -> bool {
-        self.filter_null_keys || name != FilterNullJoinKeys::NAME
-    }
-
-    fn skip_failing_rules(&self) -> bool {
-        self.skip_failing_rules
-    }
-
-    fn max_passes(&self) -> u8 {
-        self.max_passes
+    fn options(&self) -> &ConfigOptions {
+        &self.options
     }
 }
 
@@ -271,18 +254,15 @@ impl Optimizer {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
+        let options = config.options();
         let start_time = Instant::now();
         let mut plan_str = format!("{}", plan.display_indent());
         let mut new_plan = plan.clone();
         let mut i = 0;
-        while i < config.max_passes() {
+        while i < options.optimizer.max_passes {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
             for rule in &self.rules {
-                if !config.rule_enabled(rule.name()) {
-                    debug!("Skipping rule {} due to optimizer config", rule.name());
-                    continue;
-                }
                 let result = self.optimize_recursively(rule, &new_plan, config);
 
                 match result {
@@ -308,7 +288,7 @@ impl Optimizer {
                         );
                     }
                     Err(ref e) => {
-                        if config.skip_failing_rules() {
+                        if options.optimizer.skip_failed_rules {
                             // Note to future readers: if you see this warning it signals a
                             // bug in the DataFusion optimizer. Please consider filing a ticket
                             // https://github.com/apache/arrow-datafusion
