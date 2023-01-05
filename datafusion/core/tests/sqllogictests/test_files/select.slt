@@ -21,8 +21,9 @@
 ##########
 
 # all where empty
-statement ok
+query II
 SELECT * FROM aggregate_test_100 WHERE 1=2
+----
 
 # Simple values function
 query I

@@ -238,8 +238,11 @@ impl SessionContext {
 
     /// Creates a [`DataFrame`] that will execute a SQL query.
     ///
-    /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
-    /// might require the schema to be inferred.
+    /// Note: This api implements DDL such as `CREATE TABLE` and `CREATE VIEW` with in memory
+    /// default implementations.
+    ///
+    /// If this is not desirable, consider using [`SessionState::create_logical_plan()`] which
+    /// does not mutate the state based on such statements.
     pub async fn sql(&self, sql: &str) -> Result<DataFrame> {
         // create a query planner
         let plan = self.state().create_logical_plan(sql).await?;
@@ -1636,6 +1639,8 @@ impl SessionState {
         }
         let statement = statements.pop_front().unwrap();
 
+        // Getting `TableProviders` is async but planing is not -- thus pre-fetch
+        // table providers for all relations referenced in this query
         let mut relations = hashbrown::HashSet::with_capacity(10);
 
         match &statement {
