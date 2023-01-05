@@ -100,6 +100,12 @@ where o_orderstatus in (
     SubqueryAlias: __correlated_sq_1
       Projection: lineitem.l_linestatus AS l_linestatus, lineitem.l_orderkey AS l_orderkey
         TableScan: lineitem projection=[l_orderkey, l_linestatus]"#;
+    let expected = "Projection: orders.o_orderkey\
+    \n  LeftSemi Join: orders.o_orderstatus = __correlated_sq_1.l_linestatus, orders.o_orderkey = __correlated_sq_1.l_orderkey\
+    \n    TableScan: orders projection=[o_orderkey, o_orderstatus]\
+    \n    SubqueryAlias: __correlated_sq_1\
+    \n      Projection: lineitem.l_linestatus AS l_linestatus, lineitem.l_orderkey\
+    \n        TableScan: lineitem projection=[l_orderkey, l_linestatus]";    
     assert_eq!(actual, expected);
 
     // assert data
