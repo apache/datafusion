@@ -18,9 +18,7 @@
 //! Enforcement optimizer rules are used to make sure the plan's Distribution
 //! requirements are met by inserting necessary [[RepartitionExec]].
 //!
-use crate::config::{
-    ConfigOptions, OPT_TARGET_PARTITIONS, OPT_TOP_DOWN_JOIN_KEY_REORDERING,
-};
+use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -71,10 +69,8 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_partitions = config.get_usize(OPT_TARGET_PARTITIONS).unwrap();
-        let top_down_join_key_reordering = config
-            .get_bool(OPT_TOP_DOWN_JOIN_KEY_REORDERING)
-            .unwrap_or_default();
+        let target_partitions = config.execution.target_partitions;
+        let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
         let new_plan = if top_down_join_key_reordering {
             // Run a top-down process to adjust input key ordering recursively
             let plan_requirements = PlanWithKeyRequirements::new(plan);
@@ -1116,7 +1112,7 @@ mod tests {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
             let mut config = ConfigOptions::new();
-            config.set_usize(OPT_TARGET_PARTITIONS, 10);
+            config.execution.target_partitions = 10;
 
             // run optimizer
             let optimizer = EnforceDistribution {};

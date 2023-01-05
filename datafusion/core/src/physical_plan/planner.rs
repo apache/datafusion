@@ -22,9 +22,6 @@ use super::{
     aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
 };
-use crate::config::{
-    OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY, OPT_PREFER_HASH_JOIN,
-};
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -50,7 +47,7 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::windows::WindowAggExec;
+use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{joins::utils as join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::{
@@ -617,13 +614,28 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    Ok(Arc::new(WindowAggExec::try_new(
-                        window_expr,
-                        input_exec,
-                        physical_input_schema,
-                        physical_partition_keys,
-                        physical_sort_keys,
-                    )?))
+                    let uses_bounded_memory = window_expr
+                        .iter()
+                        .all(|e| e.uses_bounded_memory());
+                    // If all window expressions can run with bounded memory,
+                    // choose the bounded window variant:
+                    Ok(if uses_bounded_memory {
+                        Arc::new(BoundedWindowAggExec::try_new(
+                            window_expr,
+                            input_exec,
+                            physical_input_schema,
+                            physical_partition_keys,
+                            physical_sort_keys,
+                        )?)
+                    } else {
+                        Arc::new(WindowAggExec::try_new(
+                            window_expr,
+                            input_exec,
+                            physical_input_schema,
+                            physical_partition_keys,
+                            physical_sort_keys,
+                        )?)
+                    })
                 }
                 LogicalPlan::Aggregate(Aggregate {
                     input,
@@ -1002,9 +1014,7 @@ impl DefaultPhysicalPlanner {
                         _ => None
                     };
 
-                    let prefer_hash_join = session_state.config().config_options()
-                        .get_bool(OPT_PREFER_HASH_JOIN)
-                        .unwrap_or_default();
+                    let prefer_hash_join = session_state.config_options().optimizer.prefer_hash_join;
                     if join_on.is_empty() {
                         // there is no equal join condition, use the nested loop join
                         // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
@@ -1720,21 +1730,14 @@ impl DefaultPhysicalPlanner {
             use PlanType::*;
             let mut stringified_plans = vec![];
 
-            if !session_state
-                .config_options()
-                .get_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY)
-                .unwrap_or_default()
-            {
-                stringified_plans = e.stringified_plans.clone();
+            let config = &session_state.config_options().explain;
 
+            if !config.physical_plan_only {
+                stringified_plans = e.stringified_plans.clone();
                 stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
             }
 
-            if !session_state
-                .config_options()
-                .get_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY)
-                .unwrap_or_default()
-            {
+            if !config.logical_plan_only {
                 let input = self
                     .create_initial_plan(e.plan.as_ref(), session_state)
                     .await?;

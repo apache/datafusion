@@ -88,6 +88,12 @@ pub trait AggregateExpr: Send + Sync + Debug {
         false
     }
 
+    /// Specifies whether this aggregate function can run using bounded memory.
+    /// Any accumulator returning "true" needs to implement `retract_batch`.
+    fn supports_bounded_execution(&self) -> bool {
+        false
+    }
+
     /// RowAccumulator to access/update row-based aggregation state in-place.
     /// Currently, row accumulator only supports states of fixed-sized type.
     ///

@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use super::optimizer::PhysicalOptimizerRule;
-use crate::config::{ConfigOptions, OPT_TARGET_PARTITIONS};
+use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_plan::Partitioning::*;
 use crate::physical_plan::{
@@ -210,9 +210,10 @@ impl PhysicalOptimizerRule for Repartition {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_partitions = config.get_usize(OPT_TARGET_PARTITIONS).unwrap();
+        let target_partitions = config.execution.target_partitions;
+        let enabled = config.optimizer.enable_round_robin_repartition;
         // Don't run optimizer if target_partitions == 1
-        if target_partitions == 1 {
+        if !enabled || target_partitions == 1 {
             Ok(plan)
         } else {
             optimize_partitions(
@@ -365,7 +366,7 @@ mod tests {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
             let mut config = ConfigOptions::new();
-            config.set_usize(OPT_TARGET_PARTITIONS, 10);
+            config.execution.target_partitions = 10;
 
             // run optimizer
             let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![

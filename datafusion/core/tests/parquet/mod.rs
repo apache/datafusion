@@ -28,7 +28,6 @@ use arrow::{
     util::pretty::pretty_format_batches,
 };
 use chrono::{Datelike, Duration};
-use datafusion::config::OPT_PARQUET_ENABLE_PAGE_INDEX;
 use datafusion::{
     datasource::{provider_as_source, TableProvider},
     physical_plan::{
@@ -140,9 +139,8 @@ impl ContextWithParquet {
         let file = match unit {
             Unit::RowGroup => make_test_file_rg(scenario).await,
             Unit::Page => {
-                config
-                    .config_options_mut()
-                    .set_bool(OPT_PARQUET_ENABLE_PAGE_INDEX, true);
+                let config = config.config_options_mut();
+                config.execution.parquet.enable_page_index = true;
                 make_test_file_page(scenario).await
             }
         };

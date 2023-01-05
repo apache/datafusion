@@ -64,6 +64,7 @@ jobs:
       - name: Check Cargo.lock for datafusion-cli
         run: |
           # If this test fails, try running `cargo update` in the `datafusion-cli` directory
+          # and check in the updated Cargo.lock file.
           cargo check --manifest-path datafusion-cli/Cargo.toml --locked
 
   # test the crate
