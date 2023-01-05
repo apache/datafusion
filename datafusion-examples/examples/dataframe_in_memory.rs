@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     ctx.register_batch("t", batch)?;
-    let df = ctx.table("t")?;
+    let df = ctx.table("t").await?;
 
     // construct an expression corresponding to "SELECT a, b FROM t WHERE b = 10" in SQL
     let filter = col("b").eq(lit(10));
