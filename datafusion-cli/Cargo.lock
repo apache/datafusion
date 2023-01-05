@@ -673,6 +673,7 @@ dependencies = [
  "futures",
  "glob",
  "hashbrown 0.13.1",
+ "indexmap",
  "itertools",
  "lazy_static",
  "log",
@@ -717,6 +718,7 @@ version = "15.0.0"
 dependencies = [
  "arrow",
  "chrono",
+ "num_cpus",
  "object_store",
  "parquet",
  "sqlparser",
@@ -764,6 +766,7 @@ dependencies = [
  "datafusion-row",
  "half",
  "hashbrown 0.13.1",
+ "indexmap",
  "itertools",
  "lazy_static",
  "md-5",
