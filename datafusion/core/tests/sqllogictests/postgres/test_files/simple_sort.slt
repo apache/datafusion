@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# halt
 query IIT
 SELECT
   c2,
