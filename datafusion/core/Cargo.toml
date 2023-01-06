@@ -112,8 +112,9 @@ parquet-test-utils = { path = "../../parquet-test-utils" }
 rstest = "0.16.0"
 sqllogictest = "0.10.0"
 test-utils = { path = "../../test-utils" }
+tokio-postgres = "0.7.7"
 thiserror = "1.0.37"
-
+testcontainers = "0.14.0"
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = "0.26.1"
 

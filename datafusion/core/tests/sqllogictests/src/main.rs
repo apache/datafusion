@@ -16,17 +16,24 @@
 // under the License.
 
 use std::error::Error;
-use datafusion::prelude::SessionContext;
-use log::info;
-use std::path::Path;
-use crate::engines::datafusion::DataFusion;
+use std::fs::copy;
+use std::path::{Path, PathBuf};
 
+use log::info;
+use tempfile::tempdir;
+use testcontainers::clients::Cli as Docker;
+
+use datafusion::prelude::SessionContext;
+
+use crate::engines::datafusion::DataFusion;
+use crate::engines::postgres::{PG_DB, PG_PASSWORD, PG_PORT, PG_USER, Postgres};
 
 mod setup;
 mod utils;
 mod engines;
 
 const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files";
+const TEST_DIRECTORY_POSTGRES: &str = "tests/sqllogictests/postgres/test_files";
 
 #[tokio::main]
 #[cfg(target_family = "windows")]
@@ -39,47 +46,87 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(not(target_family = "windows"))]
 pub async fn main() -> Result<(), Box<dyn Error>> {
     // Enable logging (e.g. set RUST_LOG=debug to see debug logs)
-
-    use sqllogictest::{default_validator, update_test_file};
     env_logger::init();
 
     let options = Options::new();
 
-    // default to all files in test directory filtering based on name
-    let files: Vec<_> = std::fs::read_dir(TEST_DIRECTORY)
-        .unwrap()
-        .map(|path| path.unwrap().path())
-        .filter(|path| options.check_test_file(path.as_path()))
-        .collect();
+    let files: Vec<_> = read_test_files(&options);
 
     info!("Running test files {:?}", files);
 
     for path in files {
-        println!("Running: {}", path.display());
-
         let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
 
-        // Create the test runner
-        let ctx = context_for_test_file(&file_name).await;
-        let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name));
-
-        // run each file using its own new DB
-        //
-        // We could run these tests in parallel eventually if we wanted.
         if options.complete_mode {
-            info!("Using complete mode to complete {}", path.display());
-            let col_separator = " ";
-            let validator = default_validator;
-            update_test_file(path, runner, col_separator, validator)
-                .await
-                .map_err(|e| e.to_string())?;
+            run_complete_file(&path, file_name).await?;
+        } else if options.postgres_mode {
+            run_postgres_test_file(&path, file_name).await?;
         } else {
-            // run the test normally:
-            runner.run_file_async(path).await?;
+            run_test_file(&path, file_name).await?;
         }
     }
 
     Ok(())
+}
+
+async fn run_test_file(path: &PathBuf, file_name: String) -> Result<(), Box<dyn Error>> {
+    println!("Running: {}", path.display());
+    let ctx = context_for_test_file(&file_name).await;
+    let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name));
+    runner.run_file_async(path).await?;
+    Ok(())
+}
+
+async fn run_postgres_test_file(path: &PathBuf, file_name: String) -> Result<(), Box<dyn Error>> {
+    use sqllogictest::{default_validator, update_test_file};
+    info!("Running postgres test: {}", path.display());
+
+    let docker = Docker::default();
+    let postgres_container = docker.run(Postgres::postgres_docker_image());
+
+    let postgres_client = Postgres::connect_with_retry(
+        "127.0.0.1", postgres_container.get_host_port_ipv4(PG_PORT), PG_DB, PG_USER, PG_PASSWORD,
+    ).await?;
+    let postgres_runner = sqllogictest::Runner::new(postgres_client);
+
+    let temp_dir = tempdir()?;
+    let copy_path = temp_dir.path().join(&file_name);
+
+    copy(&path, &copy_path)?;
+    update_test_file(&copy_path, postgres_runner, " ", default_validator).await?;
+
+    let ctx = SessionContext::new();
+    setup::register_aggregate_csv_by_sql(&ctx).await;
+    let mut df_runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name));
+
+    df_runner.run_file_async(copy_path).await?;
+    Ok(())
+}
+
+async fn run_complete_file(path: &PathBuf, file_name: String) -> Result<(), Box<dyn Error>> {
+    use sqllogictest::{default_validator, update_test_file};
+
+    info!("Using complete mode to complete: {}", path.display());
+
+    let ctx = context_for_test_file(&file_name).await;
+    let runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name));
+
+    let col_separator = " ";
+    let validator = default_validator;
+    update_test_file(path, runner, col_separator, validator)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+fn read_test_files(options: &Options) -> Vec<PathBuf> {
+    let path = if options.postgres_mode { TEST_DIRECTORY_POSTGRES } else { TEST_DIRECTORY };
+    std::fs::read_dir(path)
+        .unwrap()
+        .map(|path| path.unwrap().path())
+        .filter(|path| options.check_test_file(path.as_path()))
+        .collect()
 }
 
 /// Create a SessionContext, configured for the specific test
@@ -107,6 +154,9 @@ struct Options {
 
     /// Auto complete mode to fill out expected results
     complete_mode: bool,
+
+    /// Run Postgres compatibility tests
+    postgres_mode: bool,
 }
 
 impl Options {
@@ -114,6 +164,7 @@ impl Options {
         let args: Vec<_> = std::env::args().collect();
 
         let complete_mode = args.iter().any(|a| a == "--complete");
+        let postgres_mode = args.iter().any(|a| a == "--postgres");
 
         // treat args after the first as filters to run (substring matching)
         let filters = if !args.is_empty() {
@@ -129,6 +180,7 @@ impl Options {
         Self {
             filters,
             complete_mode,
+            postgres_mode,
         }
     }
 

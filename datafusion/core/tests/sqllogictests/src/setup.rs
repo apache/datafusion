@@ -111,7 +111,7 @@ fn register_median_test_tables(ctx: &SessionContext) {
     }
 }
 
-async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
+pub async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
     let test_data = datafusion::test_util::arrow_test_data();
 
     let df = ctx
@@ -119,15 +119,15 @@ async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
             "
     CREATE EXTERNAL TABLE aggregate_test_100_by_sql (
         c1  VARCHAR NOT NULL,
-        c2  TINYINT NOT NULL,
+        c2  INT NOT NULL,
         c3  SMALLINT NOT NULL,
-        c4  SMALLINT NOT NULL,
-        c5  INTEGER NOT NULL,
+        c4  SMALLINT,
+        c5  INT,
         c6  BIGINT NOT NULL,
         c7  SMALLINT NOT NULL,
         c8  INT NOT NULL,
-        c9  INT UNSIGNED NOT NULL,
-        c10 BIGINT UNSIGNED NOT NULL,
+        c9  BIGINT NOT NULL,
+        c10 VARCHAR NOT NULL,
         c11 FLOAT NOT NULL,
         c12 DOUBLE NOT NULL,
         c13 VARCHAR NOT NULL

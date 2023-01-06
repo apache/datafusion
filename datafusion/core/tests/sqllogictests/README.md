@@ -44,6 +44,14 @@ Run only the tests in `information_schema.slt`:
 cargo test -p datafusion --test sqllogictests -- information
 ```
 
+#### Running tests: Postgres compatibility mode
+
+In this mode, `sqllogictests` runs the statements and queries in a `.slt` file, comparing outputs of postgres and datafusion.
+
+```
+cargo test -p datafusion --test sqllogictests -- --postgres          
+```
+
 #### Updating tests: Completion Mode
 
 In test script completion mode, `sqllogictests` reads a prototype script and runs the statements and queries against the database engine. The output is is a full script that is a copy of the prototype script with result inserted.

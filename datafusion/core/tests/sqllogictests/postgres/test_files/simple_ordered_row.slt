@@ -1,0 +1,28 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+query IIIIIII
+SELECT
+SUM(c5) OVER(ORDER BY c13 ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING) as summation2,
+SUM(c2) OVER(PARTITION BY c5 ORDER BY c13 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as summation10,
+SUM(c2) OVER(PARTITION BY c1 ORDER BY c13 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as summation14,
+SUM(c5) OVER(ORDER BY c5 ROWS BETWEEN 3 PRECEDING AND UNBOUNDED FOLLOWING) as summation5,
+SUM(c5) OVER(ORDER BY c5 ROWS BETWEEN UNBOUNDED PRECEDING AND 2 FOLLOWING) as summation6,
+SUM(c2) OVER(PARTITION BY c5, c7, c9 ORDER BY c13, c5 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as summation20,
+SUM(c2) OVER(PARTITION BY c5 ORDER BY c13, c5 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as summation21
+FROM aggregate_test_100_by_sql
+ORDER BY c9;

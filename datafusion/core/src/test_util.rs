@@ -156,7 +156,7 @@ pub fn parquet_test_data() -> String {
 ///  Returns either:
 /// The path referred to in `udf_env` if that variable is set and refers to a directory
 /// The submodule_data directory relative to CARGO_MANIFEST_PATH
-fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn Error>> {
+pub fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn Error>> {
     // Try user defined env.
     if let Ok(dir) = env::var(udf_env) {
         let trimmed = dir.trim().to_string();
