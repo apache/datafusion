@@ -394,7 +394,9 @@ mod tests {
 
     use sqlparser::dialect::{Dialect, GenericDialect, HiveDialect, MySqlDialect};
 
-    use datafusion_common::assert_contains;
+    use crate::parser::DFParser;
+    use datafusion_common::{assert_contains, ScalarValue};
+    use datafusion_expr::logical_plan::Prepare;
 
     use super::*;
 
