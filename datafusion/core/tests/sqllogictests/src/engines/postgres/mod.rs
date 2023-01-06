@@ -37,7 +37,10 @@ pub const PG_PORT: u16 = 5432;
 
 impl Postgres {
     pub fn postgres_docker_image() -> GenericImage {
-        let postgres_test_data = match datafusion::test_util::get_data_dir("POSTGRES_TEST_DATA", "tests/sqllogictests/postgres") {
+        let postgres_test_data = match datafusion::test_util::get_data_dir(
+            "POSTGRES_TEST_DATA",
+            "tests/sqllogictests/postgres",
+        ) {
             Ok(pb) => pb.display().to_string(),
             Err(err) => panic!("failed to get arrow data dir: {err}"),
         };
@@ -48,17 +51,31 @@ impl Postgres {
             .with_env_var("POSTGRES_DB", PG_DB)
             .with_env_var("POSTGRES_USER", PG_USER)
             .with_env_var("POSTGRES_PASSWORD", PG_PASSWORD)
-            .with_env_var("POSTGRES_INITDB_ARGS", "--encoding=UTF-8 --lc-collate=C --lc-ctype=C")
+            .with_env_var(
+                "POSTGRES_INITDB_ARGS",
+                "--encoding=UTF-8 --lc-collate=C --lc-ctype=C",
+            )
             .with_exposed_port(PG_PORT)
-            .with_volume(format!("{0}/csv/aggregate_test_100.csv", datafusion::test_util::arrow_test_data()), "/opt/data/csv/aggregate_test_100.csv")
-            .with_volume(format!("{0}/postgres_create_table.sql", postgres_test_data), "/docker-entrypoint-initdb.d/0_create_table.sql")
+            .with_volume(
+                format!(
+                    "{0}/csv/aggregate_test_100.csv",
+                    datafusion::test_util::arrow_test_data()
+                ),
+                "/opt/data/csv/aggregate_test_100.csv",
+            )
+            .with_volume(
+                format!("{0}/postgres_create_table.sql", postgres_test_data),
+                "/docker-entrypoint-initdb.d/0_create_table.sql",
+            )
     }
 
-    pub async fn connect_with_retry(host: &str,
-                                    port: u16,
-                                    db: &str,
-                                    user: &str,
-                                    pass: &str) -> Result<Self, tokio_postgres::error::Error> {
+    pub async fn connect_with_retry(
+        host: &str,
+        port: u16,
+        db: &str,
+        user: &str,
+        pass: &str,
+    ) -> Result<Self, tokio_postgres::error::Error> {
         let mut retry = 0;
         loop {
             let connection_result = Postgres::connect(host, port, db, user, pass).await;
@@ -68,16 +85,18 @@ impl Postgres {
                     retry += 1;
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
-                result => break result
+                result => break result,
             }
         }
     }
 
-    async fn connect(host: &str,
-                     port: u16,
-                     db: &str,
-                     user: &str,
-                     pass: &str) -> Result<Self, tokio_postgres::error::Error> {
+    async fn connect(
+        host: &str,
+        port: u16,
+        db: &str,
+        user: &str,
+        pass: &str,
+    ) -> Result<Self, tokio_postgres::error::Error> {
         let (client, connection) = tokio_postgres::Config::new()
             .host(host)
             .port(port)
@@ -99,7 +118,6 @@ impl Postgres {
         })
     }
 }
-
 
 impl Drop for Postgres {
     fn drop(&mut self) {

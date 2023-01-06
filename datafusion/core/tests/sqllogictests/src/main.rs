@@ -26,11 +26,11 @@ use testcontainers::clients::Cli as Docker;
 use datafusion::prelude::SessionContext;
 
 use crate::engines::datafusion::DataFusion;
-use crate::engines::postgres::{PG_DB, PG_PASSWORD, PG_PORT, PG_USER, Postgres};
+use crate::engines::postgres::{Postgres, PG_DB, PG_PASSWORD, PG_PORT, PG_USER};
 
+mod engines;
 mod setup;
 mod utils;
-mod engines;
 
 const TEST_DIRECTORY: &str = "tests/sqllogictests/test_files";
 const TEST_DIRECTORY_POSTGRES: &str = "tests/sqllogictests/postgres/test_files";
@@ -77,7 +77,10 @@ async fn run_test_file(path: &PathBuf, file_name: String) -> Result<(), Box<dyn 
     Ok(())
 }
 
-async fn run_postgres_test_file(path: &PathBuf, file_name: String) -> Result<(), Box<dyn Error>> {
+async fn run_postgres_test_file(
+    path: &PathBuf,
+    file_name: String,
+) -> Result<(), Box<dyn Error>> {
     use sqllogictest::{default_validator, update_test_file};
     info!("Running postgres test: {}", path.display());
 
@@ -85,14 +88,19 @@ async fn run_postgres_test_file(path: &PathBuf, file_name: String) -> Result<(),
     let postgres_container = docker.run(Postgres::postgres_docker_image());
 
     let postgres_client = Postgres::connect_with_retry(
-        "127.0.0.1", postgres_container.get_host_port_ipv4(PG_PORT), PG_DB, PG_USER, PG_PASSWORD,
-    ).await?;
+        "127.0.0.1",
+        postgres_container.get_host_port_ipv4(PG_PORT),
+        PG_DB,
+        PG_USER,
+        PG_PASSWORD,
+    )
+    .await?;
     let postgres_runner = sqllogictest::Runner::new(postgres_client);
 
     let temp_dir = tempdir()?;
     let copy_path = temp_dir.path().join(&file_name);
 
-    copy(&path, &copy_path)?;
+    copy(path, &copy_path)?;
     update_test_file(&copy_path, postgres_runner, " ", default_validator).await?;
 
     let ctx = SessionContext::new();
@@ -103,7 +111,10 @@ async fn run_postgres_test_file(path: &PathBuf, file_name: String) -> Result<(),
     Ok(())
 }
 
-async fn run_complete_file(path: &PathBuf, file_name: String) -> Result<(), Box<dyn Error>> {
+async fn run_complete_file(
+    path: &PathBuf,
+    file_name: String,
+) -> Result<(), Box<dyn Error>> {
     use sqllogictest::{default_validator, update_test_file};
 
     info!("Using complete mode to complete: {}", path.display());
@@ -121,7 +132,11 @@ async fn run_complete_file(path: &PathBuf, file_name: String) -> Result<(), Box<
 }
 
 fn read_test_files(options: &Options) -> Vec<PathBuf> {
-    let path = if options.postgres_mode { TEST_DIRECTORY_POSTGRES } else { TEST_DIRECTORY };
+    let path = if options.postgres_mode {
+        TEST_DIRECTORY_POSTGRES
+    } else {
+        TEST_DIRECTORY
+    };
     std::fs::read_dir(path)
         .unwrap()
         .map(|path| path.unwrap().path())

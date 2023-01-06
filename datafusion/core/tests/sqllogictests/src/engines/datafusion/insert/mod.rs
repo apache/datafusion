@@ -17,8 +17,8 @@
 
 mod util;
 
-use super::error::Result;
 use self::util::LogicTestContextProvider;
+use super::error::Result;
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;

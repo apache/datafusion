@@ -19,17 +19,17 @@ use std::time::Duration;
 
 use sqllogictest::DBOutput;
 
+use self::error::{DFSqlLogicTestError, Result};
+use async_trait::async_trait;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
-use self::error::{DFSqlLogicTestError, Result};
-use sqlparser::ast::Statement as SQLStatement;
 use datafusion_sql::parser::{DFParser, Statement};
 use insert::insert;
-use async_trait::async_trait;
+use sqlparser::ast::Statement as SQLStatement;
 
 mod error;
-mod normalize;
 mod insert;
+mod normalize;
 
 pub struct DataFusion {
     ctx: SessionContext,
@@ -66,7 +66,6 @@ impl sqllogictest::AsyncDB for DataFusion {
         tokio::time::sleep(dur).await;
     }
 }
-
 
 async fn run_query(ctx: &SessionContext, sql: impl Into<String>) -> Result<DBOutput> {
     let sql = sql.into();
