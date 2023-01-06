@@ -15,12 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! EnforceSorting optimizer rule inspects [SortExec]s in the given physical
-//! plan and removes the ones it can prove unnecessary. The rule can work on
-//! valid *and* invalid physical plans with respect to sorting requirements,
-//! but always produces a valid physical plan in this sense.
+//! EnforceSorting optimizer rule inspects the physical plan with respect
+//! to local sorting requirements and does the following:
+//! - Adds a [SortExec] when a requirement is not met,
+//! - Removes an already-existing [SortExec] if it is possible to prove
+//!   that this sort is unnecessary
+//! The rule can work on valid *and* invalid physical plans with respect to
+//! sorting requirements, but always produces a valid physical plan in this sense.
 //!
-//! A non-realistic but easy to follow example: Assume that we somehow get the fragment
+//! A non-realistic but easy to follow example for sort removals: Assume that we
+//! somehow get the fragment
 //! "SortExec: [nullable_col@0 ASC]",
 //! "  SortExec: [non_nullable_col@1 ASC]",
 //! in the physical plan. The first sort is unnecessary since its result is overwritten

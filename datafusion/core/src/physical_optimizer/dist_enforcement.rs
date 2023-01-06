@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Enforcement optimizer rules are used to make sure the plan's Distribution
-//! requirements are met by inserting necessary [[RepartitionExec]].
-//!
+//! EnforceDistribution optimizer rule inspects the physical plan with respect
+//! to distribution requirements and adds [RepartitionExec]s to satisfy them
+//! when necessary.
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::PhysicalOptimizerRule;
@@ -45,8 +45,8 @@ use datafusion_physical_expr::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// EnforceDistribution rule, it ensures the Distribution requirements are met
-/// in the strictest way. It might add additional [[RepartitionExec]] to the plan tree
+/// The EnforceDistribution rule ensures that distribution requirements are met
+/// in the strictest way. It might add additional [RepartitionExec] to the plan tree
 /// and give a non-optimal plan, but it can avoid the possible data skew in joins.
 ///
 /// For example for a HashJoin with keys(a, b, c), the required Distribution(a, b, c) can be satisfied by
@@ -80,7 +80,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
         } else {
             plan
         };
-        // Distribution and Ordering enforcement need to be applied bottom-up.
+        // Distribution enforcement needs to be applied bottom-up.
         new_plan.transform_up(&{
             |plan| {
                 let adjusted = if !top_down_join_key_reordering {

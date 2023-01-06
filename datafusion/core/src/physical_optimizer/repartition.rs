@@ -241,7 +241,7 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::physical_optimizer::enforcement::EnforceDistribution;
+    use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
     use crate::physical_optimizer::sort_enforcement::EnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -371,10 +371,10 @@ mod tests {
             // run optimizer
             let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
                 Arc::new(Repartition::new()),
-                // The `EnforceDistribution` is an essential rule to be applied.
+                // EnforceDistribution is an essential rule to be applied.
                 // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
                 Arc::new(EnforceDistribution::new()),
-                // The `EnforceSorting` is an essential rule to be applied.
+                // EnforceSorting is an essential rule to be applied.
                 // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
                 Arc::new(EnforceSorting::new()),
             ];
