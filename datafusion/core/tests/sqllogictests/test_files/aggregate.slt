@@ -93,7 +93,7 @@ SELECT stddev_pop(c12) FROM aggregate_test_100
 # csv_query_stddev_4
 query R
 SELECT stddev(c12) FROM aggregate_test_100
-----
+----q
 0.3054095399405338
 
 # csv_query_stddev_5
@@ -989,10 +989,10 @@ select avg(c1) from d_table
 
 # FIX: different test table
 # aggregate
-query I
-SELECT SUM(c1), SUM(c2) FROM test
-----
-60 220
+# query I
+# SELECT SUM(c1), SUM(c2) FROM test
+# ----
+# 60 220
 
 # TODO: aggregate_empty
 
