@@ -30,7 +30,6 @@ use crate::{
 pub use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::var_provider::is_system_variables;
 use parking_lot::RwLock;
-use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
@@ -41,6 +40,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
 };
+use std::{ops::ControlFlow, sync::Weak};
 
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -1009,6 +1009,16 @@ impl SessionContext {
         state.execution_props.start_execution();
         state
     }
+
+    /// Get weak reference to [`SessionState`]
+    pub fn state_weak_ref(&self) -> Weak<RwLock<SessionState>> {
+        Arc::downgrade(&self.state)
+    }
+
+    /// Register [`CatalogList`] in [`SessionState`]
+    pub fn register_catalog_list(&mut self, catalog_list: Arc<dyn CatalogList>) {
+        self.state.write().catalog_list = catalog_list;
+    }
 }
 
 impl FunctionRegistry for SessionContext {
@@ -1787,6 +1797,11 @@ impl SessionState {
     /// Get a new TaskContext to run in this session
     pub fn task_ctx(&self) -> Arc<TaskContext> {
         Arc::new(TaskContext::from(self))
+    }
+
+    /// Return catalog list
+    pub fn catalog_list(&self) -> Arc<dyn CatalogList> {
+        self.catalog_list.clone()
     }
 }
 

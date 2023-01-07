@@ -701,12 +701,14 @@ name = "datafusion-cli"
 version = "15.0.0"
 dependencies = [
  "arrow",
+ "async-trait",
  "clap",
  "datafusion",
  "dirs",
  "env_logger",
  "mimalloc",
  "object_store",
+ "parking_lot",
  "rustyline",
  "tokio",
  "url",
