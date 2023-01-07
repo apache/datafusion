@@ -254,7 +254,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let x: Vec<&DFSchemaRef> = all_schemas.iter().collect();
 
                 let filter_expr =
-                    self.sql_to_rex(predicate_expr, &join_schema, planner_context)?;
+                    self.sql_to_expr(predicate_expr, &join_schema, planner_context)?;
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 let filter_expr = normalize_col_with_schemas(
@@ -338,13 +338,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<Vec<Expr>> {
         match sql {
             SelectItem::UnnamedExpr(expr) => {
-                let expr = self.sql_to_rex(expr, plan.schema(), planner_context)?;
+                let expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
                 self.column_reference_ambiguous_check(from_schema, &[expr.clone()])?;
                 Ok(vec![normalize_col(expr, plan)?])
             }
             SelectItem::ExprWithAlias { expr, alias } => {
                 let select_expr =
-                    self.sql_to_rex(expr, plan.schema(), planner_context)?;
+                    self.sql_to_expr(expr, plan.schema(), planner_context)?;
                 self.column_reference_ambiguous_check(
                     from_schema,
                     &[select_expr.clone()],

@@ -67,7 +67,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a relational expression from a SQL expression
-    pub fn sql_to_rex(
+    pub fn sql_to_expr(
         &self,
         sql: SQLExpr,
         schema: &DFSchema,

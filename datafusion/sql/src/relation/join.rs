@@ -107,7 +107,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let join_schema = left.schema().join(right.schema())?;
 
                 // parse ON expression
-                let expr = self.sql_to_rex(sql_expr, &join_schema, planner_context)?;
+                let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
 
                 // ambiguous check
                 ensure_any_column_reference_is_unambiguous(

@@ -100,7 +100,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
 
         let skip = match skip {
-            Some(skip_expr) => match self.sql_to_rex(
+            Some(skip_expr) => match self.sql_to_expr(
                 skip_expr.value,
                 input.schema(),
                 &mut PlannerContext::new(),
@@ -122,7 +122,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let fetch = match fetch {
             Some(limit_expr) => {
-                let n = match self.sql_to_rex(
+                let n = match self.sql_to_expr(
                     limit_expr,
                     input.schema(),
                     &mut PlannerContext::new(),
