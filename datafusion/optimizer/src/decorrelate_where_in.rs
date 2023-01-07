@@ -121,7 +121,7 @@ impl OptimizerRule for DecorrelateWhereIn {
     }
 }
 
-/// Optimize the where in subquery to left-enti/left-semi join.
+/// Optimize the where in subquery to left-anti/left-semi join.
 /// If the subquery is a correlated subquery, we need extract the join predicate from the subquery.
 ///
 /// For example, given a query like:
@@ -149,7 +149,7 @@ fn optimize_where_in(
         .map_err(|e| context!("single expression projection required", e))?;
 
     // extract join filters
-    let (join_filters, right_input) = extract_join_filters(subquery_input.as_ref())?;
+    let (join_filters, subquery_input) = extract_join_filters(subquery_input.as_ref())?;
 
     // in_predicate may be also include in the join filters, remove it from the join filters.
     let in_predicate = Expr::eq(query_info.where_in_expr.clone(), subquery_expr.clone());
@@ -157,7 +157,7 @@ fn optimize_where_in(
 
     // replace qualified name with subquery alias.
     let subquery_alias = alias.next("__correlated_sq");
-    let input_schema = right_input.schema();
+    let input_schema = subquery_input.schema();
     let mut subquery_cols =
         join_filters
             .iter()
@@ -186,7 +186,7 @@ fn optimize_where_in(
         .chain(subquery_cols.into_iter().map(Expr::Column))
         .collect::<Vec<_>>();
 
-    let right = LogicalPlanBuilder::from(right_input)
+    let right = LogicalPlanBuilder::from(subquery_input)
         .project(projection_exprs)?
         .alias(&subquery_alias)?
         .build()?;
