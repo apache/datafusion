@@ -256,12 +256,11 @@ impl Optimizer {
     {
         let options = config.options();
         let start_time = Instant::now();
-        let mut plan_str = format!("{}", plan.display_indent());
         let mut new_plan = plan.clone();
-        let mut i = 0;
-        while i < options.optimizer.max_passes {
+        for i in 0..options.optimizer.max_passes {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
-
+            // a flag to track whether the plan is changed in this optimization pass
+            let mut plan_is_changed = false;
             for rule in &self.rules {
                 let result = self.optimize_recursively(rule, &new_plan, config);
 
@@ -275,6 +274,7 @@ impl Optimizer {
                                 plan.schema()
                             )));
                         }
+                        plan_is_changed = true;
                         new_plan = plan;
                         observer(&new_plan, rule.as_ref());
                         log_plan(rule.name(), &new_plan);
@@ -309,17 +309,11 @@ impl Optimizer {
             }
             log_plan(&format!("Optimized plan (pass {i})"), &new_plan);
 
-            // TODO this is an expensive way to see if the optimizer did anything and
-            // it would be better to change the OptimizerRule trait to return an Option
-            // instead
-            let new_plan_str = format!("{}", new_plan.display_indent());
-            if plan_str == new_plan_str {
+            if !plan_is_changed {
                 // plan did not change, so no need to continue trying to optimize
                 debug!("optimizer pass {} did not make changes", i);
                 break;
             }
-            plan_str = new_plan_str;
-            i += 1;
         }
         log_plan("Final optimized plan", &new_plan);
         debug!("Optimizer took {} ms", start_time.elapsed().as_millis());
