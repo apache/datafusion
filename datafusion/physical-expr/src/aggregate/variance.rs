@@ -289,7 +289,7 @@ impl Accumulator for VarianceAccumulator {
         Ok(ScalarValue::Float64(match self.count {
             0 => None,
             1 => {
-                if matches!(self.stats_type, StatsType::Population) {
+                if let StatsType::Population = self.stats_type {
                     Some(0.0)
                 } else {
                     None
