@@ -94,12 +94,7 @@ where o_orderstatus in (
     let dataframe = ctx.sql(sql).await.unwrap();
     let plan = dataframe.into_optimized_plan().unwrap();
     let actual = format!("{}", plan.display_indent());
-    let expected = r#"Projection: orders.o_orderkey
-  LeftSemi Join: orders.o_orderstatus = __correlated_sq_1.l_linestatus, orders.o_orderkey = __correlated_sq_1.l_orderkey
-    TableScan: orders projection=[o_orderkey, o_orderstatus]
-    SubqueryAlias: __correlated_sq_1
-      Projection: lineitem.l_linestatus AS l_linestatus, lineitem.l_orderkey AS l_orderkey
-        TableScan: lineitem projection=[l_orderkey, l_linestatus]"#;
+
     let expected = "Projection: orders.o_orderkey\
     \n  LeftSemi Join: orders.o_orderstatus = __correlated_sq_1.l_linestatus, orders.o_orderkey = __correlated_sq_1.l_orderkey\
     \n    TableScan: orders projection=[o_orderkey, o_orderstatus]\
