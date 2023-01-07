@@ -21,42 +21,6 @@ use datafusion::test_util::scan_empty;
 use datafusion_common::cast::as_float64_array;
 
 #[tokio::test]
-async fn csv_query_avg_multi_batch() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT avg(c12) FROM aggregate_test_100";
-    let dataframe = ctx.sql(sql).await.unwrap();
-    let results = dataframe.collect().await.unwrap();
-    let batch = &results[0];
-    let column = batch.column(0);
-    let array = as_float64_array(column)?;
-    let actual = array.value(0);
-    let expected = 0.5089725;
-    // Due to float number's accuracy, different batch size will lead to different
-    // answers.
-    assert!((expected - actual).abs() < 0.01);
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore] // https://github.com/apache/arrow-datafusion/issues/3353
-async fn csv_query_approx_count() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------+--------------+",
-        "| count_c9 | count_c9_str |",
-        "+----------+--------------+",
-        "| 100      | 99           |",
-        "+----------+--------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
@@ -117,60 +81,6 @@ async fn csv_query_approx_percentile_cont_with_histogram_bins() -> Result<()> {
     .unwrap_err();
     assert_eq!(results.to_string(), "Error during planning: The percentile sample points count for ApproxPercentileCont must be integer, not Float64.");
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn csv_query_array_agg() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql =
-        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------------------------------------------------------------------+",
-        "| ARRAYAGG(test.c13)                                               |",
-        "+------------------------------------------------------------------+",
-        "| [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB] |",
-        "+------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn csv_query_array_agg_empty() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql =
-        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------------------+",
-        "| ARRAYAGG(test.c13) |",
-        "+--------------------+",
-        "| []                 |",
-        "+--------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn csv_query_array_agg_one() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql =
-        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------------+",
-        "| ARRAYAGG(test.c13)               |",
-        "+----------------------------------+",
-        "| [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm] |",
-        "+----------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 

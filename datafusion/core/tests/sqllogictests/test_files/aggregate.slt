@@ -846,26 +846,23 @@ SELECT count(1 + 1)
 ----
 1
 
-# FIX: "CSV Writer does not support List(Field { name: \"item\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }) data type")
 # csv_query_array_agg
-# query T
-# SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test
-# ----
-# [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm0keZ5G8BffGwgF2RwQD59TFzMStxCB]
+query T
+SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test
+----
+[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB]
 
-# FIX: see above
 # csv_query_array_agg_empty
-# query I
-# SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
-# ----
-# []
+query I
+SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
+----
+[]
 
-# FIX: see above
 # csv_query_array_agg_one
-# query I
-# SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test
-# ----
-# [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm]
+query I
+SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test
+----
+[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm]
 
 # csv_query_array_agg_with_overflow
 query IIRIII
@@ -976,6 +973,7 @@ select max(c1) from d_table
 ----
 110.009
 
+# FIX: doesn't check datatype
 # aggregate_decimal_sum
 query R
 select sum(c1) from d_table
@@ -991,10 +989,10 @@ select avg(c1) from d_table
 
 # FIX: different test table
 # aggregate
-# query I
-# SELECT SUM(c1), SUM(c2) FROM test
-# ----
-# 60 220
+query I
+SELECT SUM(c1), SUM(c2) FROM test
+----
+60 220
 
 # TODO: aggregate_empty
 
