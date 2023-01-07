@@ -137,7 +137,6 @@ pub fn assert_optimized_plan_eq_display_indent(
         .unwrap_or_else(|| plan.clone());
     let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
     assert_eq!(formatted_plan, expected);
-
 }
 
 pub fn assert_optimizer_err(

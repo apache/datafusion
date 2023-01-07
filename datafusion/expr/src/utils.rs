@@ -951,7 +951,10 @@ pub fn can_hash(data_type: &DataType) -> bool {
 }
 
 /// Check whether all columns are from the schema.
-pub fn check_all_column_from_schema(columns: &HashSet<Column>, schema: DFSchemaRef) -> bool {
+pub fn check_all_column_from_schema(
+    columns: &HashSet<Column>,
+    schema: DFSchemaRef,
+) -> bool {
     columns
         .iter()
         .all(|column| schema.index_of_column(column).is_ok())

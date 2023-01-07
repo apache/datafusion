@@ -100,7 +100,7 @@ where o_orderstatus in (
     \n    TableScan: orders projection=[o_orderkey, o_orderstatus]\
     \n    SubqueryAlias: __correlated_sq_1\
     \n      Projection: lineitem.l_linestatus AS l_linestatus, lineitem.l_orderkey\
-    \n        TableScan: lineitem projection=[l_orderkey, l_linestatus]";    
+    \n        TableScan: lineitem projection=[l_orderkey, l_linestatus]";
     assert_eq!(actual, expected);
 
     // assert data
