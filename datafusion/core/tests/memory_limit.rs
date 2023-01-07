@@ -95,7 +95,11 @@ async fn run_limit_test(query: &str, expected_error: &str, memory_limit: usize) 
 
     let runtime = RuntimeEnv::new(rt_config).unwrap();
 
-    let ctx = SessionContext::with_config_rt(SessionConfig::new(), Arc::new(runtime));
+    let ctx = SessionContext::with_config_rt(
+        // do NOT re-partition (since RepartitionExec has also has a memory budget which we'll likely hit first)
+        SessionConfig::new().with_target_partitions(1),
+        Arc::new(runtime),
+    );
     ctx.register_table("t", Arc::new(table))
         .expect("registering table");
 

@@ -66,7 +66,7 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: SQLStatement) -> Result<D
         let logical_exprs = row
             .into_iter()
             .map(|expr| {
-                sql_to_rel.sql_to_rex(
+                sql_to_rel.sql_to_expr(
                     expr,
                     &DFSchema::empty(),
                     &mut PlannerContext::new(),
