@@ -79,6 +79,10 @@ impl AggregateExpr for Variance {
         Ok(Box::new(VarianceAccumulator::try_new(StatsType::Sample)?))
     }
 
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(VarianceAccumulator::try_new(StatsType::Sample)?))
+    }
+
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
@@ -131,6 +135,12 @@ impl AggregateExpr for VariancePop {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(VarianceAccumulator::try_new(
+            StatsType::Population,
+        )?))
+    }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(VarianceAccumulator::try_new(
             StatsType::Population,
         )?))
