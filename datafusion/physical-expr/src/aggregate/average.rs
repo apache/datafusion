@@ -25,6 +25,7 @@ use crate::aggregate::row_accumulator::{
     is_row_accumulator_support_dtype, RowAccumulator,
 };
 use crate::aggregate::sum;
+use crate::aggregate::sum::sum_batch;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
@@ -37,7 +38,6 @@ use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
-use crate::aggregate::sum::sum_batch;
 
 /// AVG aggregate expression
 #[derive(Debug)]
