@@ -93,7 +93,7 @@ SELECT stddev_pop(c12) FROM aggregate_test_100
 # csv_query_stddev_4
 query R
 SELECT stddev(c12) FROM aggregate_test_100
-----q
+----
 0.3054095399405338
 
 # csv_query_stddev_5
