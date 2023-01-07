@@ -21,6 +21,24 @@ use datafusion::test_util::scan_empty;
 use datafusion_common::cast::as_float64_array;
 
 #[tokio::test]
+#[ignore] // https://github.com/apache/arrow-datafusion/issues/3353
+async fn csv_query_approx_count() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------+--------------+",
+        "| count_c9 | count_c9_str |",
+        "+----------+--------------+",
+        "| 100      | 99           |",
+        "+----------+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
