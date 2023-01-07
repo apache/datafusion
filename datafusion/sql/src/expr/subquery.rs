@@ -51,7 +51,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         Ok(Expr::InSubquery {
-            expr: Box::new(self.sql_to_rex(expr, input_schema, planner_context)?),
+            expr: Box::new(self.sql_to_expr(expr, input_schema, planner_context)?),
             subquery: Subquery {
                 subquery: Arc::new(self.subquery_to_plan(
                     subquery,

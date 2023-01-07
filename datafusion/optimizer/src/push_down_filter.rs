@@ -14,7 +14,7 @@
 
 //! Push Down Filter optimizer rule ensures that filters are applied as early as possible in the plan
 
-use crate::utils::conjunction;
+use crate::utils::{conjunction, split_conjunction};
 use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DFSchema, DataFusionError, Result};
 use datafusion_expr::{
@@ -421,7 +421,7 @@ fn push_down_join(
 ) -> Result<Option<LogicalPlan>> {
     let mut predicates = match parent_predicate {
         Some(parent_predicate) => {
-            utils::split_conjunction_owned(utils::cnf_rewrite(parent_predicate.clone()))
+            utils::split_conjunction_owned(parent_predicate.clone())
         }
         None => vec![],
     };
@@ -538,8 +538,21 @@ impl OptimizerRule for PushDownFilter {
         let child_plan = filter.input.as_ref();
         let new_plan = match child_plan {
             LogicalPlan::Filter(child_filter) => {
-                let new_predicate =
-                    and(filter.predicate.clone(), child_filter.predicate.clone());
+                let parents_predicates = split_conjunction(&filter.predicate);
+                let set: HashSet<&&Expr> = parents_predicates.iter().collect();
+
+                let new_predicates = parents_predicates
+                    .iter()
+                    .chain(
+                        split_conjunction(&child_filter.predicate)
+                            .iter()
+                            .filter(|e| !set.contains(e)),
+                    )
+                    .map(|e| (*e).clone())
+                    .collect::<Vec<_>>();
+                let new_predicate = conjunction(new_predicates).ok_or(
+                    DataFusionError::Plan("at least one expression exists".to_string()),
+                )?;
                 let new_plan = LogicalPlan::Filter(Filter::try_new(
                     new_predicate,
                     child_filter.input.clone(),
@@ -638,9 +651,7 @@ impl OptimizerRule for PushDownFilter {
                     .map(|e| Ok(Column::from_qualified_name(e.display_name()?)))
                     .collect::<Result<HashSet<_>>>()?;
 
-                let predicates = utils::split_conjunction_owned(utils::cnf_rewrite(
-                    filter.predicate.clone(),
-                ));
+                let predicates = utils::split_conjunction_owned(filter.predicate.clone());
 
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
@@ -689,19 +700,15 @@ impl OptimizerRule for PushDownFilter {
                 }
             }
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-                let predicates = utils::split_conjunction_owned(utils::cnf_rewrite(
-                    filter.predicate.clone(),
-                ));
-
+                let predicates = utils::split_conjunction_owned(filter.predicate.clone());
                 push_down_all_join(predicates, &filter.input, left, right, vec![])?
             }
             LogicalPlan::TableScan(scan) => {
                 let mut new_scan_filters = scan.filters.clone();
                 let mut new_predicate = vec![];
 
-                let filter_predicates = utils::split_conjunction_owned(
-                    utils::cnf_rewrite(filter.predicate.clone()),
-                );
+                let filter_predicates =
+                    utils::split_conjunction_owned(filter.predicate.clone());
 
                 for filter_expr in &filter_predicates {
                     let (preserve_filter_node, add_to_provider) =
@@ -754,7 +761,10 @@ impl PushDownFilter {
 }
 
 /// replaces columns by its name on the projection.
-fn replace_cols_by_name(e: Expr, replace_map: &HashMap<String, Expr>) -> Result<Expr> {
+pub fn replace_cols_by_name(
+    e: Expr,
+    replace_map: &HashMap<String, Expr>,
+) -> Result<Expr> {
     struct ColumnReplacer<'a> {
         replace_map: &'a HashMap<String, Expr>,
     }
@@ -778,6 +788,7 @@ fn replace_cols_by_name(e: Expr, replace_map: &HashMap<String, Expr>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
     use crate::test::*;
     use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -793,6 +804,24 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let optimized_plan = PushDownFilter::new()
             .try_optimize(plan, &OptimizerContext::new())
+            .unwrap()
+            .expect("failed to optimize plan");
+        let formatted_plan = format!("{optimized_plan:?}");
+        assert_eq!(plan.schema(), optimized_plan.schema());
+        assert_eq!(expected, formatted_plan);
+        Ok(())
+    }
+
+    fn assert_optimized_plan_eq_with_rewrite_predicate(
+        plan: &LogicalPlan,
+        expected: &str,
+    ) -> Result<()> {
+        let mut optimized_plan = RewriteDisjunctivePredicate::new()
+            .try_optimize(plan, &OptimizerContext::new())
+            .unwrap()
+            .expect("failed to optimize plan");
+        optimized_plan = PushDownFilter::new()
+            .try_optimize(&optimized_plan, &OptimizerContext::new())
             .unwrap()
             .expect("failed to optimize plan");
         let formatted_plan = format!("{optimized_plan:?}");
@@ -2281,20 +2310,19 @@ mod tests {
             .build()?;
 
         let expected = "\
-        Filter: (test.a = d OR test.b = e) AND (test.a = d OR test.c < UInt32(10)) AND (test.b > UInt32(1) OR test.b = e)\
+        Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)\
         \n  CrossJoin:\
         \n    Projection: test.a, test.b, test.c\
         \n      Filter: test.b > UInt32(1) OR test.c < UInt32(10)\
         \n        TableScan: test\
         \n    Projection: test1.a AS d, test1.a AS e\
         \n      TableScan: test1";
-        assert_optimized_plan_eq(&plan, expected)?;
+        assert_optimized_plan_eq_with_rewrite_predicate(&plan, expected)?;
 
         // Originally global state which can help to avoid duplicate Filters been generated and pushed down.
         // Now the global state is removed. Need to double confirm that avoid duplicate Filters.
         let optimized_plan = PushDownFilter::new()
-            .try_optimize(&plan, &OptimizerContext::new())
-            .unwrap()
+            .try_optimize(&plan, &OptimizerContext::new())?
             .expect("failed to optimize plan");
         assert_optimized_plan_eq(&optimized_plan, expected)
     }
