@@ -37,6 +37,7 @@ use datafusion_common::{downcast_value, ScalarValue};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
+use crate::aggregate::sum::sum_batch;
 
 /// AVG aggregate expression
 #[derive(Debug)]
@@ -119,6 +120,10 @@ impl AggregateExpr for Avg {
             self.data_type.clone(),
         )))
     }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(AvgAccumulator::try_new(&self.data_type)?))
+    }
 }
 
 /// An accumulator to compute the average
@@ -151,6 +156,14 @@ impl Accumulator for AvgAccumulator {
         self.sum = self
             .sum
             .add(&sum::sum_batch(values, &self.sum.get_datatype())?)?;
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = &values[0];
+        self.count -= (values.len() - values.data().null_count()) as u64;
+        let delta = sum_batch(values, &self.sum.get_datatype())?;
+        self.sum = self.sum.sub(&delta)?;
         Ok(())
     }
 
