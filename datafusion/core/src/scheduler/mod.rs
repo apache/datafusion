@@ -59,7 +59,7 @@
 //! let config = SessionConfig::new().with_target_partitions(4);
 //! let context = SessionContext::with_config(config);
 //!
-//! context.register_csv("example", "../core/tests/example.csv", CsvReadOptions::new()).await.unwrap();
+//! context.register_csv("example", "../core/tests/data/example.csv", CsvReadOptions::new()).await.unwrap();
 //! let plan = context.sql("SELECT MIN(b) FROM example")
 //!     .await
 //!    .unwrap()
@@ -345,7 +345,7 @@ mod tests {
             "select id, b from (select id, b from table1 union all select id, b from table2 where a > 100 order by id) as t where b > 10 order by id, b",
             "select id, MIN(b), MAX(b), AVG(b) from table1 group by id order by id",
             "select count(*) from table1 where table1.a > 4",
-            "WITH gp AS (SELECT id FROM table1 GROUP BY id) 
+            "WITH gp AS (SELECT id FROM table1 GROUP BY id)
             SELECT COUNT(CAST(CAST(gp.id || 'xx' AS TIMESTAMP) AS BIGINT)) FROM gp",
         ];
 
