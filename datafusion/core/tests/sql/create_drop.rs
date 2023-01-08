@@ -129,7 +129,7 @@ async fn create_csv_table_empty_file() -> Result<()> {
     let ctx =
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
-    let sql = "CREATE EXTERNAL TABLE empty STORED AS CSV WITH HEADER ROW LOCATION 'tests/empty.csv'";
+    let sql = "CREATE EXTERNAL TABLE empty STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/empty.csv'";
     ctx.sql(sql).await.unwrap();
     let sql =
         "select column_name, data_type, ordinal_position from information_schema.columns";
