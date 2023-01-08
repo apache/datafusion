@@ -319,8 +319,8 @@ mod tests {
             "bla".to_string(),
             DataType::Float64,
         ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
+        let actual = aggregate(&batch, agg).unwrap();
+        assert_eq!(actual, ScalarValue::Float64(None));
 
         Ok(())
     }
@@ -353,9 +353,8 @@ mod tests {
             "bla".to_string(),
             DataType::Float64,
         ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
-
+        let actual = aggregate(&batch, agg).unwrap();
+        assert_eq!(actual, ScalarValue::Float64(None));
         Ok(())
     }
 
