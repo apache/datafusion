@@ -116,7 +116,8 @@ async fn setup_table(mut ctx: SessionContext) -> Result<SessionContext> {
 }
 
 async fn setup_table_without_schemas(mut ctx: SessionContext) -> Result<SessionContext> {
-    let sql = "CREATE EXTERNAL TABLE sales STORED AS CSV location 'tests/data/customer.csv'";
+    let sql =
+        "CREATE EXTERNAL TABLE sales STORED AS CSV location 'tests/data/customer.csv'";
 
     let expected = vec!["++", "++"];
 
