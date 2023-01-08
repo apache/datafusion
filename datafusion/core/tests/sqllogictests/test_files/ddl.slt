@@ -403,7 +403,7 @@ DROP VIEW y;
 # create_pipe_delimited_csv_table()
 
 statement ok
-CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION 'tests/aggregate_simple_pipe.csv';
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION 'tests/data/aggregate_simple_pipe.csv';
 
 
 query CCC
