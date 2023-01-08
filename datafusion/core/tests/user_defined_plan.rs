@@ -31,7 +31,7 @@
 //!
 //! ```sql
 //! CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT)
-//!   STORED AS CSV location 'tests/customer.csv';
+//!   STORED AS CSV location 'tests/data/customer.csv';
 //!
 //! SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3;
 //! ```
@@ -104,7 +104,7 @@ async fn exec_sql(ctx: &mut SessionContext, sql: &str) -> Result<String> {
 
 /// Create a test table.
 async fn setup_table(mut ctx: SessionContext) -> Result<SessionContext> {
-    let sql = "CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT) STORED AS CSV location 'tests/customer.csv'";
+    let sql = "CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT) STORED AS CSV location 'tests/data/customer.csv'";
 
     let expected = vec!["++", "++"];
 
@@ -116,7 +116,7 @@ async fn setup_table(mut ctx: SessionContext) -> Result<SessionContext> {
 }
 
 async fn setup_table_without_schemas(mut ctx: SessionContext) -> Result<SessionContext> {
-    let sql = "CREATE EXTERNAL TABLE sales STORED AS CSV location 'tests/customer.csv'";
+    let sql = "CREATE EXTERNAL TABLE sales STORED AS CSV location 'tests/data/customer.csv'";
 
     let expected = vec!["++", "++"];
 
