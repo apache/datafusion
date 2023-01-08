@@ -978,7 +978,7 @@ async fn register_aggregate_simple_csv(ctx: &SessionContext) -> Result<()> {
 
     ctx.register_csv(
         "aggregate_simple",
-        "tests/aggregate_simple.csv",
+        "tests/data/aggregate_simple.csv",
         CsvReadOptions::new().schema(&schema),
     )
     .await?;

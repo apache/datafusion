@@ -203,7 +203,7 @@ DROP VIEW non_existent_view
 ##########
 
 statement ok
-CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION 'tests/aggregate_simple.csv';
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv';
 
 # create_table_as
 statement ok
