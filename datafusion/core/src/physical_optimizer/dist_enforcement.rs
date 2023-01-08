@@ -1117,6 +1117,11 @@ mod tests {
             // run optimizer
             let optimizer = EnforceDistribution {};
             let optimized = optimizer.optimize($PLAN, &config)?;
+            // NOTE: These tests verify the joint `EnforceDistribution` + `EnforceSorting` cascade
+            //       because they were written prior to the separation of `BasicEnforcement` into
+            //       `EnforceSorting` and `EnfoceDistribution`.
+            // TODO: Orthogonalize the tests here just to verify `EnforceDistribution` and create
+            //       new tests for the cascade.
             let optimizer = EnforceSorting {};
             let optimized = optimizer.optimize(optimized, &config)?;
 
