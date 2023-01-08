@@ -94,6 +94,7 @@ Here are some of the projects known to use DataFusion:
 - [qv](https://github.com/timvw/qv) Quickly view your data
 - [ROAPI](https://github.com/roapi/roapi)
 - [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
+- [Synnada](https://synnada.ai/) Streaming-first framework for data products
 - [Tensorbase](https://github.com/tensorbase/tensorbase)
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 
