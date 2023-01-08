@@ -254,13 +254,15 @@ impl Accumulator for CovarianceAccumulator {
         let mut arr2 = downcast_value!(values2, Float64Array).iter().flatten();
 
         for i in 0..values1.len() {
-            let value1 = match values1.is_valid(i) {
-                true => arr1.next(),
-                false => None,
+            let value1 = if values1.is_valid(i) {
+                arr1.next()
+            } else {
+                None
             };
-            let value2 = match values2.is_valid(i) {
-                true => arr2.next(),
-                false => None,
+            let value2 = if values2.is_valid(i) {
+                arr2.next()
+            } else {
+                None
             };
 
             if value1.is_none() || value2.is_none() {
@@ -292,13 +294,15 @@ impl Accumulator for CovarianceAccumulator {
         let mut arr2 = downcast_value!(values2, Float64Array).iter().flatten();
 
         for i in 0..values1.len() {
-            let value1 = match values1.is_valid(i) {
-                true => arr1.next(),
-                false => None,
+            let value1 = if values1.is_valid(i) {
+                arr1.next()
+            } else {
+                None
             };
-            let value2 = match values2.is_valid(i) {
-                true => arr2.next(),
-                false => None,
+            let value2 = if values2.is_valid(i) {
+                arr2.next()
+            } else {
+                None
             };
 
             if value1.is_none() || value2.is_none() {
