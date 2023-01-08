@@ -142,10 +142,10 @@ fn optimize_where_in(
     outer_other_exprs: &[Expr],
     alias: &AliasGenerator,
 ) -> Result<LogicalPlan> {
-    let proj = Projection::try_from_plan(&query_info.query.subquery)
+    let projection = Projection::try_from_plan(&query_info.query.subquery)
         .map_err(|e| context!("a projection is required", e))?;
-    let subquery_input = proj.input.clone();
-    let subquery_expr = only_or_err(proj.expr.as_slice())
+    let subquery_input = projection.input.clone();
+    let subquery_expr = only_or_err(projection.expr.as_slice())
         .map_err(|e| context!("single expression projection required", e))?;
 
     // extract join filters
@@ -153,12 +153,12 @@ fn optimize_where_in(
 
     // in_predicate may be also include in the join filters, remove it from the join filters.
     let in_predicate = Expr::eq(query_info.where_in_expr.clone(), subquery_expr.clone());
-    let join_filters = remove_duplicate_filter(join_filters, in_predicate);
+    let join_filters = remove_duplicated_filter(join_filters, in_predicate);
 
     // replace qualified name with subquery alias.
     let subquery_alias = alias.next("__correlated_sq");
     let input_schema = subquery_input.schema();
-    let mut subquery_cols =
+    let mut subquery_cols: BTreeSet<Column> =
         join_filters
             .iter()
             .try_fold(BTreeSet::<Column>::new(), |mut cols, expr| {
@@ -181,10 +181,10 @@ fn optimize_where_in(
     }
     let subquery_expr_name = format!("{:?}", unnormalize_col(subquery_expr.clone()));
     let first_expr = subquery_expr.clone().alias(subquery_expr_name.clone());
-    let projection_exprs = [first_expr]
+    let projection_exprs: Vec<Expr> = [first_expr]
         .into_iter()
         .chain(subquery_cols.into_iter().map(Expr::Column))
-        .collect::<Vec<_>>();
+        .collect();
 
     let right = LogicalPlanBuilder::from(subquery_input)
         .project(projection_exprs)?
@@ -248,7 +248,7 @@ fn extract_join_filters(maybe_filter: &LogicalPlan) -> Result<(Vec<Expr>, Logica
     }
 }
 
-fn remove_duplicate_filter(filters: Vec<Expr>, in_predicate: Expr) -> Vec<Expr> {
+fn remove_duplicated_filter(filters: Vec<Expr>, in_predicate: Expr) -> Vec<Expr> {
     filters
         .into_iter()
         .filter(|filter| {
@@ -274,12 +274,12 @@ fn replace_qualify_name(
     cols: &BTreeSet<Column>,
     subquery_alias: &str,
 ) -> Result<Expr> {
-    let alias_cols = cols
+    let alias_cols: Vec<Column> = cols
         .iter()
         .map(|col| {
             Column::from_qualified_name(format!("{}.{}", subquery_alias, col.name))
         })
-        .collect::<Vec<_>>();
+        .collect();
     let replace_map: HashMap<&Column, &Column> =
         cols.iter().zip(alias_cols.iter()).collect();
 
@@ -740,14 +740,6 @@ mod tests {
             expected,
         );
         Ok(())
-
-        // // can't optimize on arbitrary expressions (yet)
-        // assert_optimizer_err(
-        //     Arc::new(DecorrelateWhereIn::new()),
-        //     &plan,
-        //     "column correlation not found",
-        // );
-        // Ok(())
     }
 
     /// Test for correlated IN subquery filter with subquery disjunction
