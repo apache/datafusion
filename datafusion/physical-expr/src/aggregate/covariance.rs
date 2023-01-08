@@ -309,12 +309,15 @@ impl Accumulator for CovarianceAccumulator {
                 continue;
             }
 
+            let value1 = unwrap_or_internal_err!(value1);
+            let value2 = unwrap_or_internal_err!(value2);
+
             let new_count = self.count - 1;
-            let delta1 = self.mean1 - value1.unwrap();
+            let delta1 = self.mean1 - value1;
             let new_mean1 = delta1 / new_count as f64 + self.mean1;
-            let delta2 = self.mean2 - value2.unwrap();
+            let delta2 = self.mean2 - value2;
             let new_mean2 = delta2 / new_count as f64 + self.mean2;
-            let new_c = self.algo_const - delta1 * (new_mean2 - value2.unwrap());
+            let new_c = self.algo_const - delta1 * (new_mean2 - value2);
 
             self.count -= 1;
             self.mean1 = new_mean1;

@@ -149,6 +149,11 @@ impl Accumulator for CorrelationAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // TODO: null input skipping logic duplicated across Correlation
+        // and its children accumulators.
+        // This could be simplified by splitting up input filtering and
+        // calculation logic in children accumulators, and calling only
+        // calculation part from Correlation
         let values = if values[0].null_count() != 0 || values[1].null_count() != 0 {
             let mask = and(&is_not_null(&values[0])?, &is_not_null(&values[1])?)?;
             let values1 = filter(&values[0], &mask)?;
