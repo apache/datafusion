@@ -134,7 +134,7 @@ OPTIONS:
 Files can be queried directly by enclosing the file or
 directory name in single `'` quotes as shown in the example.
 
-It is also possible to create a table backed by files by explictly
+It is also possible to create a table backed by files by explicitly
 via `CREATE EXTERNAL TABLE` as shown below.
 
 ## Registering Parquet Data Sources
