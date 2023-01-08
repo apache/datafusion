@@ -22,7 +22,11 @@ use crate::aggregate::stats::StatsType;
 use crate::aggregate::stddev::StddevAccumulator;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
-use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
+use arrow::{
+    array::ArrayRef,
+    compute::{and, filter, is_not_null},
+    datatypes::{DataType, Field},
+};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
@@ -145,14 +149,34 @@ impl Accumulator for CorrelationAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.covar.update_batch(values)?;
+        let values = if values[0].null_count() != 0 || values[1].null_count() != 0 {
+            let mask = and(&is_not_null(&values[0])?, &is_not_null(&values[1])?)?;
+            let values1 = filter(&values[0], &mask)?;
+            let values2 = filter(&values[1], &mask)?;
+
+            vec![values1, values2]
+        } else {
+            values.to_vec()
+        };
+
+        self.covar.update_batch(&values)?;
         self.stddev1.update_batch(&values[0..1])?;
         self.stddev2.update_batch(&values[1..2])?;
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.covar.retract_batch(values)?;
+        let values = if values[0].null_count() != 0 || values[1].null_count() != 0 {
+            let mask = and(&is_not_null(&values[0])?, &is_not_null(&values[1])?)?;
+            let values1 = filter(&values[0], &mask)?;
+            let values2 = filter(&values[1], &mask)?;
+
+            vec![values1, values2]
+        } else {
+            values.to_vec()
+        };
+
+        self.covar.retract_batch(&values)?;
         self.stddev1.retract_batch(&values[0..1])?;
         self.stddev2.retract_batch(&values[1..2])?;
         Ok(())
@@ -341,25 +365,29 @@ mod tests {
 
     #[test]
     fn correlation_i32_with_nulls_2() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
-        let b: ArrayRef = Arc::new(Int32Array::from(vec![Some(4), Some(5), Some(6)]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            Some(9),
+            Some(3),
+        ]));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(4),
+            Some(5),
+            Some(5),
+            None,
+            Some(6),
+        ]));
 
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Int32, true),
-        ]);
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a, b])?;
-
-        let agg = Arc::new(Correlation::new(
-            col("a", &schema)?,
-            col("b", &schema)?,
-            "bla".to_string(),
-            DataType::Float64,
-        ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
-
-        Ok(())
+        generic_test_op2!(
+            a,
+            b,
+            DataType::Int32,
+            DataType::Int32,
+            Correlation,
+            ScalarValue::from(1_f64)
+        )
     }
 
     #[test]
@@ -367,22 +395,14 @@ mod tests {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
         let b: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
 
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Int32, true),
-        ]);
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a, b])?;
-
-        let agg = Arc::new(Correlation::new(
-            col("a", &schema)?,
-            col("b", &schema)?,
-            "bla".to_string(),
-            DataType::Float64,
-        ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
-
-        Ok(())
+        generic_test_op2!(
+            a,
+            b,
+            DataType::Int32,
+            DataType::Int32,
+            Correlation,
+            ScalarValue::Float64(None)
+        )
     }
 
     #[test]
