@@ -978,7 +978,7 @@ async fn register_aggregate_simple_csv(ctx: &SessionContext) -> Result<()> {
 
     ctx.register_csv(
         "aggregate_simple",
-        "tests/aggregate_simple.csv",
+        "tests/data/aggregate_simple.csv",
         CsvReadOptions::new().schema(&schema),
     )
     .await?;
@@ -995,7 +995,7 @@ async fn register_aggregate_null_cases_csv(ctx: &SessionContext) -> Result<()> {
 
     ctx.register_csv(
         "null_cases",
-        "tests/null_cases.csv",
+        "tests/data/null_cases.csv",
         CsvReadOptions::new().schema(&schema),
     )
     .await?;
@@ -1189,7 +1189,7 @@ async fn register_decimal_csv_table_by_sql(ctx: &SessionContext) {
             )
             STORED AS CSV
             WITH HEADER ROW
-            LOCATION 'tests/decimal_data.csv'",
+            LOCATION 'tests/data/decimal_data.csv'",
         )
         .await
         .expect("Creating dataframe for CREATE EXTERNAL TABLE with decimal data type");

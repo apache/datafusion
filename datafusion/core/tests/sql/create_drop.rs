@@ -42,13 +42,13 @@ async fn sql_create_table_if_not_exists() -> Result<()> {
     assert_eq!(result, Vec::new());
 
     // Create external table
-    ctx.sql("CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/aggregate_simple.csv'")
+    ctx.sql("CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'")
         .await?
         .collect()
         .await?;
 
     // Create external table
-    let result = ctx.sql("CREATE EXTERNAL TABLE IF NOT EXISTS aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/aggregate_simple.csv'")
+    let result = ctx.sql("CREATE EXTERNAL TABLE IF NOT EXISTS aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'")
         .await?
         .collect()
         .await?;
@@ -96,7 +96,7 @@ async fn create_external_table_with_ddl() -> Result<()> {
     let exists = schema.table_exist("dt");
     assert!(exists, "Table should have been created!");
 
-    let table_schema = schema.table("dt").unwrap().schema();
+    let table_schema = schema.table("dt").await.unwrap().schema();
 
     assert_eq!(3, table_schema.fields().len());
 
@@ -129,7 +129,7 @@ async fn create_csv_table_empty_file() -> Result<()> {
     let ctx =
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
-    let sql = "CREATE EXTERNAL TABLE empty STORED AS CSV WITH HEADER ROW LOCATION 'tests/empty.csv'";
+    let sql = "CREATE EXTERNAL TABLE empty STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/empty.csv'";
     ctx.sql(sql).await.unwrap();
     let sql =
         "select column_name, data_type, ordinal_position from information_schema.columns";

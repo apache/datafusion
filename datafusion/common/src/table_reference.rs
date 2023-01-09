@@ -26,6 +26,12 @@ pub struct ResolvedTableReference<'a> {
     pub table: &'a str,
 }
 
+impl<'a> std::fmt::Display for ResolvedTableReference<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.catalog, self.schema, self.table)
+    }
+}
+
 /// Represents a path to a table that may require further resolution
 #[derive(Debug, Clone, Copy)]
 pub enum TableReference<'a> {

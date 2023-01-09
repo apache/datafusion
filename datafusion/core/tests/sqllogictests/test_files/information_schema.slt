@@ -17,7 +17,7 @@
 
 
 # Verify the information schema does not exit by default
-statement error Error during planning: failed to resolve schema: information_schema
+statement error DataFusion error: Error during planning: table 'datafusion.information_schema.tables' not found
 SELECT * from information_schema.tables
 
 statement error DataFusion error: Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
@@ -42,7 +42,7 @@ datafusion information_schema views VIEW
 statement ok
 set datafusion.catalog.information_schema = false
 
-statement error Error during planning: failed to resolve schema: information_schema
+statement error DataFusion error: Error during planning: table 'datafusion.information_schema.tables' not found
 SELECT * from information_schema.tables
 
 

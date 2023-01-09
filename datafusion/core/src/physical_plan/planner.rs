@@ -47,7 +47,7 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::windows::WindowAggExec;
+use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{joins::utils as join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::{
@@ -614,13 +614,28 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    Ok(Arc::new(WindowAggExec::try_new(
-                        window_expr,
-                        input_exec,
-                        physical_input_schema,
-                        physical_partition_keys,
-                        physical_sort_keys,
-                    )?))
+                    let uses_bounded_memory = window_expr
+                        .iter()
+                        .all(|e| e.uses_bounded_memory());
+                    // If all window expressions can run with bounded memory,
+                    // choose the bounded window variant:
+                    Ok(if uses_bounded_memory {
+                        Arc::new(BoundedWindowAggExec::try_new(
+                            window_expr,
+                            input_exec,
+                            physical_input_schema,
+                            physical_partition_keys,
+                            physical_sort_keys,
+                        )?)
+                    } else {
+                        Arc::new(WindowAggExec::try_new(
+                            window_expr,
+                            input_exec,
+                            physical_input_schema,
+                            physical_partition_keys,
+                            physical_sort_keys,
+                        )?)
+                    })
                 }
                 LogicalPlan::Aggregate(Aggregate {
                     input,
@@ -2004,14 +2019,6 @@ mod tests {
             col("c1").eq(bool_expr.clone()),
             // u32 AND bool
             col("c2").and(bool_expr),
-            // utf8 LIKE u32
-            col("c1").like(col("c2")),
-            // utf8 NOT LIKE u32
-            col("c1").not_like(col("c2")),
-            // utf8 ILIKE u32
-            col("c1").ilike(col("c2")),
-            // utf8 NOT ILIKE u32
-            col("c1").not_ilike(col("c2")),
         ];
         for case in cases {
             let logical_plan = test_csv_scan().await?.project(vec![case.clone()]);

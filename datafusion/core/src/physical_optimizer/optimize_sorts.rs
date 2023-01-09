@@ -33,10 +33,11 @@ use crate::physical_optimizer::utils::{
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::windows::WindowAggExec;
+use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{reverse_sort_options, DataFusionError};
+use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use itertools::izip;
 use std::iter::zip;
@@ -181,17 +182,32 @@ fn optimize_sorts(
                         sort_exec.input().equivalence_properties()
                     }) {
                         update_child_to_remove_unnecessary_sort(child, sort_onwards)?;
-                    } else if let Some(window_agg_exec) =
+                    }
+                    // For window expressions, we can remove some sorts when we can
+                    // calculate the result in reverse:
+                    else if let Some(exec) =
                         requirements.plan.as_any().downcast_ref::<WindowAggExec>()
                     {
-                        // For window expressions, we can remove some sorts when we can
-                        // calculate the result in reverse:
-                        if let Some(res) = analyze_window_sort_removal(
-                            window_agg_exec,
+                        if let Some(result) = analyze_window_sort_removal(
+                            exec.window_expr(),
+                            &exec.partition_keys,
                             sort_exec,
                             sort_onwards,
                         )? {
-                            return Ok(Some(res));
+                            return Ok(Some(result));
+                        }
+                    } else if let Some(exec) = requirements
+                        .plan
+                        .as_any()
+                        .downcast_ref::<BoundedWindowAggExec>()
+                    {
+                        if let Some(result) = analyze_window_sort_removal(
+                            exec.window_expr(),
+                            &exec.partition_keys,
+                            sort_exec,
+                            sort_onwards,
+                        )? {
+                            return Ok(Some(result));
                         }
                     }
                     // TODO: Once we can ensure that required ordering information propagates with
@@ -273,9 +289,11 @@ fn analyze_immediate_sort_removal(
     Ok(None)
 }
 
-/// Analyzes a `WindowAggExec` to determine whether it may allow removing a sort.
+/// Analyzes a [WindowAggExec] or a [BoundedWindowAggExec] to determine whether
+/// it may allow removing a sort.
 fn analyze_window_sort_removal(
-    window_agg_exec: &WindowAggExec,
+    window_expr: &[Arc<dyn WindowExpr>],
+    partition_keys: &[Arc<dyn PhysicalExpr>],
     sort_exec: &SortExec,
     sort_onward: &mut Vec<(usize, Arc<dyn ExecutionPlan>)>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
@@ -289,7 +307,6 @@ fn analyze_window_sort_removal(
         // If there is no physical ordering, there is no way to remove a sort -- immediately return:
         return Ok(None);
     };
-    let window_expr = window_agg_exec.window_expr();
     let (can_skip_sorting, should_reverse) = can_skip_sort(
         window_expr[0].partition_by(),
         required_ordering,
@@ -308,13 +325,26 @@ fn analyze_window_sort_removal(
         if let Some(window_expr) = new_window_expr {
             let new_child = remove_corresponding_sort_from_sub_plan(sort_onward)?;
             let new_schema = new_child.schema();
-            let new_plan = Arc::new(WindowAggExec::try_new(
-                window_expr,
-                new_child,
-                new_schema,
-                window_agg_exec.partition_keys.clone(),
-                Some(physical_ordering.to_vec()),
-            )?);
+
+            let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
+            // If all window exprs can run with bounded memory choose bounded window variant
+            let new_plan = if uses_bounded_memory {
+                Arc::new(BoundedWindowAggExec::try_new(
+                    window_expr,
+                    new_child,
+                    new_schema,
+                    partition_keys.to_vec(),
+                    Some(physical_ordering.to_vec()),
+                )?) as _
+            } else {
+                Arc::new(WindowAggExec::try_new(
+                    window_expr,
+                    new_child,
+                    new_schema,
+                    partition_keys.to_vec(),
+                    Some(physical_ordering.to_vec()),
+                )?) as _
+            };
             return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));
         }
     }
