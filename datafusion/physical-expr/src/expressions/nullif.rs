@@ -17,7 +17,7 @@
 
 use arrow::array::Array;
 use arrow::compute::eq_dyn;
-use arrow_select::nullif::nullif;
+use arrow::compute::nullif::nullif;
 use datafusion_common::{cast::as_boolean_array, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 

@@ -68,7 +68,7 @@ checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
 
 [[package]]
 name = "arrow"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0069bc5c7432d1bae0389bf69e4624477bb08fd791406f72bf2130515b5ab7f1"
 dependencies = [
@@ -91,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-arith"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51be0fc0cc4e7ce5c97fe146ad42389c81da9db7641b5c64b641f0b21741deea"
 dependencies = [
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-array"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41ce84b051feb34e0c1ad845e62fb49f10ee57d561ad5b189a2ff83dd8eb9774"
 dependencies = [
@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-buffer"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e2ef8d46a7367917d25e50e464c5af85d8e9b66ae36e1333f8d4e47036819af"
 dependencies = [
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-cast"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0187f082f98b10821a7599ceda29de96dbdc7fffa95c82758e2673cfd4186871"
 dependencies = [
@@ -149,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-csv"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54417037467b0bf33bc6879589bc5a1d9c897e9464a62843a61c76c56833ac9a"
 dependencies = [
@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-data"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bcc835d098c7669897d7d7274ff8d41d2ea4b2cd9fe42110bdd4755405c1ed13"
 dependencies = [
@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-ipc"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4aef1be4cd0428a689015e579b485ee77205cec51fd55562562601bb613bc9be"
 dependencies = [
@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-json"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b47b612a45a0816347ea134479483d41a010613919a03c3962e5799be7001b77"
 dependencies = [
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-ord"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1533c5fcd74ef9550d89aa774e35db9f1d53fe0bbb7daa397c2e29339232659"
 dependencies = [
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-row"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f53342d0335cb81d03829a54c5436dff7a9bdc93324e75da739eb6eea7e0f84a"
 dependencies = [
@@ -241,13 +241,13 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f6023c3d1ebd6baadf6c00f91b1c780203052036392ef85577ca761299c0420"
 
 [[package]]
 name = "arrow-select"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "566df8391dead32ae2fa9a571d05fa13c4ddbb90d6bfc7737f9a3d419e135ae0"
 dependencies = [
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "arrow-string"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a19aef42359c3b4285af8a050a38802e4ee2a8b4a47cb4a11d65d993550f1665"
 dependencies = [
@@ -1799,7 +1799,7 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "30.0.0"
+version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cafbdb07468f96c468f0c6e5b108485872f974f22f2e1bee899210e65e2c81f3"
 dependencies = [
