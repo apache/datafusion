@@ -22,7 +22,7 @@ use crate::expr::{
     Like, Sort, TryCast, WindowFunction,
 };
 use crate::logical_plan::{Aggregate, Projection};
-use crate::utils::{from_plan, grouping_set_to_exprlist};
+use crate::utils::grouping_set_to_exprlist;
 use crate::{Expr, ExprSchemable, LogicalPlan};
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema};
@@ -525,29 +525,55 @@ pub fn coerce_plan_expr_for_schema(
     plan: &LogicalPlan,
     schema: &DFSchema,
 ) -> Result<LogicalPlan> {
-    let new_expr = plan
-        .expressions()
-        .into_iter()
+    match plan {
+        LogicalPlan::Projection(Projection { expr, input, .. }) => {
+            let new_exprs = coerce_exprs_for_schema(expr, input.schema(), schema)?;
+            let projection = Projection::try_new(new_exprs, input.clone())?;
+            Ok(LogicalPlan::Projection(projection))
+        }
+        _ => {
+            let exprs: Vec<Expr> = plan
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| Expr::Column(field.qualified_column()))
+                .collect();
+
+            let new_exprs = coerce_exprs_for_schema(&exprs, plan.schema(), schema)?;
+            let add_project = new_exprs.iter().any(|expr| expr.try_into_col().is_err());
+            if add_project {
+                let projection = Projection::try_new(new_exprs, Arc::new(plan.clone()))?;
+                Ok(LogicalPlan::Projection(projection))
+            } else {
+                Ok(plan.clone())
+            }
+        }
+    }
+}
+
+fn coerce_exprs_for_schema(
+    exprs: &[Expr],
+    src_schema: &DFSchema,
+    dst_schema: &DFSchema,
+) -> Result<Vec<Expr>> {
+    exprs
+        .iter()
         .enumerate()
-        .map(|(i, expr)| {
-            let new_type = schema.field(i).data_type();
-            if plan.schema().field(i).data_type() != schema.field(i).data_type() {
-                match (plan, &expr) {
-                    (
-                        LogicalPlan::Projection(Projection { input, .. }),
-                        Expr::Alias(e, alias),
-                    ) => Ok(e.clone().cast_to(new_type, input.schema())?.alias(alias)),
-                    _ => expr.cast_to(new_type, plan.schema()),
+        .map(|(idx, expr)| {
+            let new_type = dst_schema.field(idx).data_type();
+            if new_type != &expr.get_type(src_schema)? {
+                match expr {
+                    Expr::Alias(e, alias) => {
+                        let new_expr = e.clone().cast_to(new_type, src_schema)?;
+                        Ok(Expr::Alias(Box::new(new_expr), alias.clone()))
+                    }
+                    _ => expr.clone().cast_to(new_type, src_schema),
                 }
             } else {
-                Ok(expr)
+                Ok(expr.clone())
             }
         })
-        .collect::<Result<Vec<_>>>()?;
-
-    let new_inputs = plan.inputs().into_iter().cloned().collect::<Vec<_>>();
-
-    from_plan(plan, &new_expr, &new_inputs)
+        .collect::<Result<_>>()
 }
 
 #[cfg(test)]

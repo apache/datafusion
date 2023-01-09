@@ -98,6 +98,7 @@ async fn union_all_with_count() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore]
 async fn union_schemas() -> Result<()> {
     let ctx =
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));

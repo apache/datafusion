@@ -1005,7 +1005,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
             match plan {
                 LogicalPlan::Projection(Projection { expr, input, .. }) => {
                     Ok(Arc::new(project_with_column_index(
-                        expr.to_vec(),
+                        expr,
                         input,
                         Arc::new(union_schema.clone()),
                     )?))
