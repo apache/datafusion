@@ -288,6 +288,16 @@ impl LogicalPlanBuilder {
         Ok(Self::from(project(self.plan, expr)?))
     }
 
+    /// Select the given column indices
+    pub fn select(self, indices: impl IntoIterator<Item = usize>) -> Result<Self> {
+        let fields = self.plan.schema().fields();
+        let exprs: Vec<_> = indices
+            .into_iter()
+            .map(|x| Expr::Column(fields[x].qualified_column()))
+            .collect();
+        self.project(exprs)
+    }
+
     /// Apply a filter
     pub fn filter(self, expr: impl Into<Expr>) -> Result<Self> {
         let expr = normalize_col(expr.into(), &self.plan)?;
