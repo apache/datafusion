@@ -120,7 +120,7 @@ use super::options::{
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
-/// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+/// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
 ///            .limit(0, Some(100))?;
@@ -138,7 +138,7 @@ use super::options::{
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let mut ctx = SessionContext::new();
-/// ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await?;
+/// ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
 /// let results = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
 /// # Ok(())
 /// # }
