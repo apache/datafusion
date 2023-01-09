@@ -825,9 +825,10 @@ fn new_join_conditions(
     new_join_on
 }
 
-/// Within this function, it checks whether we need to add additional plan operators
-/// of data exchanging and data ordering to satisfy the required distribution and ordering.
-/// And we should avoid to manually add plan operators of data exchanging and data ordering in other places
+/// This function checks whether we need to add additional data exchange
+/// operators to satisfy distribution requirements. Since this function
+/// takes care of such requirements, we should avoid manually adding data
+/// exchange operators in other places.
 fn ensure_distribution(
     plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
     target_partitions: usize,
