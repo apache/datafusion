@@ -142,8 +142,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .build()
             }
             JoinConstraint::Natural => {
-                // TODO: what if no common join cols? -> becomes cross join
-                // TODO: limit join_type to specific set?
                 let left_cols: HashSet<&String> = left
                     .schema()
                     .fields()
