@@ -20,6 +20,7 @@ use crate::catalog::schema::SchemaProvider;
 use crate::datasource::datasource::TableProviderFactory;
 use crate::datasource::TableProvider;
 use crate::execution::context::SessionState;
+use async_trait::async_trait;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DFSchema, DataFusionError, OwnedTableReference};
 use datafusion_expr::CreateExternalTable;
@@ -156,6 +157,7 @@ impl ListingSchemaProvider {
     }
 }
 
+#[async_trait]
 impl SchemaProvider for ListingSchemaProvider {
     fn as_any(&self) -> &dyn Any {
         self
@@ -170,7 +172,7 @@ impl SchemaProvider for ListingSchemaProvider {
             .collect()
     }
 
-    fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
         self.tables
             .lock()
             .expect("Can't lock tables")
@@ -237,7 +239,7 @@ mod tests {
             path: Path::new("/file"),
             is_dir: true,
         };
-        assert!(table_path.to_string().expect("table path").ends_with("/"));
+        assert!(table_path.to_string().expect("table path").ends_with('/'));
     }
 
     #[test]
@@ -246,6 +248,6 @@ mod tests {
             path: Path::new("/file"),
             is_dir: false,
         };
-        assert!(!table_path.to_string().expect("table_path").ends_with("/"));
+        assert!(!table_path.to_string().expect("table_path").ends_with('/'));
     }
 }

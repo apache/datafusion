@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::{
@@ -37,7 +38,7 @@ pub fn main() -> Result<()> {
     let statements = Parser::parse_sql(&dialect, sql)?;
 
     // produce a logical plan using the datafusion-sql crate
-    let context_provider = MyContextProvider {};
+    let context_provider = MyContextProvider::default();
     let sql_to_rel = SqlToRel::new(&context_provider);
     let logical_plan = sql_to_rel.sql_statement_to_plan(statements[0].clone())?;
     println!(
@@ -120,7 +121,10 @@ impl ExprRewriter for MyExprRewriter {
     }
 }
 
-struct MyContextProvider {}
+#[derive(Default)]
+struct MyContextProvider {
+    options: ConfigOptions,
+}
 
 impl ContextProvider for MyContextProvider {
     fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
@@ -148,11 +152,8 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
-    fn get_config_option(
-        &self,
-        _variable: &str,
-    ) -> Option<datafusion_common::ScalarValue> {
-        None
+    fn options(&self) -> &ConfigOptions {
+        &self.options
     }
 }
 

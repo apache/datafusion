@@ -428,12 +428,13 @@ mod tests {
         )
         .await?;
 
-        ctx.register_table("t1", Arc::new(ctx.table("test")?))?;
+        ctx.register_table("t1", Arc::new(ctx.table("test").await?))?;
 
         ctx.sql("CREATE VIEW t2 as SELECT * FROM t1").await?;
 
         let df = ctx
-            .table("t2")?
+            .table("t2")
+            .await?
             .filter(col("id").eq(lit(1)))?
             .select_columns(&["bool_col", "int_col"])?;
 
@@ -457,12 +458,13 @@ mod tests {
         )
         .await?;
 
-        ctx.register_table("t1", Arc::new(ctx.table("test")?))?;
+        ctx.register_table("t1", Arc::new(ctx.table("test").await?))?;
 
         ctx.sql("CREATE VIEW t2 as SELECT * FROM t1").await?;
 
         let df = ctx
-            .table("t2")?
+            .table("t2")
+            .await?
             .limit(0, Some(10))?
             .select_columns(&["bool_col", "int_col"])?;
 

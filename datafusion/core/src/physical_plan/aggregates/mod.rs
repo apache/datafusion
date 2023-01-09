@@ -52,7 +52,6 @@ use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 use datafusion_physical_expr::equivalence::project_equivalence_properties;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
-use datafusion_row::{row_supported, RowType};
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -273,9 +272,7 @@ impl AggregateExec {
     }
 
     fn row_aggregate_supported(&self) -> bool {
-        let group_schema = group_schema(&self.schema, self.group_by.expr.len());
-        row_supported(&group_schema, RowType::Compact)
-            && accumulator_v2_supported(&self.aggr_expr)
+        accumulator_v2_supported(&self.aggr_expr)
     }
 
     fn execute_typed(
@@ -749,7 +746,7 @@ mod tests {
     use crate::{assert_batches_sorted_eq, physical_plan::common};
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::error::{ArrowError, Result as ArrowResult};
+    use arrow::error::Result as ArrowResult;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
@@ -1210,18 +1207,11 @@ mod tests {
             let err = common::collect(stream).await.unwrap_err();
 
             // error root cause traversal is a bit complicated, see #4172.
-            if let DataFusionError::ArrowError(ArrowError::ExternalError(err)) = err {
-                if let Some(err) = err.downcast_ref::<DataFusionError>() {
-                    assert!(
-                        matches!(err, DataFusionError::ResourcesExhausted(_)),
-                        "Wrong inner error type: {err}",
-                    );
-                } else {
-                    panic!("Wrong arrow error type: {err}")
-                }
-            } else {
-                panic!("Wrong outer error type: {err}")
-            }
+            let err = err.find_root();
+            assert!(
+                matches!(err, DataFusionError::ResourcesExhausted(_)),
+                "Wrong error type: {err}",
+            );
         }
 
         Ok(())

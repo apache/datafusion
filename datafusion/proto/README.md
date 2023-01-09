@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
     ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
         .await
         ?;
-    let plan = ctx.table("t1")?.to_logical_plan()?;
+    let plan = ctx.table("t1").await?.to_logical_plan()?;
     let bytes = logical_plan_to_bytes(&plan)?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
     assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
     ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
         .await
         ?;
-    let logical_plan = ctx.table("t1")?.to_logical_plan()?;
+    let logical_plan = ctx.table("t1").await?.to_logical_plan()?;
     let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
     let bytes = physical_plan_to_bytes(physical_plan.clone())?;
     let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx)?;

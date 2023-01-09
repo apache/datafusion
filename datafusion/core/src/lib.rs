@@ -215,7 +215,6 @@ extern crate sqlparser;
 
 pub mod avro_to_arrow;
 pub mod catalog;
-pub mod config;
 pub mod dataframe;
 pub mod datasource;
 pub mod error;
@@ -234,6 +233,7 @@ pub use parquet;
 
 // re-export DataFusion crates
 pub use datafusion_common as common;
+pub use datafusion_common::config;
 pub use datafusion_expr as logical_expr;
 pub use datafusion_optimizer as optimizer;
 pub use datafusion_physical_expr as physical_expr;

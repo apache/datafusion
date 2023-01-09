@@ -917,7 +917,7 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.register_batch("t", batch)?;
 
-        let df = ctx.table("t")?.select_columns(&["f.c1"])?;
+        let df = ctx.table("t").await?.select_columns(&["f.c1"])?;
 
         let df_results = df.collect().await?;
 
@@ -1036,7 +1036,7 @@ mod tests {
         ));
 
         // build query with a UDF using DataFrame API
-        let df = ctx.table("aggregate_test_100")?;
+        let df = ctx.table("aggregate_test_100").await?;
 
         let expr = df.registry().udf("my_fn")?.call(vec![col("c12")]);
         let df = df.select(vec![expr])?;
@@ -1101,7 +1101,7 @@ mod tests {
         ctx.register_table("test_table", Arc::new(df_impl.clone()))?;
 
         // pull the table out
-        let table = ctx.table("test_table")?;
+        let table = ctx.table("test_table").await?;
 
         let group_expr = vec![col("c1")];
         let aggr_expr = vec![sum(col("c12"))];
@@ -1161,7 +1161,7 @@ mod tests {
     async fn test_table_with_name(name: &str) -> Result<DataFrame> {
         let mut ctx = SessionContext::new();
         register_aggregate_csv(&mut ctx, name).await?;
-        ctx.table(name)
+        ctx.table(name).await
     }
 
     async fn test_table() -> Result<DataFrame> {
@@ -1301,8 +1301,15 @@ mod tests {
         ctx.register_table("t1", table.clone())?;
         ctx.register_table("t2", table)?;
         let df = ctx
-            .table("t1")?
-            .join(ctx.table("t2")?, JoinType::Inner, &["c1"], &["c1"], None)?
+            .table("t1")
+            .await?
+            .join(
+                ctx.table("t2").await?,
+                JoinType::Inner,
+                &["c1"],
+                &["c1"],
+                None,
+            )?
             .sort(vec![
                 // make the test deterministic
                 col("t1.c1").sort(true, true),
@@ -1379,10 +1386,11 @@ mod tests {
         )
         .await?;
 
-        ctx.register_table("t1", Arc::new(ctx.table("test")?))?;
+        ctx.register_table("t1", Arc::new(ctx.table("test").await?))?;
 
         let df = ctx
-            .table("t1")?
+            .table("t1")
+            .await?
             .filter(col("id").eq(lit(1)))?
             .select_columns(&["bool_col", "int_col"])?;
 
@@ -1463,7 +1471,8 @@ mod tests {
         ctx.register_batch("t", batch)?;
 
         let df = ctx
-            .table("t")?
+            .table("t")
+            .await?
             // try and create a column with a '.' in it
             .with_column("f.c2", lit("hello"))?;
 

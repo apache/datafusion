@@ -402,7 +402,6 @@ async fn get_table(
                 unimplemented!("Invalid file format '{}'", other);
             }
         };
-    let schema = Arc::new(get_tpch_table_schema(table));
 
     let options = ListingOptions::new(format)
         .with_file_extension(extension)
@@ -412,10 +411,11 @@ async fn get_table(
     let table_path = ListingTableUrl::parse(path)?;
     let config = ListingTableConfig::new(table_path).with_listing_options(options);
 
-    let config = if table_format == "parquet" {
-        config.infer_schema(&state).await?
-    } else {
-        config.with_schema(schema)
+    let config = match table_format {
+        "parquet" => config.infer_schema(&state).await?,
+        "tbl" => config.with_schema(Arc::new(get_tbl_tpch_table_schema(table))),
+        "csv" => config.with_schema(Arc::new(get_tpch_table_schema(table))),
+        _ => unreachable!(),
     };
 
     Ok(Arc::new(ListingTable::try_new(config)?))
@@ -827,6 +827,7 @@ mod tests {
 #[cfg(feature = "ci")]
 mod ci {
     use super::*;
+    use arrow::datatypes::{DataType, Field};
     use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
 
     async fn serde_round_trip(query: usize) -> Result<()> {
@@ -1086,7 +1087,6 @@ mod ci {
     ///  * the correct number of rows are returned
     ///  * the content of the rows is correct
     async fn verify_query(n: usize) -> Result<()> {
-        use datafusion::arrow::datatypes::{DataType, Field};
         use datafusion::common::ScalarValue;
         use datafusion::logical_expr::expr::Cast;
 
@@ -1214,7 +1214,8 @@ mod ci {
     }
 
     fn get_tpch_data_path() -> Result<String> {
-        let path = std::env::var("TPCH_DATA").unwrap_or("benchmarks/data".to_string());
+        let path =
+            std::env::var("TPCH_DATA").unwrap_or_else(|_| "benchmarks/data".to_string());
         if !Path::new(&path).exists() {
             return Err(DataFusionError::Execution(format!(
                 "Benchmark data not found (set TPCH_DATA env var to override): {}",

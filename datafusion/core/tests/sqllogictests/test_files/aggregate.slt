@@ -1091,3 +1091,15 @@ query U
 SELECT ARRAY_AGG([1]);
 ----
 [[1]]
+
+# variance_single_value
+query RRRR
+select var(sq.column1), var_pop(sq.column1), stddev(sq.column1), stddev_pop(sq.column1) from (values (1.0)) as sq;
+----
+NULL 0 NULL 0
+
+# variance_two_values
+query RRRR
+select var(sq.column1), var_pop(sq.column1), stddev(sq.column1), stddev_pop(sq.column1) from (values (1.0), (3.0)) as sq;
+----
+2 1 1.4142135623730951 1

@@ -21,7 +21,13 @@
 mod expr;
 pub mod parser;
 pub mod planner;
+mod query;
+mod relation;
+mod select;
+mod set_expr;
+mod statement;
 pub mod utils;
+mod values;
 
 pub use datafusion_common::{ResolvedTableReference, TableReference};
 pub use sqlparser;
