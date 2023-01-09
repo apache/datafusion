@@ -15,15 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-#   100 100 7.8100000000000000 781 125 -117     --- postgres
-#   100 100 7.81 781 125 -117                   --- datafusion
-
 query IIRIII
 SELECT
   count(*) AS count_all,
   count(c3) AS count_c3,
-  round(avg(c3), 0) AS avg,
+  avg(c3) AS avg,
   sum(c3) AS sum,
   max(c3) AS max,
   min(c3) AS min
 FROM aggregate_test_100_by_sql;
+----
+100 100 7.81 781 125 -117

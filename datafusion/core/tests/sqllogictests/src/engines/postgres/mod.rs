@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 use std::time::Duration;
+use std::fmt::Write;
 
 use async_trait::async_trait;
 use log::info;
@@ -25,50 +26,20 @@ use testcontainers::core::WaitFor;
 use testcontainers::images::generic::GenericImage;
 use tokio::task::JoinHandle;
 
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
+use postgres_types::Type;
+use tokio_postgres::{Column, Row};
+use rust_decimal::Decimal;
+use super::conversion::*;
+
+pub mod image;
+
 pub struct Postgres {
     client: Arc<tokio_postgres::Client>,
     join_handle: JoinHandle<()>,
 }
 
-pub const PG_USER: &str = "postgres";
-pub const PG_PASSWORD: &str = "postgres";
-pub const PG_DB: &str = "test";
-pub const PG_PORT: u16 = 5432;
-
 impl Postgres {
-    pub fn postgres_docker_image() -> GenericImage {
-        let postgres_test_data = match datafusion::test_util::get_data_dir(
-            "POSTGRES_TEST_DATA",
-            "tests/sqllogictests/postgres",
-        ) {
-            Ok(pb) => pb.display().to_string(),
-            Err(err) => panic!("failed to get arrow data dir: {err}"),
-        };
-        GenericImage::new("postgres", "15")
-            .with_wait_for(WaitFor::message_on_stderr(
-                "database system is ready to accept connections",
-            ))
-            .with_env_var("POSTGRES_DB", PG_DB)
-            .with_env_var("POSTGRES_USER", PG_USER)
-            .with_env_var("POSTGRES_PASSWORD", PG_PASSWORD)
-            .with_env_var(
-                "POSTGRES_INITDB_ARGS",
-                "--encoding=UTF-8 --lc-collate=C --lc-ctype=C",
-            )
-            .with_exposed_port(PG_PORT)
-            .with_volume(
-                format!(
-                    "{0}/csv/aggregate_test_100.csv",
-                    datafusion::test_util::arrow_test_data()
-                ),
-                "/opt/data/csv/aggregate_test_100.csv",
-            )
-            .with_volume(
-                format!("{0}/postgres_create_table.sql", postgres_test_data),
-                "/docker-entrypoint-initdb.d/0_create_table.sql",
-            )
-    }
-
     pub async fn connect_with_retry(
         host: &str,
         port: u16,
@@ -90,13 +61,11 @@ impl Postgres {
         }
     }
 
-    async fn connect(
-        host: &str,
-        port: u16,
-        db: &str,
-        user: &str,
-        pass: &str,
-    ) -> Result<Self, tokio_postgres::error::Error> {
+    pub async fn connect(host: &str,
+                         port: u16,
+                         db: &str,
+                         user: &str,
+                         pass: &str) -> Result<Self, tokio_postgres::error::Error> {
         let (client, connection) = tokio_postgres::Config::new()
             .host(host)
             .port(port)
@@ -125,13 +94,162 @@ impl Drop for Postgres {
     }
 }
 
+macro_rules! array_process {
+    ($row:ident, $row_vec:ident, $idx:ident, $t:ty) => {
+        let value: Option<Vec<Option<$t>>> = $row.get($idx);
+        match value {
+            Some(value) => {
+                let mut output = String::new();
+                write!(output, "{{").unwrap();
+                for (i, v) in value.iter().enumerate() {
+                    match v {
+                        Some(v) => {
+                            write!(output, "{}", v).unwrap();
+                        }
+                        None => {
+                            write!(output, "NULL").unwrap();
+                        }
+                    }
+                    if i < value.len() - 1 {
+                        write!(output, ",").unwrap();
+                    }
+                }
+                write!(output, "}}").unwrap();
+                $row_vec.push(output);
+            }
+            None => {
+                $row_vec.push("NULL".to_string());
+            }
+        }
+    };
+    ($row:ident, $row_vec:ident, $idx:ident, $t:ty, $convert:ident) => {
+        let value: Option<Vec<Option<$t>>> = $row.get($idx);
+        match value {
+            Some(value) => {
+                let mut output = String::new();
+                write!(output, "{{").unwrap();
+                for (i, v) in value.iter().enumerate() {
+                    match v {
+                        Some(v) => {
+                            write!(output, "{}", $convert(v)).unwrap();
+                        }
+                        None => {
+                            write!(output, "NULL").unwrap();
+                        }
+                    }
+                    if i < value.len() - 1 {
+                        write!(output, ",").unwrap();
+                    }
+                }
+                write!(output, "}}").unwrap();
+                $row_vec.push(output);
+            }
+            None => {
+                $row_vec.push("NULL".to_string());
+            }
+        }
+    };
+    // ($self:ident, $row:ident, $row_vec:ident, $idx:ident, $t:ty, $ty_name:expr) => {
+    //     let value: Option<Vec<Option<$t>>> = $row.get($idx);
+    //     match value {
+    //         Some(value) => {
+    //             let mut output = String::new();
+    //             write!(output, "{{").unwrap();
+    //             for (i, v) in value.iter().enumerate() {
+    //                 match v {
+    //                     Some(v) => {
+    //                         let sql = format!("select ($1::{})::varchar", stringify!($ty_name));
+    //                         let tmp_rows = $self.client.query(&sql, &[&v]).await.unwrap();
+    //                         let value: &str = tmp_rows.get(0).unwrap().get(0);
+    //                         assert!(value.len() > 0);
+    //                         write!(output, "{}", value).unwrap();
+    //                     }
+    //                     None => {
+    //                         write!(output, "NULL").unwrap();
+    //                     }
+    //                 }
+    //                 if i < value.len() - 1 {
+    //                     write!(output, ",").unwrap();
+    //                 }
+    //             }
+    //             write!(output, "}}").unwrap();
+    //             $row_vec.push(output);
+    //         }
+    //         None => {
+    //             $row_vec.push("NULL".to_string());
+    //         }
+    //     }
+    // };
+}
+
+macro_rules! make_string {
+    ($row:ident, $idx:ident, $t:ty) => {{
+        let value:Option<$t> = $row.get($idx);
+        value.unwrap().to_string()
+    }};
+    ($row:ident, $idx:ident, $t:ty, $convert:ident) => {{
+        let value: Option<$t> = $row.get($idx);
+        $convert(value.unwrap()).to_string()
+    }};
+}
+
+fn cell_to_string(row: &Row, column: &Column, idx: usize) -> String {
+    if idx >= row.columns().len() {
+        return "NULL".to_string();
+    }
+    match column.type_().clone() {
+        Type::INT2 => make_string!(row, idx, i16),
+        Type::INT4 => make_string!(row, idx, i32),
+        Type::INT8 => make_string!(row, idx, i64),
+        Type::NUMERIC => make_string!(row, idx, Decimal, decimal_to_str),
+        Type::DATE => make_string!(row, idx, NaiveDate),
+        Type::TIME => make_string!(row, idx, NaiveTime),
+        Type::TIMESTAMP => make_string!(row, idx, NaiveDateTime),
+        Type::BOOL => make_string!(row, idx, bool, bool_to_str),
+        // Type::INT2_ARRAY => array_process!(row, row_vec, idx, i16),
+        // Type::INT4_ARRAY => array_process!(row, row_vec, idx, i32),
+        // Type::INT8_ARRAY => array_process!(row, row_vec, idx, i64),
+        // Type::BOOL_ARRAY => array_process!(row, row_vec, idx, bool, bool_to_str),
+        // Type::FLOAT4_ARRAY => array_process!(row, row_vec, idx, f32, float4_to_str),
+        // Type::FLOAT8_ARRAY => array_process!(row, row_vec, idx, f64, float8_to_str),
+        // Type::NUMERIC_ARRAY => array_process!(row, row_vec, idx, Decimal),
+        // Type::DATE_ARRAY => array_process!(row, row_vec, idx, NaiveDate),
+        // Type::TIME_ARRAY => array_process!(row, row_vec, idx, NaiveTime),
+        // Type::TIMESTAMP_ARRAY => array_process!(row, row_vec, idx, NaiveDateTime),
+        // Type::VARCHAR_ARRAY | Type::TEXT_ARRAY => array_process!(row, row_vec, idx, String, varchar_to_str),
+        Type::VARCHAR | Type::TEXT => make_string!(row, idx, &str, varchar_to_str),
+        Type::FLOAT4 => make_string!(row, idx, f32, float4_to_str),
+        Type::FLOAT8 => make_string!(row, idx, f64, float8_to_str),
+        // Type::INTERVAL => {
+        //     single_process!(self, row, row_vec, idx, Interval, INTERVAL);
+        // }
+        // Type::TIMESTAMPTZ => {
+        //     single_process!(
+        //                     self,
+        //                     row,
+        //                     row_vec,
+        //                     idx,
+        //                     DateTime<chrono::Utc>,
+        //                     TIMESTAMPTZ
+        //                 );
+        // }
+        // Type::INTERVAL_ARRAY => {
+        //     array_process!(self, row, row_vec, idx, Interval, INTERVAL);
+        // }
+        // Type::TIMESTAMPTZ_ARRAY => {
+        //     array_process!(self, row, row_vec, idx, DateTime<chrono::Utc>, TIMESTAMPTZ);
+        // }
+        _ => {
+            todo!("Unsupported type: {}", column.type_().name())
+        }
+    }
+}
+
 #[async_trait]
 impl sqllogictest::AsyncDB for Postgres {
     type Error = tokio_postgres::error::Error;
 
     async fn run(&mut self, sql: &str) -> Result<DBOutput, Self::Error> {
-        let mut output = vec![];
-
         let is_query_sql = {
             let lower_sql = sql.trim_start().to_ascii_lowercase();
             lower_sql.starts_with("select")
@@ -140,42 +258,18 @@ impl sqllogictest::AsyncDB for Postgres {
                 || lower_sql.starts_with("with")
                 || lower_sql.starts_with("describe")
         };
-
-        // NOTE:
-        // We use `simple_query` API which returns the query results as strings.
-        // This means that we can not reformat values based on their type,
-        // and we have to follow the format given by the specific database (pg).
-        // For example, postgres will output `t` as true and `f` as false,
-        // thus we have to write `t`/`f` in the expected results.
-        let rows = self.client.simple_query(sql).await?;
-        for row in rows {
-            let mut row_vec = vec![];
-            match row {
-                tokio_postgres::SimpleQueryMessage::Row(row) => {
-                    for i in 0..row.len() {
-                        match row.get(i) {
-                            Some(v) => {
-                                if v.is_empty() {
-                                    row_vec.push("(empty)".to_string());
-                                } else {
-                                    row_vec.push(v.to_string());
-                                }
-                            }
-                            None => row_vec.push("NULL".to_string()),
-                        }
-                    }
-                }
-                tokio_postgres::SimpleQueryMessage::CommandComplete(cnt) => {
-                    if is_query_sql {
-                        break;
-                    } else {
-                        return Ok(DBOutput::StatementComplete(cnt));
-                    }
-                }
-                _ => unreachable!(),
-            }
-            output.push(row_vec);
+        if !is_query_sql {
+            self.client.execute(sql, &[]).await?;
+            return Ok(DBOutput::StatementComplete(0));
         }
+        let rows = self.client.query(sql, &[]).await?;
+        let output = rows.iter().map(|row| {
+            row.columns().iter().enumerate()
+                .map(|(idx, column)| {
+                    cell_to_string(&row, &column, idx)
+                })
+                .collect::<Vec<String>>()
+        }).collect::<Vec<_>>();
 
         if output.is_empty() {
             let stmt = self.client.prepare(sql).await?;

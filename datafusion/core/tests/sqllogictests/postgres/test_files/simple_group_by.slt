@@ -19,10 +19,16 @@ query IIRIII
 select
   c2,
   sum(c3) sum_c3,
-  round(avg(c3), 0) avg_c3,
+  avg(c3) avg_c3,
   max(c3) max_c3,
   min(c3) min_c3,
   count(c3) count_c3
 from aggregate_test_100_by_sql
 group by c2
 order by c2;
+----
+1 367 16.681818181818 125 -99 22
+2 184 8.363636363636 122 -117 22
+3 395 20.789473684211 123 -101 19
+4 29 1.260869565217 123 -117 23
+5 -194 -13.857142857143 118 -101 14

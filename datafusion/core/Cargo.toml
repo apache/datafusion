@@ -109,7 +109,10 @@ ctor = "0.1.22"
 doc-comment = "0.3"
 env_logger = "0.10"
 parquet-test-utils = { path = "../../parquet-test-utils" }
+postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
 rstest = "0.16.0"
+rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
+half = "2.2.1"
 sqllogictest = "0.10.0"
 test-utils = { path = "../../test-utils" }
 tokio-postgres = "0.7.7"

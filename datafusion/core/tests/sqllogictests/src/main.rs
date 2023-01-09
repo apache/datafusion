@@ -26,7 +26,9 @@ use testcontainers::clients::Cli as Docker;
 use datafusion::prelude::SessionContext;
 
 use crate::engines::datafusion::DataFusion;
-use crate::engines::postgres::{Postgres, PG_DB, PG_PASSWORD, PG_PORT, PG_USER};
+use crate::engines::postgres;
+use crate::engines::postgres::{Postgres};
+use crate::engines::postgres::image::{PG_DB, PG_PASSWORD, PG_PORT, PG_USER};
 
 mod engines;
 mod setup;
@@ -85,7 +87,7 @@ async fn run_postgres_test_file(
     info!("Running postgres test: {}", path.display());
 
     let docker = Docker::default();
-    let postgres_container = docker.run(Postgres::postgres_docker_image());
+    let postgres_container = docker.run(postgres::image::postgres_docker_image());
 
     let postgres_client = Postgres::connect_with_retry(
         "127.0.0.1",
@@ -97,17 +99,17 @@ async fn run_postgres_test_file(
     .await?;
     let postgres_runner = sqllogictest::Runner::new(postgres_client);
 
-    let temp_dir = tempdir()?;
-    let copy_path = temp_dir.path().join(&file_name);
+    // let temp_dir = tempdir()?;
+    // let copy_path = temp_dir.path().join(&file_name);
 
-    copy(path, &copy_path)?;
-    update_test_file(&copy_path, postgres_runner, " ", default_validator).await?;
+    // copy(path, &copy_path)?;
+    update_test_file(&path, postgres_runner, " ", default_validator).await?;
 
     let ctx = SessionContext::new();
     setup::register_aggregate_csv_by_sql(&ctx).await;
     let mut df_runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name));
 
-    df_runner.run_file_async(copy_path).await?;
+    df_runner.run_file_async(path).await?;
     Ok(())
 }
 

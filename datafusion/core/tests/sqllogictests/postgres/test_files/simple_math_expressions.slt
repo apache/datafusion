@@ -18,7 +18,9 @@
 query RRRRR
 SELECT
   abs(-1.1) as abs,
-  round(exp(2.0), 0) as exp,
+  exp(2.0) as exp,
   sin(3.0) as sin,
   cos(4.0) as cos,
-  round(tan(5.0)) as tan;
+  tan(5.0) as tan;
+----
+1.1 7.389056098931 0.14112000806 -0.653643620864 -3.380515006247
