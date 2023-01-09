@@ -36,7 +36,7 @@ path = "src/lib.rs"
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
-arrow = { version = "29.0.0", default-features = false }
+arrow = { version = "30.0.1", default-features = false }
 datafusion-common = { path = "../common", version = "16.0.0" }
 log = "^0.4"
 sqlparser = "0.30"
