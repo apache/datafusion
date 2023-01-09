@@ -287,6 +287,10 @@ impl ExecutionPlan for LocalLimitExec {
         self.input.output_ordering()
     }
 
+    fn maintains_input_order(&self) -> bool {
+        true
+    }
+
     fn equivalence_properties(&self) -> EquivalenceProperties {
         self.input.equivalence_properties()
     }

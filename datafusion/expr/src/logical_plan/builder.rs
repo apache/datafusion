@@ -273,7 +273,8 @@ impl LogicalPlanBuilder {
         });
         for (_, exprs) in groups {
             let window_exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-            // the partition and sort itself is done at physical level, see the BasicEnforcement rule
+            // Partition and sorting is done at physical level, see the EnforceDistribution
+            // and EnforceSorting rules.
             plan = LogicalPlanBuilder::from(plan)
                 .window(window_exprs)?
                 .build()?;
