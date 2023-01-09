@@ -750,22 +750,14 @@ fn create_batch_from_map(
         }
     }
 
-    // make group states mutable
-    let mut accumulator_set_vec: Vec<_> = row_aggr_state
-        .group_states
-        .iter()
-        .map(|group_state| &group_state.accumulator_set)
-        .collect();
-
     // next, output aggregates: either intermediate state or final output
-    let mut start_idx = 0;
     for (x, &state_len) in acc_data_types.iter().enumerate() {
         for y in 0..state_len {
             match mode {
                 AggregateMode::Partial => {
                     let res = ScalarValue::iter_to_array(
-                        accumulator_set_vec.iter().map(|accumulator_set| {
-                            accumulator_set[x]
+                        row_aggr_state.group_states.iter().map(|row_group_state| {
+                            row_group_state.accumulator_set[x]
                                 .state()
                                 .map(|x| x[y].clone())
                                 .expect("unexpected accumulator state in hash aggregate")
@@ -776,12 +768,10 @@ fn create_batch_from_map(
                 }
                 AggregateMode::Final | AggregateMode::FinalPartitioned => {
                     let res = ScalarValue::iter_to_array(
-                        accumulator_set_vec.iter_mut().map(|accumulator_set| {
-                            let res = accumulator_set[x]
+                        row_aggr_state.group_states.iter().map(|row_group_state| {
+                            row_group_state.accumulator_set[x]
                                 .evaluate()
-                                .expect("unexpected accumulator state in hash aggregate");
-                            start_idx += 1;
-                            res
+                                .expect("unexpected accumulator state in hash aggregate")
                         }),
                     )?;
                     columns.push(res);

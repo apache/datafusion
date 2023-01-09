@@ -2549,9 +2549,9 @@ mod test_aggregate {
         let distincts = vec![10, 1000, 100_000, 100_000_000];
         let n_batches = vec![10, 100_000_000];
         // let n_trials = vec![10];
-        // let n_rows = vec![100, 1000, 100_000];
-        // let distincts = vec![10, 1000, 100_000, 100_000_000];
-        // let n_batches = vec![10];
+        // let n_rows = vec![100_000];
+        // let distincts = vec![100_000_000];
+        // let n_batches = vec![100_000_000];
         for (n_trial, n_row, distinct, n_batch) in
             iproduct!(n_trials, n_rows, distincts, n_batches)
         {
