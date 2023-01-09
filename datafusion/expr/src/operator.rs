@@ -51,14 +51,6 @@ pub enum Operator {
     And,
     /// Logical OR, like `||`
     Or,
-    /// Matches a wildcard pattern
-    Like,
-    /// Does not match a wildcard pattern
-    NotLike,
-    /// Matches a wildcard pattern, ignores case
-    ILike,
-    /// Does not match a wildcard pattern, ignores case
-    NotILike,
     /// IS DISTINCT FROM
     IsDistinctFrom,
     /// IS NOT DISTINCT FROM
@@ -96,10 +88,6 @@ impl Operator {
             Operator::LtEq => Some(Operator::Gt),
             Operator::Gt => Some(Operator::LtEq),
             Operator::GtEq => Some(Operator::Lt),
-            Operator::Like => Some(Operator::NotLike),
-            Operator::NotLike => Some(Operator::Like),
-            Operator::ILike => Some(Operator::NotILike),
-            Operator::NotILike => Some(Operator::ILike),
             Operator::IsDistinctFrom => Some(Operator::IsNotDistinctFrom),
             Operator::IsNotDistinctFrom => Some(Operator::IsDistinctFrom),
             Operator::Plus
@@ -133,11 +121,7 @@ impl Operator {
             Operator::LtEq => Some(Operator::GtEq),
             Operator::Gt => Some(Operator::Lt),
             Operator::GtEq => Some(Operator::LtEq),
-            Operator::Like
-            | Operator::NotLike
-            | Operator::ILike
-            | Operator::NotILike
-            | Operator::IsDistinctFrom
+            Operator::IsDistinctFrom
             | Operator::IsNotDistinctFrom
             | Operator::Plus
             | Operator::Minus
@@ -176,10 +160,6 @@ impl fmt::Display for Operator {
             Operator::Modulo => "%",
             Operator::And => "AND",
             Operator::Or => "OR",
-            Operator::Like => "LIKE",
-            Operator::NotLike => "NOT LIKE",
-            Operator::ILike => "ILIKE",
-            Operator::NotILike => "NOT ILIKE",
             Operator::RegexMatch => "~",
             Operator::RegexIMatch => "~*",
             Operator::RegexNotMatch => "!~",

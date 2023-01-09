@@ -25,7 +25,7 @@ use sqlparser::{
     },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
-    tokenizer::{Token, Tokenizer},
+    tokenizer::{Token, TokenWithLocation, Tokenizer},
 };
 use std::{collections::HashMap, str::FromStr};
 use std::{collections::VecDeque, fmt};
@@ -124,7 +124,7 @@ impl<'a> DFParser<'a> {
         let tokens = tokenizer.tokenize()?;
 
         Ok(DFParser {
-            parser: Parser::new(tokens, dialect),
+            parser: Parser::new(dialect).with_tokens(tokens),
         })
     }
 
@@ -165,13 +165,17 @@ impl<'a> DFParser<'a> {
     }
 
     /// Report an unexpected token
-    fn expected<T>(&self, expected: &str, found: Token) -> Result<T, ParserError> {
+    fn expected<T>(
+        &self,
+        expected: &str,
+        found: TokenWithLocation,
+    ) -> Result<T, ParserError> {
         parser_err!(format!("Expected {expected}, found: {found}"))
     }
 
     /// Parse a new expression
     pub fn parse_statement(&mut self) -> Result<Statement, ParserError> {
-        match self.parser.peek_token() {
+        match self.parser.peek_token().token {
             Token::Word(w) => {
                 match w.keyword {
                     Keyword::CREATE => {
@@ -227,7 +231,7 @@ impl<'a> DFParser<'a> {
         }
 
         loop {
-            if let Token::Word(_) = self.parser.peek_token() {
+            if let Token::Word(_) = self.parser.peek_token().token {
                 let identifier = self.parser.parse_identifier()?;
                 partitions.push(identifier.to_string());
             } else {
@@ -262,7 +266,7 @@ impl<'a> DFParser<'a> {
         loop {
             if let Some(constraint) = self.parser.parse_optional_table_constraint()? {
                 constraints.push(constraint);
-            } else if let Token::Word(_) = self.parser.peek_token() {
+            } else if let Token::Word(_) = self.parser.peek_token().token {
                 let column_def = self.parse_column_def()?;
                 columns.push(column_def);
             } else {
@@ -379,9 +383,10 @@ impl<'a> DFParser<'a> {
 
     /// Parses the set of valid formats
     fn parse_file_format(&mut self) -> Result<String, ParserError> {
-        match self.parser.next_token() {
+        let token = self.parser.next_token();
+        match &token.token {
             Token::Word(w) => parse_file_type(&w.value),
-            unexpected => self.expected("one of PARQUET, NDJSON, or CSV", unexpected),
+            _ => self.expected("one of PARQUET, NDJSON, or CSV", token),
         }
     }
 
@@ -389,9 +394,10 @@ impl<'a> DFParser<'a> {
     fn parse_file_compression_type(
         &mut self,
     ) -> Result<CompressionTypeVariant, ParserError> {
-        match self.parser.next_token() {
+        let token = self.parser.next_token();
+        match &token.token {
             Token::Word(w) => CompressionTypeVariant::from_str(&w.value),
-            unexpected => self.expected("one of GZIP, BZIP2, XZ", unexpected),
+            _ => self.expected("one of GZIP, BZIP2, XZ", token),
         }
     }
 

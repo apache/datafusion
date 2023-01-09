@@ -22,9 +22,6 @@ use super::{
     aggregates, empty::EmptyExec, joins::PartitionMode, udaf, union::UnionExec,
     values::ValuesExec, windows,
 };
-use crate::config::{
-    OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY, OPT_PREFER_HASH_JOIN,
-};
 use crate::datasource::source_as_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -50,7 +47,7 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::windows::WindowAggExec;
+use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{joins::utils as join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
 use crate::{
@@ -617,13 +614,28 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    Ok(Arc::new(WindowAggExec::try_new(
-                        window_expr,
-                        input_exec,
-                        physical_input_schema,
-                        physical_partition_keys,
-                        physical_sort_keys,
-                    )?))
+                    let uses_bounded_memory = window_expr
+                        .iter()
+                        .all(|e| e.uses_bounded_memory());
+                    // If all window expressions can run with bounded memory,
+                    // choose the bounded window variant:
+                    Ok(if uses_bounded_memory {
+                        Arc::new(BoundedWindowAggExec::try_new(
+                            window_expr,
+                            input_exec,
+                            physical_input_schema,
+                            physical_partition_keys,
+                            physical_sort_keys,
+                        )?)
+                    } else {
+                        Arc::new(WindowAggExec::try_new(
+                            window_expr,
+                            input_exec,
+                            physical_input_schema,
+                            physical_partition_keys,
+                            physical_sort_keys,
+                        )?)
+                    })
                 }
                 LogicalPlan::Aggregate(Aggregate {
                     input,
@@ -773,12 +785,19 @@ impl DefaultPhysicalPlanner {
                     )?;
                     Ok(Arc::new(FilterExec::try_new(runtime_expr, physical_input)?))
                 }
-                LogicalPlan::Union(Union { inputs, .. }) => {
+                LogicalPlan::Union(Union { inputs, schema }) => {
                     let physical_plans = futures::stream::iter(inputs)
                         .then(|lp| self.create_initial_plan(lp, session_state))
                         .try_collect::<Vec<_>>()
                         .await?;
-                    Ok(Arc::new(UnionExec::new(physical_plans)))
+                    if schema.fields().len() < physical_plans[0].schema().fields().len() {
+                        // `schema` could be a subset of the child schema. For example
+                        // for query "select count(*) from (select a from t union all select a from t)"
+                        // `schema` is empty but child schema contains one field `a`.
+                        Ok(Arc::new(UnionExec::try_new_with_schema(physical_plans, schema.clone())?))
+                    } else {
+                        Ok(Arc::new(UnionExec::new(physical_plans)))
+                    }
                 }
                 LogicalPlan::Repartition(Repartition {
                     input,
@@ -995,9 +1014,7 @@ impl DefaultPhysicalPlanner {
                         _ => None
                     };
 
-                    let prefer_hash_join = session_state.config().config_options()
-                        .get_bool(OPT_PREFER_HASH_JOIN)
-                        .unwrap_or_default();
+                    let prefer_hash_join = session_state.config_options().optimizer.prefer_hash_join;
                     if join_on.is_empty() {
                         // there is no equal join condition, use the nested loop join
                         // TODO optimize the plan, and use the config of `target_partitions` and `repartition_joins`
@@ -1713,21 +1730,14 @@ impl DefaultPhysicalPlanner {
             use PlanType::*;
             let mut stringified_plans = vec![];
 
-            if !session_state
-                .config_options()
-                .get_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY)
-                .unwrap_or_default()
-            {
-                stringified_plans = e.stringified_plans.clone();
+            let config = &session_state.config_options().explain;
 
+            if !config.physical_plan_only {
+                stringified_plans = e.stringified_plans.clone();
                 stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));
             }
 
-            if !session_state
-                .config_options()
-                .get_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY)
-                .unwrap_or_default()
-            {
+            if !config.logical_plan_only {
                 let input = self
                     .create_initial_plan(e.plan.as_ref(), session_state)
                     .await?;
@@ -2009,14 +2019,6 @@ mod tests {
             col("c1").eq(bool_expr.clone()),
             // u32 AND bool
             col("c2").and(bool_expr),
-            // utf8 LIKE u32
-            col("c1").like(col("c2")),
-            // utf8 NOT LIKE u32
-            col("c1").not_like(col("c2")),
-            // utf8 ILIKE u32
-            col("c1").ilike(col("c2")),
-            // utf8 NOT ILIKE u32
-            col("c1").not_ilike(col("c2")),
         ];
         for case in cases {
             let logical_plan = test_csv_scan().await?.project(vec![case.clone()]);

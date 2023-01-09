@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use crate::config::{ConfigOptions, OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD};
+use crate::config::ConfigOptions;
 use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::joins::{
@@ -214,11 +214,8 @@ impl PhysicalOptimizerRule for JoinSelection {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let collect_left_threshold: usize = config
-            .get_u64(OPT_HASH_JOIN_SINGLE_PARTITION_THRESHOLD)
-            .unwrap_or_default()
-            .try_into()
-            .unwrap();
+        let config = &config.optimizer;
+        let collect_left_threshold = config.hash_join_single_partition_threshold;
         plan.transform_up(&|plan| {
             if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
                 match hash_join.partition_mode() {

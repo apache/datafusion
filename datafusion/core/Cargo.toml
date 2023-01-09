@@ -18,7 +18,7 @@
 [package]
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
-version = "15.0.0"
+version = "16.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "../../README.md"
@@ -64,17 +64,18 @@ bytes = "1.1"
 bzip2 = { version = "0.4.3", optional = true }
 chrono = { version = "0.4.23", default-features = false }
 dashmap = "5.4.0"
-datafusion-common = { path = "../common", version = "15.0.0", features = ["parquet", "object_store"] }
-datafusion-expr = { path = "../expr", version = "15.0.0" }
-datafusion-jit = { path = "../jit", version = "15.0.0", optional = true }
-datafusion-optimizer = { path = "../optimizer", version = "15.0.0" }
-datafusion-physical-expr = { path = "../physical-expr", version = "15.0.0" }
-datafusion-row = { path = "../row", version = "15.0.0" }
-datafusion-sql = { path = "../sql", version = "15.0.0" }
+datafusion-common = { path = "../common", version = "16.0.0", features = ["parquet", "object_store"] }
+datafusion-expr = { path = "../expr", version = "16.0.0" }
+datafusion-jit = { path = "../jit", version = "16.0.0", optional = true }
+datafusion-optimizer = { path = "../optimizer", version = "16.0.0" }
+datafusion-physical-expr = { path = "../physical-expr", version = "16.0.0" }
+datafusion-row = { path = "../row", version = "16.0.0" }
+datafusion-sql = { path = "../sql", version = "16.0.0" }
 flate2 = { version = "1.0.24", optional = true }
 futures = "0.3"
 glob = "0.3.0"
 hashbrown = { version = "0.13", features = ["raw"] }
+indexmap = "1.9.2"
 itertools = "0.10"
 lazy_static = { version = "^1.4.0" }
 log = "^0.4"
@@ -90,7 +91,7 @@ pyo3 = { version = "0.17.1", optional = true }
 rand = "0.8"
 rayon = { version = "1.5", optional = true }
 smallvec = { version = "1.6", features = ["union"] }
-sqlparser = "0.28"
+sqlparser = { version = "0.30", features = ["visitor"] }
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-stream = "0.1"
@@ -111,7 +112,6 @@ env_logger = "0.10"
 parquet-test-utils = { path = "../../parquet-test-utils" }
 rstest = "0.16.0"
 sqllogictest = "0.10.0"
-sqlparser = "0.28"
 test-utils = { path = "../../test-utils" }
 thiserror = "1.0.37"
 
