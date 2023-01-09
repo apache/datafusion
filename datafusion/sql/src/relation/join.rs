@@ -21,7 +21,7 @@ use datafusion_common::{Column, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::{Expr, JoinType, LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{Join, JoinConstraint, JoinOperator, TableWithJoins};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn plan_table_with_joins(
@@ -142,10 +142,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .build()
             }
             JoinConstraint::Natural => {
-                // https://issues.apache.org/jira/browse/ARROW-10727
-                Err(DataFusionError::NotImplemented(
-                    "NATURAL JOIN is not supported (https://issues.apache.org/jira/browse/ARROW-10727)".to_string(),
-                ))
+                // TODO: what if no common join cols? -> becomes cross join
+                // TODO: limit join_type to specific set?
+                let left_cols: HashSet<&String> = left
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|f| f.field().name())
+                    .collect();
+                let keys: Vec<Column> = right
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|f| f.field().name())
+                    .filter(|f| left_cols.contains(f))
+                    .map(Column::from_name)
+                    .collect();
+                if keys.is_empty() {
+                    self.parse_cross_join(left, right)
+                } else {
+                    LogicalPlanBuilder::from(left)
+                        .join_using(right, join_type, keys)?
+                        .build()
+                }
             }
             JoinConstraint::None => Err(DataFusionError::NotImplemented(
                 "NONE constraint is not supported".to_string(),
