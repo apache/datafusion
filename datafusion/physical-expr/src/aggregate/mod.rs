@@ -21,7 +21,6 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use datafusion_row::accessor::RowAccessor;
 use std::any::Any;
-use std::cell::RefCell;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -96,8 +95,8 @@ pub trait AggregateExpr: Send + Sync + Debug {
     /// when its state is of fixed size, as RowAccumulator is more memory efficient and CPU-friendly.
     fn create_row_accumulator<'b>(
         &self,
-        accessor: RowAccessor<'b>,
-        start_index: usize,
+        _accessor: RowAccessor<'b>,
+        _start_index: usize,
     ) -> Result<Box<dyn Accumulator + 'b>> {
         Err(DataFusionError::NotImplemented(format!(
             "RowAccumulator hasn't been implemented for {self:?} yet"

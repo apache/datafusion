@@ -2353,272 +2353,30 @@ async fn test_window_agg_sort_orderby_reversed_partitionby_reversed_plan() -> Re
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_accumulator_row_accumulator() -> Result<()> {
-    // let config = SessionConfig::new().with_target_partitions(1);
     let config = SessionConfig::new();
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv(&ctx).await?;
-    // let sql = "SELECT MIN(c9), MAX(c11)
-    // FROM aggregate_test_100";
-    // let sql = "SELECT MIN(c9), MIN(c13), MAX(c9), MAX(c13), AVG(c9)
-    // FROM aggregate_test_100";
-    // let sql = "SELECT MIN(c9), MAX(c9)
-    // FROM aggregate_test_100 GROUP BY c1";
-    // let sql = "SELECT AVG(c9)
-    // FROM aggregate_test_100 GROUP BY c1, c2";
-    // let sql = "SELECT MIN(c13), MAX(c13), AVG(c9)
-    // FROM aggregate_test_100";
 
-    // let sql = "SELECT MIN(c9), MIN(c13), MAX(c9), MAX(c13), AVG(c9)
-    // FROM aggregate_test_100 GROUP BY c1";
-    // let sql = "SELECT MIN(c13), MIN(c9)
-    // FROM aggregate_test_100";
-    // let sql = "SELECT MIN(c9), MIN(c13)
-    // FROM aggregate_test_100";
-    // let sql = "SELECT c1, c2, MIN(c13), MIN(c9), MAX(c13), MAX(c9), AVG(c9), MIN(c13) as min1
-    // FROM aggregate_test_100 GROUP BY c1, c2
-    // ORDER BY c1";
-    let sql =
-        "SELECT c1, c2, MIN(c13), MIN(c9), MAX(c13), MAX(c9), COUNT(C9), SUM(c9), AVG(c9)
-    FROM aggregate_test_100 GROUP BY c1, c2
-    ORDER BY c1, c2";
-    // let sql = "SELECT c1, c2, SUM(c9)
-    // FROM aggregate_test_100 GROUP BY c1, c2
-    // ORDER BY c1, c2";
-    // let sql = "SELECT MIN(c13), MIN(c9), MAX(c13), MAX(c9), AVG(c9), MIN(c13) as min1
-    // FROM aggregate_test_100";
-    // let sql = "SELECT c1, MIN(c9), MIN(c13)
-    // FROM aggregate_test_100 GROUP BY c1";
-    // let sql = "SELECT MIN(c13), MAX(c13)
-    // FROM aggregate_test_100 GROUP BY c1";
-    // let sql = "SELECT MIN(c9), MAX(c9)
-    // FROM aggregate_test_100 GROUP BY c1";
-    // let sql = "SELECT MIN(c9), MAX(c9), AVG(c9)
-    // FROM aggregate_test_100 GROUP BY c1";
-
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let dataframe = ctx.sql(sql).await.expect(&msg);
-    let physical_plan = dataframe.create_physical_plan().await?;
-    let formatted = displayable(physical_plan.as_ref()).indent().to_string();
-    // // Only 1 SortExec was added
-    // let expected = {
-    //     vec![
-    //         "ProjectionExec: expr=[c3@3 as c3, SUM(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as sum1, SUM(aggregate_test_100.c9) PARTITION BY [aggregate_test_100.c3] ORDER BY [aggregate_test_100.c9 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@0 as sum2]",
-    //         "  GlobalLimitExec: skip=0, fetch=5",
-    //         "    WindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(NULL)), end_bound: CurrentRow }]",
-    //         "      WindowAggExec: wdw=[SUM(aggregate_test_100.c9): Ok(Field { name: \"SUM(aggregate_test_100.c9)\", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int8(NULL)), end_bound: CurrentRow }]",
-    //         "        SortExec: [c3@1 DESC,c9@2 DESC,c2@0 ASC NULLS LAST]",
-    //     ]
-    // };
-    //
-    let actual: Vec<&str> = formatted.trim().lines().collect();
-    let actual_len = actual.len();
-    println!("{:#?}", actual);
-    // assert_eq!(
-    //     expected, actual_trim_last,
-    //     "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-    //     expected, actual
-    // );
+    let sql = "SELECT c1, c2, MIN(c13) as min1, MIN(c9) as min2, MAX(c13) as max1, MAX(c9) as max2, AVG(c9) as avg1, MIN(c13) as min3, COUNT(C9) as cnt1, 0.5*SUM(c9-c8) as sum1
+    FROM aggregate_test_100
+    GROUP BY c1, c2
+    ORDER BY c1, c2
+    LIMIT 5";
 
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----+--------------------------------+----------------------------+--------------------------------+----------------------------+----------------------------+--------------------------------+",
-        "| c1 | MIN(aggregate_test_100.c13)    | MIN(aggregate_test_100.c9) | MAX(aggregate_test_100.c13)    | MAX(aggregate_test_100.c9) | AVG(aggregate_test_100.c9) | min1                           |",
-        "+----+--------------------------------+----------------------------+--------------------------------+----------------------------+----------------------------+--------------------------------+",
-        "| a  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB | 141047417                  | ydkwycaISlYSlEq3TlkS2m15I2pcp8 | 4015442341                 | 2029486539.1904762         | 0keZ5G8BffGwgF2RwQD59TFzMStxCB |",
-        "| b  | 52mKlRE3aHCBZtjECq6sY9OqVf8Dze | 243203849                  | qnPOOmslCJaT45buUisMRnM0rc77EK | 4076864659                 | 2229766647.894737          | 52mKlRE3aHCBZtjECq6sY9OqVf8Dze |",
-        "| c  | 2T3wSlHdEmASmO0xcXHnndkKEt6bz8 | 141680161                  | t6fQUjJejPcjc04wHvHTPe55S65B4V | 4268716378                 | 2208666607.714286          | 2T3wSlHdEmASmO0xcXHnndkKEt6bz8 |",
-        "| d  | 0og6hSkhbX8AC1ktFS4kounvTzy8Vo | 63044568                   | y7C453hRWd4E7ImjNDWlpexB8nUqjh | 4216440507                 | 2217237221.1666665         | 0og6hSkhbX8AC1ktFS4kounvTzy8Vo |",
-        "| e  | 0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm | 28774375                   | xipQ93429ksjNcXPX5326VSg1xJZcW | 4229654142                 | 2419653223.047619          | 0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm |",
-        "+----+--------------------------------+----------------------------+--------------------------------+----------------------------+----------------------------+--------------------------------+",
+        "+----+----+--------------------------------+-----------+--------------------------------+------------+--------------------+--------------------------------+------+--------------+",
+        "| c1 | c2 | min1                           | min2      | max1                           | max2       | avg1               | min3                           | cnt1 | sum1         |",
+        "+----+----+--------------------------------+-----------+--------------------------------+------------+--------------------+--------------------------------+------+--------------+",
+        "| a  | 1  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB | 774637006 | waIGbOGl1PM6gnzZ4uuZt4E2yDWRHs | 4015442341 | 2437927011         | 0keZ5G8BffGwgF2RwQD59TFzMStxCB | 5    | 6094771121.5 |",
+        "| a  | 2  | b3b9esRhTzFEawbs6XhpKnD9ojutHB | 145294611 | ukyD7b0Efj7tNlFSRmzZ0IqkEzg2a8 | 3717551163 | 2267588664         | b3b9esRhTzFEawbs6XhpKnD9ojutHB | 3    | 3401364777   |",
+        "| a  | 3  | Amn2K87Db5Es3dFQO9cw9cvpAM6h35 | 431948861 | oLZ21P2JEDooxV1pU31cIxQHEeeoLu | 3998790955 | 2225685115.1666665 | Amn2K87Db5Es3dFQO9cw9cvpAM6h35 | 6    | 6676994872.5 |",
+        "| a  | 4  | KJFcmTVjdkCMv94wYCtfHMFhzyRsmH | 466439833 | ydkwycaISlYSlEq3TlkS2m15I2pcp8 | 2502326480 | 1655431654         | KJFcmTVjdkCMv94wYCtfHMFhzyRsmH | 4    | 3310812222.5 |",
+        "| a  | 5  | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 141047417 | QJYm7YRA3YetcBHI5wkMZeLXVmfuNy | 2496054700 | 1216992989.6666667 | MeSTAXq8gVxVjbEjgkvU9YLte0X9uE | 3    | 1825431770   |",
+        "+----+----+--------------------------------+-----------+--------------------------------+------------+--------------------+--------------------------------+------+--------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
     Ok(())
-}
-
-#[cfg(test)]
-mod test_aggregate {
-    use arrow::array::{ArrayRef, Int32Array};
-    use arrow::compute::concat_batches;
-    use arrow::datatypes::DataType;
-    use arrow::record_batch::RecordBatch;
-    use arrow::util::pretty::print_batches;
-    use datafusion::physical_plan::aggregates::{
-        AggregateExec, AggregateMode, PhysicalGroupBy,
-    };
-    use datafusion::physical_plan::collect;
-    use datafusion::physical_plan::memory::MemoryExec;
-    use datafusion::prelude::{SessionConfig, SessionContext};
-    use datafusion_common::Result;
-    use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr::expressions::{Avg, Count, Max, Min, Sum};
-    use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
-    use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
-    use itertools::iproduct;
-    use test_utils::add_empty_batches;
-    use tokio::runtime::Builder;
-    // use super::*;
-
-    /// Return randomly sized record batches with:
-    /// two sorted int32 columns 'a', 'b' ranged from 0..len / DISTINCT as columns
-    /// two random int32 columns 'x', 'y' as other columns
-    fn make_staggered_batches<const STREAM: bool>(
-        len: usize,
-        distinct: usize,
-        random_seed: u64,
-        n_batch: usize,
-    ) -> Vec<RecordBatch> {
-        // use a random number generator to pick a random sized output
-        let mut rng = StdRng::seed_from_u64(random_seed);
-        let mut input4: Vec<i32> = vec![0; len];
-        input4
-            .iter_mut()
-            .for_each(|v| *v = rng.gen_range(0..distinct) as i32);
-        let input4 = Int32Array::from_iter_values(input4.into_iter());
-
-        // split into several record batches
-        let mut remainder = RecordBatch::try_from_iter(vec![
-            ("a", Arc::new(input4.clone()) as ArrayRef),
-            ("b", Arc::new(input4.clone()) as ArrayRef),
-            ("x", Arc::new(input4.clone()) as ArrayRef),
-            ("y", Arc::new(input4) as ArrayRef),
-        ])
-            .unwrap();
-
-        let mut batches = vec![];
-        if STREAM {
-            while remainder.num_rows() > 0 {
-                let mut batch_size = rng.gen_range(0..n_batch);
-                if remainder.num_rows() < batch_size {
-                    batch_size = remainder.num_rows()
-                }
-                batches.push(remainder.slice(0, batch_size));
-                remainder =
-                    remainder.slice(batch_size, remainder.num_rows() - batch_size);
-            }
-        } else {
-            while remainder.num_rows() > 0 {
-                let batch_size = rng.gen_range(0..remainder.num_rows() + 1);
-                batches.push(remainder.slice(0, batch_size));
-                remainder =
-                    remainder.slice(batch_size, remainder.num_rows() - batch_size);
-            }
-        }
-        add_empty_batches(batches, &mut rng)
-    }
-
-    #[tokio::test]
-    async fn test1() {
-        let n_trials = vec![10];
-        let n_rows = vec![100, 1000, 100_000];
-        let distincts = vec![10, 1000, 100_000, 100_000_000];
-        let n_batches = vec![10, 100_000_000];
-        // let n_trials = vec![10];
-        // let n_rows = vec![100, 1000, 100_000];
-        // let distincts = vec![10, 1000, 100_000, 100_000_000];
-        // let n_batches = vec![10];
-        for (n_trial, n_row, distinct, n_batch) in iproduct!(n_trials, n_rows, distincts, n_batches) {
-            let mut elapsed = vec![];
-            for i in 0..n_trial {
-                let res = run_test(i, n_row, distinct, n_batch).await.unwrap();
-                elapsed.push(res);
-            }
-            elapsed.sort();
-            let tot_dur: Duration = elapsed.iter().sum();
-            println!("------------------------------------");
-            println!("n_row: {:?}, distinct: {:?}, n_batch: {:?}", n_row, distinct, n_batch);
-            println!("elapsed   mean: {:?}", tot_dur / elapsed.len() as u32);
-            println!("elapsed median: {:?}", elapsed[(n_trial / 2) as usize]);
-            println!("------------------------------------");
-        }
-    }
-
-    async fn run_test(random_seed: u64, n_row: usize, distinct: usize, n_batch: usize) -> Result<Duration> {
-        let in_data =
-            make_staggered_batches::<true>(n_row, distinct, random_seed, n_batch);
-        let schema = in_data[0].schema();
-        // let in_data = vec![concat_batches(&schema, &in_data).unwrap()];
-        let in_exec =
-            Arc::new(MemoryExec::try_new(&[in_data], schema.clone(), None).unwrap());
-        // print_batches(&in_data)?;
-        // let mut partitionby_exprs = vec![];
-        // partitionby_exprs.push(col("a", &schema).unwrap());
-        // let mut group_by_expr: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![];
-        // group_by_expr.push((col("a", &schema).unwrap(), "dummy".to_string()));
-        // let group_by = PhysicalGroupBy::new_single(group_by_expr.clone());
-
-        let grouping_set = PhysicalGroupBy::new(
-            vec![(col("a", &schema)?, "a".to_string())],
-            vec![],
-            vec![vec![false]],
-        );
-
-        let aggregates: Vec<Arc<dyn AggregateExpr>> = vec![
-            Arc::new(Sum::new(
-                col("x", &schema)?,
-                "Sum(x)".to_string(),
-                DataType::Int64,
-            )),
-            Arc::new(Min::new(
-                col("x", &schema)?,
-                "Min(x)".to_string(),
-                DataType::Int32,
-            )),
-            Arc::new(Max::new(
-                col("x", &schema)?,
-                "Max(x)".to_string(),
-                DataType::Int32,
-            )),
-            Arc::new(Avg::new(
-                col("x", &schema)?,
-                "Avg(x)".to_string(),
-                DataType::Float64,
-            )),
-            Arc::new(Sum::new(
-                col("y", &schema)?,
-                "Sum(y)".to_string(),
-                DataType::Int64,
-            )),
-            Arc::new(Min::new(
-                col("y", &schema)?,
-                "Min(y)".to_string(),
-                DataType::Int32,
-            )),
-            Arc::new(Max::new(
-                col("y", &schema)?,
-                "Max(y)".to_string(),
-                DataType::Int32,
-            )),
-            Arc::new(Avg::new(
-                col("y", &schema)?,
-                "Avg(y)".to_string(),
-                DataType::Float64,
-            )),
-        ];
-        // println!("aggregates:{:?}", aggregates);
-
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            grouping_set,
-            aggregates,
-            in_exec,
-            schema,
-        )?) as _;
-
-        let session_config = SessionConfig::new().with_batch_size(50);
-        let ctx = SessionContext::with_config(session_config);
-        let task_ctx = ctx.task_ctx();
-        let now = Instant::now();
-        let collected_running = collect(aggregate_exec, task_ctx.clone()).await.unwrap();
-        let elapsed = now.elapsed();
-        // println!("Elapsed: {:.2?}", now.elapsed());
-        // println!("Elapsed: {:.2?}", now_start.elapsed());
-        // print_batches(&collected_running)?;
-        Ok(elapsed)
-    }
 }

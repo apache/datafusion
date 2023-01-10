@@ -203,7 +203,7 @@ impl Accumulator for CountRowAccumulator<'_> {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(match self.accessor.get_u64_opt(self.index){
+        Ok(match self.accessor.get_u64_opt(self.index) {
             Some(cnt) => ScalarValue::Int64(Some(cnt as i64)),
             None => ScalarValue::Int64(Some(0)),
         })
@@ -213,7 +213,6 @@ impl Accumulator for CountRowAccumulator<'_> {
         std::mem::size_of_val(self)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

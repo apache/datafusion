@@ -16,11 +16,7 @@
 // under the License.
 
 //! Defines physical expressions that can evaluated at runtime during query execution
-
-use std::alloc;
-use std::alloc::Layout;
 use std::any::Any;
-use std::cell::RefCell;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
@@ -46,10 +42,7 @@ use crate::aggregate::row_accumulator::is_row_accumulator_support_dtype;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
-use arrow_schema::Schema;
 use datafusion_row::accessor::RowAccessor;
-use datafusion_row::layout::RowLayout;
-use datafusion_row::RowType;
 
 use super::moving_min_max;
 

@@ -46,7 +46,6 @@ use std::sync::Arc;
 
 mod hash;
 mod no_grouping;
-mod row_hash;
 
 // use crate::physical_plan::aggregates::row_hash::GroupedHashAggregateStreamV2;
 use crate::physical_plan::EquivalenceProperties;
@@ -56,7 +55,7 @@ pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
-use datafusion_row::{row_supported, RowType};
+use datafusion_row::RowType;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -276,18 +275,11 @@ impl AggregateExec {
         self.input_schema.clone()
     }
 
-    fn row_aggregate_supported(&self) -> bool {
-        let group_schema = group_schema(&self.schema, self.group_by.expr.len());
-        row_supported(&group_schema, RowType::Compact)
-            && accumulator_v2_supported(&self.aggr_expr)
-    }
-
     fn execute_typed(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<StreamType> {
-        let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, Arc::clone(&context))?;
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -302,8 +294,7 @@ impl AggregateExec {
                 context,
                 partition,
             )?))
-        }
-        else {
+        } else {
             Ok(StreamType::GroupedHashAggregateStream(
                 GroupedHashAggregateStream::new(
                     self.mode,
@@ -551,11 +542,6 @@ fn create_schema(
     Ok(Schema::new(fields))
 }
 
-fn group_schema(schema: &Schema, group_count: usize) -> SchemaRef {
-    let group_fields = schema.fields()[0..group_count].to_vec();
-    Arc::new(Schema::new(group_fields))
-}
-
 /// returns physical expressions to evaluate against a batch
 /// The expressions are different depending on `mode`:
 /// * Partial: AggregateExpr::expressions
@@ -603,7 +589,6 @@ fn merge_expressions(
 }
 
 pub(crate) type AccumulatorItem = Box<dyn Accumulator>;
-pub(crate) type AccumulatorItemV2 = Box<dyn Accumulator>;
 
 fn aggr_state_schema(aggr_expr: &[Arc<dyn AggregateExpr>]) -> Result<SchemaRef> {
     let fields = aggr_expr
@@ -629,13 +614,11 @@ fn create_accumulators(
     let mut n_buf = 0;
     let mut offsets = vec![];
     for row_expr in &row_agg_expr {
-        let aggr_schema = aggr_state_schema(&vec![row_expr.clone()])?;
+        let aggr_schema = aggr_state_schema(&[row_expr.clone()])?;
         let cur_layout = Arc::new(RowLayout::new(&aggr_schema, RowType::WordAligned));
         offsets.push(n_buf);
         n_buf += cur_layout.fixed_part_width();
     }
-    // println!("n_buf:{:?}", n_buf);
-    // println!("offsets:{:?}", offsets);
     let new_layout = Layout::array::<u8>(n_buf).unwrap();
     let buffer = unsafe { alloc::alloc_zeroed(new_layout) };
     let mut slices = vec![];
@@ -647,40 +630,24 @@ fn create_accumulators(
             offsets[idx + 1] - offset
         };
 
-        let cur_slice = unsafe {
-            std::slice::from_raw_parts_mut(buffer.offset(offset as isize), n_chunk)
-        };
+        let cur_slice =
+            unsafe { std::slice::from_raw_parts_mut(buffer.add(offset), n_chunk) };
         slices.push(cur_slice);
     }
     let mut res = vec![];
     for expr in aggr_expr {
         res.push(expr.create_accumulator()?)
     }
-    // println!("row_agg_expr {:?}", row_agg_expr);
-    // println!("slices {:?}", slices);
-    // println!("row_agg_expr_indices {:?}", row_agg_expr_indices);
     for (expr, cur_slice, row_idx) in izip!(row_agg_expr, slices, row_agg_expr_indices) {
-        let aggr_schema = aggr_state_schema(&vec![expr.clone()])?;
+        let aggr_schema = aggr_state_schema(&[expr.clone()])?;
         let cur_layout = Arc::new(RowLayout::new(&aggr_schema, RowType::WordAligned));
-        let n_width = cur_layout.fixed_part_width();
-        // println!("aggr_schema:{:?}, n width: {:?}", aggr_schema, n_width);
-        // println!("field offsets: {:?}", cur_layout.field_offsets());
         let mut accessor = RowAccessor::new_from_layout(cur_layout);
-        // let cur_start_idx = offsets[start_idx];
-        // let mut cur_chunk = &slice[cur_start_idx..cur_start_idx+n_width];
         accessor.point_to(0, cur_slice);
 
         res[row_idx] = expr.create_row_accumulator(accessor, 0)?;
     }
     Ok(res)
 }
-
-fn accumulator_v2_supported(aggr_expr: &[Arc<dyn AggregateExpr>]) -> bool {
-    aggr_expr
-        .iter()
-        .all(|expr| expr.row_accumulator_supported())
-}
-
 
 /// returns a vector of ArrayRefs, where each entry corresponds to either the
 /// final value (mode = Final) or states (mode = Partial)
@@ -791,7 +758,7 @@ mod tests {
     use arrow::error::{ArrowError, Result as ArrowResult};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
-    use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
+    use datafusion_physical_expr::expressions::{lit, Count, Median};
     use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
     use futures::{FutureExt, Stream};
     use std::any::Any;
@@ -1198,16 +1165,8 @@ mod tests {
             DataType::UInt32,
         ))];
 
-        // use slow-path in `hash.rs`
-        let aggregates_v1: Vec<Arc<dyn AggregateExpr>> =
-            vec![Arc::new(ApproxDistinct::new(
-                col("a", &input_schema)?,
-                "APPROX_DISTINCT(a)".to_string(),
-                DataType::UInt32,
-            ))];
-
         // use fast-path in `row_hash.rs`.
-        let aggregates_v2: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
+        let aggregates_v1: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Avg::new(
             col("b", &input_schema)?,
             "AVG(b)".to_string(),
             DataType::Float64,

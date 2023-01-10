@@ -271,7 +271,6 @@ impl Accumulator for AvgRowAccumulator<'_> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

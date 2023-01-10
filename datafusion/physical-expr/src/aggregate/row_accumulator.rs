@@ -17,11 +17,7 @@
 
 //! Accumulator over row format
 
-use arrow::array::ArrayRef;
 use arrow_schema::DataType;
-use datafusion_common::{Result, ScalarValue};
-use datafusion_row::accessor::RowAccessor;
-use std::fmt::Debug;
 
 /// Row-based accumulator where the internal aggregate state(s) are stored using row format.
 ///
