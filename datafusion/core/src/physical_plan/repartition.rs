@@ -399,20 +399,10 @@ impl ExecutionPlan for RepartitionExec {
 
         // now return stream for the specified *output* partition which will
         // read from the channel
-        println!(
-            "partition: {:?}, channels:{:?}",
-            partition,
-            state.channels.keys()
-        );
-        let (_tx, rx, reservation) = state.channels.remove(&partition).expect(
-            format!(
-                "partition not used yet, partition:{:?}, channels:{:?}",
-                partition,
-                state.channels.keys()
-            )
-            .as_str(),
-        );
-        // .expect("partition not used yet");
+        let (_tx, rx, reservation) = state
+            .channels
+            .remove(&partition)
+            .expect("partition not used yet");
         Ok(Box::pin(RepartitionStream {
             num_input_partitions,
             num_input_partitions_processed: 0,
