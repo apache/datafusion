@@ -17,7 +17,6 @@
 
 //! Hash aggregation through row format
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
@@ -33,13 +32,11 @@ use crate::physical_plan::aggregates::{
     evaluate_group_by, evaluate_many, group_schema, AccumulatorItem, AccumulatorItemV2,
     AggregateMode, PhysicalGroupBy,
 };
-use crate::physical_plan::hash_utils::create_row_hashes;
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use crate::physical_plan::common::transpose;
 use arrow::compute::cast;
 use arrow::datatypes::Schema;
 use arrow::{array::ArrayRef, compute};
@@ -54,7 +51,6 @@ use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
 use datafusion_row::reader::{read_row, RowReader};
-use datafusion_row::writer::{write_row, RowWriter};
 use datafusion_row::{row_supported, MutableRecordBatch, RowType};
 use hashbrown::raw::RawTable;
 
@@ -94,10 +90,8 @@ struct GroupedHashAggregateStreamV2Inner {
     row_aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
     group_by: PhysicalGroupBy,
-    normal_accumulators: Vec<AccumulatorItem>,
     row_accumulators: Vec<AccumulatorItemV2>,
 
-    group_schema: SchemaRef,
     row_aggr_schema: SchemaRef,
     row_aggr_layout: Arc<RowLayout>,
 
@@ -143,12 +137,12 @@ impl GroupedHashAggregateStreamV2 {
         let mut row_agg_indices = vec![];
         let mut normal_agg_indices = vec![];
         let mut start_idx = group_by.expr.len();
-        for idx in 0..aggr_expr.len() {
+        for (idx, expr) in aggr_expr.iter().enumerate() {
             let n_field = match mode {
-                AggregateMode::Partial => aggr_expr[idx].state_fields()?.len(),
+                AggregateMode::Partial => expr.state_fields()?.len(),
                 _ => 1,
             };
-            if is_supported(&aggr_expr[idx], &group_schema) {
+            if is_supported(expr, &group_schema) {
                 row_agg_indices.push((idx, (start_idx, start_idx + n_field)));
             } else {
                 normal_agg_indices.push((idx, (start_idx, start_idx + n_field)));
@@ -182,7 +176,6 @@ impl GroupedHashAggregateStreamV2 {
         }
 
         // let accumulators = aggregates::create_accumulators_v2(&aggr_expr)?;
-        let normal_accumulators = aggregates::create_accumulators(&normal_aggr_exprs)?;
         let row_accumulators = aggregates::create_accumulators_v2(&row_aggr_exprs)?;
 
         let row_aggr_schema = aggr_state_schema(&row_aggr_exprs)?;
@@ -207,9 +200,7 @@ impl GroupedHashAggregateStreamV2 {
             input,
             group_by,
             normal_aggr_expr: normal_aggr_exprs,
-            normal_accumulators,
             row_accumulators,
-            group_schema,
             row_aggr_schema,
             row_aggr_layout,
             baseline_metrics,
@@ -236,7 +227,6 @@ impl GroupedHashAggregateStreamV2 {
                                 &this.group_by,
                                 &this.normal_aggr_expr,
                                 &mut this.row_accumulators,
-                                &this.group_schema,
                                 this.row_aggr_layout.clone(),
                                 batch,
                                 &mut this.row_aggr_state,
@@ -261,7 +251,6 @@ impl GroupedHashAggregateStreamV2 {
                             let timer = this.baseline_metrics.elapsed_compute().timer();
                             let result = create_batch_from_map(
                                 &this.mode,
-                                &this.group_schema,
                                 &this.row_aggr_schema,
                                 this.batch_size,
                                 this.row_group_skip_position,
@@ -329,7 +318,6 @@ fn group_aggregate_batch(
     grouping_set: &PhysicalGroupBy,
     normal_aggr_expr: &[Arc<dyn AggregateExpr>],
     row_accumulators: &mut [AccumulatorItemV2],
-    group_schema: &Schema,
     state_layout: Arc<RowLayout>,
     batch: RecordBatch,
     aggr_state: &mut RowAggregationState,
@@ -363,7 +351,7 @@ fn group_aggregate_batch(
 
         // 1.1 Calculate the group keys for the group values
         let mut batch_hashes = vec![0; batch.num_rows()];
-        create_hashes(&group_values, random_state, &mut batch_hashes)?;
+        create_hashes(group_values, random_state, &mut batch_hashes)?;
 
         for (row, hash) in batch_hashes.into_iter().enumerate() {
             let entry = row_map.get_mut(hash, |(_hash, group_idx)| {
@@ -530,7 +518,7 @@ fn group_aggregate_batch(
                         }
                     })
                     // 2.5
-                    .and({ Ok(()) })?;
+                    .and(Ok(()))?;
                 // normal accumulators
                 group_state
                     .accumulator_set
@@ -619,30 +607,17 @@ impl std::fmt::Debug for RowAggregationState {
     }
 }
 
-/// Create grouping rows
-fn create_group_rows(arrays: Vec<ArrayRef>, schema: &Schema) -> Vec<Vec<u8>> {
-    let mut writer = RowWriter::new(schema, RowType::Compact);
-    let mut results = vec![];
-    for cur_row in 0..arrays[0].len() {
-        write_row(&mut writer, cur_row, schema, &arrays);
-        results.push(writer.get_row().to_vec());
-        writer.reset()
-    }
-    results
-}
-
 /// Create a RecordBatch with all group keys and accumulator' states or values.
 #[allow(clippy::too_many_arguments)]
 fn create_batch_from_map(
     mode: &AggregateMode,
-    group_schema: &Schema,
     aggr_schema: &Schema,
     batch_size: usize,
     skip_items: usize,
     row_aggr_state: &mut RowAggregationState,
     row_accumulators: &mut [AccumulatorItemV2],
     output_schema: &Schema,
-    indices: &Vec<Vec<(usize, (usize, usize))>>,
+    indices: &[Vec<(usize, (usize, usize))>],
     num_group_expr: usize,
 ) -> ArrowResult<Option<RecordBatch>> {
     if skip_items > row_aggr_state.group_states.len() {
@@ -670,7 +645,7 @@ fn create_batch_from_map(
         ))));
     }
     // First, output all group by exprs
-    let mut group_by_columns = (0..num_group_expr)
+    let group_by_columns = (0..num_group_expr)
         .map(|idx| {
             ScalarValue::iter_to_array(group_buffers.iter().map(|x| x[idx].clone()))
         })
@@ -794,7 +769,6 @@ fn create_batch_from_map(
         }
     }
     let columns = new_columns;
-    // Ok(Some(RecordBatch::try_new(Arc::new(output_schema.to_owned()), columns)?))
 
     let empty_arr = ScalarValue::iter_to_array(vec![ScalarValue::Null])?;
     let n_res = indices[0]
@@ -807,18 +781,17 @@ fn create_batch_from_map(
             .sum::<usize>()
         + group_by_columns.len();
     let mut res = vec![empty_arr; n_res];
-    for idx in 0..group_by_columns.len() {
-        res[idx] = group_by_columns[idx].clone();
+    for (idx, column) in group_by_columns.into_iter().enumerate() {
+        res[idx] = column;
     }
 
     let results = vec![columns, row_columns];
-    for outer in 0..results.len() {
+    for (outer, cur_res) in results.into_iter().enumerate() {
         let mut start_idx = 0;
-        let cur_res = &results[outer];
         let cur_indices = &indices[outer];
         for (_idx, range) in cur_indices.iter() {
-            for res_idx in range.0..range.1 {
-                res[res_idx] = cur_res[start_idx].clone();
+            for elem in res.iter_mut().take(range.1).skip(range.0) {
+                *elem = cur_res[start_idx].clone();
                 start_idx += 1;
             }
         }

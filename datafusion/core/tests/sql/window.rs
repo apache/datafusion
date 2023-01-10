@@ -2403,13 +2403,7 @@ async fn test_accumulator_row_accumulator() -> Result<()> {
     // };
     //
     let actual: Vec<&str> = formatted.trim().lines().collect();
-    let actual_len = actual.len();
     println!("{:#?}", actual);
-    // assert_eq!(
-    //     expected, actual_trim_last,
-    //     "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-    //     expected, actual
-    // );
 
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -2450,29 +2444,19 @@ async fn test_accumulator_row_accumulator() -> Result<()> {
 
 #[cfg(test)]
 mod test_aggregate {
-    use arrow::array::{ArrayRef, Int32Array};
-    use arrow::compute::concat_batches;
-    use arrow::datatypes::DataType;
-    use arrow::record_batch::RecordBatch;
-    use arrow::util::pretty::print_batches;
-    use datafusion::physical_plan::aggregates::{
-        AggregateExec, AggregateMode, PhysicalGroupBy,
-    };
-    use datafusion::physical_plan::collect;
+    use super::*;
+    use datafusion::physical_plan::aggregates::AggregateExec;
+    use datafusion::physical_plan::aggregates::{AggregateMode, PhysicalGroupBy};
     use datafusion::physical_plan::memory::MemoryExec;
-    use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::Result;
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr::expressions::{Avg, Count, Max, Min, Sum};
-    use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
+    use datafusion_physical_expr::expressions::{Avg, Max, Min, Sum};
+    use datafusion_physical_expr::AggregateExpr;
     use itertools::iproduct;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
-    use std::sync::Arc;
     use std::time::{Duration, Instant};
     use test_utils::add_empty_batches;
-    use tokio::runtime::Builder;
-    // use super::*;
 
     /// Return randomly sized record batches with:
     /// two sorted int32 columns 'a', 'b' ranged from 0..len / DISTINCT as columns
@@ -2485,29 +2469,10 @@ mod test_aggregate {
     ) -> Vec<RecordBatch> {
         // use a random number generator to pick a random sized output
         let mut rng = StdRng::seed_from_u64(random_seed);
-        // let mut input12: Vec<(i32, i32)> = vec![(0, 0); len];
-        // let mut input3: Vec<i32> = vec![0; len];
         let mut input4: Vec<i32> = vec![0; len];
-        // input12.iter_mut().for_each(|v| {
-        //     *v = (
-        //         rng.gen_range(0..distinct) as i32,
-        //         rng.gen_range(0..distinct) as i32,
-        //     )
-        // });
-        // input3
-        //     .iter_mut()
-        //     .for_each(|v| *v = rng.gen_range(0..distinct) as i32);
         input4
             .iter_mut()
             .for_each(|v| *v = rng.gen_range(0..distinct) as i32);
-        // // rng.fill(&mut input3[..]);
-        // // rng.fill(&mut input4[..]);
-        // input12.sort();
-        // let input1 =
-        //     Int32Array::from_iter_values(input12.clone().into_iter().map(|k| k.0));
-        // let input2 =
-        //     Int32Array::from_iter_values(input12.clone().into_iter().map(|k| k.1));
-        // let input3 = Int32Array::from_iter_values(input3.into_iter());
         let input4 = Int32Array::from_iter_values(input4.into_iter());
 
         // split into several record batches
@@ -2640,7 +2605,6 @@ mod test_aggregate {
                 DataType::Float64,
             )),
         ];
-        // println!("aggregates:{:?}", aggregates);
 
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
@@ -2654,7 +2618,7 @@ mod test_aggregate {
         let ctx = SessionContext::with_config(session_config);
         let task_ctx = ctx.task_ctx();
         let now = Instant::now();
-        let collected_running = collect(aggregate_exec, task_ctx.clone()).await.unwrap();
+        let _collected_running = collect(aggregate_exec, task_ctx.clone()).await.unwrap();
         let elapsed = now.elapsed();
         // println!("Elapsed: {:.2?}", now.elapsed());
         // println!("Elapsed: {:.2?}", now_start.elapsed());

@@ -38,7 +38,6 @@ use datafusion_physical_expr::{
 use std::any::Any;
 use std::collections::HashMap;
 
-use parquet::schema::printer::print_schema;
 use std::sync::Arc;
 
 mod no_grouping;
@@ -54,7 +53,7 @@ use datafusion_physical_expr::equivalence::project_equivalence_properties;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
 use datafusion_row::accessor::RowAccessor;
-use datafusion_row::{row_supported, RowType};
+use datafusion_row::RowType;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -272,12 +271,6 @@ impl AggregateExec {
         self.input_schema.clone()
     }
 
-    fn row_aggregate_supported(&self) -> bool {
-        let group_schema = group_schema(&self.schema, self.group_by.expr.len());
-        row_supported(&group_schema, RowType::Compact)
-            && accumulator_v2_supported(&self.aggr_expr)
-    }
-
     fn execute_typed(
         &self,
         partition: usize,
@@ -285,7 +278,6 @@ impl AggregateExec {
     ) -> Result<StreamType> {
         let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, Arc::clone(&context))?;
-        const VERSION: usize = 1;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         if self.group_by.expr.is_empty() {
             Ok(StreamType::AggregateStream(AggregateStream::new(
@@ -596,12 +588,6 @@ fn create_accumulators(
         .collect::<datafusion_common::Result<Vec<_>>>()
 }
 
-fn accumulator_v2_supported(aggr_expr: &[Arc<dyn AggregateExpr>]) -> bool {
-    aggr_expr
-        .iter()
-        .all(|expr| expr.row_accumulator_supported())
-}
-
 fn create_accumulators_v2(
     aggr_expr: &[Arc<dyn AggregateExpr>],
 ) -> datafusion_common::Result<Vec<AccumulatorItemV2>> {
@@ -625,9 +611,9 @@ fn finalize_aggregation(
     aggr_schema: &Schema,
     aggr_state: &mut RowAggregationState,
     output_schema: &Schema,
-    indices: &Vec<Vec<(usize, (usize, usize))>>,
+    indices: &[Vec<(usize, (usize, usize))>],
 ) -> datafusion_common::Result<Vec<ArrayRef>> {
-    let mut acc_res = match mode {
+    let acc_res = match mode {
         AggregateMode::Partial => {
             // build the vector of states
             let a = accumulators
@@ -693,15 +679,12 @@ fn finalize_aggregation(
             .sum::<usize>();
     let mut res = vec![empty_arr; n_res];
     let results = vec![acc_res, columns];
-    for outer in [0, 1] {
+    for (outer, cur_res) in results.into_iter().enumerate() {
         let mut start_idx = 0;
-        let cur_res = &results[outer];
         let cur_indices = &indices[outer];
-        // println!("cur res:{:?}", cur_res);
-        // println!("cur_indices:{:?}", cur_indices);
         for (_idx, range) in cur_indices.iter() {
-            for res_idx in range.0..range.1 {
-                res[res_idx] = cur_res[start_idx].clone();
+            for elem in res.iter_mut().take(range.1).skip(range.0) {
+                *elem = cur_res[start_idx].clone();
                 start_idx += 1;
             }
         }

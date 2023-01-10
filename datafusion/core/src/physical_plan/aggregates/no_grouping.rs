@@ -24,8 +24,6 @@ use crate::physical_plan::aggregates::{
 };
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
-use arrow::array::{Array, ArrayRef};
-use arrow::compute;
 use arrow::datatypes::SchemaRef;
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
@@ -87,14 +85,12 @@ impl AggregateStream {
         let mut row_agg_indices = vec![];
         let mut normal_agg_indices = vec![];
         let mut start_idx = 0;
-        for idx in 0..aggr_expr.len() {
+        for (idx, expr) in aggr_expr.iter().enumerate() {
             let n_field = match mode {
-                AggregateMode::Partial => aggr_expr[idx].state_fields()?.len(),
+                AggregateMode::Partial => expr.state_fields()?.len(),
                 _ => 1,
             };
-            // println!("aggr_expr[idx]: {:?}", aggr_expr[idx]);
-            // println!("n_field:{:?}", n_field);
-            if aggr_expr[idx].row_accumulator_supported() {
+            if expr.row_accumulator_supported() {
                 row_agg_indices.push((idx, (start_idx, start_idx + n_field)));
             } else {
                 normal_agg_indices.push((idx, (start_idx, start_idx + n_field)));
@@ -102,7 +98,6 @@ impl AggregateStream {
             start_idx += n_field;
         }
         let indices = vec![normal_agg_indices, row_agg_indices];
-        println!("indices:{:?}", indices);
         let row_aggr_exprs = aggr_expr
             .clone()
             .into_iter()
@@ -127,7 +122,7 @@ impl AggregateStream {
             group_by_values: Box::new([]),
             aggregation_buffer: vec![0; row_aggr_layout.fixed_part_width()],
             accumulator_set: vec![],
-            indices: vec![0 as u32], // 1.3
+            indices: vec![0_u32], // 1.3
         };
         let row_aggr_state = RowAggregationState {
             reservation,
@@ -144,14 +139,6 @@ impl AggregateStream {
         for (idx, _) in &indices[1] {
             row_aggregate_expressions.push(all_aggregate_expressions[*idx].clone())
         }
-        // let normal_aggregate_expressions = aggregate_expressions(&normal_aggr_exprs, &mode, 0)?;
-        // let row_aggregate_expressions = aggregate_expressions(&row_aggr_exprs, &mode, 0)?;
-        // println!("all_aggregate_expressions:{:?}", all_aggregate_expressions);
-        // println!(
-        //     "normal_aggregate_expressions:{:?}",
-        //     normal_aggregate_expressions
-        // );
-        // println!("row_aggregate_expressions:{:?}", row_aggregate_expressions);
         let normal_accumulators = create_accumulators(&normal_aggr_exprs)?;
         let row_accumulators = create_accumulators_v2(&row_aggr_exprs)?;
 
@@ -269,6 +256,7 @@ impl RecordBatchStream for AggregateStream {
 /// If successfull, this returns the additional number of bytes that were allocated during this process.
 ///
 /// TODO: Make this a member function
+#[allow(clippy::too_many_arguments)]
 fn aggregate_batch(
     mode: &AggregateMode,
     batch: &RecordBatch,
@@ -279,30 +267,9 @@ fn aggregate_batch(
     row_aggr_state: &mut RowAggregationState,
     state_layout: Arc<RowLayout>,
 ) -> Result<usize> {
-    let RowAggregationState {
-        map, group_states, ..
-    } = row_aggr_state;
+    let RowAggregationState { group_states, .. } = row_aggr_state;
     let group_state = &mut group_states[0];
-    let aggr_input_values = evaluate_many(row_expressions, &batch)?;
-    // println!("aggr_input_values:{:?}", aggr_input_values);
-    // // `Take` all values based on indices into Arrays
-    // let values: Vec<Vec<Arc<dyn Array>>> = aggr_input_values
-    //     .iter()
-    //     .map(|array| {
-    //         array
-    //             .iter()
-    //             .map(|array| {
-    //                 compute::take(
-    //                     array.as_ref(),
-    //                     &batch_indices,
-    //                     None, // None: no index check
-    //                 )
-    //                     .unwrap()
-    //             })
-    //             .collect()
-    //         // 2.3
-    //     })
-    //     .collect();
+    let aggr_input_values = evaluate_many(row_expressions, batch)?;
     row_accumulators
         .iter_mut()
         .zip(aggr_input_values.iter())
@@ -310,14 +277,13 @@ fn aggregate_batch(
         .try_for_each(|(accumulator, values)| {
             let mut state_accessor = RowAccessor::new_from_layout(state_layout.clone());
             state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
-            // println!("row acc values:{:?}, mode:{:?}", values, mode);
             match mode {
                 AggregateMode::Partial => {
-                    accumulator.update_batch(&values, &mut state_accessor)
+                    accumulator.update_batch(values, &mut state_accessor)
                 }
                 AggregateMode::FinalPartitioned | AggregateMode::Final => {
                     // note: the aggregation here is over states, not values, thus the merge
-                    accumulator.merge_batch(&values, &mut state_accessor)
+                    accumulator.merge_batch(values, &mut state_accessor)
                 }
             }
         })
@@ -334,8 +300,6 @@ fn aggregate_batch(
     // 1.3 update / merge accumulators with the expressions' values
 
     // 1.1
-    // println!("expressions:{:?}", expressions);
-    // println!("row_expressions:{:?}", row_expressions);
     accumulators
         .iter_mut()
         .zip(expressions)
