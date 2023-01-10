@@ -49,7 +49,7 @@ where c_acctbal < (
     debug!("input:\n{}", dataframe.logical_plan().display_indent());
 
     let plan = dataframe.into_optimized_plan().unwrap();
-    let actual = format!("{}", plan.display_indent());           
+    let actual = format!("{}", plan.display_indent());
 
     let expected = "Sort: customer.c_custkey ASC NULLS LAST\
     \n  Projection: customer.c_custkey\

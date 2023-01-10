@@ -162,7 +162,7 @@ enum Predicate {
 impl PartialEq<Predicate> for Predicate {
     fn eq(&self, other: &Predicate) -> bool {
         match (self, other) {
-            // For BinaryExpr, A = B should be the same as B = A 
+            // For BinaryExpr, A = B should be the same as B = A
             // when extract A = B in expr like (A = B and C > D) OR (B = A and C = E).
             (Predicate::Other { expr: l }, Predicate::Other { expr: r }) => {
                 match (l.as_ref(), r.as_ref()) {
