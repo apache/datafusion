@@ -73,6 +73,10 @@ impl AggregateExpr for Stddev {
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
     }
 
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
+    }
+
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
@@ -125,6 +129,10 @@ impl AggregateExpr for StddevPop {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
+    }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
     }
 
@@ -182,6 +190,10 @@ impl Accumulator for StddevAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         self.variance.update_batch(values)
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.variance.retract_batch(values)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
