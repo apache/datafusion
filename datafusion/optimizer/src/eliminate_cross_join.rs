@@ -23,7 +23,7 @@ use crate::{utils, OptimizerConfig, OptimizerRule};
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::expr::{BinaryExpr, Expr};
 use datafusion_expr::logical_plan::{
-    CrossJoin, Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
+    CrossJoin, Filter, JoinType, LogicalPlan, Projection,
 };
 use datafusion_expr::utils::{find_valid_equijoin_key_pair, is_valid_join_predicate};
 use datafusion_expr::{build_join_schema, LogicalPlanBuilder, Operator};
