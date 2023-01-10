@@ -62,6 +62,12 @@ impl OptimizerRule for EliminateCrossJoin {
                 let mut all_inputs: Vec<LogicalPlan> = vec![];
                 match &input {
                     LogicalPlan::Join(join) if (join.join_type == JoinType::Inner) => {
+                        // The filter of inner join will lost, skip this rule.
+                        // issue: https://github.com/apache/arrow-datafusion/issues/4844
+                        if join.filter.is_some() {
+                            return Ok(None);
+                        }
+                        
                         flatten_join_inputs(
                             &input,
                             &mut possible_join_keys,
