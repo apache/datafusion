@@ -100,3 +100,7 @@ dev/dist
 arrow-ballista
 
 datafusion/CHANGELOG.md.bak
+
+# antlr
+.antlr
+*.jar
