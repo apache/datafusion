@@ -27,7 +27,9 @@ use datafusion_common::{
 use datafusion_expr::expr::{self, Between, BinaryExpr, Case, Like, WindowFunction};
 use datafusion_expr::expr_rewriter::{ExprRewriter, RewriteRecursion};
 use datafusion_expr::logical_plan::Subquery;
-use datafusion_expr::type_coercion::binary::{coerce_types, comparison_coercion};
+use datafusion_expr::type_coercion::binary::{
+    coerce_types, comparison_coercion, like_coercion,
+};
 use datafusion_expr::type_coercion::functions::data_types;
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_when, get_coerce_type_for_list,
@@ -175,8 +177,11 @@ impl ExprRewriter for TypeCoercionRewriter {
             }) => {
                 let left_type = expr.get_type(&self.schema)?;
                 let right_type = pattern.get_type(&self.schema)?;
-                let coerced_type =
-                    coerce_types(&left_type, &Operator::Like, &right_type)?;
+                let coerced_type = like_coercion(&left_type,  &right_type).ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "There isn't a common type to coerce {left_type} and {right_type} in LIKE expression"
+                    ))
+                })?;
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
                 let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
                 let expr = Expr::Like(Like::new(negated, expr, pattern, escape_char));
@@ -190,8 +195,11 @@ impl ExprRewriter for TypeCoercionRewriter {
             }) => {
                 let left_type = expr.get_type(&self.schema)?;
                 let right_type = pattern.get_type(&self.schema)?;
-                let coerced_type =
-                    coerce_types(&left_type, &Operator::ILike, &right_type)?;
+                let coerced_type = like_coercion(&left_type,  &right_type).ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "There isn't a common type to coerce {left_type} and {right_type} in ILIKE expression"
+                    ))
+                })?;
                 let expr = Box::new(expr.cast_to(&coerced_type, &self.schema)?);
                 let pattern = Box::new(pattern.cast_to(&coerced_type, &self.schema)?);
                 let expr = Expr::ILike(Like::new(negated, expr, pattern, escape_char));
@@ -252,24 +260,21 @@ impl ExprRewriter for TypeCoercionRewriter {
                 let low_coerced_type = comparison_coercion(&expr_type, &low_type)
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
-                            "Failed to coerce types {} and {} in BETWEEN expression",
-                            expr_type, low_type
+                            "Failed to coerce types {expr_type} and {low_type} in BETWEEN expression"
                         ))
                     })?;
                 let high_type = high.get_type(&self.schema)?;
                 let high_coerced_type = comparison_coercion(&expr_type, &low_type)
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
-                            "Failed to coerce types {} and {} in BETWEEN expression",
-                            expr_type, high_type
+                            "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
                         ))
                     })?;
                 let coercion_type =
                     comparison_coercion(&low_coerced_type, &high_coerced_type)
                         .ok_or_else(|| {
                             DataFusionError::Internal(format!(
-                                "Failed to coerce types {} and {} in BETWEEN expression",
-                                expr_type, high_type
+                                "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
                             ))
                         })?;
                 let expr = Expr::Between(Between::new(
@@ -294,8 +299,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                     get_coerce_type_for_list(&expr_data_type, &list_data_types);
                 match result_type {
                     None => Err(DataFusionError::Plan(format!(
-                        "Can not find compatible types to compare {:?} with {:?}",
-                        expr_data_type, list_data_types
+                        "Can not find compatible types to compare {expr_data_type:?} with {list_data_types:?}"
                     ))),
                     Some(coerced_type) => {
                         // find the coerced type
@@ -331,8 +335,7 @@ impl ExprRewriter for TypeCoercionRewriter {
                     get_coerce_type_for_case_when(&then_types, else_type.as_ref());
                 match case_when_coerce_type {
                     None => Err(DataFusionError::Internal(format!(
-                        "Failed to coerce then ({:?}) and else ({:?}) to common types in CASE WHEN expression",
-                        then_types, else_type
+                        "Failed to coerce then ({then_types:?}) and else ({else_type:?}) to common types in CASE WHEN expression"
                     ))),
                     Some(data_type) => {
                         let left = case.when_then_expr
@@ -487,8 +490,7 @@ fn get_coerced_window_frame(
             Ok(DataType::Interval(IntervalUnit::MonthDayNano))
         } else {
             Err(DataFusionError::Internal(format!(
-                "Cannot run range queries on datatype: {:?}",
-                column_type
+                "Cannot run range queries on datatype: {column_type:?}"
             )))
         }
     }
@@ -611,7 +613,7 @@ mod test {
         let rule = TypeCoercion::new();
         let config = OptimizerContext::default();
         let plan = rule.try_optimize(plan, &config)?.unwrap();
-        assert_eq!(expected, &format!("{:?}", plan));
+        assert_eq!(expected, &format!("{plan:?}"));
         Ok(())
     }
 
@@ -696,7 +698,7 @@ mod test {
         let err = assert_optimized_plan_eq(&plan, "").err().unwrap();
         assert_eq!(
             "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Int32]) failed.\")",
-            &format!("{:?}", err)
+            &format!("{err:?}")
         );
         Ok(())
     }
@@ -764,7 +766,7 @@ mod test {
         let err = assert_optimized_plan_eq(&plan, "").err().unwrap();
         assert_eq!(
             "Plan(\"Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed.\")",
-            &format!("{:?}", err)
+            &format!("{err:?}")
         );
         Ok(())
     }
@@ -810,7 +812,7 @@ mod test {
         let err = Projection::try_new(vec![agg_expr], empty).err().unwrap();
         assert_eq!(
             "Plan(\"The function Avg does not support inputs of type Utf8.\")",
-            &format!("{:?}", err)
+            &format!("{err:?}")
         );
         Ok(())
     }
@@ -938,7 +940,9 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
         let err = assert_optimized_plan_eq(&plan, expected);
         assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("'Int64 LIKE Utf8' can't be evaluated because there isn't a common type to coerce the types to"));
+        assert!(err.unwrap_err().to_string().contains(
+            "There isn't a common type to coerce Int64 and Utf8 in LIKE expression"
+        ));
         Ok(())
     }
 

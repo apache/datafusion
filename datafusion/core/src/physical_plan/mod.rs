@@ -110,6 +110,13 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Specifies the output partitioning scheme of this plan
     fn output_partitioning(&self) -> Partitioning;
 
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, _children: &[bool]) -> Result<bool> {
+        Ok(false)
+    }
+
     /// If the output of this operator within each partition is sorted,
     /// returns `Some(keys)` with the description of how it was sorted.
     ///
@@ -314,7 +321,7 @@ pub fn with_new_children_if_necessary(
 ///   let mut ctx = SessionContext::with_config(config);
 ///
 ///   // register the a table
-///   ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await.unwrap();
+///   ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await.unwrap();
 ///
 ///   // create a plan to run a SQL query
 ///   let dataframe = ctx.sql("SELECT a FROM example WHERE a < 5").await.unwrap();
@@ -329,10 +336,10 @@ pub fn with_new_children_if_necessary(
 ///   let plan_string = plan_string.replace(normalized.as_ref(), "WORKING_DIR");
 ///
 ///   assert_eq!("ProjectionExec: expr=[a@0 as a]\
-///              \n  CoalesceBatchesExec: target_batch_size=4096\
+///              \n  CoalesceBatchesExec: target_batch_size=8192\
 ///              \n    FilterExec: a@0 < 5\
 ///              \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
-///              \n        CsvExec: files={1 group: [[WORKING_DIR/tests/example.csv]]}, has_header=true, limit=None, projection=[a]",
+///              \n        CsvExec: files={1 group: [[WORKING_DIR/tests/data/example.csv]]}, has_header=true, limit=None, projection=[a]",
 ///               plan_string.trim());
 ///
 ///   let one_line = format!("{}", displayable_plan.one_line());

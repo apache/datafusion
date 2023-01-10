@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SQL Parser
-//!
-//! Declares a SQL parser based on sqlparser that handles custom formats that we need.
+//! DataFusion SQL Parser based on [`sqlparser`]
 
 use datafusion_common::parsers::CompressionTypeVariant;
 use sqlparser::{
@@ -27,7 +25,7 @@ use sqlparser::{
     },
     dialect::{keywords::Keyword, Dialect, GenericDialect},
     parser::{Parser, ParserError},
-    tokenizer::{Token, Tokenizer},
+    tokenizer::{Token, TokenWithLocation, Tokenizer},
 };
 use std::{collections::HashMap, str::FromStr};
 use std::{collections::VecDeque, fmt};
@@ -89,7 +87,7 @@ pub struct DescribeTable {
 
 /// DataFusion Statement representations.
 ///
-/// Tokens parsed by `DFParser` are converted into these values.
+/// Tokens parsed by [`DFParser`] are converted into these values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
     /// ANSI SQL AST node
@@ -100,19 +98,24 @@ pub enum Statement {
     DescribeTable(DescribeTable),
 }
 
-/// SQL Parser
+/// DataFusion SQL Parser based on [`sqlparser`]
+///
+/// This parser handles DataFusion specific statements, delegating to
+/// [`Parser`](sqlparser::parser::Parser) for other SQL statements.
 pub struct DFParser<'a> {
     parser: Parser<'a>,
 }
 
 impl<'a> DFParser<'a> {
-    /// Parse the specified tokens
+    /// Create a new parser for the specified tokens using the
+    /// [`GenericDialect`].
     pub fn new(sql: &str) -> Result<Self, ParserError> {
         let dialect = &GenericDialect {};
         DFParser::new_with_dialect(sql, dialect)
     }
 
-    /// Parse the specified tokens with dialect
+    /// Create a new parser for the specified tokens with the
+    /// specified dialect.
     pub fn new_with_dialect(
         sql: &str,
         dialect: &'a dyn Dialect,
@@ -121,17 +124,19 @@ impl<'a> DFParser<'a> {
         let tokens = tokenizer.tokenize()?;
 
         Ok(DFParser {
-            parser: Parser::new(tokens, dialect),
+            parser: Parser::new(dialect).with_tokens(tokens),
         })
     }
 
-    /// Parse a SQL statement and produce a set of statements with dialect
+    /// Parse a sql string into one or [`Statement`]s using the
+    /// [`GenericDialect`].
     pub fn parse_sql(sql: &str) -> Result<VecDeque<Statement>, ParserError> {
         let dialect = &GenericDialect {};
         DFParser::parse_sql_with_dialect(sql, dialect)
     }
 
-    /// Parse a SQL statement and produce a set of statements
+    /// Parse a SQL string and produce one or more [`Statement`]s with
+    /// with the specified dialect.
     pub fn parse_sql_with_dialect(
         sql: &str,
         dialect: &dyn Dialect,
@@ -159,14 +164,18 @@ impl<'a> DFParser<'a> {
         Ok(stmts)
     }
 
-    /// Report unexpected token
-    fn expected<T>(&self, expected: &str, found: Token) -> Result<T, ParserError> {
-        parser_err!(format!("Expected {}, found: {}", expected, found))
+    /// Report an unexpected token
+    fn expected<T>(
+        &self,
+        expected: &str,
+        found: TokenWithLocation,
+    ) -> Result<T, ParserError> {
+        parser_err!(format!("Expected {expected}, found: {found}"))
     }
 
     /// Parse a new expression
     pub fn parse_statement(&mut self) -> Result<Statement, ParserError> {
-        match self.parser.peek_token() {
+        match self.parser.peek_token().token {
             Token::Word(w) => {
                 match w.keyword {
                     Keyword::CREATE => {
@@ -198,12 +207,13 @@ impl<'a> DFParser<'a> {
         }
     }
 
+    /// Parse a SQL `DESCRIBE` statement
     pub fn parse_describe(&mut self) -> Result<Statement, ParserError> {
         let table_name = self.parser.parse_object_name()?;
         Ok(Statement::DescribeTable(DescribeTable { table_name }))
     }
 
-    /// Parse a SQL CREATE statement
+    /// Parse a SQL `CREATE` statementm handling `CREATE EXTERNAL TABLE`
     pub fn parse_create(&mut self) -> Result<Statement, ParserError> {
         if self.parser.parse_keyword(Keyword::EXTERNAL) {
             self.parse_create_external_table()
@@ -221,7 +231,7 @@ impl<'a> DFParser<'a> {
         }
 
         loop {
-            if let Token::Word(_) = self.parser.peek_token() {
+            if let Token::Word(_) = self.parser.peek_token().token {
                 let identifier = self.parser.parse_identifier()?;
                 partitions.push(identifier.to_string());
             } else {
@@ -256,7 +266,7 @@ impl<'a> DFParser<'a> {
         loop {
             if let Some(constraint) = self.parser.parse_optional_table_constraint()? {
                 constraints.push(constraint);
-            } else if let Token::Word(_) = self.parser.peek_token() {
+            } else if let Token::Word(_) = self.parser.peek_token().token {
                 let column_def = self.parse_column_def()?;
                 columns.push(column_def);
             } else {
@@ -373,9 +383,10 @@ impl<'a> DFParser<'a> {
 
     /// Parses the set of valid formats
     fn parse_file_format(&mut self) -> Result<String, ParserError> {
-        match self.parser.next_token() {
+        let token = self.parser.next_token();
+        match &token.token {
             Token::Word(w) => parse_file_type(&w.value),
-            unexpected => self.expected("one of PARQUET, NDJSON, or CSV", unexpected),
+            _ => self.expected("one of PARQUET, NDJSON, or CSV", token),
         }
     }
 
@@ -383,9 +394,10 @@ impl<'a> DFParser<'a> {
     fn parse_file_compression_type(
         &mut self,
     ) -> Result<CompressionTypeVariant, ParserError> {
-        match self.parser.next_token() {
+        let token = self.parser.next_token();
+        match &token.token {
             Token::Word(w) => CompressionTypeVariant::from_str(&w.value),
-            unexpected => self.expected("one of GZIP, BZIP2, XZ", unexpected),
+            _ => self.expected("one of GZIP, BZIP2, XZ", token),
         }
     }
 
@@ -468,17 +480,14 @@ mod tests {
         match DFParser::parse_sql(sql) {
             Ok(statements) => {
                 panic!(
-                    "Expected parse error for '{}', but was successful: {:?}",
-                    sql, statements
+                    "Expected parse error for '{sql}', but was successful: {statements:?}"
                 );
             }
             Err(e) => {
                 let error_message = e.to_string();
                 assert!(
                     error_message.contains(expected_error),
-                    "Expected error '{}' not found in actual error '{}'",
-                    expected_error,
-                    error_message
+                    "Expected error '{expected_error}' not found in actual error '{error_message}'"
                 );
             }
         }

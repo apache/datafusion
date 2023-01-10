@@ -1,11 +1,12 @@
-Projection: CAST(SUM(lineitem.l_extendedprice) AS Decimal128(38, 33)) / Decimal128(Some(7000000000000000195487369212723200),38,33) AS avg_yearly
+Projection: CAST(SUM(lineitem.l_extendedprice) AS Float64) / Float64(7) AS avg_yearly
   Aggregate: groupBy=[[]], aggr=[[SUM(lineitem.l_extendedprice)]]
-    Filter: CAST(lineitem.l_quantity AS Decimal128(38, 21)) < __sq_1.__value
-      Inner Join: part.p_partkey = __sq_1.l_partkey
+    Filter: CAST(lineitem.l_quantity AS Decimal128(30, 15)) < CAST(__scalar_sq_1.__value AS Decimal128(30, 15))
+      Inner Join: part.p_partkey = __scalar_sq_1.l_partkey, lineitem.l_partkey = __scalar_sq_1.l_partkey
         Inner Join: lineitem.l_partkey = part.p_partkey
           TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice]
           Filter: part.p_brand = Utf8("Brand#23") AND part.p_container = Utf8("MED BOX")
             TableScan: part projection=[p_partkey, p_brand, p_container]
-        Projection: lineitem.l_partkey, Decimal128(Some(200000000000000000000),38,21) * CAST(AVG(lineitem.l_quantity) AS Decimal128(38, 21)) AS __value, alias=__sq_1
-          Aggregate: groupBy=[[lineitem.l_partkey]], aggr=[[AVG(lineitem.l_quantity)]]
-            TableScan: lineitem projection=[l_partkey, l_quantity, l_extendedprice]
+        SubqueryAlias: __scalar_sq_1
+          Projection: lineitem.l_partkey, Float64(0.2) * CAST(AVG(lineitem.l_quantity) AS Float64) AS __value
+            Aggregate: groupBy=[[lineitem.l_partkey]], aggr=[[AVG(lineitem.l_quantity)]]
+              TableScan: lineitem projection=[l_partkey, l_quantity]

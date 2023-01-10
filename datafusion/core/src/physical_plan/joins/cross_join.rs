@@ -35,6 +35,7 @@ use crate::physical_plan::{
 };
 use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
+use datafusion_common::DataFusionError;
 use log::debug;
 use std::time::Instant;
 
@@ -141,6 +142,20 @@ impl ExecutionPlan for CrossJoinExec {
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.left.clone(), self.right.clone()]
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.    
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        if children[0] || children[1] {
+            Err(DataFusionError::Plan(
+                "Cross Join Error: Cross join is not supported for the unbounded inputs."
+                    .to_string(),
+            ))
+        } else {
+            Ok(false)
+        }
     }
 
     fn with_new_children(

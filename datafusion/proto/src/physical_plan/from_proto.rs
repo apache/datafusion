@@ -29,6 +29,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
 use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_plan::expressions::LikeExpr;
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
     expressions::{
@@ -217,6 +218,22 @@ pub(crate) fn parse_physical_expr(
                 &convert_required!(e.return_type)?,
             ))
         }
+        ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
+            like_expr.negated,
+            like_expr.case_insensitive,
+            parse_required_physical_box_expr(
+                &like_expr.expr,
+                registry,
+                "expr",
+                input_schema,
+            )?,
+            parse_required_physical_box_expr(
+                &like_expr.pattern,
+                registry,
+                "pattern",
+                input_schema,
+            )?,
+        )),
     };
 
     Ok(pexpr)
@@ -232,7 +249,7 @@ fn parse_required_physical_box_expr(
         .map(|e| parse_physical_expr(e.as_ref(), registry, input_schema))
         .transpose()?
         .ok_or_else(|| {
-            DataFusionError::Internal(format!("Missing required field {:?}", field))
+            DataFusionError::Internal(format!("Missing required field {field:?}"))
         })
 }
 
@@ -246,7 +263,7 @@ fn parse_required_physical_expr(
         .map(|e| parse_physical_expr(e, registry, input_schema))
         .transpose()?
         .ok_or_else(|| {
-            DataFusionError::Internal(format!("Missing required field {:?}", field))
+            DataFusionError::Internal(format!("Missing required field {field:?}"))
         })
 }
 
@@ -260,8 +277,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
             protobuf::physical_window_expr_node::WindowFunction::AggrFunction(n) => {
                 let f = protobuf::AggregateFunction::from_i32(*n).ok_or_else(|| {
                     proto_error(format!(
-                        "Received an unknown window aggregate function: {}",
-                        n
+                        "Received an unknown window aggregate function: {n}"
                     ))
                 })?;
 
@@ -271,8 +287,7 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
                 let f =
                     protobuf::BuiltInWindowFunction::from_i32(*n).ok_or_else(|| {
                         proto_error(format!(
-                            "Received an unknown window builtin function: {}",
-                            n
+                            "Received an unknown window builtin function: {n}"
                         ))
                     })?;
 
@@ -377,6 +392,7 @@ pub fn parse_protobuf_file_scan_config(
         limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
         table_partition_cols,
         output_ordering,
+        infinite_source: false,
     })
 }
 

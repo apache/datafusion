@@ -147,9 +147,9 @@ impl WindowFrame {
 /// There are five ways to describe starting and ending frame boundaries:
 ///
 /// 1. UNBOUNDED PRECEDING
-/// 2. <expr> PRECEDING
+/// 2. `<expr>` PRECEDING
 /// 3. CURRENT ROW
-/// 4. <expr> FOLLOWING
+/// 4. `<expr>` FOLLOWING
 /// 5. UNBOUNDED FOLLOWING
 ///
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -157,9 +157,9 @@ pub enum WindowFrameBound {
     /// 1. UNBOUNDED PRECEDING
     /// The frame boundary is the first row in the partition.
     ///
-    /// 2. <expr> PRECEDING
-    /// <expr> must be a non-negative constant numeric expression. The boundary is a row that
-    /// is <expr> "units" prior to the current row.
+    /// 2. `<expr>` PRECEDING
+    /// `<expr>` must be a non-negative constant numeric expression. The boundary is a row that
+    /// is `<expr>` "units" prior to the current row.
     Preceding(ScalarValue),
     /// 3. The current row.
     ///
@@ -168,7 +168,7 @@ pub enum WindowFrameBound {
     /// This is true regardless of whether CURRENT ROW is used as the starting or ending frame
     /// boundary.
     CurrentRow,
-    /// 4. This is the same as "<expr> PRECEDING" except that the boundary is <expr> units after the
+    /// 4. This is the same as "`<expr>` PRECEDING" except that the boundary is `<expr>` units after the
     /// current rather than before the current row.
     ///
     /// 5. UNBOUNDED FOLLOWING
@@ -216,18 +216,18 @@ pub fn convert_frame_bound_to_scalar_value(v: ast::Expr) -> Result<ScalarValue> 
             let result = match *value {
                 ast::Expr::Value(ast::Value::SingleQuotedString(item)) => item,
                 e => {
-                    let msg = format!("INTERVAL expression cannot be {:?}", e);
+                    let msg = format!("INTERVAL expression cannot be {e:?}");
                     return Err(DataFusionError::SQL(ParserError(msg)));
                 }
             };
             if let Some(leading_field) = leading_field {
-                format!("{} {}", result, leading_field)
+                format!("{result} {leading_field}")
             } else {
                 result
             }
         }
         e => {
-            let msg = format!("Window frame bound cannot be {:?}", e);
+            let msg = format!("Window frame bound cannot be {e:?}");
             return Err(DataFusionError::Internal(msg));
         }
     })))
@@ -240,7 +240,7 @@ impl fmt::Display for WindowFrameBound {
                 if n.is_null() {
                     f.write_str("UNBOUNDED PRECEDING")
                 } else {
-                    write!(f, "{} PRECEDING", n)
+                    write!(f, "{n} PRECEDING")
                 }
             }
             WindowFrameBound::CurrentRow => f.write_str("CURRENT ROW"),
@@ -248,7 +248,7 @@ impl fmt::Display for WindowFrameBound {
                 if n.is_null() {
                     f.write_str("UNBOUNDED FOLLOWING")
                 } else {
-                    write!(f, "{} FOLLOWING", n)
+                    write!(f, "{n} FOLLOWING")
                 }
             }
         }

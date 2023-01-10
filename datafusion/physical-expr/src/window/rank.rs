@@ -19,12 +19,13 @@
 //! at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::BuiltInWindowFunctionExpr;
+use crate::window::window_expr::{BuiltinWindowState, RankState};
+use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use std::any::Any;
 use std::iter;
 use std::ops::Range;
@@ -98,18 +99,77 @@ impl BuiltInWindowFunctionExpr for Rank {
         &self.name
     }
 
+    fn supports_bounded_execution(&self) -> bool {
+        matches!(self.rank_type, RankType::Basic | RankType::Dense)
+    }
+
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(RankEvaluator {
+            state: RankState::default(),
             rank_type: self.rank_type,
         }))
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct RankEvaluator {
+    state: RankState,
     rank_type: RankType,
 }
 
 impl PartitionEvaluator for RankEvaluator {
+    fn get_range(&self, state: &WindowAggState, _n_rows: usize) -> Result<Range<usize>> {
+        Ok(Range {
+            start: state.last_calculated_index,
+            end: state.last_calculated_index + 1,
+        })
+    }
+
+    fn state(&self) -> Result<BuiltinWindowState> {
+        Ok(BuiltinWindowState::Rank(self.state.clone()))
+    }
+
+    fn update_state(
+        &mut self,
+        state: &WindowAggState,
+        range_columns: &[ArrayRef],
+        sort_partition_points: &[Range<usize>],
+    ) -> Result<()> {
+        // find range inside `sort_partition_points` containing `state.last_calculated_index`
+        let chunk_idx = sort_partition_points
+            .iter()
+            .position(|elem| {
+                elem.start <= state.last_calculated_index
+                    && state.last_calculated_index < elem.end
+            })
+            .ok_or_else(|| DataFusionError::Execution("Expects sort_partition_points to contain state.last_calculated_index".to_string()))?;
+        let chunk = &sort_partition_points[chunk_idx];
+        let last_rank_data = range_columns
+            .iter()
+            .map(|c| ScalarValue::try_from_array(c, chunk.end - 1))
+            .collect::<Result<Vec<_>>>()?;
+        let empty = self.state.last_rank_data.is_empty();
+        if empty || self.state.last_rank_data != last_rank_data {
+            self.state.last_rank_data = last_rank_data;
+            self.state.last_rank_boundary = state.offset_pruned_rows + chunk.start;
+            self.state.n_rank = 1 + if empty { chunk_idx } else { self.state.n_rank };
+        }
+        Ok(())
+    }
+
+    /// evaluate window function result inside given range
+    fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
+        match self.rank_type {
+            RankType::Basic => Ok(ScalarValue::UInt64(Some(
+                self.state.last_rank_boundary as u64 + 1,
+            ))),
+            RankType::Dense => Ok(ScalarValue::UInt64(Some(self.state.n_rank as u64))),
+            RankType::Percent => Err(DataFusionError::Execution(
+                "Can not execute PERCENT_RANK in a streaming fashion".to_string(),
+            )),
+        }
+    }
+
     fn include_rank(&self) -> bool {
         true
     }

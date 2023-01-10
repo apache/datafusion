@@ -23,10 +23,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion::common::ToDFSchema;
-use datafusion::config::{
-    OPT_PARQUET_ENABLE_PAGE_INDEX, OPT_PARQUET_PUSHDOWN_FILTERS,
-    OPT_PARQUET_REORDER_FILTERS,
-};
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::error::Result;
@@ -61,10 +58,11 @@ pub struct ParquetScanOptions {
 impl ParquetScanOptions {
     /// Returns a [`SessionConfig`] with the given options
     pub fn config(&self) -> SessionConfig {
-        SessionConfig::new()
-            .set_bool(OPT_PARQUET_PUSHDOWN_FILTERS, self.pushdown_filters)
-            .set_bool(OPT_PARQUET_REORDER_FILTERS, self.reorder_filters)
-            .set_bool(OPT_PARQUET_ENABLE_PAGE_INDEX, self.enable_page_index)
+        let mut config = ConfigOptions::new();
+        config.execution.parquet.pushdown_filters = self.pushdown_filters;
+        config.execution.parquet.reorder_filters = self.reorder_filters;
+        config.execution.parquet.enable_page_index = self.enable_page_index;
+        config.into()
     }
 }
 
@@ -85,17 +83,15 @@ impl TestParquetFile {
         let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props)).unwrap();
 
         writer.write(&first_batch).unwrap();
-        writer.flush()?;
         let mut num_rows = first_batch.num_rows();
 
         for batch in batches {
             writer.write(&batch).unwrap();
-            writer.flush()?;
             num_rows += batch.num_rows();
         }
         writer.close().unwrap();
 
-        println!("Generated test dataset with {} rows", num_rows);
+        println!("Generated test dataset with {num_rows} rows");
 
         let size = std::fs::metadata(&path)?.len() as usize;
 
@@ -144,6 +140,7 @@ impl TestParquetFile {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: None,
+            infinite_source: false,
         };
 
         let df_schema = self.schema.clone().to_dfschema_ref()?;

@@ -187,8 +187,7 @@ fn from_owned_table_reference(
 ) -> Result<OwnedTableReference, DataFusionError> {
     let table_ref = table_ref.ok_or_else(|| {
         DataFusionError::Internal(format!(
-            "Protobuf deserialization error, {} was missing required field name.",
-            error_context
+            "Protobuf deserialization error, {error_context} was missing required field name."
         ))
     })?;
 
@@ -201,7 +200,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         Self: Sized,
     {
         LogicalPlanNode::decode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to decode logical plan: {:?}", e))
+            DataFusionError::Internal(format!("failed to decode logical plan: {e:?}"))
         })
     }
 
@@ -211,7 +210,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         Self: Sized,
     {
         self.encode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to encode logical plan: {:?}", e))
+            DataFusionError::Internal(format!("failed to encode logical plan: {e:?}"))
         })
     }
 
@@ -222,8 +221,7 @@ impl AsLogicalPlan for LogicalPlanNode {
     ) -> Result<LogicalPlan, DataFusionError> {
         let plan = self.logical_plan_type.as_ref().ok_or_else(|| {
             proto_error(format!(
-                "logical_plan::from_proto() Unsupported logical plan '{:?}'",
-                self
+                "logical_plan::from_proto() Unsupported logical plan '{self:?}'"
             ))
         })?;
         match plan {
@@ -349,8 +347,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let file_format: Arc<dyn FileFormat> =
                     match scan.file_format_type.as_ref().ok_or_else(|| {
                         proto_error(format!(
-                            "logical_plan::from_proto() Unsupported file format '{:?}'",
-                            self
+                            "logical_plan::from_proto() Unsupported file format '{self:?}'"
                         ))
                     })? {
                         &FileFormatType::Parquet(protobuf::ParquetFormat {}) => {
@@ -502,8 +499,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let env = ctx.runtime_env();
                 if !env.table_factories.contains_key(file_type) {
                     Err(DataFusionError::Internal(format!(
-                        "No TableProvider for file type: {}",
-                        file_type
+                        "No TableProvider for file type: {file_type}"
                     )))?
                 }
 
@@ -1419,10 +1415,7 @@ mod roundtrip_tests {
         let proto: protobuf::LogicalExprNode = (&initial_struct).try_into().unwrap();
         let round_trip: Expr = parse_expr(&proto, &ctx).unwrap();
 
-        assert_eq!(
-            format!("{:?}", &initial_struct),
-            format!("{:?}", round_trip)
-        );
+        assert_eq!(format!("{:?}", &initial_struct), format!("{round_trip:?}"));
 
         roundtrip_json_test(&proto);
     }
@@ -1436,7 +1429,7 @@ mod roundtrip_tests {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
-        let scan = ctx.table("t1")?.into_optimized_plan()?;
+        let scan = ctx.table("t1").await?.into_optimized_plan()?;
         let topk_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(TopKPlanNode::new(3, scan, col("revenue"))),
         });
@@ -1445,10 +1438,7 @@ mod roundtrip_tests {
             logical_plan_to_bytes_with_extension_codec(&topk_plan, &extension_codec)?;
         let logical_round_trip =
             logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &extension_codec)?;
-        assert_eq!(
-            format!("{:?}", topk_plan),
-            format!("{:?}", logical_round_trip)
-        );
+        assert_eq!(format!("{topk_plan:?}"), format!("{logical_round_trip:?}"));
         Ok(())
     }
 
@@ -1533,11 +1523,11 @@ mod roundtrip_tests {
         ctx.sql(sql).await.unwrap();
 
         let codec = TestTableProviderCodec {};
-        let scan = ctx.table("t")?.into_optimized_plan()?;
+        let scan = ctx.table("t").await?.into_optimized_plan()?;
         let bytes = logical_plan_to_bytes_with_extension_codec(&scan, &codec)?;
         let logical_round_trip =
             logical_plan_from_bytes_with_extension_codec(&bytes, &ctx, &codec)?;
-        assert_eq!(format!("{:?}", scan), format!("{:?}", logical_round_trip));
+        assert_eq!(format!("{scan:?}"), format!("{logical_round_trip:?}"));
         Ok(())
     }
 
@@ -1563,7 +1553,7 @@ mod roundtrip_tests {
 
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-        assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+        assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
         Ok(())
     }
@@ -1589,7 +1579,7 @@ mod roundtrip_tests {
 
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-        assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+        assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
 
         Ok(())
     }
@@ -1599,10 +1589,10 @@ mod roundtrip_tests {
         let ctx = SessionContext::new();
         ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
             .await?;
-        let plan = ctx.table("t1")?.into_optimized_plan()?;
+        let plan = ctx.table("t1").await?.into_optimized_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-        assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+        assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
         Ok(())
     }
 
@@ -1619,7 +1609,7 @@ mod roundtrip_tests {
             .into_optimized_plan()?;
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
-        assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
+        assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
         Ok(())
     }
 
@@ -1711,8 +1701,7 @@ mod roundtrip_tests {
             if let Some((input, _)) = inputs.split_first() {
                 let proto = proto::TopKPlanProto::decode(buf).map_err(|e| {
                     DataFusionError::Internal(format!(
-                        "failed to decode logical plan: {:?}",
-                        e
+                        "failed to decode logical plan: {e:?}"
                     ))
                 })?;
 
@@ -1751,8 +1740,7 @@ mod roundtrip_tests {
 
                 proto.encode(buf).map_err(|e| {
                     DataFusionError::Internal(format!(
-                        "failed to encode logical plan: {:?}",
-                        e
+                        "failed to encode logical plan: {e:?}"
                     ))
                 })?;
 
@@ -1859,9 +1847,7 @@ mod roundtrip_tests {
                 let res: Result<ScalarValue, _> = (&proto).try_into();
                 assert!(
                     res.is_err(),
-                    "The value {:?} unexpectedly serialized without error:{:?}",
-                    test_case,
-                    res
+                    "The value {test_case:?} unexpectedly serialized without error:{res:?}"
                 );
             }
         }
@@ -2047,8 +2033,7 @@ mod roundtrip_tests {
             assert_eq!(
                 test_case, roundtrip,
                 "ScalarValue was not the same after round trip!\n\n\
-                        Input: {:?}\n\nRoundtrip: {:?}",
-                test_case, roundtrip
+                        Input: {test_case:?}\n\nRoundtrip: {roundtrip:?}"
             );
         }
     }
@@ -2085,7 +2070,7 @@ mod roundtrip_tests {
             let field = Field::new("item", test_case, true);
             let proto: super::protobuf::Field = (&field).try_into().unwrap();
             let roundtrip: Field = (&proto).try_into().unwrap();
-            assert_eq!(format!("{:?}", field), format!("{:?}", roundtrip));
+            assert_eq!(format!("{field:?}"), format!("{roundtrip:?}"));
         }
     }
 
@@ -2223,7 +2208,7 @@ mod roundtrip_tests {
         for test_case in test_cases.into_iter() {
             let proto: super::protobuf::ArrowType = (&test_case).try_into().unwrap();
             let roundtrip: DataType = (&proto).try_into().unwrap();
-            assert_eq!(format!("{:?}", test_case), format!("{:?}", roundtrip));
+            assert_eq!(format!("{test_case:?}"), format!("{roundtrip:?}"));
         }
     }
 
@@ -2257,10 +2242,7 @@ mod roundtrip_tests {
                 (&test_case).try_into().unwrap();
             let returned_scalar: datafusion::scalar::ScalarValue =
                 (&proto_scalar).try_into().unwrap();
-            assert_eq!(
-                format!("{:?}", &test_case),
-                format!("{:?}", returned_scalar)
-            );
+            assert_eq!(format!("{:?}", &test_case), format!("{returned_scalar:?}"));
         }
     }
 
@@ -2317,10 +2299,6 @@ mod roundtrip_tests {
         test(Operator::RegexNotMatch);
         test(Operator::RegexIMatch);
         test(Operator::RegexMatch);
-        test(Operator::Like);
-        test(Operator::NotLike);
-        test(Operator::ILike);
-        test(Operator::NotILike);
         test(Operator::BitwiseShiftRight);
         test(Operator::BitwiseShiftLeft);
         test(Operator::BitwiseAnd);

@@ -19,10 +19,8 @@
 //!
 //! Information Schema]<https://en.wikipedia.org/wiki/Information_schema>
 
-use std::{
-    any::Any,
-    sync::{Arc, Weak},
-};
+use async_trait::async_trait;
+use std::{any::Any, sync::Arc};
 
 use arrow::{
     array::{StringBuilder, UInt64Builder},
@@ -30,9 +28,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use datafusion_common::Result;
-
-use crate::config::ConfigOptions;
+use crate::config::{ConfigEntry, ConfigOptions};
 use crate::datasource::streaming::{PartitionStream, StreamingTable};
 use crate::datasource::TableProvider;
 use crate::execution::context::TaskContext;
@@ -40,76 +36,16 @@ use crate::logical_expr::TableType;
 use crate::physical_plan::stream::RecordBatchStreamAdapter;
 use crate::physical_plan::SendableRecordBatchStream;
 
-use super::{
-    catalog::{CatalogList, CatalogProvider},
-    schema::SchemaProvider,
-};
+use super::{catalog::CatalogList, schema::SchemaProvider};
 
-const INFORMATION_SCHEMA: &str = "information_schema";
-const TABLES: &str = "tables";
-const VIEWS: &str = "views";
-const COLUMNS: &str = "columns";
-const DF_SETTINGS: &str = "df_settings";
+pub const INFORMATION_SCHEMA: &str = "information_schema";
+pub const TABLES: &str = "tables";
+pub const VIEWS: &str = "views";
+pub const COLUMNS: &str = "columns";
+pub const DF_SETTINGS: &str = "df_settings";
 
-/// Wraps another [`CatalogProvider`] and adds a "information_schema"
-/// schema that can introspect on tables in the catalog_list
-pub(crate) struct CatalogWithInformationSchema {
-    catalog_list: Weak<dyn CatalogList>,
-    /// wrapped provider
-    inner: Arc<dyn CatalogProvider>,
-}
-
-impl CatalogWithInformationSchema {
-    pub(crate) fn new(
-        catalog_list: Weak<dyn CatalogList>,
-        inner: Arc<dyn CatalogProvider>,
-    ) -> Self {
-        Self {
-            catalog_list,
-            inner,
-        }
-    }
-
-    /// Return a reference to the wrapped provider
-    pub(crate) fn inner(&self) -> Arc<dyn CatalogProvider> {
-        self.inner.clone()
-    }
-}
-
-impl CatalogProvider for CatalogWithInformationSchema {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema_names(&self) -> Vec<String> {
-        self.inner
-            .schema_names()
-            .into_iter()
-            .chain(std::iter::once(INFORMATION_SCHEMA.to_string()))
-            .collect::<Vec<String>>()
-    }
-
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        if name.eq_ignore_ascii_case(INFORMATION_SCHEMA) {
-            Weak::upgrade(&self.catalog_list).map(|catalog_list| {
-                Arc::new(InformationSchemaProvider {
-                    config: InformationSchemaConfig { catalog_list },
-                }) as Arc<dyn SchemaProvider>
-            })
-        } else {
-            self.inner.schema(name)
-        }
-    }
-
-    fn register_schema(
-        &self,
-        name: &str,
-        schema: Arc<dyn SchemaProvider>,
-    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
-        let catalog = &self.inner;
-        catalog.register_schema(name, schema)
-    }
-}
+/// All information schema tables
+pub const INFORMATION_SCHEMA_TABLES: &[&str] = &[TABLES, VIEWS, COLUMNS, DF_SETTINGS];
 
 /// Implements the `information_schema` virtual schema and tables
 ///
@@ -117,8 +53,17 @@ impl CatalogProvider for CatalogWithInformationSchema {
 /// demand. This means that if more tables are added to the underlying
 /// providers, they will appear the next time the `information_schema`
 /// table is queried.
-struct InformationSchemaProvider {
+pub struct InformationSchemaProvider {
     config: InformationSchemaConfig,
+}
+
+impl InformationSchemaProvider {
+    /// Creates a new [`InformationSchemaProvider`] for the provided `catalog_list`
+    pub fn new(catalog_list: Arc<dyn CatalogList>) -> Self {
+        Self {
+            config: InformationSchemaConfig { catalog_list },
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -128,7 +73,7 @@ struct InformationSchemaConfig {
 
 impl InformationSchemaConfig {
     /// Construct the `information_schema.tables` virtual table
-    fn make_tables(&self, builder: &mut InformationSchemaTablesBuilder) {
+    async fn make_tables(&self, builder: &mut InformationSchemaTablesBuilder) {
         // create a mem table with the names of tables
 
         for catalog_name in self.catalog_list.catalog_names() {
@@ -138,7 +83,7 @@ impl InformationSchemaConfig {
                 if schema_name != INFORMATION_SCHEMA {
                     let schema = catalog.schema(&schema_name).unwrap();
                     for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).unwrap();
+                        let table = schema.table(&table_name).await.unwrap();
                         builder.add_table(
                             &catalog_name,
                             &schema_name,
@@ -167,7 +112,7 @@ impl InformationSchemaConfig {
         }
     }
 
-    fn make_views(&self, builder: &mut InformationSchemaViewBuilder) {
+    async fn make_views(&self, builder: &mut InformationSchemaViewBuilder) {
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
@@ -175,7 +120,7 @@ impl InformationSchemaConfig {
                 if schema_name != INFORMATION_SCHEMA {
                     let schema = catalog.schema(&schema_name).unwrap();
                     for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).unwrap();
+                        let table = schema.table(&table_name).await.unwrap();
                         builder.add_view(
                             &catalog_name,
                             &schema_name,
@@ -189,7 +134,7 @@ impl InformationSchemaConfig {
     }
 
     /// Construct the `information_schema.columns` virtual table
-    fn make_columns(&self, builder: &mut InformationSchemaColumnsBuilder) {
+    async fn make_columns(&self, builder: &mut InformationSchemaColumnsBuilder) {
         for catalog_name in self.catalog_list.catalog_names() {
             let catalog = self.catalog_list.catalog(&catalog_name).unwrap();
 
@@ -197,7 +142,7 @@ impl InformationSchemaConfig {
                 if schema_name != INFORMATION_SCHEMA {
                     let schema = catalog.schema(&schema_name).unwrap();
                     for table_name in schema.table_names() {
-                        let table = schema.table(&table_name).unwrap();
+                        let table = schema.table(&table_name).await.unwrap();
                         for (i, field) in table.schema().fields().iter().enumerate() {
                             builder.add_column(
                                 &catalog_name,
@@ -221,12 +166,13 @@ impl InformationSchemaConfig {
         config_options: &ConfigOptions,
         builder: &mut InformationSchemaDfSettingsBuilder,
     ) {
-        for (name, setting) in config_options.options() {
-            builder.add_setting(name, setting.to_string());
+        for entry in config_options.entries() {
+            builder.add_setting(entry);
         }
     }
 }
 
+#[async_trait]
 impl SchemaProvider for InformationSchemaProvider {
     fn as_any(&self) -> &(dyn Any + 'static) {
         self
@@ -241,7 +187,7 @@ impl SchemaProvider for InformationSchemaProvider {
         ]
     }
 
-    fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
         let config = self.config.clone();
         let table: Arc<dyn PartitionStream> = if name.eq_ignore_ascii_case("tables") {
             Arc::new(InformationSchemaTables::new(config))
@@ -305,7 +251,7 @@ impl PartitionStream for InformationSchemaTables {
             self.schema.clone(),
             // TODO: Stream this
             futures::stream::once(async move {
-                config.make_tables(&mut builder);
+                config.make_tables(&mut builder).await;
                 Ok(builder.finish())
             }),
         ))
@@ -396,7 +342,7 @@ impl PartitionStream for InformationSchemaViews {
             self.schema.clone(),
             // TODO: Stream this
             futures::stream::once(async move {
-                config.make_views(&mut builder);
+                config.make_views(&mut builder).await;
                 Ok(builder.finish())
             }),
         ))
@@ -510,7 +456,7 @@ impl PartitionStream for InformationSchemaColumns {
             self.schema.clone(),
             // TODO: Stream this
             futures::stream::once(async move {
-                config.make_columns(&mut builder);
+                config.make_columns(&mut builder).await;
                 Ok(builder.finish())
             }),
         ))
@@ -570,7 +516,7 @@ impl InformationSchemaColumnsBuilder {
         self.is_nullables.append_value(nullable_str);
 
         // "System supplied type" --> Use debug format of the datatype
-        self.data_types.append_value(format!("{:?}", data_type));
+        self.data_types.append_value(format!("{data_type:?}"));
 
         // "If data_type identifies a character or bit string type, the
         // declared maximum length; null for all other data types or
@@ -670,7 +616,7 @@ impl InformationSchemaDfSettings {
     fn new(config: InformationSchemaConfig) -> Self {
         let schema = Arc::new(Schema::new(vec![
             Field::new("name", DataType::Utf8, false),
-            Field::new("setting", DataType::Utf8, false),
+            Field::new("setting", DataType::Utf8, true),
         ]));
 
         Self { schema, config }
@@ -715,9 +661,9 @@ struct InformationSchemaDfSettingsBuilder {
 }
 
 impl InformationSchemaDfSettingsBuilder {
-    fn add_setting(&mut self, name: impl AsRef<str>, setting: impl AsRef<str>) {
-        self.names.append_value(name.as_ref());
-        self.settings.append_value(setting.as_ref());
+    fn add_setting(&mut self, entry: ConfigEntry) {
+        self.names.append_value(entry.key);
+        self.settings.append_option(entry.value);
     }
 
     fn finish(&mut self) -> RecordBatch {

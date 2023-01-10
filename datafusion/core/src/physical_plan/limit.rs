@@ -148,8 +148,7 @@ impl ExecutionPlan for GlobalLimitExec {
         // GlobalLimitExec has a single output partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "GlobalLimitExec invalid partition {}",
-                partition
+                "GlobalLimitExec invalid partition {partition}"
             )));
         }
 
@@ -286,6 +285,10 @@ impl ExecutionPlan for LocalLimitExec {
     // Local limit will not change the input plan's ordering
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.input.output_ordering()
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        true
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {

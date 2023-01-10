@@ -29,7 +29,7 @@ use datafusion_expr::{
     utils::from_plan,
     Expr, Operator,
 };
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Convenience rule for writing optimizers: recursively invoke
@@ -167,104 +167,6 @@ fn split_binary_impl<'a>(
             exprs.push(other);
             exprs
         }
-    }
-}
-
-/// Given a list of lists of [`Expr`]s, returns a list of lists of
-/// [`Expr`]s of expressions where there is one expression from each
-/// from each of the input expressions
-///
-/// For example, given the input `[[a, b], [c], [d, e]]` returns
-/// `[a, c, d], [a, c, e], [b, c, d], [b, c, e]]`.
-fn permutations(mut exprs: VecDeque<Vec<&Expr>>) -> Vec<Vec<&Expr>> {
-    let first = if let Some(first) = exprs.pop_front() {
-        first
-    } else {
-        return vec![];
-    };
-
-    // base case:
-    if exprs.is_empty() {
-        first.into_iter().map(|e| vec![e]).collect()
-    } else {
-        first
-            .into_iter()
-            .flat_map(|expr| {
-                permutations(exprs.clone())
-                    .into_iter()
-                    .map(|expr_list| {
-                        // Create [expr, ...] for each permutation
-                        std::iter::once(expr)
-                            .chain(expr_list.into_iter())
-                            .collect::<Vec<&Expr>>()
-                    })
-                    .collect::<Vec<Vec<&Expr>>>()
-            })
-            .collect()
-    }
-}
-
-const MAX_CNF_REWRITE_CONJUNCTS: usize = 10;
-
-/// Tries to convert an expression to conjunctive normal form (CNF).
-///
-/// Does not convert the expression if the total number of conjuncts
-/// (exprs ANDed together) would exceed [`MAX_CNF_REWRITE_CONJUNCTS`].
-///
-/// The following expression is in CNF:
-///  `(a OR b) AND (c OR d)`
-///
-/// The following is not in CNF:
-///  `(a AND b) OR c`.
-///
-/// But could be rewrite to a CNF expression:
-///  `(a OR c) AND (b OR c)`.
-///
-///
-/// # Example
-/// ```
-/// # use datafusion_expr::{col, lit};
-/// # use datafusion_optimizer::utils::cnf_rewrite;
-/// // （a=1 AND b=2）OR c = 3
-/// let expr1 = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
-/// let expr2 = col("c").eq(lit(3));
-/// let expr = expr1.or(expr2);
-///
-///  //（a=1 or c=3）AND（b=2 or c=3）
-/// let expr1 = col("a").eq(lit(1)).or(col("c").eq(lit(3)));
-/// let expr2 = col("b").eq(lit(2)).or(col("c").eq(lit(3)));
-/// let expect = expr1.and(expr2);
-/// assert_eq!(expect, cnf_rewrite(expr));
-/// ```
-pub fn cnf_rewrite(expr: Expr) -> Expr {
-    // Find all exprs joined by OR
-    let disjuncts = split_binary(&expr, Operator::Or);
-
-    // For each expr, split now on AND
-    // A OR B OR C --> split each A, B and C
-    let disjunct_conjuncts: VecDeque<Vec<&Expr>> = disjuncts
-        .into_iter()
-        .map(|e| split_binary(e, Operator::And))
-        .collect::<VecDeque<_>>();
-
-    // Decide if we want to distribute the clauses. Heuristic is
-    // chosen to avoid creating huge predicates
-    let num_conjuncts = disjunct_conjuncts
-        .iter()
-        .fold(1usize, |sz, exprs| sz.saturating_mul(exprs.len()));
-
-    if disjunct_conjuncts.iter().any(|exprs| exprs.len() > 1)
-        && num_conjuncts < MAX_CNF_REWRITE_CONJUNCTS
-    {
-        let or_clauses = permutations(disjunct_conjuncts)
-            .into_iter()
-            // form the OR clauses( A OR B OR C ..)
-            .map(|exprs| disjunction(exprs.into_iter().cloned()).unwrap());
-        conjunction(or_clauses).unwrap()
-    }
-    // otherwise return the original expression
-    else {
-        expr
     }
 }
 
@@ -422,7 +324,7 @@ pub fn find_join_exprs(
             Operator::Eq => {}
             Operator::NotEq => {}
             _ => {
-                plan_err!(format!("can't optimize {} column comparison", op))?;
+                plan_err!(format!("can't optimize {op} column comparison"))?;
             }
         }
 
@@ -471,7 +373,7 @@ pub fn exprs_to_join_cols(
                     continue;
                 }
             }
-            _ => plan_err!(format!("Correlation operator unsupported: {}", op))?,
+            _ => plan_err!(format!("Correlation operator unsupported: {op}"))?,
         }
         let left = left.try_into_col()?;
         let right = right.try_into_col()?;
@@ -614,7 +516,7 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::Column;
     use datafusion_expr::expr::Cast;
-    use datafusion_expr::{col, lit, or, utils::expr_to_columns};
+    use datafusion_expr::{col, lit, utils::expr_to_columns};
     use std::collections::HashSet;
     use std::ops::Add;
 
@@ -814,136 +716,5 @@ mod tests {
             original_name, new_name,
             "mismatch rewriting expr_from: {expr_from} to {rewrite_to}"
         )
-    }
-
-    #[test]
-    fn test_permutations() {
-        assert_eq!(make_permutations(vec![]), vec![] as Vec<Vec<Expr>>)
-    }
-
-    #[test]
-    fn test_permutations_one() {
-        // [[a]] --> [[a]]
-        assert_eq!(
-            make_permutations(vec![vec![col("a")]]),
-            vec![vec![col("a")]]
-        )
-    }
-
-    #[test]
-    fn test_permutations_two() {
-        // [[a, b]] --> [[a], [b]]
-        assert_eq!(
-            make_permutations(vec![vec![col("a"), col("b")]]),
-            vec![vec![col("a")], vec![col("b")]]
-        )
-    }
-
-    #[test]
-    fn test_permutations_two_and_one() {
-        // [[a, b], [c]] --> [[a, c], [b, c]]
-        assert_eq!(
-            make_permutations(vec![vec![col("a"), col("b")], vec![col("c")]]),
-            vec![vec![col("a"), col("c")], vec![col("b"), col("c")]]
-        )
-    }
-
-    #[test]
-    fn test_permutations_two_and_one_and_two() {
-        // [[a, b], [c], [d, e]] --> [[a, c, d], [a, c, e], [b, c, d], [b, c, e]]
-        assert_eq!(
-            make_permutations(vec![
-                vec![col("a"), col("b")],
-                vec![col("c")],
-                vec![col("d"), col("e")]
-            ]),
-            vec![
-                vec![col("a"), col("c"), col("d")],
-                vec![col("a"), col("c"), col("e")],
-                vec![col("b"), col("c"), col("d")],
-                vec![col("b"), col("c"), col("e")],
-            ]
-        )
-    }
-
-    /// call permutations with owned `Expr`s for easier testing
-    fn make_permutations(exprs: impl IntoIterator<Item = Vec<Expr>>) -> Vec<Vec<Expr>> {
-        let exprs = exprs.into_iter().collect::<Vec<_>>();
-
-        let exprs: VecDeque<Vec<&Expr>> = exprs
-            .iter()
-            .map(|exprs| exprs.iter().collect::<Vec<&Expr>>())
-            .collect();
-
-        permutations(exprs)
-            .into_iter()
-            // copy &Expr --> Expr
-            .map(|exprs| exprs.into_iter().cloned().collect())
-            .collect()
-    }
-
-    #[test]
-    fn test_rewrite_cnf() {
-        let a_1 = col("a").eq(lit(1i64));
-        let a_2 = col("a").eq(lit(2i64));
-
-        let b_1 = col("b").eq(lit(1i64));
-        let b_2 = col("b").eq(lit(2i64));
-
-        // Test rewrite on a1_and_b2 and a2_and_b1 -> not change
-        let expr1 = and(a_1.clone(), b_2.clone());
-        let expect = expr1.clone();
-        assert_eq!(expect, cnf_rewrite(expr1));
-
-        // Test rewrite on a1_and_b2 and a2_and_b1 -> (((a1 and b2) and a2) and b1)
-        let expr1 = and(and(a_1.clone(), b_2.clone()), and(a_2.clone(), b_1.clone()));
-        let expect = and(a_1.clone(), b_2.clone())
-            .and(a_2.clone())
-            .and(b_1.clone());
-        assert_eq!(expect, cnf_rewrite(expr1));
-
-        // Test rewrite on a1_or_b2  -> not change
-        let expr1 = or(a_1.clone(), b_2.clone());
-        let expect = expr1.clone();
-        assert_eq!(expect, cnf_rewrite(expr1));
-
-        // Test rewrite on a1_and_b2 or a2_and_b1 ->  a1_or_a2 and a1_or_b1 and b2_or_a2 and b2_or_b1
-        let expr1 = or(and(a_1.clone(), b_2.clone()), and(a_2.clone(), b_1.clone()));
-        let a1_or_a2 = or(a_1.clone(), a_2.clone());
-        let a1_or_b1 = or(a_1.clone(), b_1.clone());
-        let b2_or_a2 = or(b_2.clone(), a_2.clone());
-        let b2_or_b1 = or(b_2.clone(), b_1.clone());
-        let expect = and(a1_or_a2, a1_or_b1).and(b2_or_a2).and(b2_or_b1);
-        assert_eq!(expect, cnf_rewrite(expr1));
-
-        // Test rewrite on a1_or_b2 or a2_and_b1 ->  ( a1_or_a2 or a2 ) and (a1_or_a2 or b1)
-        let a1_or_b2 = or(a_1.clone(), b_2.clone());
-        let expr1 = or(or(a_1.clone(), b_2.clone()), and(a_2.clone(), b_1.clone()));
-        let expect = or(a1_or_b2.clone(), a_2.clone()).and(or(a1_or_b2, b_1.clone()));
-        assert_eq!(expect, cnf_rewrite(expr1));
-
-        // Test rewrite on a1_or_b2 or a2_or_b1 ->  not change
-        let expr1 = or(or(a_1, b_2), or(a_2, b_1));
-        let expect = expr1.clone();
-        assert_eq!(expect, cnf_rewrite(expr1));
-    }
-
-    #[test]
-    fn test_rewrite_cnf_overflow() {
-        // in this situation:
-        // AND = (a=1 and b=2)
-        // rewrite (AND * 10) or (AND * 10), it will produce 10 * 10 = 100 (a=1 or b=2)
-        // which cause size expansion.
-
-        let mut expr1 = col("test1").eq(lit(1i64));
-        let expr2 = col("test2").eq(lit(2i64));
-
-        for _i in 0..9 {
-            expr1 = expr1.clone().and(expr2.clone());
-        }
-        let expr3 = expr1.clone();
-        let expr = or(expr1, expr3);
-
-        assert_eq!(expr, cnf_rewrite(expr.clone()));
     }
 }

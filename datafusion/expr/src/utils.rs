@@ -150,13 +150,23 @@ pub fn expand_wildcard(schema: &DFSchema, plan: &LogicalPlan) -> Result<Vec<Expr
     let using_columns = plan.using_columns()?;
     let columns_to_skip = using_columns
         .into_iter()
-        // For each USING JOIN condition, only expand to one column in projection
+        // For each USING JOIN condition, only expand to one of each join column in projection
         .flat_map(|cols| {
             let mut cols = cols.into_iter().collect::<Vec<_>>();
             // sort join columns to make sure we consistently keep the same
             // qualified column
             cols.sort();
-            cols.into_iter().skip(1)
+            let mut out_column_names: HashSet<String> = HashSet::new();
+            cols.into_iter()
+                .filter_map(|c| {
+                    if out_column_names.contains(&c.name) {
+                        Some(c)
+                    } else {
+                        out_column_names.insert(c.name);
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
         })
         .collect::<HashSet<_>>();
 
@@ -186,7 +196,6 @@ pub fn expand_wildcard(schema: &DFSchema, plan: &LogicalPlan) -> Result<Vec<Expr
 pub fn expand_qualified_wildcard(
     qualifier: &str,
     schema: &DFSchema,
-    plan: &LogicalPlan,
 ) -> Result<Vec<Expr>> {
     let qualified_fields: Vec<DFField> = schema
         .fields_with_qualified(qualifier)
@@ -195,13 +204,17 @@ pub fn expand_qualified_wildcard(
         .collect();
     if qualified_fields.is_empty() {
         return Err(DataFusionError::Plan(format!(
-            "Invalid qualifier {}",
-            qualifier
+            "Invalid qualifier {qualifier}"
         )));
     }
-    let qualifier_schema =
+    let qualified_schema =
         DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
-    expand_wildcard(&qualifier_schema, plan)
+    // if qualified, allow all columns in output (i.e. ignore using column check)
+    Ok(qualified_schema
+        .fields()
+        .iter()
+        .map(|f| Expr::Column(f.qualified_column()))
+        .collect::<Vec<Expr>>())
 }
 
 /// (expr, "is the SortExpr for window (either comes from PARTITION BY or ORDER BY columns)")
@@ -258,7 +271,7 @@ pub fn generate_sort_key(
 }
 
 /// Compare the sort expr as PostgreSQL's common_prefix_cmp():
-/// https://github.com/postgres/postgres/blob/master/src/backend/optimizer/plan/planner.c
+/// <https://github.com/postgres/postgres/blob/master/src/backend/optimizer/plan/planner.c>
 pub fn compare_sort_expr(
     sort_expr_a: &Expr,
     sort_expr_b: &Expr,
@@ -339,8 +352,7 @@ pub fn group_window_expr_by_sort_keys(
             Ok(())
         }
         other => Err(DataFusionError::Internal(format!(
-            "Impossibly got non-window expr {:?}",
-            other,
+            "Impossibly got non-window expr {other:?}",
         ))),
     })?;
     Ok(result)
@@ -586,13 +598,13 @@ pub fn from_plan(
             // The preceding part of expr is equi-exprs,
             // and the struct of each equi-expr is like `left-expr = right-expr`.
             let new_on:Vec<(Expr,Expr)> = expr.iter().take(equi_expr_count).map(|equi_expr| {
-                    if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = equi_expr {
-                        assert!(op == &Operator::Eq);
-                        Ok(((**left).clone(), (**right).clone()))
+                    // SimplifyExpression rule may add alias to the equi_expr.
+                    let unalias_expr = equi_expr.clone().unalias();
+                    if let Expr::BinaryExpr(BinaryExpr { left, op:Operator::Eq, right }) = unalias_expr {
+                        Ok((*left, *right))
                     } else {
                         Err(DataFusionError::Internal(format!(
-                            "The front part expressions should be an binary expression, actual:{}",
-                            equi_expr
+                            "The front part expressions should be an binary equiality expression, actual:{equi_expr}"
                         )))
                     }
                 }).collect::<Result<Vec<(Expr, Expr)>>>()?;
@@ -706,7 +718,7 @@ pub fn from_plan(
             input: Arc::new(inputs[0].clone()),
         })),
         LogicalPlan::TableScan(ts) => {
-            assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
+            assert!(inputs.is_empty(), "{plan:?}  should have no inputs");
             Ok(LogicalPlan::TableScan(TableScan {
                 filters: expr.to_vec(),
                 ..ts.clone()
@@ -720,8 +732,8 @@ pub fn from_plan(
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_) => {
             // All of these plan types have no inputs / exprs so should not be called
-            assert!(expr.is_empty(), "{:?} should have no exprs", plan);
-            assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
+            assert!(expr.is_empty(), "{plan:?} should have no exprs");
+            assert!(inputs.is_empty(), "{plan:?}  should have no inputs");
             Ok(plan.clone())
         }
     }
@@ -953,15 +965,54 @@ pub fn can_hash(data_type: &DataType) -> bool {
 }
 
 /// Check whether all columns are from the schema.
-pub fn check_all_column_from_schema(
-    columns: &HashSet<Column>,
-    schema: DFSchemaRef,
-) -> Result<bool> {
-    let result = columns
+fn check_all_column_from_schema(columns: &HashSet<Column>, schema: DFSchemaRef) -> bool {
+    columns
         .iter()
-        .all(|column| schema.index_of_column(column).is_ok());
+        .all(|column| schema.index_of_column(column).is_ok())
+}
 
-    Ok(result)
+/// Give two sides of the equijoin predicate, return a valid join key pair.
+/// If there is no valid join key pair, return None.
+///
+/// A valid join means:
+/// 1. All referenced column of the left side is from the left schema, and
+///    all referenced column of the right side is from the right schema.
+/// 2. Or opposite. All referenced column of the left side is from the right schema,
+///    and the right side is from the left schema.
+///
+pub fn find_valid_equijoin_key_pair(
+    left_key: &Expr,
+    right_key: &Expr,
+    left_schema: DFSchemaRef,
+    right_schema: DFSchemaRef,
+) -> Result<Option<(Expr, Expr)>> {
+    let left_using_columns = left_key.to_columns()?;
+    let right_using_columns = right_key.to_columns()?;
+
+    // Conditions like a = 10, will be added to non-equijoin.
+    if left_using_columns.is_empty() || right_using_columns.is_empty() {
+        return Ok(None);
+    }
+
+    let l_is_left =
+        check_all_column_from_schema(&left_using_columns, left_schema.clone());
+    let r_is_right =
+        check_all_column_from_schema(&right_using_columns, right_schema.clone());
+
+    let r_is_left_and_l_is_right = || {
+        check_all_column_from_schema(&right_using_columns, left_schema.clone())
+            && check_all_column_from_schema(&left_using_columns, right_schema.clone())
+    };
+
+    let join_key_pair = match (l_is_left, r_is_right) {
+        (true, true) => Some((left_key.clone(), right_key.clone())),
+        (_, _) if r_is_left_and_l_is_right() => {
+            Some((right_key.clone(), left_key.clone()))
+        }
+        _ => None,
+    };
+
+    Ok(join_key_pair)
 }
 
 #[cfg(test)]

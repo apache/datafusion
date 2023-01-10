@@ -15,16 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! OptimizeSorts optimizer rule inspects [SortExec]s in the given physical
-//! plan and removes the ones it can prove unnecessary. The rule can work on
-//! valid *and* invalid physical plans with respect to sorting requirements,
-//! but always produces a valid physical plan in this sense.
+//! EnforceSorting optimizer rule inspects the physical plan with respect
+//! to local sorting requirements and does the following:
+//! - Adds a [SortExec] when a requirement is not met,
+//! - Removes an already-existing [SortExec] if it is possible to prove
+//!   that this sort is unnecessary
+//! The rule can work on valid *and* invalid physical plans with respect to
+//! sorting requirements, but always produces a valid physical plan in this sense.
 //!
-//! A non-realistic but easy to follow example: Assume that we somehow get the fragment
+//! A non-realistic but easy to follow example for sort removals: Assume that we
+//! somehow get the fragment
 //! "SortExec: [nullable_col@0 ASC]",
 //! "  SortExec: [non_nullable_col@1 ASC]",
 //! in the physical plan. The first sort is unnecessary since its result is overwritten
 //! by another SortExec. Therefore, this rule removes it from the physical plan.
+use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::utils::{
     add_sort_above_child, ordering_satisfy, ordering_satisfy_concrete,
@@ -32,11 +37,11 @@ use crate::physical_optimizer::utils::{
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::windows::WindowAggExec;
+use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
-use crate::prelude::SessionConfig;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{reverse_sort_options, DataFusionError};
+use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use itertools::izip;
 use std::iter::zip;
@@ -45,16 +50,16 @@ use std::sync::Arc;
 /// This rule inspects SortExec's in the given physical plan and removes the
 /// ones it can prove unnecessary.
 #[derive(Default)]
-pub struct OptimizeSorts {}
+pub struct EnforceSorting {}
 
-impl OptimizeSorts {
+impl EnforceSorting {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-/// This is a "data class" we use within the [OptimizeSorts] rule that
+/// This is a "data class" we use within the [EnforceSorting] rule that
 /// tracks the closest `SortExec` descendant for every child of a plan.
 #[derive(Debug, Clone)]
 struct PlanWithCorrespondingSort {
@@ -118,20 +123,20 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
     }
 }
 
-impl PhysicalOptimizerRule for OptimizeSorts {
+impl PhysicalOptimizerRule for EnforceSorting {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &SessionConfig,
+        _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Execute a post-order traversal to adjust input key ordering:
         let plan_requirements = PlanWithCorrespondingSort::new(plan);
-        let adjusted = plan_requirements.transform_up(&optimize_sorts)?;
+        let adjusted = plan_requirements.transform_up(&ensure_sorting)?;
         Ok(adjusted.plan)
     }
 
     fn name(&self) -> &str {
-        "OptimizeSorts"
+        "EnforceSorting"
     }
 
     fn schema_check(&self) -> bool {
@@ -139,7 +144,7 @@ impl PhysicalOptimizerRule for OptimizeSorts {
     }
 }
 
-fn optimize_sorts(
+fn ensure_sorting(
     requirements: PlanWithCorrespondingSort,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
     // Perform naive analysis at the beginning -- remove already-satisfied sorts:
@@ -170,7 +175,8 @@ fn optimize_sorts(
                     let sort_expr = required_ordering.to_vec();
                     *child = add_sort_above_child(child, sort_expr)?;
                     sort_onwards.push((idx, child.clone()))
-                } else if let [first, ..] = sort_onwards.as_slice() {
+                }
+                if let [first, ..] = sort_onwards.as_slice() {
                     // The ordering requirement is met, we can analyze if there is an unnecessary sort:
                     let sort_any = first.1.clone();
                     let sort_exec = convert_to_sort_exec(&sort_any)?;
@@ -181,17 +187,32 @@ fn optimize_sorts(
                         sort_exec.input().equivalence_properties()
                     }) {
                         update_child_to_remove_unnecessary_sort(child, sort_onwards)?;
-                    } else if let Some(window_agg_exec) =
+                    }
+                    // For window expressions, we can remove some sorts when we can
+                    // calculate the result in reverse:
+                    else if let Some(exec) =
                         requirements.plan.as_any().downcast_ref::<WindowAggExec>()
                     {
-                        // For window expressions, we can remove some sorts when we can
-                        // calculate the result in reverse:
-                        if let Some(res) = analyze_window_sort_removal(
-                            window_agg_exec,
+                        if let Some(result) = analyze_window_sort_removal(
+                            exec.window_expr(),
+                            &exec.partition_keys,
                             sort_exec,
                             sort_onwards,
                         )? {
-                            return Ok(Some(res));
+                            return Ok(Some(result));
+                        }
+                    } else if let Some(exec) = requirements
+                        .plan
+                        .as_any()
+                        .downcast_ref::<BoundedWindowAggExec>()
+                    {
+                        if let Some(result) = analyze_window_sort_removal(
+                            exec.window_expr(),
+                            &exec.partition_keys,
+                            sort_exec,
+                            sort_onwards,
+                        )? {
+                            return Ok(Some(result));
                         }
                     }
                     // TODO: Once we can ensure that required ordering information propagates with
@@ -273,9 +294,11 @@ fn analyze_immediate_sort_removal(
     Ok(None)
 }
 
-/// Analyzes a `WindowAggExec` to determine whether it may allow removing a sort.
+/// Analyzes a [WindowAggExec] or a [BoundedWindowAggExec] to determine whether
+/// it may allow removing a sort.
 fn analyze_window_sort_removal(
-    window_agg_exec: &WindowAggExec,
+    window_expr: &[Arc<dyn WindowExpr>],
+    partition_keys: &[Arc<dyn PhysicalExpr>],
     sort_exec: &SortExec,
     sort_onward: &mut Vec<(usize, Arc<dyn ExecutionPlan>)>,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
@@ -289,7 +312,6 @@ fn analyze_window_sort_removal(
         // If there is no physical ordering, there is no way to remove a sort -- immediately return:
         return Ok(None);
     };
-    let window_expr = window_agg_exec.window_expr();
     let (can_skip_sorting, should_reverse) = can_skip_sort(
         window_expr[0].partition_by(),
         required_ordering,
@@ -308,13 +330,26 @@ fn analyze_window_sort_removal(
         if let Some(window_expr) = new_window_expr {
             let new_child = remove_corresponding_sort_from_sub_plan(sort_onward)?;
             let new_schema = new_child.schema();
-            let new_plan = Arc::new(WindowAggExec::try_new(
-                window_expr,
-                new_child,
-                new_schema,
-                window_agg_exec.partition_keys.clone(),
-                Some(physical_ordering.to_vec()),
-            )?);
+
+            let uses_bounded_memory = window_expr.iter().all(|e| e.uses_bounded_memory());
+            // If all window exprs can run with bounded memory choose bounded window variant
+            let new_plan = if uses_bounded_memory {
+                Arc::new(BoundedWindowAggExec::try_new(
+                    window_expr,
+                    new_child,
+                    new_schema,
+                    partition_keys.to_vec(),
+                    Some(physical_ordering.to_vec()),
+                )?) as _
+            } else {
+                Arc::new(WindowAggExec::try_new(
+                    window_expr,
+                    new_child,
+                    new_schema,
+                    partition_keys.to_vec(),
+                    Some(physical_ordering.to_vec()),
+                )?) as _
+            };
             return Ok(Some(PlanWithCorrespondingSort::new(new_plan)));
         }
     }
@@ -557,7 +592,7 @@ mod tests {
     #[tokio::test]
     async fn test_remove_unnecessary_sort() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -585,11 +620,10 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            EnforceSorting::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -599,8 +633,7 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }
@@ -608,7 +641,7 @@ mod tests {
     #[tokio::test]
     async fn test_remove_unnecessary_sort_window_multilayer() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -677,7 +710,7 @@ mod tests {
             vec![
                 "WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
                 "  FilterExec: NOT non_nullable_col@1",
-                "    SortExec: [non_nullable_col@2 ASC NULLS LAST]",
+                "    SortExec: [non_nullable_col@1 ASC NULLS LAST]",
                 "      WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow }]",
                 "        SortExec: [non_nullable_col@1 DESC]",
                 "          MemoryExec: partitions=0, partition_sizes=[]",
@@ -686,11 +719,10 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            EnforceSorting::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -706,8 +738,7 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }
@@ -715,7 +746,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_required_sort() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -732,11 +763,10 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            EnforceSorting::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -751,8 +781,7 @@ mod tests {
         let actual_trim_last = &actual[..actual_len - 1];
         assert_eq!(
             expected, actual_trim_last,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }
@@ -760,7 +789,7 @@ mod tests {
     #[tokio::test]
     async fn test_remove_unnecessary_sort1() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -799,11 +828,10 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            EnforceSorting::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -818,8 +846,7 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }
@@ -827,7 +854,7 @@ mod tests {
     #[tokio::test]
     async fn test_change_wrong_sorting() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let conf = session_ctx.copied_config();
+        let state = session_ctx.state();
         let schema = create_test_schema()?;
         let source = Arc::new(MemoryExec::try_new(&[], schema.clone(), None)?)
             as Arc<dyn ExecutionPlan>;
@@ -861,11 +888,10 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, &conf)?;
+            EnforceSorting::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -879,8 +905,7 @@ mod tests {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         Ok(())
     }

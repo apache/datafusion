@@ -45,10 +45,6 @@ pub fn binary_operator_data_type(
         | Operator::NotEq
         | Operator::And
         | Operator::Or
-        | Operator::Like
-        | Operator::NotLike
-        | Operator::ILike
-        | Operator::NotILike
         | Operator::Lt
         | Operator::Gt
         | Operator::GtEq
@@ -88,7 +84,7 @@ pub fn binary_operator_data_type(
 /// when the input argument types do not match the output argument
 /// types
 ///
-/// Tracking issue is https://github.com/apache/arrow-datafusion/issues/3419
+/// Tracking issue is <https://github.com/apache/arrow-datafusion/issues/3419>
 pub fn coerce_types(
     lhs_type: &DataType,
     op: &Operator,
@@ -117,10 +113,6 @@ pub fn coerce_types(
         | Operator::Gt
         | Operator::GtEq
         | Operator::LtEq => comparison_coercion(lhs_type, rhs_type),
-        // "like" operators operate on strings and always return a boolean
-        Operator::Like | Operator::NotLike | Operator::ILike | Operator::NotILike => {
-            like_coercion(lhs_type, rhs_type)
-        }
         Operator::Plus | Operator::Minus
             if is_date(lhs_type) || is_timestamp(lhs_type) =>
         {
@@ -131,9 +123,8 @@ pub fn coerce_types(
                 DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
                     return Err(DataFusionError::Plan(
                         format!(
-                            "'{:?} {} {:?}' is an unsupported operation. \
-                                addition/subtraction on dates/timestamps only supported with interval types",
-                            lhs_type, op, rhs_type
+                            "'{lhs_type:?} {op} {rhs_type:?}' is an unsupported operation. \
+                                addition/subtraction on dates/timestamps only supported with interval types"
                         ),
                     ));
                 }
@@ -162,8 +153,7 @@ pub fn coerce_types(
     match result {
         None => Err(DataFusionError::Plan(
             format!(
-                "'{:?} {} {:?}' can't be evaluated because there isn't a common type to coerce the types to",
-                lhs_type, op, rhs_type
+                "'{lhs_type:?} {op} {rhs_type:?}' can't be evaluated because there isn't a common type to coerce the types to"
             ),
         )),
         Some(t) => Ok(t)
@@ -527,7 +517,7 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 
 /// coercion rules for like operations.
 /// This is a union of string coercion rules and dictionary coercion rules
-fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
         .or_else(|| null_coercion(lhs_type, rhs_type))
@@ -575,6 +565,7 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         },
         (Timestamp(_, tz), Utf8) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
         (Utf8, Timestamp(_, tz)) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
+        // TODO: need to investigate the result type for the comparison between timestamp and date
         (Timestamp(_, _), Date32) => Some(Date32),
         (Timestamp(_, _), Date64) => Some(Date64),
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
@@ -880,30 +871,10 @@ mod tests {
 
     #[test]
     fn test_type_coercion() -> Result<()> {
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8,
-            Operator::Like,
-            DataType::Utf8
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8,
-            Operator::NotLike,
-            DataType::Utf8
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8,
-            Operator::ILike,
-            DataType::Utf8
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8,
-            Operator::NotILike,
-            DataType::Utf8
-        );
+        // test like coercion rule
+        let result = like_coercion(&DataType::Utf8, &DataType::Utf8);
+        assert_eq!(result, Some(DataType::Utf8));
+
         test_coercion_binary_rule!(
             DataType::Utf8,
             DataType::Date32,

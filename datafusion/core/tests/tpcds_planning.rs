@@ -43,7 +43,6 @@ async fn tpcds_logical_q3() -> Result<()> {
     create_logical_plan(3).await
 }
 
-#[ignore] // thread 'q4' has overflowed its stack
 #[tokio::test]
 async fn tpcds_logical_q4() -> Result<()> {
     create_logical_plan(4).await
@@ -179,7 +178,6 @@ async fn tpcds_logical_q30() -> Result<()> {
     create_logical_plan(30).await
 }
 
-#[ignore] // thread 'q31' has overflowed its stack
 #[tokio::test]
 async fn tpcds_logical_q31() -> Result<()> {
     create_logical_plan(31).await
@@ -345,7 +343,7 @@ async fn tpcds_logical_q63() -> Result<()> {
     create_logical_plan(63).await
 }
 
-#[ignore] // thread 'q64' has overflowed its stack
+#[ignore] // thread 'q64' has overflowed its stack]
 #[tokio::test]
 async fn tpcds_logical_q64() -> Result<()> {
     create_logical_plan(64).await
@@ -541,7 +539,6 @@ async fn tpcds_physical_q3() -> Result<()> {
     create_physical_plan(3).await
 }
 
-#[ignore] // thread 'q4' has overflowed its stack
 #[tokio::test]
 async fn tpcds_physical_q4() -> Result<()> {
     create_physical_plan(4).await
@@ -683,7 +680,6 @@ async fn tpcds_physical_q30() -> Result<()> {
     create_physical_plan(30).await
 }
 
-#[ignore] // thread 'q31' has overflowed its stack
 #[tokio::test]
 async fn tpcds_physical_q31() -> Result<()> {
     create_physical_plan(31).await
@@ -1067,9 +1063,10 @@ async fn regression_test(query_no: u8, create_physical: bool) -> Result<()> {
 
     for sql in &sql {
         let df = ctx.sql(sql).await?;
-        let plan = df.into_optimized_plan()?;
+        let (state, plan) = df.into_parts();
+        let plan = state.optimize(&plan)?;
         if create_physical {
-            let _ = ctx.create_physical_plan(&plan).await?;
+            let _ = state.create_physical_plan(&plan).await?;
         }
     }
 

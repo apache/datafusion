@@ -98,6 +98,10 @@ impl AggregateExpr for Count {
         true
     }
 
+    fn supports_bounded_execution(&self) -> bool {
+        true
+    }
+
     fn create_row_accumulator(
         &self,
         start_index: usize,

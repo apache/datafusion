@@ -257,10 +257,10 @@ mod tests {
             Err(DataFusionError::ArrowError(ArrowError::SchemaError(e))) => {
                 assert_eq!(
                     "\"project index 4 out of bounds, max field 3\"",
-                    format!("{:?}", e)
+                    format!("{e:?}")
                 )
             }
-            res => panic!("Scan should failed on invalid projection, got {:?}", res),
+            res => panic!("Scan should failed on invalid projection, got {res:?}"),
         };
 
         Ok(())
@@ -290,10 +290,9 @@ mod tests {
         )?;
 
         match MemTable::try_new(schema2, vec![vec![batch]]) {
-            Err(DataFusionError::Plan(e)) => assert_eq!(
-                "\"Mismatch between schema and batches\"",
-                format!("{:?}", e)
-            ),
+            Err(DataFusionError::Plan(e)) => {
+                assert_eq!("\"Mismatch between schema and batches\"", format!("{e:?}"))
+            }
             _ => panic!("MemTable::new should have failed due to schema mismatch"),
         }
 
@@ -322,10 +321,9 @@ mod tests {
         )?;
 
         match MemTable::try_new(schema2, vec![vec![batch]]) {
-            Err(DataFusionError::Plan(e)) => assert_eq!(
-                "\"Mismatch between schema and batches\"",
-                format!("{:?}", e)
-            ),
+            Err(DataFusionError::Plan(e)) => {
+                assert_eq!("\"Mismatch between schema and batches\"", format!("{e:?}"))
+            }
             _ => panic!("MemTable::new should have failed due to schema mismatch"),
         }
 

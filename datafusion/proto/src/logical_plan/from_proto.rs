@@ -68,20 +68,20 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::General(desc) => write!(f, "General error: {}", desc),
+            Self::General(desc) => write!(f, "General error: {desc}"),
 
             Self::DataFusionError(desc) => {
-                write!(f, "DataFusion error: {:?}", desc)
+                write!(f, "DataFusion error: {desc:?}")
             }
 
             Self::MissingRequiredField(name) => {
-                write!(f, "Missing required field {}", name)
+                write!(f, "Missing required field {name}")
             }
             Self::AtLeastOneValue(name) => {
-                write!(f, "Must have at least one {}, found 0", name)
+                write!(f, "Must have at least one {name}, found 0")
             }
             Self::UnknownEnumVariant { name, value } => {
-                write!(f, "Unknown i32 value for {} enum: {}", name, value)
+                write!(f, "Unknown i32 value for {name} enum: {value}")
             }
         }
     }
@@ -372,8 +372,7 @@ impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
                 .and_then(|pt| pt.plan_type_enum.as_ref())
                 .unwrap_or_else(|| {
                     panic!(
-                        "Cannot create protobuf::StringifiedPlan from {:?}",
-                        stringified_plan
+                        "Cannot create protobuf::StringifiedPlan from {stringified_plan:?}"
                     )
                 }) {
                 InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
@@ -828,8 +827,7 @@ fn validate_list_values(field: &Field, values: &[ScalarValue]) -> Result<(), Err
 
         if field_type != &value_type {
             return Err(proto_error(format!(
-                "Expected field type {:?}, got scalar of type: {:?}",
-                field_type, value_type
+                "Expected field type {field_type:?}, got scalar of type: {value_type:?}"
             )));
         }
     }
@@ -1328,7 +1326,7 @@ pub fn parse_expr(
         }
         ExprType::Placeholder(PlaceholderNode { id, data_type }) => match data_type {
             None => {
-                let message = format!("Protobuf deserialization error: data type must be provided for the placeholder {}", id);
+                let message = format!("Protobuf deserialization error: data type must be provided for the placeholder {id}");
                 Err(proto_error(message))
             }
             Some(data_type) => Ok(Expr::Placeholder {
@@ -1372,10 +1370,6 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "Multiply" => Ok(Operator::Multiply),
         "Divide" => Ok(Operator::Divide),
         "Modulo" => Ok(Operator::Modulo),
-        "Like" => Ok(Operator::Like),
-        "NotLike" => Ok(Operator::NotLike),
-        "ILike" => Ok(Operator::ILike),
-        "NotILike" => Ok(Operator::NotILike),
         "IsDistinctFrom" => Ok(Operator::IsDistinctFrom),
         "IsNotDistinctFrom" => Ok(Operator::IsNotDistinctFrom),
         "BitwiseAnd" => Ok(Operator::BitwiseAnd),
@@ -1389,8 +1383,7 @@ pub fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
         "RegexNotMatch" => Ok(Operator::RegexNotMatch),
         "StringConcat" => Ok(Operator::StringConcat),
         other => Err(proto_error(format!(
-            "Unsupported binary operator '{:?}'",
-            other
+            "Unsupported binary operator '{other:?}'"
         ))),
     }
 }

@@ -25,7 +25,7 @@ use arrow::{
 use chrono::prelude::*;
 use chrono::Duration;
 
-use datafusion::config::OPT_PREFER_HASH_JOIN;
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::TableProvider;
 use datafusion::from_slice::FromSlice;
 use datafusion::logical_expr::{Aggregate, LogicalPlan, Projection, TableScan};
@@ -104,7 +104,6 @@ pub mod union;
 pub mod wildcard;
 pub mod window;
 
-pub mod arrow_typeof;
 pub mod decimal;
 pub mod explain;
 pub mod idenfifers;
@@ -132,7 +131,7 @@ where
             if l.is_nan() || r.is_nan() {
                 assert!(l.is_nan() && r.is_nan());
             } else if (l - r).abs() > 2.0 * f64::EPSILON {
-                panic!("{} != {}", l, r)
+                panic!("{l} != {r}")
             }
         });
 }
@@ -187,7 +186,8 @@ fn create_join_context(
     let ctx = SessionContext::with_config(
         SessionConfig::new()
             .with_repartition_joins(repartition_joins)
-            .with_target_partitions(2),
+            .with_target_partitions(2)
+            .with_batch_size(4096),
     );
 
     let t1_schema = Arc::new(Schema::new(vec![
@@ -241,7 +241,8 @@ fn create_left_semi_anti_join_context_with_null_ids(
     let ctx = SessionContext::with_config(
         SessionConfig::new()
             .with_repartition_joins(repartition_joins)
-            .with_target_partitions(2),
+            .with_target_partitions(2)
+            .with_batch_size(4096),
     );
 
     let t1_schema = Arc::new(Schema::new(vec![
@@ -313,7 +314,8 @@ fn create_right_semi_anti_join_context_with_null_ids(
     let ctx = SessionContext::with_config(
         SessionConfig::new()
             .with_repartition_joins(repartition_joins)
-            .with_target_partitions(2),
+            .with_target_partitions(2)
+            .with_batch_size(4096),
     );
 
     let t1_schema = Arc::new(Schema::new(vec![
@@ -567,9 +569,10 @@ fn create_sort_merge_join_context(
     column_left: &str,
     column_right: &str,
 ) -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(
-        SessionConfig::new().set_bool(OPT_PREFER_HASH_JOIN, false),
-    );
+    let mut config = ConfigOptions::new();
+    config.optimizer.prefer_hash_join = false;
+
+    let ctx = SessionContext::with_config(config.into());
 
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new(column_left, DataType::UInt32, true),
@@ -615,11 +618,12 @@ fn create_sort_merge_join_context(
 }
 
 fn create_sort_merge_join_datatype_context() -> Result<SessionContext> {
-    let ctx = SessionContext::with_config(
-        SessionConfig::new()
-            .set_bool(OPT_PREFER_HASH_JOIN, false)
-            .with_target_partitions(2),
-    );
+    let mut config = ConfigOptions::new();
+    config.optimizer.prefer_hash_join = false;
+    config.execution.target_partitions = 2;
+    config.execution.batch_size = 4096;
+
+    let ctx = SessionContext::with_config(config.into());
 
     let t1_schema = Schema::new(vec![
         Field::new("c1", DataType::Date32, true),
@@ -784,7 +788,7 @@ async fn register_tpch_csv(ctx: &SessionContext, table: &str) -> Result<()> {
 
     ctx.register_csv(
         table,
-        format!("tests/tpch-csv/{}.csv", table).as_str(),
+        format!("tests/tpch-csv/{table}.csv").as_str(),
         CsvReadOptions::new().schema(&schema),
     )
     .await?;
@@ -913,9 +917,8 @@ async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
     )
     STORED AS CSV
     WITH HEADER ROW
-    LOCATION '{}/csv/aggregate_test_100.csv'
-    ",
-            testdata
+    LOCATION '{testdata}/csv/aggregate_test_100.csv'
+    "
         ))
         .await
         .expect("Creating dataframe for CREATE EXTERNAL TABLE");
@@ -974,7 +977,7 @@ async fn register_aggregate_simple_csv(ctx: &SessionContext) -> Result<()> {
 
     ctx.register_csv(
         "aggregate_simple",
-        "tests/aggregate_simple.csv",
+        "tests/data/aggregate_simple.csv",
         CsvReadOptions::new().schema(&schema),
     )
     .await?;
@@ -991,7 +994,7 @@ async fn register_aggregate_null_cases_csv(ctx: &SessionContext) -> Result<()> {
 
     ctx.register_csv(
         "null_cases",
-        "tests/null_cases.csv",
+        "tests/data/null_cases.csv",
         CsvReadOptions::new().schema(&schema),
     )
     .await?;
@@ -1003,7 +1006,7 @@ async fn register_aggregate_csv(ctx: &SessionContext) -> Result<()> {
     let schema = test_util::aggr_test_schema();
     ctx.register_csv(
         "aggregate_test_100",
-        &format!("{}/csv/aggregate_test_100.csv", testdata),
+        &format!("{testdata}/csv/aggregate_test_100.csv"),
         CsvReadOptions::new().schema(&schema),
     )
     .await?;
@@ -1022,13 +1025,11 @@ async fn try_execute_to_batches(
 ) -> Result<Vec<RecordBatch>> {
     let dataframe = ctx.sql(sql).await?;
     let logical_schema = dataframe.schema().clone();
+    let (state, plan) = dataframe.into_parts();
 
-    let optimized = ctx.optimize(dataframe.logical_plan())?;
-    let optimized_logical_schema = optimized.schema();
-    let results = dataframe.collect().await?;
-
-    assert_eq!(&logical_schema, optimized_logical_schema.as_ref());
-    Ok(results)
+    let optimized = state.optimize(&plan)?;
+    assert_eq!(&logical_schema, optimized.schema().as_ref());
+    DataFrame::new(state, optimized).collect().await
 }
 
 /// Execute query and return results as a Vec of RecordBatches
@@ -1097,7 +1098,7 @@ fn populate_csv_partitions(
 
     // generate a partitioned file
     for partition in 0..partition_count {
-        let filename = format!("partition-{}.{}", partition, file_extension);
+        let filename = format!("partition-{partition}.{file_extension}");
         let file_path = tmp_dir.path().join(filename);
         let mut file = File::create(file_path)?;
 
@@ -1187,7 +1188,7 @@ async fn register_decimal_csv_table_by_sql(ctx: &SessionContext) {
             )
             STORED AS CSV
             WITH HEADER ROW
-            LOCATION 'tests/decimal_data.csv'",
+            LOCATION 'tests/data/decimal_data.csv'",
         )
         .await
         .expect("Creating dataframe for CREATE EXTERNAL TABLE with decimal data type");
@@ -1203,7 +1204,7 @@ async fn register_alltypes_parquet(ctx: &SessionContext) {
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "alltypes_plain",
-        &format!("{}/alltypes_plain.parquet", testdata),
+        &format!("{testdata}/alltypes_plain.parquet"),
         ParquetReadOptions::default(),
     )
     .await
@@ -1378,7 +1379,7 @@ pub fn make_timestamps() -> RecordBatch {
     let names = ts_nanos
         .iter()
         .enumerate()
-        .map(|(i, _)| format!("Row {}", i))
+        .map(|(i, _)| format!("Row {i}"))
         .collect::<Vec<_>>();
 
     let arr_nanos = TimestampNanosecondArray::from(ts_nanos);
@@ -1471,7 +1472,7 @@ pub fn make_times() -> RecordBatch {
     let names = ts_nanos
         .iter()
         .enumerate()
-        .map(|(i, _)| format!("Row {}", i))
+        .map(|(i, _)| format!("Row {i}"))
         .collect::<Vec<_>>();
 
     let arr_nanos = Time64NanosecondArray::from(ts_nanos);

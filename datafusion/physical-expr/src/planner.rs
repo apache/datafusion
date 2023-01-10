@@ -19,7 +19,7 @@ use crate::var_provider::is_system_variables;
 use crate::{
     execution_props::ExecutionProps,
     expressions::{
-        self, binary, Column, DateTimeIntervalExpr, GetIndexedFieldExpr, Literal,
+        self, binary, like, Column, DateTimeIntervalExpr, GetIndexedFieldExpr, Literal,
     },
     functions, udf,
     var_provider::VarType,
@@ -28,7 +28,6 @@ use crate::{
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::expr::Cast;
-use datafusion_expr::type_coercion::functions::get_common_coerced_type;
 use datafusion_expr::{
     binary_expr, Between, BinaryExpr, Expr, GetIndexedField, Like, Operator, TryCast,
 };
@@ -199,16 +198,14 @@ pub fn create_physical_expr(
                     input_schema,
                 )?)),
                 _ => {
-                    let target_datatype = get_common_coerced_type(
-                        lhs.data_type(input_schema)?,
-                        rhs.data_type(input_schema)?,
-                    )?;
-                    binary(
-                        expressions::cast(lhs, input_schema, target_datatype.clone())?,
-                        *op,
-                        expressions::cast(rhs, input_schema, target_datatype)?,
-                        input_schema,
-                    )
+                    // Note that the logical planner is responsible
+                    // for type coercion on the arguments (e.g. if one
+                    // argument was originally Int32 and one was
+                    // Int64 they will both be coerced to Int64).
+                    //
+                    // There should be no coercion during physical
+                    // planning.
+                    binary(lhs, *op, rhs, input_schema)
                 }
             }
         }
@@ -223,14 +220,25 @@ pub fn create_physical_expr(
                     "LIKE does not support escape_char".to_string(),
                 ));
             }
-            let op = if *negated {
-                Operator::NotLike
-            } else {
-                Operator::Like
-            };
-            let bin_expr =
-                binary_expr(expr.as_ref().clone(), op, pattern.as_ref().clone());
-            create_physical_expr(&bin_expr, input_dfschema, input_schema, execution_props)
+            let physical_expr = create_physical_expr(
+                expr,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )?;
+            let physical_pattern = create_physical_expr(
+                pattern,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )?;
+            like(
+                *negated,
+                false,
+                physical_expr,
+                physical_pattern,
+                input_schema,
+            )
         }
         Expr::ILike(Like {
             negated,
@@ -243,14 +251,25 @@ pub fn create_physical_expr(
                     "ILIKE does not support escape_char".to_string(),
                 ));
             }
-            let op = if *negated {
-                Operator::NotILike
-            } else {
-                Operator::ILike
-            };
-            let bin_expr =
-                binary_expr(expr.as_ref().clone(), op, pattern.as_ref().clone());
-            create_physical_expr(&bin_expr, input_dfschema, input_schema, execution_props)
+            let physical_expr = create_physical_expr(
+                expr,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )?;
+            let physical_pattern = create_physical_expr(
+                pattern,
+                input_dfschema,
+                input_schema,
+                execution_props,
+            )?;
+            like(
+                *negated,
+                true,
+                physical_expr,
+                physical_pattern,
+                input_schema,
+            )
         }
         Expr::Case(case) => {
             let expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = &case.expr {
@@ -443,8 +462,7 @@ pub fn create_physical_expr(
             }
         },
         other => Err(DataFusionError::NotImplemented(format!(
-            "Physical plan does not support logical expression {:?}",
-            other
+            "Physical plan does not support logical expression {other:?}"
         ))),
     }
 }

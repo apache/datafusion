@@ -97,10 +97,9 @@ impl ExternalSorter {
     ) -> Self {
         let metrics = metrics_set.new_intermediate_baseline(partition_id);
 
-        let reservation =
-            MemoryConsumer::new(format!("ExternalSorter[{}]", partition_id))
-                .with_can_spill(true)
-                .register(&runtime.memory_pool);
+        let reservation = MemoryConsumer::new(format!("ExternalSorter[{partition_id}]"))
+            .with_can_spill(true)
+            .register(&runtime.memory_pool);
 
         Self {
             schema,
@@ -567,8 +566,7 @@ async fn spill_partial_sorted_stream(
     match handle.await {
         Ok(r) => r,
         Err(e) => Err(DataFusionError::Execution(format!(
-            "Error occurred while spilling {}",
-            e
+            "Error occurred while spilling {e}"
         ))),
     }
 }
@@ -618,7 +616,7 @@ fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: &Path) -> Result<(
     for batch in reader {
         sender
             .blocking_send(batch)
-            .map_err(|e| DataFusionError::Execution(format!("{}", e)))?;
+            .map_err(|e| DataFusionError::Execution(format!("{e}")))?;
     }
     Ok(())
 }
@@ -627,7 +625,7 @@ fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: &Path) -> Result<(
 #[derive(Debug)]
 pub struct SortExec {
     /// Input schema
-    input: Arc<dyn ExecutionPlan>,
+    pub(crate) input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
     /// Containing all metrics set created during sort
@@ -701,6 +699,19 @@ impl ExecutionPlan for SortExec {
             self.input.output_partitioning()
         } else {
             Partitioning::UnknownPartitioning(1)
+        }
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.    
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        if children[0] {
+            Err(DataFusionError::Plan(
+                "Sort Error: Can not sort unbounded inputs.".to_string(),
+            ))
+        } else {
+            Ok(false)
         }
     }
 
@@ -1094,7 +1105,7 @@ mod tests {
 
             let metrics = sort_exec.metrics().unwrap();
             let did_it_spill = metrics.spill_count().unwrap() > 0;
-            assert_eq!(did_it_spill, expect_spillage, "with fetch: {:?}", fetch);
+            assert_eq!(did_it_spill, expect_spillage, "with fetch: {fetch:?}");
         }
         Ok(())
     }

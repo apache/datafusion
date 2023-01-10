@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// / Represents a resolved path to a table of the form "catalog.schema.table"
+/// A resolved path to a table of the form "catalog.schema.table"
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedTableReference<'a> {
     /// The catalog (aka database) containing the table
@@ -24,6 +24,12 @@ pub struct ResolvedTableReference<'a> {
     pub schema: &'a str,
     /// The table name
     pub table: &'a str,
+}
+
+impl<'a> std::fmt::Display for ResolvedTableReference<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.catalog, self.schema, self.table)
+    }
 }
 
 /// Represents a path to a table that may require further resolution
@@ -101,7 +107,7 @@ impl OwnedTableReference {
 impl std::fmt::Display for OwnedTableReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OwnedTableReference::Bare { table } => write!(f, "{}", table),
+            OwnedTableReference::Bare { table } => write!(f, "{table}"),
             OwnedTableReference::Partial { schema, table } => {
                 write!(f, "{schema}.{table}")
             }
@@ -161,7 +167,7 @@ impl<'a> TableReference<'a> {
         }
     }
 
-    /// Forms a [`TableReferece`] by splitting `s` on periods `.`.
+    /// Forms a [`TableReference`] by splitting `s` on periods `.`.
     ///
     /// Note that this function does NOT handle periods or name
     /// normalization correctly (e.g. `"foo.bar"` will be parsed as

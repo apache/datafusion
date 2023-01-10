@@ -125,7 +125,7 @@ fn check_column_satisfies_expr(
             expr,
             columns
                 .iter()
-                .map(|e| format!("{}", e))
+                .map(|e| format!("{e}"))
                 .collect::<Vec<String>>()
                 .join(", ")
         )));
@@ -488,14 +488,12 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
                         Ok(partition_by)
                     }
                     expr => Err(DataFusionError::Execution(format!(
-                        "Impossibly got non-window expr {:?}",
-                        expr
+                        "Impossibly got non-window expr {expr:?}"
                     ))),
                 }
             }
             expr => Err(DataFusionError::Execution(format!(
-                "Impossibly got non-window expr {:?}",
-                expr
+                "Impossibly got non-window expr {expr:?}"
             ))),
         })
         .collect::<Result<Vec<_>>>()?;
@@ -532,8 +530,7 @@ pub(crate) fn make_decimal_type(
         || scale.unsigned_abs() > precision
     {
         Err(DataFusionError::Internal(format!(
-            "Decimal(precision = {}, scale = {}) should satisfy `0 < precision <= 38`, and `scale <= precision`.",
-            precision, scale
+            "Decimal(precision = {precision}, scale = {scale}) should satisfy `0 < precision <= 38`, and `scale <= precision`."
         )))
     } else {
         Ok(DataType::Decimal128(precision, scale))

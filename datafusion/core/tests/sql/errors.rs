@@ -123,26 +123,26 @@ async fn invalid_qualified_table_references() -> Result<()> {
         "nonexistentcatalog.public.aggregate_test_100",
         "way.too.many.namespaces.as.ident.prefixes.aggregate_test_100",
     ] {
-        let sql = format!("SELECT COUNT(*) FROM {}", table_ref);
+        let sql = format!("SELECT COUNT(*) FROM {table_ref}");
         let result = ctx.sql(&sql).await;
         assert!(
             matches!(result, Err(DataFusionError::Plan(_))),
-            "result was: {:?}",
-            result
+            "result was: {result:?}"
         );
     }
     Ok(())
 }
 
 #[tokio::test]
-#[allow(deprecated)] // TODO: Remove this test once create_logical_plan removed
 async fn unsupported_sql_returns_error() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
+    let state = ctx.state();
+
     // create view
     let sql = "create view test_view as select * from aggregate_test_100";
-    let plan = ctx.create_logical_plan(sql);
-    let physical_plan = ctx.create_physical_plan(&plan.unwrap()).await;
+    let plan = state.create_logical_plan(sql).await;
+    let physical_plan = state.create_physical_plan(&plan.unwrap()).await;
     assert!(physical_plan.is_err());
     assert_eq!(
         format!("{}", physical_plan.unwrap_err()),
@@ -151,8 +151,8 @@ async fn unsupported_sql_returns_error() -> Result<()> {
     );
     // // drop view
     let sql = "drop view test_view";
-    let plan = ctx.create_logical_plan(sql);
-    let physical_plan = ctx.create_physical_plan(&plan.unwrap()).await;
+    let plan = state.create_logical_plan(sql).await;
+    let physical_plan = state.create_physical_plan(&plan.unwrap()).await;
     assert!(physical_plan.is_err());
     assert_eq!(
         format!("{}", physical_plan.unwrap_err()),
@@ -161,8 +161,8 @@ async fn unsupported_sql_returns_error() -> Result<()> {
     );
     // // drop table
     let sql = "drop table aggregate_test_100";
-    let plan = ctx.create_logical_plan(sql);
-    let physical_plan = ctx.create_physical_plan(&plan.unwrap()).await;
+    let plan = state.create_logical_plan(sql).await;
+    let physical_plan = state.create_physical_plan(&plan.unwrap()).await;
     assert!(physical_plan.is_err());
     assert_eq!(
         format!("{}", physical_plan.unwrap_err()),

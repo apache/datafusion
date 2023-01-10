@@ -25,9 +25,7 @@ use std::fs;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::config::OPT_PARQUET_PUSHDOWN_FILTERS;
-use crate::config::OPT_PARQUET_REORDER_FILTERS;
-use crate::config::{ConfigOptions, OPT_PARQUET_ENABLE_PAGE_INDEX};
+use crate::config::ConfigOptions;
 use crate::datasource::file_format::parquet::fetch_parquet_metadata;
 use crate::physical_plan::file_format::file_stream::{
     FileOpenFuture, FileOpener, FileStream,
@@ -202,9 +200,7 @@ impl ParquetExec {
     /// Return the value described in [`Self::with_pushdown_filters`]
     fn pushdown_filters(&self, config_options: &ConfigOptions) -> bool {
         self.pushdown_filters
-            .or_else(|| config_options.get_bool(OPT_PARQUET_PUSHDOWN_FILTERS))
-            // default to false
-            .unwrap_or_default()
+            .unwrap_or(config_options.execution.parquet.pushdown_filters)
     }
 
     /// If true, the `RowFilter` made by `pushdown_filters` may try to
@@ -219,9 +215,7 @@ impl ParquetExec {
     /// Return the value described in [`Self::with_reorder_filters`]
     fn reorder_filters(&self, config_options: &ConfigOptions) -> bool {
         self.reorder_filters
-            .or_else(|| config_options.get_bool(OPT_PARQUET_REORDER_FILTERS))
-            // default to false
-            .unwrap_or_default()
+            .unwrap_or(config_options.execution.parquet.reorder_filters)
     }
 
     /// If enabled, the reader will read the page index
@@ -236,9 +230,7 @@ impl ParquetExec {
     /// Return the value described in [`Self::with_enable_page_index`]
     fn enable_page_index(&self, config_options: &ConfigOptions) -> bool {
         self.enable_page_index
-            .or_else(|| config_options.get_bool(OPT_PARQUET_ENABLE_PAGE_INDEX))
-            // default to false
-            .unwrap_or_default()
+            .unwrap_or(config_options.execution.parquet.enable_page_index)
     }
 }
 
@@ -334,7 +326,7 @@ impl ExecutionPlan for ParquetExec {
                 let predicate_string = self
                     .predicate
                     .as_ref()
-                    .map(|p| format!(", predicate={}", p))
+                    .map(|p| format!(", predicate={p}"))
                     .unwrap_or_default();
 
                 let pruning_predicate_string = self
@@ -379,7 +371,7 @@ fn make_output_ordering_string(ordering: &[PhysicalSortExpr]) -> String {
         if i > 0 {
             write!(&mut w, ", ").unwrap()
         }
-        write!(&mut w, "{}", e).unwrap()
+        write!(&mut w, "{e}").unwrap()
     }
     write!(&mut w, "]").unwrap();
     w
@@ -556,7 +548,7 @@ impl AsyncFileReader for ParquetFileReader {
         self.store
             .get_range(&self.meta.location, range)
             .map_err(|e| {
-                ParquetError::General(format!("AsyncChunkReader::get_bytes error: {}", e))
+                ParquetError::General(format!("AsyncChunkReader::get_bytes error: {e}"))
             })
             .boxed()
     }
@@ -577,8 +569,7 @@ impl AsyncFileReader for ParquetFileReader {
                 .await
                 .map_err(|e| {
                     ParquetError::General(format!(
-                        "AsyncChunkReader::get_byte_ranges error: {}",
-                        e
+                        "AsyncChunkReader::get_byte_ranges error: {e}"
                     ))
                 })
         }
@@ -597,8 +588,7 @@ impl AsyncFileReader for ParquetFileReader {
             .await
             .map_err(|e| {
                 ParquetError::General(format!(
-                    "AsyncChunkReader::get_metadata error: {}",
-                    e
+                    "AsyncChunkReader::get_metadata error: {e}"
                 ))
             })?;
             Ok(Arc::new(metadata))
@@ -644,7 +634,7 @@ pub async fn plan_to_parquet(
             let mut tasks = vec![];
             for i in 0..plan.output_partitioning().partition_count() {
                 let plan = plan.clone();
-                let filename = format!("part-{}.parquet", i);
+                let filename = format!("part-{i}.parquet");
                 let path = fs_path.join(filename);
                 let file = fs::File::create(path)?;
                 let mut writer =
@@ -666,32 +656,36 @@ pub async fn plan_to_parquet(
                 .await
                 .into_iter()
                 .try_for_each(|result| {
-                    result.map_err(|e| DataFusionError::Execution(format!("{}", e)))?
+                    result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
                 })?;
             Ok(())
         }
         Err(e) => Err(DataFusionError::Execution(format!(
-            "Could not create directory {}: {:?}",
-            path, e
+            "Could not create directory {path}: {e:?}"
         ))),
     }
 }
 
-// TODO: consolidate code with arrow-rs
+// Copy from the arrow-rs
+// https://github.com/apache/arrow-rs/blob/733b7e7fd1e8c43a404c3ce40ecf741d493c21b4/parquet/src/arrow/buffer/bit_util.rs#L55
+// Convert the byte slice to fixed length byte array with the length of 16
+fn sign_extend_be(b: &[u8]) -> [u8; 16] {
+    assert!(b.len() <= 16, "Array too large, expected less than 16");
+    let is_negative = (b[0] & 128u8) == 128u8;
+    let mut result = if is_negative { [255u8; 16] } else { [0u8; 16] };
+    for (d, s) in result.iter_mut().skip(16 - b.len()).zip(b) {
+        *d = *s;
+    }
+    result
+}
+
 // Convert the bytes array to i128.
 // The endian of the input bytes array must be big-endian.
-// Copy from the arrow-rs
 pub(crate) fn from_bytes_to_i128(b: &[u8]) -> i128 {
-    assert!(b.len() <= 16, "Decimal128Array supports only up to size 16");
-    let first_bit = b[0] & 128u8 == 128u8;
-    let mut result = if first_bit { [255u8; 16] } else { [0u8; 16] };
-    for (i, v) in b.iter().enumerate() {
-        result[i + (16 - b.len())] = *v;
-    }
     // The bytes array are from parquet file and must be the big-endian.
     // The endian is defined by parquet format, and the reference document
     // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
-    i128::from_be_bytes(result)
+    i128::from_be_bytes(sign_extend_be(b))
 }
 
 // Convert parquet column schema to arrow data type, and just consider the
@@ -813,6 +807,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: None,
+                infinite_source: false,
             },
             predicate,
             None,
@@ -872,7 +867,7 @@ mod tests {
             .write_parquet(&out_dir, None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!("Parquet error: Arrow: underlying Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{}", e));
+        assert_eq!("Parquet error: Arrow: underlying Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
         Ok(())
     }
 
@@ -1350,6 +1345,7 @@ mod tests {
                     limit: None,
                     table_partition_cols: vec![],
                     output_ordering: None,
+                    infinite_source: false,
                 },
                 None,
                 None,
@@ -1371,7 +1367,7 @@ mod tests {
         let state = session_ctx.state();
 
         let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/alltypes_plain.parquet", testdata);
+        let filename = format!("{testdata}/alltypes_plain.parquet");
 
         let meta = local_unpartitioned_file(filename);
 
@@ -1401,10 +1397,10 @@ mod tests {
         let task_ctx = session_ctx.task_ctx();
 
         let object_store_url = ObjectStoreUrl::local_filesystem();
-        let store = state.runtime_env.object_store(&object_store_url).unwrap();
+        let store = state.runtime_env().object_store(&object_store_url).unwrap();
 
         let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/alltypes_plain.parquet", testdata);
+        let filename = format!("{testdata}/alltypes_plain.parquet");
 
         let meta = local_unpartitioned_file(filename);
 
@@ -1439,6 +1435,7 @@ mod tests {
                     ("day".to_owned(), partition_type_wrap(DataType::Utf8)),
                 ],
                 output_ordering: None,
+                infinite_source: false,
             },
             None,
             None,
@@ -1498,6 +1495,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering: None,
+                infinite_source: false,
             },
             None,
             None,
@@ -1534,8 +1532,7 @@ mod tests {
         assert_eq!(get_value(&metrics, "page_index_rows_filtered"), 3);
         assert!(
             get_value(&metrics, "page_index_eval_time") > 0,
-            "no eval time in metrics: {:#?}",
-            metrics
+            "no eval time in metrics: {metrics:#?}"
         );
     }
 
@@ -1573,8 +1570,7 @@ mod tests {
         assert_eq!(get_value(&metrics, "pushdown_rows_filtered"), 5);
         assert!(
             get_value(&metrics, "pushdown_eval_time") > 0,
-            "no eval time in metrics: {:#?}",
-            metrics
+            "no eval time in metrics: {metrics:#?}"
         );
     }
 
@@ -1642,8 +1638,7 @@ mod tests {
         let pruning_predicate = &rt.parquet_exec.pruning_predicate;
         assert!(
             pruning_predicate.is_none(),
-            "Still had pruning predicate: {:?}",
-            pruning_predicate
+            "Still had pruning predicate: {pruning_predicate:?}"
         );
 
         // but does still has a pushdown down predicate
@@ -1663,8 +1658,7 @@ mod tests {
             Some(v) => v.as_usize(),
             _ => {
                 panic!(
-                    "Expected metric not found. Looking for '{}' in\n\n{:#?}",
-                    metric_name, metrics
+                    "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
                 );
             }
         }
@@ -1684,7 +1678,7 @@ mod tests {
 
         // generate a partitioned file
         for partition in 0..partition_count {
-            let filename = format!("partition-{}.{}", partition, file_extension);
+            let filename = format!("partition-{partition}.{file_extension}");
             let file_path = tmp_dir.path().join(filename);
             let mut file = File::create(file_path)?;
 
@@ -1726,25 +1720,25 @@ mod tests {
         // register each partition as well as the top level dir
         ctx.register_parquet(
             "part0",
-            &format!("{}/part-0.parquet", out_dir),
+            &format!("{out_dir}/part-0.parquet"),
             ParquetReadOptions::default(),
         )
         .await?;
         ctx.register_parquet(
             "part1",
-            &format!("{}/part-1.parquet", out_dir),
+            &format!("{out_dir}/part-1.parquet"),
             ParquetReadOptions::default(),
         )
         .await?;
         ctx.register_parquet(
             "part2",
-            &format!("{}/part-2.parquet", out_dir),
+            &format!("{out_dir}/part-2.parquet"),
             ParquetReadOptions::default(),
         )
         .await?;
         ctx.register_parquet(
             "part3",
-            &format!("{}/part-3.parquet", out_dir),
+            &format!("{out_dir}/part-3.parquet"),
             ParquetReadOptions::default(),
         )
         .await?;

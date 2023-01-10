@@ -96,6 +96,13 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self.input.output_partitioning()
     }
 
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        Ok(children[0])
+    }
+
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         // The coalesce batches operator does not make any changes to the sorting of its input
         self.input.output_ordering()
@@ -301,20 +308,21 @@ pub fn concat_batches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{OPT_COALESCE_BATCHES, OPT_COALESCE_TARGET_BATCH_SIZE};
+    use crate::config::ConfigOptions;
     use crate::datasource::MemTable;
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::{memory::MemoryExec, repartition::RepartitionExec};
-    use crate::prelude::{SessionConfig, SessionContext};
+    use crate::prelude::SessionContext;
     use crate::test::create_vec_batches;
     use arrow::datatypes::{DataType, Field, Schema};
 
     #[tokio::test]
     async fn test_custom_batch_size() -> Result<()> {
-        let ctx = SessionContext::with_config(
-            SessionConfig::new().set_u64(OPT_COALESCE_TARGET_BATCH_SIZE, 1234),
-        );
+        let mut config = ConfigOptions::new();
+        config.execution.batch_size = 1234;
+
+        let ctx = SessionContext::with_config(config.into());
         let plan = create_physical_plan(ctx).await?;
         let projection = plan.as_any().downcast_ref::<ProjectionExec>().unwrap();
         let coalesce = projection
@@ -328,9 +336,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_disable_coalesce() -> Result<()> {
-        let ctx = SessionContext::with_config(
-            SessionConfig::new().set_bool(OPT_COALESCE_BATCHES, false),
-        );
+        let mut config = ConfigOptions::new();
+        config.execution.coalesce_batches = false;
+
+        let ctx = SessionContext::with_config(config.into());
         let plan = create_physical_plan(ctx).await?;
         let projection = plan.as_any().downcast_ref::<ProjectionExec>().unwrap();
         // projection should directly wrap filter with no coalesce step

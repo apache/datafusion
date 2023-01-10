@@ -74,7 +74,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     ///
     /// ```text
     /// ProjectionExec: expr=[a]
-    ///   CoalesceBatchesExec: target_batch_size=4096
+    ///   CoalesceBatchesExec: target_batch_size=8192
     ///     FilterExec: a < 5
     ///       RepartitionExec: partitioning=RoundRobinBatch(16)
     ///         CsvExec: source=...",
@@ -171,14 +171,14 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
                         .sorted_for_display()
                         .timestamps_removed();
 
-                    write!(self.f, ", metrics=[{}]", metrics)?;
+                    write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
                 }
             }
             ShowMetrics::Full => {
                 if let Some(metrics) = plan.metrics() {
-                    write!(self.f, ", metrics=[{}]", metrics)?;
+                    write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
                 }

@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Enforcement optimizer rules are used to make sure the plan's Distribution and Ordering
-//! requirements are met by inserting necessary [[RepartitionExec]] and [[SortExec]].
-//!
-use crate::config::OPT_TOP_DOWN_JOIN_KEY_REORDERING;
+//! EnforceDistribution optimizer rule inspects the physical plan with respect
+//! to distribution requirements and adds [RepartitionExec]s to satisfy them
+//! when necessary.
+use crate::config::ConfigOptions;
 use crate::error::Result;
-use crate::physical_optimizer::utils::{add_sort_above_child, ordering_satisfy};
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -30,12 +29,10 @@ use crate::physical_plan::joins::{
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::rewrite::TreeNodeRewritable;
-use crate::physical_plan::sorts::sort::{SortExec, SortOptions};
-use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use crate::physical_plan::sorts::sort::SortOptions;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::Partitioning;
 use crate::physical_plan::{with_new_children_if_necessary, Distribution, ExecutionPlan};
-use crate::prelude::SessionConfig;
 use arrow::datatypes::SchemaRef;
 use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::equivalence::EquivalenceProperties;
@@ -48,8 +45,8 @@ use datafusion_physical_expr::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// BasicEnforcement rule, it ensures the Distribution and Ordering requirements are met
-/// in the strictest way. It might add additional [[RepartitionExec]] to the plan tree
+/// The EnforceDistribution rule ensures that distribution requirements are met
+/// in the strictest way. It might add additional [RepartitionExec] to the plan tree
 /// and give a non-optimal plan, but it can avoid the possible data skew in joins.
 ///
 /// For example for a HashJoin with keys(a, b, c), the required Distribution(a, b, c) can be satisfied by
@@ -57,26 +54,23 @@ use std::sync::Arc;
 ///
 /// This rule only chooses the exactly match and satisfies the Distribution(a, b, c) by a HashPartition(a, b, c).
 #[derive(Default)]
-pub struct BasicEnforcement {}
+pub struct EnforceDistribution {}
 
-impl BasicEnforcement {
+impl EnforceDistribution {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl PhysicalOptimizerRule for BasicEnforcement {
+impl PhysicalOptimizerRule for EnforceDistribution {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &SessionConfig,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_partitions = config.target_partitions();
-        let top_down_join_key_reordering = config
-            .config_options()
-            .get_bool(OPT_TOP_DOWN_JOIN_KEY_REORDERING)
-            .unwrap_or_default();
+        let target_partitions = config.execution.target_partitions;
+        let top_down_join_key_reordering = config.optimizer.top_down_join_key_reordering;
         let new_plan = if top_down_join_key_reordering {
             // Run a top-down process to adjust input key ordering recursively
             let plan_requirements = PlanWithKeyRequirements::new(plan);
@@ -86,7 +80,7 @@ impl PhysicalOptimizerRule for BasicEnforcement {
         } else {
             plan
         };
-        // Distribution and Ordering enforcement need to be applied bottom-up.
+        // Distribution enforcement needs to be applied bottom-up.
         new_plan.transform_up(&{
             |plan| {
                 let adjusted = if !top_down_join_key_reordering {
@@ -94,16 +88,13 @@ impl PhysicalOptimizerRule for BasicEnforcement {
                 } else {
                     plan
                 };
-                Ok(Some(ensure_distribution_and_ordering(
-                    adjusted,
-                    target_partitions,
-                )?))
+                Ok(Some(ensure_distribution(adjusted, target_partitions)?))
             }
         })
     }
 
     fn name(&self) -> &str {
-        "BasicEnforcement"
+        "EnforceDistribution"
     }
 
     fn schema_check(&self) -> bool {
@@ -834,55 +825,24 @@ fn new_join_conditions(
     new_join_on
 }
 
-/// Within this function, it checks whether we need to add additional plan operators
-/// of data exchanging and data ordering to satisfy the required distribution and ordering.
-/// And we should avoid to manually add plan operators of data exchanging and data ordering in other places
-fn ensure_distribution_and_ordering(
+/// This function checks whether we need to add additional data exchange
+/// operators to satisfy distribution requirements. Since this function
+/// takes care of such requirements, we should avoid manually adding data
+/// exchange operators in other places.
+fn ensure_distribution(
     plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
     target_partitions: usize,
 ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
     if plan.children().is_empty() {
         return Ok(plan);
     }
-    // It's mainly for changing the single node global SortExec to
-    // the SortPreservingMergeExec with multiple local SortExec.
-    // What's more, if limit exists, it can also be pushed down to the local sort
-    let plan = plan
-        .as_any()
-        .downcast_ref::<SortExec>()
-        .and_then(|sort_exec| {
-            // There are three situations that there's no need for this optimization
-            // - There's only one input partition;
-            // - It's already preserving the partitioning so that it can be regarded as a local sort
-            // - There's no limit pushed down to the local sort (It's still controversial)
-            if sort_exec.input().output_partitioning().partition_count() > 1
-                && !sort_exec.preserve_partitioning()
-                && sort_exec.fetch().is_some()
-            {
-                let sort = SortExec::new_with_partitioning(
-                    sort_exec.expr().to_vec(),
-                    sort_exec.input().clone(),
-                    true,
-                    sort_exec.fetch(),
-                );
-                Some(Arc::new(SortPreservingMergeExec::new(
-                    sort_exec.expr().to_vec(),
-                    Arc::new(sort),
-                )))
-            } else {
-                None
-            }
-        })
-        .map_or(plan, |new_plan| new_plan);
 
     let required_input_distributions = plan.required_input_distribution();
-    let required_input_orderings = plan.required_input_ordering();
     let children: Vec<Arc<dyn ExecutionPlan>> = plan.children();
     assert_eq!(children.len(), required_input_distributions.len());
-    assert_eq!(children.len(), required_input_orderings.len());
 
     // Add RepartitionExec to guarantee output partitioning
-    let children = children
+    let new_children: Result<Vec<Arc<dyn ExecutionPlan>>> = children
         .into_iter()
         .zip(required_input_distributions.into_iter())
         .map(|(child, required)| {
@@ -905,24 +865,8 @@ fn ensure_distribution_and_ordering(
                 };
                 new_child
             }
-        });
-
-    // Add local SortExec to guarantee output ordering within each partition
-    let new_children: Result<Vec<Arc<dyn ExecutionPlan>>> = children
-        .zip(required_input_orderings.into_iter())
-        .map(|(child_result, required)| {
-            let child = child_result?;
-            if ordering_satisfy(child.output_ordering(), required, || {
-                child.equivalence_properties()
-            }) {
-                Ok(child)
-            } else {
-                let sort_expr = required.unwrap().to_vec();
-                add_sort_above_child(&child, sort_expr)
-            }
         })
         .collect();
-
     with_new_children_if_necessary(plan, new_children?)
 }
 
@@ -1014,6 +958,7 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::physical_optimizer::sort_enforcement::EnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -1052,6 +997,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
                 output_ordering,
+                infinite_source: false,
             },
             None,
             None,
@@ -1166,10 +1112,19 @@ mod tests {
         ($EXPECTED_LINES: expr, $PLAN: expr) => {
             let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
+            let mut config = ConfigOptions::new();
+            config.execution.target_partitions = 10;
+
             // run optimizer
-            let optimizer = BasicEnforcement {};
-            let optimized = optimizer
-                .optimize($PLAN, &SessionConfig::new().with_target_partitions(10))?;
+            let optimizer = EnforceDistribution {};
+            let optimized = optimizer.optimize($PLAN, &config)?;
+            // NOTE: These tests verify the joint `EnforceDistribution` + `EnforceSorting` cascade
+            //       because they were written prior to the separation of `BasicEnforcement` into
+            //       `EnforceSorting` and `EnfoceDistribution`.
+            // TODO: Orthogonalize the tests here just to verify `EnforceDistribution` and create
+            //       new tests for the cascade.
+            let optimizer = EnforceSorting {};
+            let optimized = optimizer.optimize(optimized, &config)?;
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent().to_string();
@@ -1229,7 +1184,7 @@ mod tests {
         for join_type in join_types {
             let join = hash_join_exec(left.clone(), right.clone(), &join_on, &join_type);
             let join_plan =
-                format!("HashJoinExec: mode=Partitioned, join_type={}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"b1\", index: 1 }})]", join_type);
+                format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"b1\", index: 1 }})]");
 
             match join_type {
                 JoinType::Inner
@@ -1250,7 +1205,7 @@ mod tests {
                         &join_type,
                     );
                     let top_join_plan =
-                        format!("HashJoinExec: mode=Partitioned, join_type={}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"c\", index: 2 }})]", join_type);
+                        format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"c\", index: 2 }})]");
 
                     let expected = match join_type {
                         // Should include 3 RepartitionExecs
@@ -1302,9 +1257,9 @@ mod tests {
                         hash_join_exec(join, parquet_exec(), &top_join_on, &join_type);
                     let top_join_plan = match join_type {
                         JoinType::RightSemi | JoinType::RightAnti =>
-                            format!("HashJoinExec: mode=Partitioned, join_type={}, on=[(Column {{ name: \"b1\", index: 1 }}, Column {{ name: \"c\", index: 2 }})]", join_type),
+                            format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(Column {{ name: \"b1\", index: 1 }}, Column {{ name: \"c\", index: 2 }})]"),
                         _ =>
-                            format!("HashJoinExec: mode=Partitioned, join_type={}, on=[(Column {{ name: \"b1\", index: 6 }}, Column {{ name: \"c\", index: 2 }})]", join_type),
+                            format!("HashJoinExec: mode=Partitioned, join_type={join_type}, on=[(Column {{ name: \"b1\", index: 6 }}, Column {{ name: \"c\", index: 2 }})]"),
                     };
 
                     let expected = match join_type {
@@ -1688,7 +1643,7 @@ mod tests {
                 Column::new_with_schema("c1", &right.schema()).unwrap(),
             ),
         ];
-        let bottom_left_join = ensure_distribution_and_ordering(
+        let bottom_left_join = ensure_distribution(
             hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
             10,
         )?;
@@ -1718,7 +1673,7 @@ mod tests {
                 Column::new_with_schema("a1", &right.schema()).unwrap(),
             ),
         ];
-        let bottom_right_join = ensure_distribution_and_ordering(
+        let bottom_right_join = ensure_distribution(
             hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
             10,
         )?;
@@ -1807,7 +1762,7 @@ mod tests {
                 Column::new_with_schema("b1", &right.schema()).unwrap(),
             ),
         ];
-        let bottom_left_join = ensure_distribution_and_ordering(
+        let bottom_left_join = ensure_distribution(
             hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
             10,
         )?;
@@ -1837,7 +1792,7 @@ mod tests {
                 Column::new_with_schema("a1", &right.schema()).unwrap(),
             ),
         ];
-        let bottom_right_join = ensure_distribution_and_ordering(
+        let bottom_right_join = ensure_distribution(
             hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
             10,
         )?;
@@ -1937,7 +1892,7 @@ mod tests {
             let join =
                 sort_merge_join_exec(left.clone(), right.clone(), &join_on, &join_type);
             let join_plan =
-                format!("SortMergeJoin: join_type={}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"b1\", index: 1 }})]", join_type);
+                format!("SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"b1\", index: 1 }})]");
 
             // Top join on (a == c)
             let top_join_on = vec![(
@@ -1951,7 +1906,7 @@ mod tests {
                 &join_type,
             );
             let top_join_plan =
-                format!("SortMergeJoin: join_type={}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"c\", index: 2 }})]", join_type);
+                format!("SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"a\", index: 0 }}, Column {{ name: \"c\", index: 2 }})]");
 
             let expected = match join_type {
                 // Should include 3 RepartitionExecs 3 SortExecs
@@ -2005,7 +1960,7 @@ mod tests {
                         &join_type,
                     );
                     let top_join_plan =
-                        format!("SortMergeJoin: join_type={}, on=[(Column {{ name: \"b1\", index: 6 }}, Column {{ name: \"c\", index: 2 }})]", join_type);
+                        format!("SortMergeJoin: join_type={join_type}, on=[(Column {{ name: \"b1\", index: 6 }}, Column {{ name: \"c\", index: 2 }})]");
 
                     let expected = match join_type {
                         // Should include 3 RepartitionExecs and 3 SortExecs

@@ -40,9 +40,7 @@ use crate::arrow::array::{
 };
 use crate::arrow::datatypes::{DataType, Field};
 use crate::config::ConfigOptions;
-use crate::config::OPT_PARQUET_ENABLE_PRUNING;
-use crate::config::OPT_PARQUET_METADATA_SIZE_HINT;
-use crate::config::OPT_PARQUET_SKIP_METADATA;
+
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -87,8 +85,7 @@ impl ParquetFormat {
     /// Return true if pruning is enabled
     pub fn enable_pruning(&self, config_options: &ConfigOptions) -> bool {
         self.enable_pruning
-            .or_else(|| config_options.get_bool(OPT_PARQUET_ENABLE_PRUNING))
-            .unwrap_or(true)
+            .unwrap_or(config_options.execution.parquet.pruning)
     }
 
     /// Provide a hint to the size of the file metadata. If a hint is provided
@@ -104,8 +101,8 @@ impl ParquetFormat {
 
     /// Return the metadata size hint if set
     pub fn metadata_size_hint(&self, config_options: &ConfigOptions) -> Option<usize> {
-        self.metadata_size_hint
-            .or_else(|| config_options.get_usize(OPT_PARQUET_METADATA_SIZE_HINT))
+        let hint = config_options.execution.parquet.metadata_size_hint;
+        self.metadata_size_hint.or(hint)
     }
 
     /// Tell the parquet reader to skip any metadata that may be in
@@ -122,8 +119,7 @@ impl ParquetFormat {
     /// schema merging.
     pub fn skip_metadata(&self, config_options: &ConfigOptions) -> bool {
         self.skip_metadata
-            .or_else(|| config_options.get_bool(OPT_PARQUET_SKIP_METADATA))
-            .unwrap_or(true)
+            .unwrap_or(config_options.execution.parquet.skip_metadata)
     }
 }
 
@@ -993,7 +989,7 @@ mod tests {
 
         assert_eq!(
             "[true, false, true, false, true, false, true, false]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -1018,7 +1014,7 @@ mod tests {
             values.push(array.value(i));
         }
 
-        assert_eq!("[4, 5, 6, 7, 2, 3, 0, 1]", format!("{:?}", values));
+        assert_eq!("[4, 5, 6, 7, 2, 3, 0, 1]", format!("{values:?}"));
 
         Ok(())
     }
@@ -1042,7 +1038,7 @@ mod tests {
             values.push(array.value(i));
         }
 
-        assert_eq!("[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]", format!("{:?}", values));
+        assert_eq!("[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]", format!("{values:?}"));
 
         Ok(())
     }
@@ -1068,7 +1064,7 @@ mod tests {
 
         assert_eq!(
             "[0.0, 1.1, 0.0, 1.1, 0.0, 1.1, 0.0, 1.1]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -1095,7 +1091,7 @@ mod tests {
 
         assert_eq!(
             "[0.0, 10.1, 0.0, 10.1, 0.0, 10.1, 0.0, 10.1]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -1122,7 +1118,7 @@ mod tests {
 
         assert_eq!(
             "[\"0\", \"1\", \"0\", \"1\", \"0\", \"1\", \"0\", \"1\"]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -1176,7 +1172,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_parquet_page_index() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_tiny_pages.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages.parquet");
         let file = File::open(path).await.unwrap();
         let options = ArrowReaderOptions::new().with_page_index(true);
         let builder =
@@ -1187,7 +1183,7 @@ mod tests {
                 .clone();
         check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
 
-        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let file = File::open(path).await.unwrap();
 
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(file, options)

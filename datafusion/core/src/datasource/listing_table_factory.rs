@@ -117,9 +117,9 @@ impl TableProviderFactory for ListingTableFactory {
         };
 
         let options = ListingOptions::new(file_format)
-            .with_collect_stat(state.config.collect_statistics())
+            .with_collect_stat(state.config().collect_statistics())
             .with_file_extension(file_extension)
-            .with_target_partitions(state.config.target_partitions())
+            .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
             .with_file_sort_order(None);
 

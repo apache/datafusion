@@ -115,8 +115,7 @@ impl<'a> WindowFrameContext<'a> {
             // UNBOUNDED FOLLOWING
             WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
                 return Err(DataFusionError::Internal(format!(
-                    "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
-                    window_frame
+                    "Frame start cannot be UNBOUNDED FOLLOWING '{window_frame:?}'"
                 )))
             }
             WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
@@ -131,8 +130,7 @@ impl<'a> WindowFrameContext<'a> {
             // UNBOUNDED PRECEDING
             WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
                 return Err(DataFusionError::Internal(format!(
-                    "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
-                    window_frame
+                    "Frame end cannot be UNBOUNDED PRECEDING '{window_frame:?}'"
                 )))
             }
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
@@ -356,8 +354,7 @@ impl WindowFrameStateGroups {
             // UNBOUNDED FOLLOWING
             WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
                 return Err(DataFusionError::Internal(format!(
-                    "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
-                    window_frame
+                    "Frame start cannot be UNBOUNDED FOLLOWING '{window_frame:?}'"
                 )))
             }
             // ERRONEOUS FRAMES
@@ -371,8 +368,7 @@ impl WindowFrameStateGroups {
             // UNBOUNDED PRECEDING
             WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
                 return Err(DataFusionError::Internal(format!(
-                    "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
-                    window_frame
+                    "Frame end cannot be UNBOUNDED PRECEDING '{window_frame:?}'"
                 )))
             }
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => self

@@ -754,7 +754,7 @@ async fn cross_join() {
 
         assert_eq!(4 * 4, actual.len());
 
-        let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2";
+        let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id";
 
         let actual = execute(&ctx, sql).await;
         assert_eq!(4 * 4, actual.len());
@@ -1349,7 +1349,7 @@ async fn hash_join_with_date32() -> Result<()> {
 
     // inner join on hash supported data type (Date32)
     let sql = "select * from t1 join t2 on t1.c1 = t2.c1";
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
@@ -1363,8 +1363,7 @@ async fn hash_join_with_date32() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let expected = vec![
@@ -1388,7 +1387,7 @@ async fn hash_join_with_date64() -> Result<()> {
 
     // left join on hash supported data type (Date64)
     let sql = "select * from t1 left join t2 on t1.c2 = t2.c2";
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
@@ -1402,8 +1401,7 @@ async fn hash_join_with_date64() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let expected = vec![
@@ -1429,7 +1427,7 @@ async fn hash_join_with_decimal() -> Result<()> {
 
     // right join on hash supported data type (Decimal)
     let sql = "select * from t1 right join t2 on t1.c3 = t2.c3";
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
@@ -1443,8 +1441,7 @@ async fn hash_join_with_decimal() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let expected = vec![
@@ -1470,7 +1467,7 @@ async fn hash_join_with_dictionary() -> Result<()> {
 
     // inner join on hash supported data type (Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)))
     let sql = "select * from t1 join t2 on t1.c4 = t2.c4";
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.into_optimized_plan()?;
     let expected = vec![
@@ -1484,8 +1481,7 @@ async fn hash_join_with_dictionary() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let expected = vec![
@@ -1511,7 +1507,7 @@ async fn reduce_left_join_1() -> Result<()> {
         // reduce to inner join
         let sql =
             "select * from t1 left join t2 on t1.t1_id = t2.t2_id where t2.t2_id < 100";
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
@@ -1527,8 +1523,7 @@ async fn reduce_left_join_1() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let expected = vec![
             "+-------+---------+--------+-------+---------+--------+",
@@ -1555,7 +1550,7 @@ async fn reduce_left_join_2() -> Result<()> {
 
         // reduce to inner join
         let sql = "select * from t1 left join t2 on t1.t1_id = t2.t2_id where t2.t2_int < 10 or (t1.t1_int > 2 and t2.t2_name != 'w')";
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
         let plan = dataframe.into_optimized_plan()?;
 
@@ -1566,7 +1561,7 @@ async fn reduce_left_join_2() -> Result<()> {
         let expected = vec![
             "Explain [plan_type:Utf8, plan:Utf8]",
             "  Projection: t1.t1_id, t1.t1_name, t1.t1_int, t2.t2_id, t2.t2_name, t2.t2_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
-            "    Filter: t2.t2_int < UInt32(10) OR t1.t1_int > UInt32(2) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
+            "    Filter: t2.t2_int < UInt32(10) OR t1.t1_int > UInt32(2) AND t2.t2_name != Utf8(\"w\") [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
             "      Inner Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N, t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
             "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
             "        Filter: t2.t2_int < UInt32(10) OR t2.t2_name != Utf8(\"w\") [t2_id:UInt32;N, t2_name:Utf8;N, t2_int:UInt32;N]",
@@ -1576,8 +1571,7 @@ async fn reduce_left_join_2() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let expected = vec![
             "+-------+---------+--------+-------+---------+--------+",
@@ -1604,7 +1598,7 @@ async fn reduce_left_join_3() -> Result<()> {
 
         // reduce subquery to inner join
         let sql = "select * from (select t1.* from t1 left join t2 on t1.t1_id = t2.t2_id where t2.t2_int < 3) t3 left join t2 on t3.t1_int = t2.t2_int where t3.t1_id < 100";
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
@@ -1624,8 +1618,7 @@ async fn reduce_left_join_3() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let expected = vec![
             "+-------+---------+--------+-------+---------+--------+",
@@ -1650,7 +1643,7 @@ async fn reduce_right_join_1() -> Result<()> {
 
         // reduce to inner join
         let sql = "select * from t1 right join t2 on t1.t1_id = t2.t2_id where t1.t1_int is not null";
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
@@ -1665,8 +1658,7 @@ async fn reduce_right_join_1() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let expected = vec![
             "+-------+---------+--------+-------+---------+--------+",
@@ -1693,7 +1685,7 @@ async fn reduce_right_join_2() -> Result<()> {
 
         // reduce to inner join
         let sql = "select * from t1 right join t2 on t1.t1_id = t2.t2_id where not(t1.t1_int = t2.t2_int)";
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
@@ -1708,8 +1700,7 @@ async fn reduce_right_join_2() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let expected = vec![
             "+-------+---------+--------+-------+---------+--------+",
@@ -1736,7 +1727,7 @@ async fn reduce_full_join_to_right_join() -> Result<()> {
 
         // reduce to right join
         let sql = "select * from t1 full join t2 on t1.t1_id = t2.t2_id where t2.t2_name is not null";
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
@@ -1751,8 +1742,7 @@ async fn reduce_full_join_to_right_join() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let expected = vec![
             "+-------+---------+--------+-------+---------+--------+",
@@ -1781,7 +1771,7 @@ async fn reduce_full_join_to_left_join() -> Result<()> {
         // reduce to left join
         let sql =
             "select * from t1 full join t2 on t1.t1_id = t2.t2_id where t1.t1_name != 'b'";
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
@@ -1796,8 +1786,7 @@ async fn reduce_full_join_to_left_join() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let expected = vec![
             "+-------+---------+--------+-------+---------+--------+",
@@ -1823,7 +1812,7 @@ async fn reduce_full_join_to_inner_join() -> Result<()> {
 
         // reduce to inner join
         let sql = "select * from t1 full join t2 on t1.t1_id = t2.t2_id where t1.t1_name != 'b' and t2.t2_name = 'x'";
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
@@ -1839,8 +1828,7 @@ async fn reduce_full_join_to_inner_join() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let expected = vec![
             "+-------+---------+--------+-------+---------+--------+",
@@ -1887,7 +1875,7 @@ async fn sort_merge_join_on_date32() -> Result<()> {
 
     // inner sort merge join on data type (Date32)
     let sql = "select * from t1 join t2 on t1.c1 = t2.c1";
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let expected = vec![
@@ -1908,8 +1896,7 @@ async fn sort_merge_join_on_date32() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let expected = vec![
@@ -1933,7 +1920,7 @@ async fn sort_merge_join_on_decimal() -> Result<()> {
 
     // right join on data type (Decimal)
     let sql = "select * from t1 right join t2 on t1.c3 = t2.c3";
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(sql).await.expect(&msg);
     let physical_plan = dataframe.create_physical_plan().await?;
     let expected = vec![
@@ -1956,8 +1943,7 @@ async fn sort_merge_join_on_decimal() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let expected = vec![
@@ -1989,7 +1975,7 @@ async fn left_semi_join() -> Result<()> {
         .unwrap();
 
         let sql = "SELECT t1_id, t1_name FROM t1 WHERE t1_id IN (SELECT t2_id FROM t2) ORDER BY t1_id";
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
@@ -2026,8 +2012,7 @@ async fn left_semi_join() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
         let actual = execute_to_batches(&ctx, sql).await;
@@ -2178,7 +2163,7 @@ async fn right_semi_join() -> Result<()> {
         .unwrap();
 
         let sql = "SELECT t1_id, t1_name, t1_int FROM t1 WHERE EXISTS (SELECT * FROM t2 where t2.t2_id = t1.t1_id and t2.t2_name <> t1.t1_name) ORDER BY t1_id";
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
@@ -2201,8 +2186,8 @@ async fn right_semi_join() -> Result<()> {
                 "SortExec: [t1_id@0 ASC NULLS LAST]",
                 "  CoalescePartitionsExec",
                 "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
-                "      CoalesceBatchesExec: target_batch_size=4096",
-                "        RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "      RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "        CoalesceBatchesExec: target_batch_size=4096",
                 "          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
@@ -2212,8 +2197,7 @@ async fn right_semi_join() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
         let actual = execute_to_batches(&ctx, sql).await;
@@ -2263,7 +2247,7 @@ async fn reduce_cross_join_with_expr_join_key_all() -> Result<()> {
 
         // reduce to inner join
         let sql = "select * from t1 cross join t2 where t1.t1_id + 12 = t2.t2_id + 1";
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
@@ -2278,8 +2262,7 @@ async fn reduce_cross_join_with_expr_join_key_all() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let expected = vec![
             "+-------+---------+--------+-------+---------+--------+",
@@ -2306,7 +2289,7 @@ async fn reduce_cross_join_with_cast_expr_join_key() -> Result<()> {
 
         let sql =
             "select t1.t1_id, t2.t2_id, t1.t1_name from t1 cross join t2 where t1.t1_id + 11 = cast(t2.t2_id as BIGINT)";
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
         let plan = dataframe.into_optimized_plan()?;
         let expected = vec![
@@ -2321,8 +2304,7 @@ async fn reduce_cross_join_with_cast_expr_join_key() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let expected = vec![
             "+-------+-------+---------+",
@@ -2350,7 +2332,7 @@ async fn reduce_cross_join_with_wildcard_and_expr() -> Result<()> {
         let sql = "select *,t1.t1_id+11 from t1,t2 where t1.t1_id+11=t2.t2_id";
 
         // assert logical plan
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
         let plan = dataframe.into_optimized_plan()?;
 
@@ -2366,12 +2348,11 @@ async fn reduce_cross_join_with_wildcard_and_expr() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
         // assert physical plan
-        let msg = format!("Creating physical plan for '{}'", sql);
+        let msg = format!("Creating physical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
         let expected = if repartition_joins {
@@ -2410,8 +2391,7 @@ async fn reduce_cross_join_with_wildcard_and_expr() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
         // assert execution result
@@ -2443,7 +2423,7 @@ async fn both_side_expr_key_inner_join() -> Result<()> {
                          INNER JOIN t2 \
                          ON t1.t1_id + cast(12 as INT UNSIGNED)  = t2.t2_id + cast(1 as INT UNSIGNED)";
 
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
 
@@ -2452,29 +2432,29 @@ async fn both_side_expr_key_inner_join() -> Result<()> {
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
-                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + Int64(12)\", index: 2 }, Column { name: \"t2.t2_id + Int64(1)\", index: 1 })]",
+                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }, Column { name: \"t2.t2_id + UInt32(1)\", index: 1 })]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + Int64(12)\", index: 2 }], 2)",
-                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + CAST(12 AS UInt32) as t1.t1_id + Int64(12)]",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }], 2)",
+                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as t1.t1_id + UInt32(12)]",
                 "              RepartitionExec: partitioning=RoundRobinBatch(2)",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id + Int64(1)\", index: 1 }], 2)",
-                "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + CAST(1 AS UInt32) as t2.t2_id + Int64(1)]",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id + UInt32(1)\", index: 1 }], 2)",
+                "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as t2.t2_id + UInt32(1)]",
                 "              RepartitionExec: partitioning=RoundRobinBatch(2)",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
-           ]
+            ]
         } else {
             vec![
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
-                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + Int64(12)\", index: 2 }, Column { name: \"t2.t2_id + Int64(1)\", index: 1 })]",
+                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }, Column { name: \"t2.t2_id + UInt32(1)\", index: 1 })]",
                 "        CoalescePartitionsExec",
-                "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + CAST(12 AS UInt32) as t1.t1_id + Int64(12)]",
+                "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as t1.t1_id + UInt32(12)]",
                 "            RepartitionExec: partitioning=RoundRobinBatch(2)",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
-                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + CAST(1 AS UInt32) as t2.t2_id + Int64(1)]",
+                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as t2.t2_id + UInt32(1)]",
                 "          RepartitionExec: partitioning=RoundRobinBatch(2)",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
             ]
@@ -2483,8 +2463,7 @@ async fn both_side_expr_key_inner_join() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
         let expected = vec![
@@ -2515,7 +2494,7 @@ async fn left_side_expr_key_inner_join() -> Result<()> {
                          INNER JOIN t2 \
                          ON t1.t1_id + cast(11 as INT UNSIGNED)  = t2.t2_id";
 
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
 
@@ -2524,10 +2503,10 @@ async fn left_side_expr_key_inner_join() -> Result<()> {
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
-                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + Int64(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
+                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + Int64(11)\", index: 2 }], 2)",
-                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + CAST(11 AS UInt32) as t1.t1_id + Int64(11)]",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }], 2)",
+                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as t1.t1_id + UInt32(11)]",
                 "              RepartitionExec: partitioning=RoundRobinBatch(2)",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
@@ -2539,11 +2518,11 @@ async fn left_side_expr_key_inner_join() -> Result<()> {
             vec![
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
-                "    CoalesceBatchesExec: target_batch_size=4096",
-                "      RepartitionExec: partitioning=RoundRobinBatch(2)",
-                "        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + Int64(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
+                "    RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "      CoalesceBatchesExec: target_batch_size=4096",
+                "        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
                 "          CoalescePartitionsExec",
-                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + CAST(11 AS UInt32) as t1.t1_id + Int64(11)]",
+                "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as t1.t1_id + UInt32(11)]",
                 "              RepartitionExec: partitioning=RoundRobinBatch(2)",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "          MemoryExec: partitions=1, partition_sizes=[1]",
@@ -2553,8 +2532,7 @@ async fn left_side_expr_key_inner_join() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
         let expected = vec![
@@ -2585,7 +2563,7 @@ async fn right_side_expr_key_inner_join() -> Result<()> {
                          INNER JOIN t2 \
                          ON t1.t1_id = t2.t2_id - cast(11 as INT UNSIGNED)";
 
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
 
@@ -2594,14 +2572,14 @@ async fn right_side_expr_key_inner_join() -> Result<()> {
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@2 as t2_id]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
-                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - Int64(11)\", index: 1 })]",
+                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 1 })]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
                 "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
                 "            RepartitionExec: partitioning=RoundRobinBatch(2)",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - Int64(11)\", index: 1 }], 2)",
-                "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 - CAST(11 AS UInt32) as t2.t2_id - Int64(11)]",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - UInt32(11)\", index: 1 }], 2)",
+                "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
                 "              RepartitionExec: partitioning=RoundRobinBatch(2)",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
            ]
@@ -2610,9 +2588,9 @@ async fn right_side_expr_key_inner_join() -> Result<()> {
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@2 as t2_id]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
-                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - Int64(11)\", index: 1 })]",
+                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 1 })]",
                 "        MemoryExec: partitions=1, partition_sizes=[1]",
-                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 - CAST(11 AS UInt32) as t2.t2_id - Int64(11)]",
+                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
                 "          RepartitionExec: partitioning=RoundRobinBatch(2)",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
             ]
@@ -2621,8 +2599,7 @@ async fn right_side_expr_key_inner_join() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
         let expected = vec![
@@ -2653,7 +2630,7 @@ async fn select_wildcard_with_expr_key_inner_join() -> Result<()> {
                          INNER JOIN t2 \
                          ON t1.t1_id = t2.t2_id - cast(11 as INT UNSIGNED)";
 
-        let msg = format!("Creating logical plan for '{}'", sql);
+        let msg = format!("Creating logical plan for '{sql}'");
         let dataframe = ctx.sql(sql).await.expect(&msg);
         let physical_plan = dataframe.create_physical_plan().await?;
 
@@ -2662,14 +2639,14 @@ async fn select_wildcard_with_expr_key_inner_join() -> Result<()> {
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
-                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - Int64(11)\", index: 3 })]",
+                "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 3 })]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
                 "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
                 "            RepartitionExec: partitioning=RoundRobinBatch(2)",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - Int64(11)\", index: 3 }], 2)",
-                "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - CAST(11 AS UInt32) as t2.t2_id - Int64(11)]",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - UInt32(11)\", index: 3 }], 2)",
+                "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
                 "              RepartitionExec: partitioning=RoundRobinBatch(2)",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
            ]
@@ -2678,9 +2655,9 @@ async fn select_wildcard_with_expr_key_inner_join() -> Result<()> {
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, t2_id@3 as t2_id, t2_name@4 as t2_name, t2_int@5 as t2_int]",
                 "    CoalesceBatchesExec: target_batch_size=4096",
-                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - Int64(11)\", index: 3 })]",
+                "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 3 })]",
                 "        MemoryExec: partitions=1, partition_sizes=[1]",
-                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - CAST(11 AS UInt32) as t2.t2_id - Int64(11)]",
+                "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
                 "          RepartitionExec: partitioning=RoundRobinBatch(2)",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
             ]
@@ -2689,8 +2666,7 @@ async fn select_wildcard_with_expr_key_inner_join() -> Result<()> {
         let actual: Vec<&str> = formatted.trim().lines().collect();
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
         let expected = vec![
@@ -2717,7 +2693,7 @@ async fn join_with_type_coercion_for_equi_expr() -> Result<()> {
     let sql = "select t1.t1_id, t1.t1_name, t2.t2_id from t1 inner join t2 on t1.t1_id + 11 = t2.t2_id";
 
     // assert logical plan
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.into_optimized_plan().unwrap();
 
@@ -2733,8 +2709,7 @@ async fn join_with_type_coercion_for_equi_expr() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let expected = vec![
@@ -2760,7 +2735,7 @@ async fn join_only_with_filter() -> Result<()> {
     let sql = "select t1.t1_id, t1.t1_name, t2.t2_id from t1 inner join t2 on t1.t1_id * 4 < t2.t2_id";
 
     // assert logical plan
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.into_optimized_plan().unwrap();
 
@@ -2776,8 +2751,7 @@ async fn join_only_with_filter() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let expected = vec![
@@ -2804,7 +2778,7 @@ async fn type_coercion_join_with_filter_and_equi_expr() -> Result<()> {
                      on t1.t1_id * 5 = t2.t2_id and t1.t1_id * 4 < t2.t2_id";
 
     // assert logical plan
-    let msg = format!("Creating logical plan for '{}'", sql);
+    let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.into_optimized_plan().unwrap();
 
@@ -2820,8 +2794,7 @@ async fn type_coercion_join_with_filter_and_equi_expr() -> Result<()> {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     let expected = vec![

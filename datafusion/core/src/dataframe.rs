@@ -63,7 +63,7 @@ use crate::prelude::SessionContext;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
-/// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+/// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
 ///            .limit(0, Some(100))?;
@@ -87,13 +87,7 @@ impl DataFrame {
     }
 
     /// Create a physical plan
-    pub async fn create_physical_plan(mut self) -> Result<Arc<dyn ExecutionPlan>> {
-        self.create_physical_plan_impl().await
-    }
-
-    /// Temporary pending #4626
-    async fn create_physical_plan_impl(&mut self) -> Result<Arc<dyn ExecutionPlan>> {
-        self.session_state.execution_props.start_execution();
+    pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
         self.session_state.create_physical_plan(&self.plan).await
     }
 
@@ -106,7 +100,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.select_columns(&["a", "b"])?;
     /// # Ok(())
     /// # }
@@ -131,7 +125,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.select(vec![col("a") * col("b"), col("c")])?;
     /// # Ok(())
     /// # }
@@ -156,7 +150,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.filter(col("a").lt_eq(col("b")))?;
     /// # Ok(())
     /// # }
@@ -176,7 +170,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     ///
     /// // The following use is the equivalent of "SELECT MIN(b) GROUP BY a"
     /// let _ = df.clone().aggregate(vec![col("a")], vec![min(col("b"))])?;
@@ -208,7 +202,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.limit(0, Some(100))?;
     /// # Ok(())
     /// # }
@@ -229,7 +223,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let d2 = df.clone();
     /// let df = df.union(d2)?;
     /// # Ok(())
@@ -251,7 +245,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let d2 = df.clone();
     /// let df = df.union_distinct(d2)?;
     /// # Ok(())
@@ -274,7 +268,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.distinct()?;
     /// # Ok(())
     /// # }
@@ -295,7 +289,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.sort(vec![col("a").sort(true, true), col("b").sort(false, false)])?;
     /// # Ok(())
     /// # }
@@ -317,8 +311,8 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let left = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let right = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?
+    /// let left = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let right = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
     ///   .select(vec![
     ///     col("a").alias("a2"),
     ///     col("b").alias("b2"),
@@ -355,7 +349,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df1 = df.repartition(Partitioning::RoundRobinBatch(4))?;
     /// # Ok(())
     /// # }
@@ -376,7 +370,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let batches = df.collect().await?;
     /// # Ok(())
     /// # }
@@ -395,7 +389,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// df.show().await?;
     /// # Ok(())
     /// # }
@@ -413,7 +407,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// df.show_limit(10).await?;
     /// # Ok(())
     /// # }
@@ -435,7 +429,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let stream = df.execute_stream().await?;
     /// # Ok(())
     /// # }
@@ -455,7 +449,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let batches = df.collect_partitioned().await?;
     /// # Ok(())
     /// # }
@@ -474,7 +468,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let batches = df.execute_stream_partitioned().await?;
     /// # Ok(())
     /// # }
@@ -496,7 +490,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let schema = df.schema();
     /// # Ok(())
     /// # }
@@ -508,6 +502,11 @@ impl DataFrame {
     /// Return the unoptimized logical plan
     pub fn logical_plan(&self) -> &LogicalPlan {
         &self.plan
+    }
+
+    /// Returns both the [`LogicalPlan`] and [`SessionState`] that comprise this [`DataFrame`]
+    pub fn into_parts(self) -> (SessionState, LogicalPlan) {
+        (self.session_state, self.plan)
     }
 
     /// Return the logical plan represented by this DataFrame without running the optimizers
@@ -527,6 +526,15 @@ impl DataFrame {
     pub fn into_optimized_plan(self) -> Result<LogicalPlan> {
         // Optimize the plan first for better UX
         self.session_state.optimize(&self.plan)
+    }
+
+    /// Converts this [`DataFrame`] into a [`TableProvider`] that can be registered
+    /// as a table view using [`SessionContext::register_table`].
+    ///
+    /// Note: This discards the [`SessionState`] associated with this
+    /// [`DataFrame`] in favour of the one passed to [`TableProvider::scan`]
+    pub fn into_view(self) -> Arc<dyn TableProvider> {
+        Arc::new(DataFrameTableProvider { plan: self.plan })
     }
 
     /// Return the optimized logical plan represented by this DataFrame.
@@ -549,7 +557,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let batches = df.limit(0, Some(100))?.explain(false, false)?.collect().await?;
     /// # Ok(())
     /// # }
@@ -569,7 +577,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let f = df.registry();
     /// // use f.udf("name", vec![...]) to use the udf
     /// # Ok(())
@@ -587,7 +595,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let d2 = df.clone();
     /// let df = df.intersect(d2)?;
     /// # Ok(())
@@ -610,7 +618,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let d2 = df.clone();
     /// let df = df.except(d2)?;
     /// # Ok(())
@@ -627,24 +635,24 @@ impl DataFrame {
     }
 
     /// Write a `DataFrame` to a CSV file.
-    pub async fn write_csv(mut self, path: &str) -> Result<()> {
-        let plan = self.create_physical_plan_impl().await?;
+    pub async fn write_csv(self, path: &str) -> Result<()> {
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
         plan_to_csv(&self.session_state, plan, path).await
     }
 
     /// Write a `DataFrame` to a Parquet file.
     pub async fn write_parquet(
-        mut self,
+        self,
         path: &str,
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
-        let plan = self.create_physical_plan_impl().await?;
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
         plan_to_parquet(&self.session_state, plan, path, writer_properties).await
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.
-    pub async fn write_json(mut self, path: impl AsRef<str>) -> Result<()> {
-        let plan = self.create_physical_plan_impl().await?;
+    pub async fn write_json(self, path: impl AsRef<str>) -> Result<()> {
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
         plan_to_json(&self.session_state, plan, path).await
     }
 
@@ -656,7 +664,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.with_column("ab_sum", col("a") + col("b"))?;
     /// # Ok(())
     /// # }
@@ -706,7 +714,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.with_column_renamed("ab_sum", "total")?;
     /// # Ok(())
     /// # }
@@ -751,7 +759,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.cache().await?;
     /// # Ok(())
     /// # }
@@ -767,9 +775,12 @@ impl DataFrame {
     }
 }
 
-// TODO: This will introduce a ref cycle (#2659)
+struct DataFrameTableProvider {
+    plan: LogicalPlan,
+}
+
 #[async_trait]
-impl TableProvider for DataFrame {
+impl TableProvider for DataFrameTableProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -797,20 +808,14 @@ impl TableProvider for DataFrame {
 
     async fn scan(
         &self,
-        _state: &SessionState,
+        state: &SessionState,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut expr = self.clone();
+        let mut expr = LogicalPlanBuilder::from(self.plan.clone());
         if let Some(p) = projection {
-            let schema = TableProvider::schema(&expr).project(p)?;
-            let names = schema
-                .fields()
-                .iter()
-                .map(|field| field.name().as_str())
-                .collect::<Vec<_>>();
-            expr = expr.select_columns(names.as_slice())?;
+            expr = expr.select(p.iter().copied())?
         }
 
         // Add filter when given
@@ -818,13 +823,12 @@ impl TableProvider for DataFrame {
         if let Some(filter) = filter {
             expr = expr.filter(filter)?
         }
+        // add a limit if given
         if let Some(l) = limit {
             expr = expr.limit(0, Some(l))?
         }
-        // add a limit if given
-        Self::new(self.session_state.clone(), expr.plan)
-            .create_physical_plan()
-            .await
+        let plan = expr.build()?;
+        state.create_physical_plan(&plan).await
     }
 }
 
@@ -919,7 +923,7 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.register_batch("t", batch)?;
 
-        let df = ctx.table("t")?.select_columns(&["f.c1"])?;
+        let df = ctx.table("t").await?.select_columns(&["f.c1"])?;
 
         let df_results = df.collect().await?;
 
@@ -1039,7 +1043,7 @@ mod tests {
         ));
 
         // build query with a UDF using DataFrame API
-        let df = ctx.table("aggregate_test_100")?;
+        let df = ctx.table("aggregate_test_100").await?;
 
         let expr = df.registry().udf("my_fn")?.call(vec![col("c12")]);
         let df = df.select(vec![expr])?;
@@ -1101,10 +1105,10 @@ mod tests {
         let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
 
         // register a dataframe as a table
-        ctx.register_table("test_table", Arc::new(df_impl.clone()))?;
+        ctx.register_table("test_table", df_impl.clone().into_view())?;
 
         // pull the table out
-        let table = ctx.table("test_table")?;
+        let table = ctx.table("test_table").await?;
 
         let group_expr = vec![col("c1")];
         let aggr_expr = vec![sum(col("c12"))];
@@ -1151,7 +1155,7 @@ mod tests {
 
     /// Compare the formatted string representation of two plans for equality
     fn assert_same_plan(plan1: &LogicalPlan, plan2: &LogicalPlan) {
-        assert_eq!(format!("{:?}", plan1), format!("{:?}", plan2));
+        assert_eq!(format!("{plan1:?}"), format!("{plan2:?}"));
     }
 
     /// Create a logical plan from a SQL query
@@ -1164,7 +1168,7 @@ mod tests {
     async fn test_table_with_name(name: &str) -> Result<DataFrame> {
         let mut ctx = SessionContext::new();
         register_aggregate_csv(&mut ctx, name).await?;
-        ctx.table(name)
+        ctx.table(name).await
     }
 
     async fn test_table() -> Result<DataFrame> {
@@ -1179,7 +1183,7 @@ mod tests {
         let testdata = test_util::arrow_test_data();
         ctx.register_csv(
             table_name,
-            &format!("{}/csv/aggregate_test_100.csv", testdata),
+            &format!("{testdata}/csv/aggregate_test_100.csv"),
             CsvReadOptions::new().schema(schema.as_ref()),
         )
         .await?;
@@ -1300,12 +1304,19 @@ mod tests {
         let df = test_table().await?.select_columns(&["c1", "c2", "c3"])?;
         let ctx = SessionContext::new();
 
-        let table = Arc::new(df);
+        let table = df.into_view();
         ctx.register_table("t1", table.clone())?;
         ctx.register_table("t2", table)?;
         let df = ctx
-            .table("t1")?
-            .join(ctx.table("t2")?, JoinType::Inner, &["c1"], &["c1"], None)?
+            .table("t1")
+            .await?
+            .join(
+                ctx.table("t2").await?,
+                JoinType::Inner,
+                &["c1"],
+                &["c1"],
+                None,
+            )?
             .sort(vec![
                 // make the test deterministic
                 col("t1.c1").sort(true, true),
@@ -1382,10 +1393,11 @@ mod tests {
         )
         .await?;
 
-        ctx.register_table("t1", Arc::new(ctx.table("test")?))?;
+        ctx.register_table("t1", ctx.table("test").await?.into_view())?;
 
         let df = ctx
-            .table("t1")?
+            .table("t1")
+            .await?
             .filter(col("id").eq(lit(1)))?
             .select_columns(&["bool_col", "int_col"])?;
 
@@ -1466,7 +1478,8 @@ mod tests {
         ctx.register_batch("t", batch)?;
 
         let df = ctx
-            .table("t")?
+            .table("t")
+            .await?
             // try and create a column with a '.' in it
             .with_column("f.c2", lit("hello"))?;
 

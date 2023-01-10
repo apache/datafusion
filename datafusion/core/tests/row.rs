@@ -82,7 +82,7 @@ async fn get_exec(
     limit: Option<usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let testdata = datafusion::test_util::parquet_test_data();
-    let filename = format!("{}/{}", testdata, file_name);
+    let filename = format!("{testdata}/{file_name}");
 
     let path = Path::from_filesystem_path(filename).unwrap();
 
@@ -113,6 +113,7 @@ async fn get_exec(
                 limit,
                 table_partition_cols: vec![],
                 output_ordering: None,
+                infinite_source: false,
             },
             &[],
         )

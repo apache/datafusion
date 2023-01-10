@@ -28,7 +28,6 @@ use arrow::{
     util::pretty::pretty_format_batches,
 };
 use chrono::{Datelike, Duration};
-use datafusion::config::OPT_PARQUET_ENABLE_PAGE_INDEX;
 use datafusion::{
     datasource::{provider_as_source, TableProvider},
     physical_plan::{
@@ -140,9 +139,8 @@ impl ContextWithParquet {
         let file = match unit {
             Unit::RowGroup => make_test_file_rg(scenario).await,
             Unit::Page => {
-                config
-                    .config_options_mut()
-                    .set_bool(OPT_PARQUET_ENABLE_PAGE_INDEX, true);
+                let config = config.config_options_mut();
+                config.execution.parquet.enable_page_index = true;
                 make_test_file_page(scenario).await
             }
         };
@@ -167,7 +165,7 @@ impl ContextWithParquet {
     /// runs a query like "SELECT * from t WHERE <expr> and returns
     /// the number of output rows and normalized execution metrics
     async fn query_with_expr(&mut self, expr: Expr) -> TestOutput {
-        let sql = format!("EXPR only: {:?}", expr);
+        let sql = format!("EXPR only: {expr:?}");
         let logical_plan = LogicalPlanBuilder::scan(
             "t",
             provider_as_source(self.provider.clone()),
@@ -184,7 +182,7 @@ impl ContextWithParquet {
     /// Runs the specified SQL query and returns the number of output
     /// rows and normalized execution metrics
     async fn query(&mut self, sql: &str) -> TestOutput {
-        println!("Planning sql {}", sql);
+        println!("Planning sql {sql}");
         let logical_plan = self
             .ctx
             .sql(sql)
@@ -210,15 +208,15 @@ impl ContextWithParquet {
             .expect("getting input");
         let pretty_input = pretty_format_batches(&input).unwrap().to_string();
 
-        let logical_plan = self.ctx.optimize(&logical_plan).expect("optimizing plan");
+        let state = self.ctx.state();
+        let logical_plan = state.optimize(&logical_plan).expect("optimizing plan");
 
-        let physical_plan = self
-            .ctx
+        let physical_plan = state
             .create_physical_plan(&logical_plan)
             .await
             .expect("creating physical plan");
 
-        let task_ctx = self.ctx.task_ctx();
+        let task_ctx = state.task_ctx();
         let results = datafusion::physical_plan::collect(physical_plan.clone(), task_ctx)
             .await
             .expect("Running");
@@ -309,7 +307,7 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
     let names = ts_nanos
         .iter()
         .enumerate()
-        .map(|(i, _)| format!("Row {} + {}", i, offset))
+        .map(|(i, _)| format!("Row {i} + {offset}"))
         .collect::<Vec<_>>();
 
     let arr_nanos = TimestampNanosecondArray::from(ts_nanos);
@@ -400,7 +398,7 @@ fn make_date_batch(offset: Duration) -> RecordBatch {
     let names = date_strings
         .iter()
         .enumerate()
-        .map(|(i, val)| format!("Row {} + {}: {:?}", i, offset, val))
+        .map(|(i, val)| format!("Row {i} + {offset}: {val:?}"))
         .collect::<Vec<_>>();
 
     // Copied from `cast.rs` cast kernel due to lack of temporal kernels

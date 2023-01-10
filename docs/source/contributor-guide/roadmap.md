@@ -59,7 +59,7 @@ to provide:
 ### Query Optimizer
 
 - More sophisticated cost based optimizer for join ordering
-- Implement advanced query optimization framework (Tokomak) #440
+- Implement advanced query optimization framework (Tokomak) [#440](https://github.com/apache/arrow-datafusion/issues/440)
 - Finer optimizations for group by and aggregate functions
 
 ### Datasources
@@ -70,8 +70,8 @@ to provide:
 ### Runtime / Infrastructure
 
 - Migrate to some sort of arrow2 based implementation (see [milestone](https://github.com/apache/arrow-datafusion/milestone/3) for more details)
-- Add DataFusion to h2oai/db-benchmark [147](https://github.com/apache/arrow-datafusion/issues/147)
-- Improve build time [348](https://github.com/apache/arrow-datafusion/issues/348)
+- Add DataFusion to h2oai/db-benchmark [#147](https://github.com/apache/arrow-datafusion/issues/147)
+- Improve build time [#348](https://github.com/apache/arrow-datafusion/issues/348)
 
 ### Resource Management
 

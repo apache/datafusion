@@ -25,7 +25,7 @@ use datafusion_expr::expr::{BinaryExpr, Expr};
 use datafusion_expr::logical_plan::{
     CrossJoin, Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
-use datafusion_expr::utils::{can_hash, check_all_column_from_schema};
+use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{and, build_join_schema, or, ExprSchemable, Operator};
 
 #[derive(Default)]
@@ -183,42 +183,21 @@ fn find_inner_join(
         let mut join_keys = vec![];
 
         for (l, r) in &mut *possible_join_keys {
-            let left_using_columns = l.to_columns()?;
-            let right_using_columns = r.to_columns()?;
-
-            // Conditions like a = 10, will be treated as filter.
-            if left_using_columns.is_empty() || right_using_columns.is_empty() {
-                continue;
-            }
-
-            let l_is_left = check_all_column_from_schema(
-                &left_using_columns,
+            let key_pair = find_valid_equijoin_key_pair(
+                l,
+                r,
                 left_input.schema().clone(),
-            )?;
-            let r_is_right = check_all_column_from_schema(
-                &right_using_columns,
                 right_input.schema().clone(),
             )?;
 
-            let r_is_left_and_l_is_right = || {
-                let result = check_all_column_from_schema(
-                    &right_using_columns,
-                    left_input.schema().clone(),
-                )? && check_all_column_from_schema(
-                    &left_using_columns,
-                    right_input.schema().clone(),
-                )?;
-
-                Result::Ok(result)
-            };
-
             // Save join keys
-            if l_is_left && r_is_right && can_hash(&l.get_type(left_input.schema())?) {
-                join_keys.push((l.clone(), r.clone()));
-            } else if r_is_left_and_l_is_right()?
-                && can_hash(&l.get_type(right_input.schema())?)
-            {
-                join_keys.push((r.clone(), l.clone()));
+            match key_pair {
+                Some((valid_l, valid_r)) => {
+                    if can_hash(&valid_l.get_type(left_input.schema())?) {
+                        join_keys.push((valid_l, valid_r));
+                    }
+                }
+                _ => continue,
             }
         }
 
@@ -372,8 +351,7 @@ mod tests {
 
         assert_eq!(
             expected, actual,
-            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-            expected, actual
+            "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
 
         assert_eq!(plan.schema(), optimized_plan.schema())

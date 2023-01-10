@@ -106,7 +106,7 @@ fn register_median_test_tables(ctx: &SessionContext) {
             vec![values],
         )
         .unwrap();
-        let table_name = &format!("median_{}", name);
+        let table_name = &format!("median_{name}");
         ctx.register_batch(table_name, batch).unwrap();
     }
 }
@@ -134,9 +134,8 @@ async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
     )
     STORED AS CSV
     WITH HEADER ROW
-    LOCATION '{}/csv/aggregate_test_100.csv'
-    ",
-            test_data
+    LOCATION '{test_data}/csv/aggregate_test_100.csv'
+    "
         ))
         .await
         .expect("Creating dataframe for CREATE EXTERNAL TABLE");
@@ -193,7 +192,7 @@ async fn register_aggregate_test_100(ctx: &SessionContext) {
     let schema = test_util::aggr_test_schema();
     ctx.register_csv(
         "aggregate_test_100",
-        &format!("{}/csv/aggregate_test_100.csv", test_data),
+        &format!("{test_data}/csv/aggregate_test_100.csv"),
         CsvReadOptions::new().schema(&schema),
     )
     .await

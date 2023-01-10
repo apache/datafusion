@@ -36,7 +36,9 @@ use datafusion::physical_plan::file_format::FileScanConfig;
 
 use datafusion::physical_plan::expressions::{Count, DistinctCount, Literal};
 
-use datafusion::physical_plan::expressions::{Avg, BinaryExpr, Column, Max, Min, Sum};
+use datafusion::physical_plan::expressions::{
+    Avg, BinaryExpr, Column, LikeExpr, Max, Min, Sum,
+};
 use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
 use crate::protobuf;
@@ -130,8 +132,7 @@ impl TryFrom<Arc<dyn AggregateExpr>> for protobuf::PhysicalExprNode {
             Ok(AggregateFunction::ApproxMedian.into())
         } else {
             Err(DataFusionError::NotImplemented(format!(
-                "Aggregate function not supported: {:?}",
-                a
+                "Aggregate function not supported: {a:?}"
             )))
         }?;
         let expressions: Vec<protobuf::PhysicalExprNode> = a
@@ -331,10 +332,20 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                     ),
                 ),
             })
+        } else if let Some(expr) = expr.downcast_ref::<LikeExpr>() {
+            Ok(protobuf::PhysicalExprNode {
+                expr_type: Some(protobuf::physical_expr_node::ExprType::LikeExpr(
+                    Box::new(protobuf::PhysicalLikeExprNode {
+                        negated: expr.negated(),
+                        case_insensitive: expr.case_insensitive(),
+                        expr: Some(Box::new(expr.expr().to_owned().try_into()?)),
+                        pattern: Some(Box::new(expr.pattern().to_owned().try_into()?)),
+                    }),
+                )),
+            })
         } else {
             Err(DataFusionError::Internal(format!(
-                "physical_plan::to_proto() unsupported expression {:?}",
-                value
+                "physical_plan::to_proto() unsupported expression {value:?}"
             )))
         }
     }

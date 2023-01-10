@@ -32,8 +32,8 @@ use crate::{
         Union, Values, Window,
     },
     utils::{
-        can_hash, check_all_column_from_schema, expand_qualified_wildcard,
-        expand_wildcard, group_window_expr_by_sort_keys,
+        can_hash, expand_qualified_wildcard, expand_wildcard,
+        find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
     },
     Expr, ExprSchemable, TableSource,
 };
@@ -160,7 +160,7 @@ impl LogicalPlanBuilder {
                         let data_type = expr.get_type(&empty_schema)?;
                         if let Some(prev_data_type) = &field_types[j] {
                             if prev_data_type != &data_type {
-                                let err = format!("Inconsistent data type across values list at row {} column {}", i, j);
+                                let err = format!("Inconsistent data type across values list at row {i} column {j}");
                                 return Err(DataFusionError::Plan(err));
                             }
                         }
@@ -273,7 +273,8 @@ impl LogicalPlanBuilder {
         });
         for (_, exprs) in groups {
             let window_exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-            // the partition and sort itself is done at physical level, see the BasicEnforcement rule
+            // Partition and sorting is done at physical level, see the EnforceDistribution
+            // and EnforceSorting rules.
             plan = LogicalPlanBuilder::from(plan)
                 .window(window_exprs)?
                 .build()?;
@@ -286,6 +287,16 @@ impl LogicalPlanBuilder {
         expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
         Ok(Self::from(project(self.plan, expr)?))
+    }
+
+    /// Select the given column indices
+    pub fn select(self, indices: impl IntoIterator<Item = usize>) -> Result<Self> {
+        let fields = self.plan.schema().fields();
+        let exprs: Vec<_> = indices
+            .into_iter()
+            .map(|x| Expr::Column(fields[x].qualified_column()))
+            .collect();
+        self.project(exprs)
     }
 
     /// Apply a filter
@@ -681,8 +692,8 @@ impl LogicalPlanBuilder {
         let window_expr = normalize_cols(window_expr, &self.plan)?;
         let all_expr = window_expr.iter();
         validate_unique_names("Windows", all_expr.clone())?;
-        let mut window_fields: Vec<DFField> = exprlist_to_fields(all_expr, &self.plan)?;
-        window_fields.extend_from_slice(self.plan.schema().fields());
+        let mut window_fields: Vec<DFField> = self.plan.schema().fields().clone();
+        window_fields.extend_from_slice(&exprlist_to_fields(all_expr, &self.plan)?);
         let metadata = self.plan.schema().metadata().clone();
 
         Ok(Self::from(LogicalPlan::Window(Window {
@@ -778,8 +789,7 @@ impl LogicalPlanBuilder {
 
         if left_len != right_len {
             return Err(DataFusionError::Plan(format!(
-                "INTERSECT/EXCEPT query must have the same number of columns. Left is {} and right is {}.",
-                left_len, right_len
+                "INTERSECT/EXCEPT query must have the same number of columns. Left is {left_len} and right is {right_len}."
             )));
         }
 
@@ -853,39 +863,16 @@ impl LogicalPlanBuilder {
                     &[right_using_columns],
                 )?;
 
-                let normalized_left_using_columns = normalized_left_key.to_columns()?;
-                let l_is_left = check_all_column_from_schema(
-                    &normalized_left_using_columns,
-                    self.plan.schema().clone(),
-                )?;
-
-                let normalized_right_using_columns = normalized_right_key.to_columns()?;
-                let r_is_right = check_all_column_from_schema(
-                    &normalized_right_using_columns,
-                    right.schema().clone(),
-                )?;
-
-                let r_is_left_and_l_is_right = || {
-                    let result = check_all_column_from_schema(
-                        &normalized_right_using_columns,
+                // find valid equijoin
+                find_valid_equijoin_key_pair(
+                        &normalized_left_key,
+                        &normalized_right_key,
                         self.plan.schema().clone(),
-                    )? && check_all_column_from_schema(
-                        &normalized_left_using_columns,
                         right.schema().clone(),
-                    )?;
-                    Result::Ok(result)
-                };
-
-                if l_is_left && r_is_right {
-                    Ok((normalized_left_key, normalized_right_key))
-                } else if r_is_left_and_l_is_right()?{
-                    Ok((normalized_right_key, normalized_left_key))
-                } else {
-                    Err(DataFusionError::Plan(format!(
-                        "can't create join plan, join key should belong to one input, error key: ({},{})",
-                        normalized_left_key, normalized_right_key
-                    )))
-                }
+                    )?.ok_or_else(||
+                        DataFusionError::Plan(format!(
+                            "can't create join plan, join key should belong to one input, error key: ({normalized_left_key},{normalized_right_key})"
+                        )))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -949,10 +936,9 @@ pub(crate) fn validate_unique_names<'a>(
             },
             Some((existing_position, existing_expr)) => {
                 Err(DataFusionError::Plan(
-                    format!("{} require unique expression names \
-                             but the expression \"{:?}\" at position {} and \"{:?}\" \
-                             at position {} have the same name. Consider aliasing (\"AS\") one of them.",
-                             node_name, existing_expr, existing_position, expr, position,
+                    format!("{node_name} require unique expression names \
+                             but the expression \"{existing_expr:?}\" at position {existing_position} and \"{expr:?}\" \
+                             at position {position} have the same name. Consider aliasing (\"AS\") one of them.",
                             )
                 ))
             }
@@ -987,8 +973,7 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     let right_col_num = right_plan.schema().fields().len();
     if right_col_num != left_col_num {
         return Err(DataFusionError::Plan(format!(
-            "Union queries must have the same number of columns, (left is {}, right is {})",
-            left_col_num, right_col_num)
+            "Union queries must have the same number of columns, (left is {left_col_num}, right is {right_col_num})")
         ));
     }
 
@@ -1068,8 +1053,9 @@ pub fn project(
             Expr::Wildcard => {
                 projected_expr.extend(expand_wildcard(input_schema, &plan)?)
             }
-            Expr::QualifiedWildcard { ref qualifier } => projected_expr
-                .extend(expand_qualified_wildcard(qualifier, input_schema, &plan)?),
+            Expr::QualifiedWildcard { ref qualifier } => {
+                projected_expr.extend(expand_qualified_wildcard(qualifier, input_schema)?)
+            }
             _ => projected_expr
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
@@ -1127,7 +1113,7 @@ pub fn wrap_projection_for_join_if_necessary(
             //  then a and cast(a as int) will use the same field name - `a` in projection schema.
             //  https://github.com/apache/arrow-datafusion/issues/4478
             if matches!(key, Expr::Cast(_)) || matches!(key, Expr::TryCast(_)) {
-                let alias = format!("{:?}", key);
+                let alias = format!("{key:?}");
                 key.clone().alias(alias)
             } else {
                 key.clone()
@@ -1210,7 +1196,7 @@ mod tests {
         \n  Filter: employee_csv.state = Utf8(\"CO\")\
         \n    TableScan: employee_csv projection=[id, state]";
 
-        assert_eq!(expected, format!("{:?}", plan));
+        assert_eq!(expected, format!("{plan:?}"));
 
         Ok(())
     }
@@ -1243,7 +1229,7 @@ mod tests {
                 \n    Aggregate: groupBy=[[employee_csv.state]], aggr=[[SUM(employee_csv.salary) AS total_salary]]\
                 \n      TableScan: employee_csv projection=[state, salary]";
 
-        assert_eq!(expected, format!("{:?}", plan));
+        assert_eq!(expected, format!("{plan:?}"));
 
         Ok(())
     }
@@ -1261,7 +1247,7 @@ mod tests {
         let expected = "Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST\
         \n  TableScan: employee_csv projection=[state, salary]";
 
-        assert_eq!(expected, format!("{:?}", plan));
+        assert_eq!(expected, format!("{plan:?}"));
 
         Ok(())
     }
@@ -1281,7 +1267,7 @@ mod tests {
         \n    TableScan: t1\
         \n    TableScan: t2";
 
-        assert_eq!(expected, format!("{:?}", plan));
+        assert_eq!(expected, format!("{plan:?}"));
 
         Ok(())
     }
@@ -1305,7 +1291,7 @@ mod tests {
         \n  TableScan: employee_csv projection=[state, salary]\
         \n  TableScan: employee_csv projection=[state, salary]";
 
-        assert_eq!(expected, format!("{:?}", plan));
+        assert_eq!(expected, format!("{plan:?}"));
 
         Ok(())
     }
@@ -1331,7 +1317,7 @@ mod tests {
         \n    TableScan: employee_csv projection=[state, salary]\
         \n    TableScan: employee_csv projection=[state, salary]";
 
-        assert_eq!(expected, format!("{:?}", plan));
+        assert_eq!(expected, format!("{plan:?}"));
 
         Ok(())
     }
@@ -1367,7 +1353,7 @@ mod tests {
         \n    Filter: employee_csv.state = Utf8(\"CO\")\
         \n      TableScan: employee_csv projection=[id, state]";
 
-        assert_eq!(expected, format!("{:?}", plan));
+        assert_eq!(expected, format!("{plan:?}"));
 
         Ok(())
     }
@@ -1394,7 +1380,7 @@ mod tests {
         \n        TableScan: foo\
         \n  Projection: bar.a\
         \n    TableScan: bar";
-        assert_eq!(expected, format!("{:?}", outer_query));
+        assert_eq!(expected, format!("{outer_query:?}"));
 
         Ok(())
     }
@@ -1422,7 +1408,7 @@ mod tests {
         \n        TableScan: foo\
         \n  Projection: bar.a\
         \n    TableScan: bar";
-        assert_eq!(expected, format!("{:?}", outer_query));
+        assert_eq!(expected, format!("{outer_query:?}"));
 
         Ok(())
     }
@@ -1448,7 +1434,7 @@ mod tests {
         \n      Projection: foo.b\
         \n        TableScan: foo\
         \n  TableScan: bar";
-        assert_eq!(expected, format!("{:?}", outer_query));
+        assert_eq!(expected, format!("{outer_query:?}"));
 
         Ok(())
     }

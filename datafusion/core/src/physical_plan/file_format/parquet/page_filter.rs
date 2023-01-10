@@ -168,8 +168,7 @@ impl PagePruningPredicate {
                                 )
                                 .map_err(|e| {
                                     ArrowError::ParquetError(format!(
-                                        "Fail in prune_pages_in_one_row_group: {}",
-                                        e
+                                        "Fail in prune_pages_in_one_row_group: {e}"
                                     ))
                                 }),
                             );
@@ -251,7 +250,7 @@ fn prune_pages_in_one_row_group(
                 let mut sum_row = *row_vec.first().unwrap();
                 let mut selected = *values.first().unwrap();
                 trace!("Pruned to to {:?} using {:?}", values, pruning_stats);
-                for (i, &f) in values.iter().skip(1).enumerate() {
+                for (i, &f) in values.iter().enumerate().skip(1) {
                     if f == selected {
                         sum_row += *row_vec.get(i).unwrap();
                     } else {
@@ -381,15 +380,28 @@ macro_rules! get_min_max_values_for_page_index {
                     vec.iter().map(|x| x.$func().cloned()),
                 )))
             }
-            Index::BYTE_ARRAY(index) => {
-                let vec = &index.indexes;
-                let array: StringArray = vec
-                    .iter()
-                    .map(|x| x.$func())
-                    .map(|x| x.and_then(|x| std::str::from_utf8(x).ok()))
-                    .collect();
-                Some(Arc::new(array))
-            }
+            Index::BYTE_ARRAY(index) => match $self.target_type {
+                Some(DataType::Decimal128(precision, scale)) => {
+                    let vec = &index.indexes;
+                    Decimal128Array::from(
+                        vec.iter()
+                            .map(|x| x.$func().and_then(|x| Some(from_bytes_to_i128(x))))
+                            .collect::<Vec<Option<i128>>>(),
+                    )
+                    .with_precision_and_scale(*precision, *scale)
+                    .ok()
+                    .map(|arr| Arc::new(arr) as ArrayRef)
+                }
+                _ => {
+                    let vec = &index.indexes;
+                    let array: StringArray = vec
+                        .iter()
+                        .map(|x| x.$func())
+                        .map(|x| x.and_then(|x| std::str::from_utf8(x).ok()))
+                        .collect();
+                    Some(Arc::new(array))
+                }
+            },
             Index::INT96(_) => {
                 //Todo support these type
                 None
@@ -443,10 +455,15 @@ impl<'a> PruningStatistics for PagesPruningStatistics<'a> {
             Index::DOUBLE(index) => Some(Arc::new(Int64Array::from_iter(
                 index.indexes.iter().map(|x| x.null_count),
             ))),
-            Index::INT96(_) | Index::BYTE_ARRAY(_) | Index::FIXED_LEN_BYTE_ARRAY(_) => {
-                // Todo support these types
-                None
-            }
+            Index::INT96(index) => Some(Arc::new(Int64Array::from_iter(
+                index.indexes.iter().map(|x| x.null_count),
+            ))),
+            Index::BYTE_ARRAY(index) => Some(Arc::new(Int64Array::from_iter(
+                index.indexes.iter().map(|x| x.null_count),
+            ))),
+            Index::FIXED_LEN_BYTE_ARRAY(index) => Some(Arc::new(Int64Array::from_iter(
+                index.indexes.iter().map(|x| x.null_count),
+            ))),
         }
     }
 }

@@ -1,7 +1,7 @@
 Sort: supplier.s_acctbal DESC NULLS FIRST, nation.n_name ASC NULLS LAST, supplier.s_name ASC NULLS LAST, part.p_partkey ASC NULLS LAST
   Projection: supplier.s_acctbal, supplier.s_name, nation.n_name, part.p_partkey, part.p_mfgr, supplier.s_address, supplier.s_phone, supplier.s_comment
     Projection: part.p_partkey, part.p_mfgr, supplier.s_name, supplier.s_address, supplier.s_phone, supplier.s_acctbal, supplier.s_comment, nation.n_name
-      Inner Join: part.p_partkey = __sq_1.ps_partkey, partsupp.ps_supplycost = __sq_1.__value
+      Inner Join: part.p_partkey = __scalar_sq_1.ps_partkey, partsupp.ps_supplycost = __scalar_sq_1.__value
         Inner Join: nation.n_regionkey = region.r_regionkey
           Inner Join: supplier.s_nationkey = nation.n_nationkey
             Inner Join: partsupp.ps_suppkey = supplier.s_suppkey
@@ -13,7 +13,7 @@ Sort: supplier.s_acctbal DESC NULLS FIRST, nation.n_name ASC NULLS LAST, supplie
             TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
           Filter: region.r_name = Utf8("EUROPE")
             TableScan: region projection=[r_regionkey, r_name]
-        SubqueryAlias: __sq_1
+        SubqueryAlias: __scalar_sq_1
           Projection: partsupp.ps_partkey, MIN(partsupp.ps_supplycost) AS __value
             Aggregate: groupBy=[[partsupp.ps_partkey]], aggr=[[MIN(partsupp.ps_supplycost)]]
               Inner Join: nation.n_regionkey = region.r_regionkey

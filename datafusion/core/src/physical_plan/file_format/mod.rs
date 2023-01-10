@@ -104,6 +104,8 @@ pub struct FileScanConfig {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// The order in which the data is sorted, if known.
     pub output_ordering: Option<Vec<PhysicalSortExpr>>,
+    /// Indicates whether this plan may produce an infinite stream of records.
+    pub infinite_source: bool,
 }
 
 impl FileScanConfig {
@@ -809,6 +811,7 @@ mod tests {
             statistics,
             table_partition_cols,
             output_ordering: None,
+            infinite_source: false,
         }
     }
 

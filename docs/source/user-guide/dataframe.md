@@ -39,7 +39,7 @@ Here is a minimal example showing the execution of a query using the DataFrame A
 
 ```rust
 let ctx = SessionContext::new();
-let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
 let df = df.filter(col("a").lt_eq(col("b")))?
            .aggregate(vec![col("a")], vec![min(col("b"))])?
            .limit(0, Some(100))?;
