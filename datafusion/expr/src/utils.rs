@@ -150,13 +150,23 @@ pub fn expand_wildcard(schema: &DFSchema, plan: &LogicalPlan) -> Result<Vec<Expr
     let using_columns = plan.using_columns()?;
     let columns_to_skip = using_columns
         .into_iter()
-        // For each USING JOIN condition, only expand to one column in projection
+        // For each USING JOIN condition, only expand to one of each join column in projection
         .flat_map(|cols| {
             let mut cols = cols.into_iter().collect::<Vec<_>>();
             // sort join columns to make sure we consistently keep the same
             // qualified column
             cols.sort();
-            cols.into_iter().skip(1)
+            let mut out_column_names: HashSet<String> = HashSet::new();
+            cols.into_iter()
+                .filter_map(|c| {
+                    if out_column_names.contains(&c.name) {
+                        Some(c)
+                    } else {
+                        out_column_names.insert(c.name);
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
         })
         .collect::<HashSet<_>>();
 
@@ -186,7 +196,6 @@ pub fn expand_wildcard(schema: &DFSchema, plan: &LogicalPlan) -> Result<Vec<Expr
 pub fn expand_qualified_wildcard(
     qualifier: &str,
     schema: &DFSchema,
-    plan: &LogicalPlan,
 ) -> Result<Vec<Expr>> {
     let qualified_fields: Vec<DFField> = schema
         .fields_with_qualified(qualifier)
@@ -198,9 +207,14 @@ pub fn expand_qualified_wildcard(
             "Invalid qualifier {qualifier}"
         )));
     }
-    let qualifier_schema =
+    let qualified_schema =
         DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
-    expand_wildcard(&qualifier_schema, plan)
+    // if qualified, allow all columns in output (i.e. ignore using column check)
+    Ok(qualified_schema
+        .fields()
+        .iter()
+        .map(|f| Expr::Column(f.qualified_column()))
+        .collect::<Vec<Expr>>())
 }
 
 /// (expr, "is the SortExpr for window (either comes from PARTITION BY or ORDER BY columns)")

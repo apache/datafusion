@@ -428,7 +428,7 @@ mod tests {
         )
         .await?;
 
-        ctx.register_table("t1", Arc::new(ctx.table("test").await?))?;
+        ctx.register_table("t1", ctx.table("test").await?.into_view())?;
 
         ctx.sql("CREATE VIEW t2 as SELECT * FROM t1").await?;
 
@@ -458,7 +458,7 @@ mod tests {
         )
         .await?;
 
-        ctx.register_table("t1", Arc::new(ctx.table("test").await?))?;
+        ctx.register_table("t1", ctx.table("test").await?.into_view())?;
 
         ctx.sql("CREATE VIEW t2 as SELECT * FROM t1").await?;
 

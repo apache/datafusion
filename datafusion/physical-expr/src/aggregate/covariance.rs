@@ -253,33 +253,35 @@ impl Accumulator for CovarianceAccumulator {
         let mut arr1 = downcast_value!(values1, Float64Array).iter().flatten();
         let mut arr2 = downcast_value!(values2, Float64Array).iter().flatten();
 
-        for _i in 0..values1.len() {
-            let value1 = arr1.next();
-            let value2 = arr2.next();
+        for i in 0..values1.len() {
+            let value1 = if values1.is_valid(i) {
+                arr1.next()
+            } else {
+                None
+            };
+            let value2 = if values2.is_valid(i) {
+                arr2.next()
+            } else {
+                None
+            };
 
             if value1.is_none() || value2.is_none() {
-                if value1.is_none() && value2.is_none() {
-                    continue;
-                } else {
-                    return Err(DataFusionError::Internal(
-                        "The two columns are not aligned".to_string(),
-                    ));
-                }
-            } else {
-                let value1 = unwrap_or_internal_err!(value1);
-                let value2 = unwrap_or_internal_err!(value2);
-                let new_count = self.count + 1;
-                let delta1 = value1 - self.mean1;
-                let new_mean1 = delta1 / new_count as f64 + self.mean1;
-                let delta2 = value2 - self.mean2;
-                let new_mean2 = delta2 / new_count as f64 + self.mean2;
-                let new_c = delta1 * (value2 - new_mean2) + self.algo_const;
-
-                self.count += 1;
-                self.mean1 = new_mean1;
-                self.mean2 = new_mean2;
-                self.algo_const = new_c;
+                continue;
             }
+
+            let value1 = unwrap_or_internal_err!(value1);
+            let value2 = unwrap_or_internal_err!(value2);
+            let new_count = self.count + 1;
+            let delta1 = value1 - self.mean1;
+            let new_mean1 = delta1 / new_count as f64 + self.mean1;
+            let delta2 = value2 - self.mean2;
+            let new_mean2 = delta2 / new_count as f64 + self.mean2;
+            let new_c = delta1 * (value2 - new_mean2) + self.algo_const;
+
+            self.count += 1;
+            self.mean1 = new_mean1;
+            self.mean2 = new_mean2;
+            self.algo_const = new_c;
         }
 
         Ok(())
@@ -291,31 +293,38 @@ impl Accumulator for CovarianceAccumulator {
         let mut arr1 = downcast_value!(values1, Float64Array).iter().flatten();
         let mut arr2 = downcast_value!(values2, Float64Array).iter().flatten();
 
-        for _i in 0..values1.len() {
-            let value1 = arr1.next();
-            let value2 = arr2.next();
+        for i in 0..values1.len() {
+            let value1 = if values1.is_valid(i) {
+                arr1.next()
+            } else {
+                None
+            };
+            let value2 = if values2.is_valid(i) {
+                arr2.next()
+            } else {
+                None
+            };
 
             if value1.is_none() || value2.is_none() {
-                if value1.is_none() && value2.is_none() {
-                    continue;
-                } else {
-                    return Err(DataFusionError::Internal(
-                        "The two columns are not aligned".to_string(),
-                    ));
-                }
+                continue;
             }
+
+            let value1 = unwrap_or_internal_err!(value1);
+            let value2 = unwrap_or_internal_err!(value2);
+
             let new_count = self.count - 1;
-            let delta1 = self.mean1 - value1.unwrap();
+            let delta1 = self.mean1 - value1;
             let new_mean1 = delta1 / new_count as f64 + self.mean1;
-            let delta2 = self.mean2 - value2.unwrap();
+            let delta2 = self.mean2 - value2;
             let new_mean2 = delta2 / new_count as f64 + self.mean2;
-            let new_c = self.algo_const - delta1 * (new_mean2 - value2.unwrap());
+            let new_c = self.algo_const - delta1 * (new_mean2 - value2);
 
             self.count -= 1;
             self.mean1 = new_mean1;
             self.mean2 = new_mean2;
             self.algo_const = new_c;
         }
+
         Ok(())
     }
 
@@ -361,13 +370,7 @@ impl Accumulator for CovarianceAccumulator {
             }
         };
 
-        if count <= 1 {
-            return Err(DataFusionError::Internal(
-                "At least two values are needed to calculate covariance".to_string(),
-            ));
-        }
-
-        if self.count == 0 {
+        if count == 0 {
             Ok(ScalarValue::Float64(None))
         } else {
             Ok(ScalarValue::Float64(Some(self.algo_const / count as f64)))
@@ -529,25 +532,60 @@ mod tests {
 
     #[test]
     fn covariance_i32_with_nulls_2() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
-        let b: ArrayRef = Arc::new(Int32Array::from(vec![Some(4), Some(5), Some(6)]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            None,
+            Some(3),
+            None,
+        ]));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(4),
+            Some(9),
+            Some(5),
+            Some(8),
+            Some(6),
+            None,
+        ]));
 
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Int32, true),
-        ]);
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a, b])?;
+        generic_test_op2!(
+            a,
+            b,
+            DataType::Int32,
+            DataType::Int32,
+            CovariancePop,
+            ScalarValue::from(0.6666666666666666_f64)
+        )
+    }
 
-        let agg = Arc::new(Covariance::new(
-            col("a", &schema)?,
-            col("b", &schema)?,
-            "bla".to_string(),
-            DataType::Float64,
-        ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
+    #[test]
+    fn covariance_i32_with_nulls_3() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            None,
+            Some(3),
+            None,
+        ]));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(4),
+            Some(9),
+            Some(5),
+            Some(8),
+            Some(6),
+            None,
+        ]));
 
-        Ok(())
+        generic_test_op2!(
+            a,
+            b,
+            DataType::Int32,
+            DataType::Int32,
+            Covariance,
+            ScalarValue::from(1_f64)
+        )
     }
 
     #[test]
@@ -555,22 +593,59 @@ mod tests {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
         let b: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
 
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Int32, true),
-        ]);
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a, b])?;
+        generic_test_op2!(
+            a,
+            b,
+            DataType::Int32,
+            DataType::Int32,
+            Covariance,
+            ScalarValue::Float64(None)
+        )
+    }
 
-        let agg = Arc::new(Covariance::new(
-            col("a", &schema)?,
-            col("b", &schema)?,
-            "bla".to_string(),
+    #[test]
+    fn covariance_pop_i32_all_nulls() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+
+        generic_test_op2!(
+            a,
+            b,
+            DataType::Int32,
+            DataType::Int32,
+            CovariancePop,
+            ScalarValue::Float64(None)
+        )
+    }
+
+    #[test]
+    fn covariance_1_input() -> Result<()> {
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64]));
+        let b: ArrayRef = Arc::new(Float64Array::from(vec![2_f64]));
+
+        generic_test_op2!(
+            a,
+            b,
             DataType::Float64,
-        ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
+            DataType::Float64,
+            Covariance,
+            ScalarValue::Float64(None)
+        )
+    }
 
-        Ok(())
+    #[test]
+    fn covariance_pop_1_input() -> Result<()> {
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64]));
+        let b: ArrayRef = Arc::new(Float64Array::from(vec![2_f64]));
+
+        generic_test_op2!(
+            a,
+            b,
+            DataType::Float64,
+            DataType::Float64,
+            CovariancePop,
+            ScalarValue::from(0_f64)
+        )
     }
 
     #[test]

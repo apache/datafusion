@@ -368,7 +368,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 let qualifier = format!("{object_name}");
                 // do not expand from outer schema
-                expand_qualified_wildcard(&qualifier, plan.schema().as_ref(), plan)
+                expand_qualified_wildcard(&qualifier, plan.schema().as_ref())
             }
         }
     }
