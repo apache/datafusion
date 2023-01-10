@@ -503,21 +503,22 @@ async fn window_frame_rows_preceding() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c4) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
+               AVG(c4) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
                COUNT(*) OVER(ORDER BY c4 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
                FROM aggregate_test_100 \
                ORDER BY c9 \
                LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
-        "+----------------------------+-----------------+",
-        "| -48302                     | 3               |",
-        "| 11243                      | 3               |",
-        "| -51311                     | 3               |",
-        "| -2391                      | 3               |",
-        "| 46756                      | 3               |",
-        "+----------------------------+-----------------+",
+        "+----------------------------+----------------------------+-----------------+",
+        "| SUM(aggregate_test_100.c4) | AVG(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
+        "+----------------------------+----------------------------+-----------------+",
+        "| -48302                     | -16100.666666666666        | 3               |",
+        "| 11243                      | 3747.6666666666665         | 3               |",
+        "| -51311                     | -17103.666666666668        | 3               |",
+        "| -2391                      | -797                       | 3               |",
+        "| 46756                      | 15585.333333333334         | 3               |",
+        "+----------------------------+----------------------------+-----------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -529,21 +530,22 @@ async fn window_frame_rows_preceding_with_partition_unique_order_by() -> Result<
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT \
                SUM(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
+               AVG(c4) OVER(PARTITION BY c1 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),\
                COUNT(*) OVER(PARTITION BY c2 ORDER BY c9 ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)\
                FROM aggregate_test_100 \
                ORDER BY c9 \
                LIMIT 5";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----------------------------+-----------------+",
-        "| SUM(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
-        "+----------------------------+-----------------+",
-        "| -38611                     | 2               |",
-        "| 17547                      | 2               |",
-        "| -1301                      | 2               |",
-        "| 26638                      | 3               |",
-        "| 26861                      | 3               |",
-        "+----------------------------+-----------------+",
+        "+----------------------------+----------------------------+-----------------+",
+        "| SUM(aggregate_test_100.c4) | AVG(aggregate_test_100.c4) | COUNT(UInt8(1)) |",
+        "+----------------------------+----------------------------+-----------------+",
+        "| -38611                     | -19305.5                   | 2               |",
+        "| 17547                      | 8773.5                     | 2               |",
+        "| -1301                      | -650.5                     | 2               |",
+        "| 26638                      | 13319                      | 3               |",
+        "| 26861                      | 8953.666666666666          | 3               |",
+        "+----------------------------+----------------------------+-----------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
