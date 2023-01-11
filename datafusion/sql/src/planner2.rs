@@ -22,10 +22,17 @@ impl Binder {
     ) -> Result<LogicalPlan> {
         match &*ctx {
             StatementContextAll::StatementDefaultContext(c) => {
-                self.bind_LogicalPlan_from_query(c.query().unwrap())
+                self.bind_LogicalPlan_from_statementDefault(c)
             }
             _ => Err(DataFusionError::NotImplemented(String::from(""))),
         }
+    }
+
+    fn bind_LogicalPlan_from_statementDefault<'input>(
+        &self,
+        ctx: &StatementDefaultContext<'input>,
+    ) -> Result<LogicalPlan> {
+        self.bind_LogicalPlan_from_query(ctx.query().unwrap())
     }
 
     fn bind_LogicalPlan_from_query<'input>(
@@ -61,12 +68,109 @@ impl Binder {
         &self,
         ctx: Rc<QueryTermContextAll<'input>>,
     ) -> Result<LogicalPlan> {
+        match &*ctx {
+            QueryTermContextAll::QueryTermDefaultContext(c) => {
+                self.bind_LogicalPlan_from_queryTermDefault(c)
+            }
+            _ => Err(DataFusionError::NotImplemented(String::from(""))),
+        }
+    }
+
+    fn bind_LogicalPlan_from_queryTermDefault<'input>(
+        &self,
+        ctx: &QueryTermDefaultContext<'input>,
+    ) -> Result<LogicalPlan> {
+        self.bind_LogicalPlan_from_queryPrimary(ctx.queryPrimary().unwrap())
+    }
+
+    fn bind_LogicalPlan_from_queryPrimary<'input>(
+        &self,
+        ctx: Rc<QueryPrimaryContextAll<'input>>,
+    ) -> Result<LogicalPlan> {
+        match &*ctx {
+            QueryPrimaryContextAll::QueryPrimaryDefaultContext(c) => {
+                self.bind_LogicalPlan_from_queryPrimaryDefault(c)
+            }
+            _ => Err(DataFusionError::NotImplemented(String::from(""))),
+        }
+    }
+
+    fn bind_LogicalPlan_from_queryPrimaryDefault<'input>(
+        &self,
+        ctx: &QueryPrimaryDefaultContext<'input>,
+    ) -> Result<LogicalPlan> {
+        self.bind_LogicalPlan_from_querySpecification(ctx.querySpecification().unwrap())
+    }
+
+    fn bind_LogicalPlan_from_querySpecification<'input>(
+        &self,
+        ctx: Rc<QuerySpecificationContextAll<'input>>,
+    ) -> Result<LogicalPlan> {
+        if ctx.setQuantifier().is_some() {
+            return Err(DataFusionError::NotImplemented(String::from("")));
+        }
+        if ctx.where_.is_some() {
+            return Err(DataFusionError::NotImplemented(String::from("")));
+        }
+        if ctx.groupBy().is_some() {
+            return Err(DataFusionError::NotImplemented(String::from("")));
+        }
+        if ctx.having.is_some() {
+            return Err(DataFusionError::NotImplemented(String::from("")));
+        }
+        if ctx.windowDefinition_all().len() > 0 {
+            return Err(DataFusionError::NotImplemented(String::from("")));
+        }
+        if ctx.relation_all().len() > 0 {
+            return Err(DataFusionError::NotImplemented(String::from("")));
+        }
+        let parent = if ctx.relation_all().len() > 0 {
+            EmptyRelation {
+                produce_one_row: true,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            }
+        } else {
+            self.bind_LogicalPlan_from_relation(ctx.relation(0))
+        };
+
+        // TODO
         Ok(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: true,
             schema: DFSchemaRef::new(DFSchema::empty()),
-        }))
+        }))        
     }
 
+    fn bind_LogicalPlan_from_relation<'input>(
+        &self,
+        ctx: Rc<RelationContextAll<'input>>,
+    ) -> Result<LogicalPlan> {
+        match &*ctx {
+            RelationContextAll::RelationDefaultContext(c) => {
+                self.bind_LogicalPlan_from_relationDefault(c)
+            }
+            _ => Err(DataFusionError::NotImplemented(String::from(""))),
+        }
+    }
+    
+    fn bind_LogicalPlan_from_relationDefault<'input>(
+        &self,
+        ctx: &RelationDefaultContext<'input>,
+    ) -> Result<LogicalPlan> {
+        self.bind_LogicalPlan_from_sampledRelation(ctx.sampledRelation().unwrap())
+    }
+
+    fn bind_LogicalPlan_from_sampledRelation<'input>(
+        &self,
+        ctx: Rc<RelationContextAll<'input>>,
+    ) -> Result<LogicalPlan> {
+        // TODO
+        Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: true,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        }))        
+    }
+
+    
 }
 
 pub fn bind<'input>(root: Rc<SingleStatementContextAll<'input>>) -> Result<LogicalPlan> {
