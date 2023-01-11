@@ -71,7 +71,7 @@ use hashbrown::raw::RawTable;
 ///
 /// [Compact]: datafusion_row::layout::RowType::Compact
 /// [WordAligned]: datafusion_row::layout::RowType::WordAligned
-pub(crate) struct GroupedHashAggregateStreamV2 {
+pub(crate) struct GroupedHashAggregateStream {
     stream: BoxStream<'static, ArrowResult<RecordBatch>>,
     schema: SchemaRef,
 }
@@ -81,7 +81,7 @@ pub(crate) struct GroupedHashAggregateStreamV2 {
 /// This is wrapped into yet another struct because we need to interact with the async memory management subsystem
 /// during poll. To have as little code "weirdness" as possible, we chose to just use [`BoxStream`] together with
 /// [`futures::stream::unfold`]. The latter requires a state object, which is [`GroupedHashAggregateStreamV2Inner`].
-struct GroupedHashAggregateStreamV2Inner {
+struct GroupedHashAggregateStreamInner {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     mode: AggregateMode,
@@ -106,7 +106,7 @@ struct GroupedHashAggregateStreamV2Inner {
     indices: Vec<Vec<(usize, (usize, usize))>>,
 }
 
-pub fn aggr_state_schema(aggr_expr: &[Arc<dyn AggregateExpr>]) -> Result<SchemaRef> {
+fn aggr_state_schema(aggr_expr: &[Arc<dyn AggregateExpr>]) -> Result<SchemaRef> {
     let fields = aggr_expr
         .iter()
         .flat_map(|expr| expr.state_fields().unwrap().into_iter())
@@ -118,7 +118,7 @@ fn is_supported(elem: &Arc<dyn AggregateExpr>, group_schema: &Schema) -> bool {
     elem.row_accumulator_supported() && row_supported(group_schema, RowType::Compact)
 }
 
-impl GroupedHashAggregateStreamV2 {
+impl GroupedHashAggregateStream {
     /// Create a new GroupedRowHashAggregateStream
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -152,12 +152,12 @@ impl GroupedHashAggregateStreamV2 {
         }
         let indices = vec![normal_agg_indices, row_agg_indices];
 
-        let row_aggr_exprs = aggr_expr
+        let row_aggr_expr = aggr_expr
             .clone()
             .into_iter()
             .filter(|elem| is_supported(elem, &group_schema))
             .collect::<Vec<_>>();
-        let normal_aggr_exprs = aggr_expr
+        let normal_aggr_expr = aggr_expr
             .clone()
             .into_iter()
             .filter(|elem| !is_supported(elem, &group_schema))
@@ -176,15 +176,14 @@ impl GroupedHashAggregateStreamV2 {
             row_aggregate_expressions.push(all_aggregate_expressions[*idx].clone())
         }
 
-        // let accumulators = aggregates::create_accumulators_v2(&aggr_expr)?;
-        let row_accumulators = aggregates::create_accumulators_v2(&row_aggr_exprs)?;
+        let row_accumulators = aggregates::create_row_accumulators(&row_aggr_expr)?;
 
-        let row_aggr_schema = aggr_state_schema(&row_aggr_exprs)?;
+        let row_aggr_schema = aggr_state_schema(&row_aggr_expr)?;
 
         let row_aggr_layout =
             Arc::new(RowLayout::new(&row_aggr_schema, RowType::WordAligned));
         let row_reservation =
-            MemoryConsumer::new(format!("GroupedHashAggregateStreamV2[{}]", partition))
+            MemoryConsumer::new(format!("GroupedHashAggregateStream[{}]", partition))
                 .register(context.memory_pool());
 
         let row_aggr_state = RowAggregationState {
@@ -195,12 +194,12 @@ impl GroupedHashAggregateStreamV2 {
 
         timer.done();
 
-        let inner = GroupedHashAggregateStreamV2Inner {
+        let inner = GroupedHashAggregateStreamInner {
             schema: Arc::clone(&schema),
             mode,
             input,
             group_by,
-            normal_aggr_expr: normal_aggr_exprs,
+            normal_aggr_expr,
             row_accumulators,
             row_aggr_schema,
             row_aggr_layout,
@@ -289,7 +288,7 @@ impl GroupedHashAggregateStreamV2 {
     }
 }
 
-impl Stream for GroupedHashAggregateStreamV2 {
+impl Stream for GroupedHashAggregateStream {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(
@@ -301,7 +300,7 @@ impl Stream for GroupedHashAggregateStreamV2 {
     }
 }
 
-impl RecordBatchStream for GroupedHashAggregateStreamV2 {
+impl RecordBatchStream for GroupedHashAggregateStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -644,7 +643,7 @@ fn create_batch_from_map(
         ))));
     }
     // First, output all group by exprs
-    let all_group_by_columns = (0..num_group_expr)
+    let group_by_columns = (0..num_group_expr)
         .map(|idx| {
             ScalarValue::iter_to_array(group_buffers.iter().map(|x| x[idx].clone()))
         })
@@ -675,7 +674,7 @@ fn create_batch_from_map(
             //
             // This shouldn't panic if the `output_schema` has enough fields.
             let remaining_field_iterator =
-                output_schema.fields()[all_group_by_columns.len()..].iter();
+                output_schema.fields()[group_by_columns.len()..].iter();
 
             for (scalars, field) in results.into_iter().zip(remaining_field_iterator) {
                 if !scalars.is_empty() {
@@ -775,9 +774,9 @@ fn create_batch_from_map(
             .iter()
             .map(|(_, range)| range.1 - range.0)
             .sum::<usize>()
-        + all_group_by_columns.len();
+        + group_by_columns.len();
     let mut res = vec![empty_arr; n_res];
-    for (idx, column) in all_group_by_columns.into_iter().enumerate() {
+    for (idx, column) in group_by_columns.into_iter().enumerate() {
         res[idx] = column;
     }
 

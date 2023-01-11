@@ -43,7 +43,7 @@ use std::sync::Arc;
 mod no_grouping;
 mod row_hash;
 
-use crate::physical_plan::aggregates::row_hash::GroupedHashAggregateStreamV2;
+use crate::physical_plan::aggregates::row_hash::GroupedHashAggregateStream;
 use crate::physical_plan::EquivalenceProperties;
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
@@ -149,14 +149,14 @@ impl PhysicalGroupBy {
 
 enum StreamType {
     AggregateStream(AggregateStream),
-    GroupedHashAggregateStreamV2(GroupedHashAggregateStreamV2),
+    GroupedHashAggregateStream(GroupedHashAggregateStream),
 }
 
 impl From<StreamType> for SendableRecordBatchStream {
     fn from(stream: StreamType) -> Self {
         match stream {
             StreamType::AggregateStream(stream) => Box::pin(stream),
-            StreamType::GroupedHashAggregateStreamV2(stream) => Box::pin(stream),
+            StreamType::GroupedHashAggregateStream(stream) => Box::pin(stream),
         }
     }
 }
@@ -286,8 +286,8 @@ impl AggregateExec {
                 partition,
             )?))
         } else {
-            Ok(StreamType::GroupedHashAggregateStreamV2(
-                GroupedHashAggregateStreamV2::new(
+            Ok(StreamType::GroupedHashAggregateStream(
+                GroupedHashAggregateStream::new(
                     self.mode,
                     self.schema.clone(),
                     self.group_by.clone(),
@@ -597,7 +597,7 @@ fn create_accumulators(
         .collect::<datafusion_common::Result<Vec<_>>>()
 }
 
-fn create_accumulators_v2(
+fn create_row_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],
 ) -> datafusion_common::Result<Vec<AccumulatorItemV2>> {
     let mut state_index = 0;
@@ -1163,16 +1163,10 @@ mod tests {
                     assert!(matches!(stream, StreamType::AggregateStream(_)));
                 }
                 1 => {
-                    assert!(matches!(
-                        stream,
-                        StreamType::GroupedHashAggregateStreamV2(_)
-                    ));
+                    assert!(matches!(stream, StreamType::GroupedHashAggregateStream(_)));
                 }
                 2 => {
-                    assert!(matches!(
-                        stream,
-                        StreamType::GroupedHashAggregateStreamV2(_)
-                    ));
+                    assert!(matches!(stream, StreamType::GroupedHashAggregateStream(_)));
                 }
                 _ => panic!("Unknown version: {version}"),
             }
