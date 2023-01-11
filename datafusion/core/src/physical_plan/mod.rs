@@ -141,27 +141,6 @@ pub trait ExecutionPlan: Debug + Send + Sync {
         vec![None; self.children().len()]
     }
 
-    /// Returns `true` if this operator relies on its inputs being
-    /// produced in a certain order (for example that they are sorted
-    /// a particular way) for correctness.
-    ///
-    /// If `true` is returned, DataFusion will not apply certain
-    /// optimizations which might reorder the inputs (such as
-    /// repartitioning to increase concurrency).
-    ///
-    /// The default implementation checks the input ordering requirements
-    /// and if there is non empty ordering requirements to the input, the method will
-    /// return `true`.
-    ///
-    /// WARNING: if you override this default and return `false`, your
-    /// operator can not rely on DataFusion preserving the input order
-    /// as it will likely not.
-    fn relies_on_input_order(&self) -> bool {
-        self.required_input_ordering()
-            .iter()
-            .any(|ordering| matches!(ordering, Some(_)))
-    }
-
     /// Returns `false` if this operator's implementation may reorder
     /// rows within or between partitions.
     ///
