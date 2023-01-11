@@ -1,0 +1,44 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## JOIN Tests
+##########
+
+statement ok
+CREATE TABLE students(name TEXT, mark INT) AS VALUES
+('Stuart', 28),
+('Amina', 89),
+('Christen', 50),
+('Salma', 77),
+('Samantha', 21);
+
+statement ok
+CREATE TABLE grades(grade INT, min INT, max INT) AS VALUES
+(1, 0, 14),
+(2, 15, 35),
+(3, 36, 55),
+(4, 56, 79),
+(5, 80, 100);
+
+# Regression test: https://github.com/apache/arrow-datafusion/issues/4844
+query I
+SELECT s.*, g.grade FROM students s join grades g on s.mark between g.min and g.max WHERE grade > 2 ORDER BY s.mark DESC
+----
+Amina 89 5
+Salma 77 4
+Christen 50 3
