@@ -1,52 +1,68 @@
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
+#![allow(non_snake_case)]
+
+use datafusion_expr::{EmptyRelation, LogicalPlan};
 
 use crate::antlr::presto::prestoparser::*;
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use std::rc::Rc;
-use datafusion_common::Result;
 
 struct Binder();
 
 impl Binder {
-    fn bind_Query_from_singleStatement<'input>(
+    fn bind_LogicalPlan_from_singleStatement<'input>(
         &self,
         ctx: Rc<SingleStatementContextAll<'input>>,
     ) -> Result<LogicalPlan> {
-        self.bind_Query_from_statement(
-            ctx.statement().expect("No statement in singleStatement"),
-        )
+        self.bind_LogicalPlan_from_statement(ctx.statement().unwrap())
     }
 
-    fn bind_Query_from_statement<'input>(
+    fn bind_LogicalPlan_from_statement<'input>(
         &self,
         ctx: Rc<StatementContextAll<'input>>,
     ) -> Result<LogicalPlan> {
-        LogicalPlanBuilder::empty(true).build()
+        match &*ctx {
+            StatementContextAll::StatementDefaultContext(c) => {
+                self.bind_LogicalPlan_from_query(c.query().unwrap())
+            }
+            _ => Err(DataFusionError::NotImplemented(String::from(""))),
+        }
+    }
+
+    fn bind_LogicalPlan_from_query<'input>(
+        &self,
+        ctx: Rc<QueryContextAll<'input>>,
+    ) -> Result<LogicalPlan> {
+        Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: true,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        }))
     }
 }
 
-pub fn bind<'input>(
-    root: Rc<SingleStatementContextAll<'input>>,
-) -> Result<LogicalPlan> {
+pub fn bind<'input>(root: Rc<SingleStatementContextAll<'input>>) -> Result<LogicalPlan> {
     let binder = Binder();
-    return binder.bind_Query_from_singleStatement(root);
+    return binder.bind_LogicalPlan_from_singleStatement(root);
 }
 
 #[cfg(test)]
 mod tests {
     use std::rc::Rc;
 
+    use crate::antlr::presto::prestolexer::PrestoLexer;
+    use crate::antlr::presto::prestoparser::{PrestoParser, SingleStatementContextAll};
     use antlr_rust::common_token_stream::CommonTokenStream;
     use antlr_rust::errors::ANTLRError;
     use antlr_rust::input_stream::InputStream;
     use antlr_rust::token_factory::ArenaCommonFactory;
-    use crate::antlr::presto::prestoparser::{PrestoParser, SingleStatementContextAll};
-    use crate::antlr::presto::prestolexer::PrestoLexer;
 
     use super::bind;
-    
-    fn parse<'input>(sql: &'input str, tf: &'input ArenaCommonFactory<'input>) -> Result<Rc<SingleStatementContextAll<'input>>,ANTLRError> {
+
+    fn parse<'input>(
+        sql: &'input str,
+        tf: &'input ArenaCommonFactory<'input>,
+    ) -> Result<Rc<SingleStatementContextAll<'input>>, ANTLRError> {
         println!("test started");
-        
+
         let mut _lexer: PrestoLexer<'input, InputStream<&'input str>> =
             PrestoLexer::new_with_token_factory(InputStream::new(&sql), &tf);
         let token_source = CommonTokenStream::new(_lexer);
