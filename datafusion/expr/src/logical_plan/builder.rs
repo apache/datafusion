@@ -273,7 +273,8 @@ impl LogicalPlanBuilder {
         });
         for (_, exprs) in groups {
             let window_exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
-            // the partition and sort itself is done at physical level, see the BasicEnforcement rule
+            // Partition and sorting is done at physical level, see the EnforceDistribution
+            // and EnforceSorting rules.
             plan = LogicalPlanBuilder::from(plan)
                 .window(window_exprs)?
                 .build()?;
@@ -286,6 +287,16 @@ impl LogicalPlanBuilder {
         expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
         Ok(Self::from(project(self.plan, expr)?))
+    }
+
+    /// Select the given column indices
+    pub fn select(self, indices: impl IntoIterator<Item = usize>) -> Result<Self> {
+        let fields = self.plan.schema().fields();
+        let exprs: Vec<_> = indices
+            .into_iter()
+            .map(|x| Expr::Column(fields[x].qualified_column()))
+            .collect();
+        self.project(exprs)
     }
 
     /// Apply a filter
@@ -1042,8 +1053,9 @@ pub fn project(
             Expr::Wildcard => {
                 projected_expr.extend(expand_wildcard(input_schema, &plan)?)
             }
-            Expr::QualifiedWildcard { ref qualifier } => projected_expr
-                .extend(expand_qualified_wildcard(qualifier, input_schema, &plan)?),
+            Expr::QualifiedWildcard { ref qualifier } => {
+                projected_expr.extend(expand_qualified_wildcard(qualifier, input_schema)?)
+            }
             _ => projected_expr
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }

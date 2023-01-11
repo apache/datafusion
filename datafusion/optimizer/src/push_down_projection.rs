@@ -374,6 +374,24 @@ fn optimize_plan(
             )?;
             from_plan(plan, &plan.expressions(), &[child])
         }
+        // at a distinct, all columns are required
+        LogicalPlan::Distinct(distinct) => {
+            let new_required_columns = distinct
+                .input
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.qualified_column())
+                .collect();
+            let child = optimize_plan(
+                _optimizer,
+                distinct.input.as_ref(),
+                &new_required_columns,
+                has_projection,
+                _config,
+            )?;
+            from_plan(plan, &[], &[child])
+        }
         // all other nodes: Add any additional columns used by
         // expressions in this node to the list of required columns
         LogicalPlan::Limit(_)
@@ -392,7 +410,6 @@ fn optimize_plan(
         | LogicalPlan::DropView(_)
         | LogicalPlan::SetVariable(_)
         | LogicalPlan::CrossJoin(_)
-        | LogicalPlan::Distinct(_)
         | LogicalPlan::Extension { .. }
         | LogicalPlan::Prepare(_) => {
             let expr = plan.expressions();
@@ -1003,6 +1020,25 @@ mod tests {
 
         let expected = "Aggregate: groupBy=[[test.a]], aggr=[[COUNT(test.b), COUNT(test.b) FILTER (WHERE c > Int32(42)) AS count2]]\
         \n  TableScan: test projection=[a, b, c]";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn pushdown_through_distinct() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .distinct()?
+            .project(vec![col("a")])?
+            .build()?;
+
+        let expected = "Projection: test.a\
+        \n  Distinct:\
+        \n    TableScan: test projection=[a, b]";
 
         assert_optimized_plan_eq(&plan, expected);
 

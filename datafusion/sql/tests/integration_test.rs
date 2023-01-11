@@ -396,6 +396,124 @@ fn join_with_ambiguous_column() {
 }
 
 #[test]
+fn natural_join() {
+    let sql = "SELECT * FROM lineitem a NATURAL JOIN lineitem b";
+    let expected = "Projection: a.l_item_id, a.l_description, a.price\
+                        \n  Inner Join: Using a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.price = b.price\
+                        \n    SubqueryAlias: a\
+                        \n      TableScan: lineitem\
+                        \n    SubqueryAlias: b\
+                        \n      TableScan: lineitem";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn natural_left_join() {
+    let sql = "SELECT l_item_id FROM lineitem a NATURAL LEFT JOIN lineitem b";
+    let expected = "Projection: a.l_item_id\
+                        \n  Left Join: Using a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.price = b.price\
+                        \n    SubqueryAlias: a\
+                        \n      TableScan: lineitem\
+                        \n    SubqueryAlias: b\
+                        \n      TableScan: lineitem";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn natural_right_join() {
+    let sql = "SELECT l_item_id FROM lineitem a NATURAL RIGHT JOIN lineitem b";
+    let expected = "Projection: a.l_item_id\
+                        \n  Right Join: Using a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.price = b.price\
+                        \n    SubqueryAlias: a\
+                        \n      TableScan: lineitem\
+                        \n    SubqueryAlias: b\
+                        \n      TableScan: lineitem";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn natural_join_no_common_becomes_cross_join() {
+    let sql = "SELECT * FROM person a NATURAL JOIN lineitem b";
+    let expected = "Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀, b.l_item_id, b.l_description, b.price\
+                        \n  CrossJoin:\
+                        \n    SubqueryAlias: a\
+                        \n      TableScan: person\
+                        \n    SubqueryAlias: b\
+                        \n      TableScan: lineitem";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn using_join_multiple_keys() {
+    let sql = "SELECT * FROM person a join person b using (id, age)";
+    let expected = "Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀, \
+        b.first_name, b.last_name, b.state, b.salary, b.birth_date, b.😀\
+                        \n  Inner Join: Using a.id = b.id, a.age = b.age\
+                        \n    SubqueryAlias: a\
+                        \n      TableScan: person\
+                        \n    SubqueryAlias: b\
+                        \n      TableScan: person";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn using_join_multiple_keys_subquery() {
+    let sql =
+        "SELECT age FROM (SELECT * FROM person a join person b using (id, age, state))";
+    let expected = "Projection: a.age\
+                        \n  Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀, \
+        b.first_name, b.last_name, b.salary, b.birth_date, b.😀\
+                        \n    Inner Join: Using a.id = b.id, a.age = b.age, a.state = b.state\
+                        \n      SubqueryAlias: a\
+                        \n        TableScan: person\
+                        \n      SubqueryAlias: b\
+                        \n        TableScan: person";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn using_join_multiple_keys_qualified_wildcard_select() {
+    let sql = "SELECT a.* FROM person a join person b using (id, age)";
+    let expected = "Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀\
+                        \n  Inner Join: Using a.id = b.id, a.age = b.age\
+                        \n    SubqueryAlias: a\
+                        \n      TableScan: person\
+                        \n    SubqueryAlias: b\
+                        \n      TableScan: person";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn using_join_multiple_keys_select_all_columns() {
+    let sql = "SELECT a.*, b.* FROM person a join person b using (id, age)";
+    let expected = "Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀, \
+        b.id, b.first_name, b.last_name, b.age, b.state, b.salary, b.birth_date, b.😀\
+                        \n  Inner Join: Using a.id = b.id, a.age = b.age\
+                        \n    SubqueryAlias: a\
+                        \n      TableScan: person\
+                        \n    SubqueryAlias: b\
+                        \n      TableScan: person";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn using_join_multiple_keys_multiple_joins() {
+    let sql = "SELECT * FROM person a join person b using (id, age, state) join person c using (id, age, state)";
+    let expected = "Projection: a.id, a.first_name, a.last_name, a.age, a.state, a.salary, a.birth_date, a.😀, \
+        b.first_name, b.last_name, b.salary, b.birth_date, b.😀, \
+        c.first_name, c.last_name, c.salary, c.birth_date, c.😀\
+                        \n  Inner Join: Using a.id = c.id, a.age = c.age, a.state = c.state\
+                        \n    Inner Join: Using a.id = b.id, a.age = b.age, a.state = b.state\
+                        \n      SubqueryAlias: a\
+                        \n        TableScan: person\
+                        \n      SubqueryAlias: b\
+                        \n        TableScan: person\
+                        \n    SubqueryAlias: c\
+                        \n      TableScan: person";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn select_with_having() {
     let sql = "SELECT id, age
                    FROM person

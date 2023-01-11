@@ -15,12 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! OptimizeSorts optimizer rule inspects [SortExec]s in the given physical
-//! plan and removes the ones it can prove unnecessary. The rule can work on
-//! valid *and* invalid physical plans with respect to sorting requirements,
-//! but always produces a valid physical plan in this sense.
+//! EnforceSorting optimizer rule inspects the physical plan with respect
+//! to local sorting requirements and does the following:
+//! - Adds a [SortExec] when a requirement is not met,
+//! - Removes an already-existing [SortExec] if it is possible to prove
+//!   that this sort is unnecessary
+//! The rule can work on valid *and* invalid physical plans with respect to
+//! sorting requirements, but always produces a valid physical plan in this sense.
 //!
-//! A non-realistic but easy to follow example: Assume that we somehow get the fragment
+//! A non-realistic but easy to follow example for sort removals: Assume that we
+//! somehow get the fragment
 //! "SortExec: [nullable_col@0 ASC]",
 //! "  SortExec: [non_nullable_col@1 ASC]",
 //! in the physical plan. The first sort is unnecessary since its result is overwritten
@@ -46,16 +50,16 @@ use std::sync::Arc;
 /// This rule inspects SortExec's in the given physical plan and removes the
 /// ones it can prove unnecessary.
 #[derive(Default)]
-pub struct OptimizeSorts {}
+pub struct EnforceSorting {}
 
-impl OptimizeSorts {
+impl EnforceSorting {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
-/// This is a "data class" we use within the [OptimizeSorts] rule that
+/// This is a "data class" we use within the [EnforceSorting] rule that
 /// tracks the closest `SortExec` descendant for every child of a plan.
 #[derive(Debug, Clone)]
 struct PlanWithCorrespondingSort {
@@ -119,7 +123,7 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
     }
 }
 
-impl PhysicalOptimizerRule for OptimizeSorts {
+impl PhysicalOptimizerRule for EnforceSorting {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -127,12 +131,12 @@ impl PhysicalOptimizerRule for OptimizeSorts {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Execute a post-order traversal to adjust input key ordering:
         let plan_requirements = PlanWithCorrespondingSort::new(plan);
-        let adjusted = plan_requirements.transform_up(&optimize_sorts)?;
+        let adjusted = plan_requirements.transform_up(&ensure_sorting)?;
         Ok(adjusted.plan)
     }
 
     fn name(&self) -> &str {
-        "OptimizeSorts"
+        "EnforceSorting"
     }
 
     fn schema_check(&self) -> bool {
@@ -140,7 +144,7 @@ impl PhysicalOptimizerRule for OptimizeSorts {
     }
 }
 
-fn optimize_sorts(
+fn ensure_sorting(
     requirements: PlanWithCorrespondingSort,
 ) -> Result<Option<PlanWithCorrespondingSort>> {
     // Perform naive analysis at the beginning -- remove already-satisfied sorts:
@@ -171,7 +175,8 @@ fn optimize_sorts(
                     let sort_expr = required_ordering.to_vec();
                     *child = add_sort_above_child(child, sort_expr)?;
                     sort_onwards.push((idx, child.clone()))
-                } else if let [first, ..] = sort_onwards.as_slice() {
+                }
+                if let [first, ..] = sort_onwards.as_slice() {
                     // The ordering requirement is met, we can analyze if there is an unnecessary sort:
                     let sort_any = first.1.clone();
                     let sort_exec = convert_to_sort_exec(&sort_any)?;
@@ -618,7 +623,7 @@ mod tests {
             "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
+            EnforceSorting::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -717,7 +722,7 @@ mod tests {
             "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
+            EnforceSorting::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -761,7 +766,7 @@ mod tests {
             "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
+            EnforceSorting::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -826,7 +831,7 @@ mod tests {
             "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
+            EnforceSorting::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
@@ -886,7 +891,7 @@ mod tests {
             "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
         );
         let optimized_physical_plan =
-            OptimizeSorts::new().optimize(physical_plan, state.config_options())?;
+            EnforceSorting::new().optimize(physical_plan, state.config_options())?;
         let formatted = displayable(optimized_physical_plan.as_ref())
             .indent()
             .to_string();
