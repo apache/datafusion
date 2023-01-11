@@ -67,7 +67,7 @@ impl OptimizerRule for EliminateCrossJoin {
                         if join.filter.is_some() {
                             return Ok(None);
                         }
-                        
+
                         flatten_join_inputs(
                             &input,
                             &mut possible_join_keys,
