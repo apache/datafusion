@@ -17,6 +17,7 @@
 
 //! Hash aggregation through row format
 
+use std::cmp::min;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
@@ -629,15 +630,13 @@ fn create_batch_from_map(
         ))));
     }
 
-    let group_buffers = row_aggr_state
-        .group_states
+    let end_idx = min(skip_items + batch_size, row_aggr_state.group_states.len());
+    let group_state_chunk = &row_aggr_state.group_states[skip_items..end_idx];
+    let group_buffers = group_state_chunk
         .iter()
-        .skip(skip_items)
-        .take(batch_size)
         .map(|gs| (gs.group_by_values.clone()))
         .collect::<Vec<_>>();
 
-    // let mut group_by_columns = read_as_batch(&group_buffers, group_schema, RowType::Compact)?;
     let n_row = group_buffers.len();
     if n_row == 0 {
         return Ok(Some(RecordBatch::new_empty(Arc::new(
@@ -645,7 +644,7 @@ fn create_batch_from_map(
         ))));
     }
     // First, output all group by exprs
-    let group_by_columns = (0..num_group_expr)
+    let all_group_by_columns = (0..num_group_expr)
         .map(|idx| {
             ScalarValue::iter_to_array(group_buffers.iter().map(|x| x[idx].clone()))
         })
@@ -653,11 +652,8 @@ fn create_batch_from_map(
     let mut row_columns = vec![];
 
     let mut state_accessor = RowAccessor::new(aggr_schema, RowType::WordAligned);
-    let mut state_buffers = row_aggr_state
-        .group_states
+    let mut state_buffers = group_state_chunk
         .iter()
-        .skip(skip_items)
-        .take(batch_size)
         .map(|gs| gs.aggregation_buffer.clone())
         .collect::<Vec<_>>();
 
@@ -679,7 +675,7 @@ fn create_batch_from_map(
             //
             // This shouldn't panic if the `output_schema` has enough fields.
             let remaining_field_iterator =
-                output_schema.fields()[group_by_columns.len()..].iter();
+                output_schema.fields()[all_group_by_columns.len()..].iter();
 
             for (scalars, field) in results.into_iter().zip(remaining_field_iterator) {
                 if !scalars.is_empty() {
@@ -730,25 +726,25 @@ fn create_batch_from_map(
         for y in 0..state_len {
             match mode {
                 AggregateMode::Partial => {
-                    let res = ScalarValue::iter_to_array(
-                        row_aggr_state.group_states.iter().map(|row_group_state| {
+                    let res = ScalarValue::iter_to_array(group_state_chunk.iter().map(
+                        |row_group_state| {
                             row_group_state.accumulator_set[x]
                                 .state()
                                 .map(|x| x[y].clone())
                                 .expect("unexpected accumulator state in hash aggregate")
-                        }),
-                    )?;
+                        },
+                    ))?;
 
                     columns.push(res);
                 }
                 AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                    let res = ScalarValue::iter_to_array(
-                        row_aggr_state.group_states.iter().map(|row_group_state| {
+                    let res = ScalarValue::iter_to_array(group_state_chunk.iter().map(
+                        |row_group_state| {
                             row_group_state.accumulator_set[x]
                                 .evaluate()
                                 .expect("unexpected accumulator state in hash aggregate")
-                        }),
-                    )?;
+                        },
+                    ))?;
                     columns.push(res);
                 }
             }
@@ -779,9 +775,9 @@ fn create_batch_from_map(
             .iter()
             .map(|(_, range)| range.1 - range.0)
             .sum::<usize>()
-        + group_by_columns.len();
+        + all_group_by_columns.len();
     let mut res = vec![empty_arr; n_res];
-    for (idx, column) in group_by_columns.into_iter().enumerate() {
+    for (idx, column) in all_group_by_columns.into_iter().enumerate() {
         res[idx] = column;
     }
 
@@ -796,7 +792,6 @@ fn create_batch_from_map(
             }
         }
     }
-
     Ok(Some(RecordBatch::try_new(
         Arc::new(output_schema.to_owned()),
         res,
