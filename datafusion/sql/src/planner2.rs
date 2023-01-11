@@ -32,6 +32,16 @@ impl Binder {
         &self,
         ctx: Rc<QueryContextAll<'input>>,
     ) -> Result<LogicalPlan> {
+        match ctx.with() {
+            None => self.bind_LogicalPlan_from_queryNoWith(ctx.queryNoWith().unwrap()),
+            Some(_) => Err(DataFusionError::NotImplemented(String::from(""))),
+        }
+    }
+
+    fn bind_LogicalPlan_from_queryNoWith<'input>(
+        &self,
+        ctx: Rc<QueryNoWithContextAll<'input>>,
+    ) -> Result<LogicalPlan> {
         Ok(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: true,
             schema: DFSchemaRef::new(DFSchema::empty()),
