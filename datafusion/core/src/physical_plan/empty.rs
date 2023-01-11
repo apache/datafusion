@@ -24,7 +24,7 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     memory::MemoryStream, DisplayFormatType, ExecutionPlan, Partitioning,
 };
-use arrow::array::NullArray;
+use arrow::array::{ArrayRef, NullArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use log::debug;
@@ -68,13 +68,25 @@ impl EmptyExec {
 
     fn data(&self) -> Result<Vec<RecordBatch>> {
         let batch = if self.produce_one_row {
+            let n_field = self.schema.fields.len();
+            // hack for https://github.com/apache/arrow-datafusion/pull/3242
+            let n_field = if n_field == 0 { 1 } else { n_field };
             vec![RecordBatch::try_new(
-                Arc::new(Schema::new(vec![Field::new(
-                    "placeholder",
-                    DataType::Null,
-                    true,
-                )])),
-                vec![Arc::new(NullArray::new(1))],
+                Arc::new(Schema::new(
+                    (0..n_field)
+                        .into_iter()
+                        .map(|i| {
+                            Field::new(format!("placeholder_{i}"), DataType::Null, true)
+                        })
+                        .collect(),
+                )),
+                (0..n_field)
+                    .into_iter()
+                    .map(|_i| {
+                        let ret: ArrayRef = Arc::new(NullArray::new(1));
+                        ret
+                    })
+                    .collect(),
             )?]
         } else {
             vec![]

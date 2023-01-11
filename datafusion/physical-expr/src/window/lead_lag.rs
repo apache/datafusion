@@ -19,7 +19,8 @@
 //! at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::BuiltInWindowFunctionExpr;
+use crate::window::window_expr::{BuiltinWindowState, LeadLagState};
+use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
@@ -27,8 +28,8 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use std::any::Any;
-use std::ops::Neg;
-use std::ops::Range;
+use std::cmp::min;
+use std::ops::{Neg, Range};
 use std::sync::Arc;
 
 /// window shift expression
@@ -103,13 +104,30 @@ impl BuiltInWindowFunctionExpr for WindowShift {
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(WindowShiftEvaluator {
+            state: LeadLagState { idx: 0 },
             shift_offset: self.shift_offset,
+            default_value: self.default_value.clone(),
+        }))
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+        Some(Arc::new(Self {
+            name: self.name.clone(),
+            data_type: self.data_type.clone(),
+            shift_offset: -self.shift_offset,
+            expr: self.expr.clone(),
             default_value: self.default_value.clone(),
         }))
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct WindowShiftEvaluator {
+    state: LeadLagState,
     shift_offset: i64,
     default_value: Option<ScalarValue>,
 }
@@ -164,15 +182,75 @@ fn shift_with_default_value(
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {
-    fn evaluate_partition(
-        &self,
-        values: &[ArrayRef],
-        partition: Range<usize>,
-    ) -> Result<ArrayRef> {
+    fn state(&self) -> Result<BuiltinWindowState> {
+        // If we do not use state we just return Default
+        Ok(BuiltinWindowState::LeadLag(self.state.clone()))
+    }
+
+    fn update_state(
+        &mut self,
+        state: &WindowAggState,
+        _range_columns: &[ArrayRef],
+        _sort_partition_points: &[Range<usize>],
+    ) -> Result<()> {
+        self.state.idx = state.last_calculated_index;
+        Ok(())
+    }
+
+    fn get_range(&self, state: &WindowAggState, n_rows: usize) -> Result<Range<usize>> {
+        if self.shift_offset > 0 {
+            let offset = self.shift_offset as usize;
+            let start = if state.last_calculated_index > offset {
+                state.last_calculated_index - offset
+            } else {
+                0
+            };
+            Ok(Range {
+                start,
+                end: state.last_calculated_index + 1,
+            })
+        } else {
+            let offset = (-self.shift_offset) as usize;
+            let end = min(state.last_calculated_index + offset, n_rows);
+            Ok(Range {
+                start: state.last_calculated_index,
+                end,
+            })
+        }
+    }
+
+    fn evaluate_stateful(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
+        let array = &values[0];
+        let dtype = array.data_type();
+        let idx = self.state.idx as i64 - self.shift_offset;
+        if idx < 0 || idx as usize >= array.len() {
+            get_default_value(&self.default_value, dtype)
+        } else {
+            ScalarValue::try_from_array(array, idx as usize)
+        }
+    }
+
+    fn evaluate(&self, values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
         // LEAD, LAG window functions take single column, values will have size 1
         let value = &values[0];
-        let value = value.slice(partition.start, partition.end - partition.start);
-        shift_with_default_value(&value, self.shift_offset, self.default_value.as_ref())
+        shift_with_default_value(value, self.shift_offset, self.default_value.as_ref())
+    }
+}
+
+fn get_default_value(
+    default_value: &Option<ScalarValue>,
+    dtype: &DataType,
+) -> Result<ScalarValue> {
+    if let Some(value) = default_value {
+        if let ScalarValue::Int64(Some(val)) = value {
+            ScalarValue::try_from_string(val.to_string(), dtype)
+        } else {
+            Err(DataFusionError::Internal(
+                "Expects default value to have Int64 type".to_string(),
+            ))
+        }
+    } else {
+        Ok(ScalarValue::try_from(dtype)?)
     }
 }
 
@@ -191,9 +269,10 @@ mod tests {
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
         let values = expr.evaluate_args(&batch)?;
-        let result = expr.create_evaluator()?.evaluate(&values, vec![0..8])?;
-        assert_eq!(1, result.len());
-        let result = as_int32_array(&result[0])?;
+        let result = expr
+            .create_evaluator()?
+            .evaluate(&values, batch.num_rows())?;
+        let result = as_int32_array(&result)?;
         assert_eq!(expected, *result);
         Ok(())
     }

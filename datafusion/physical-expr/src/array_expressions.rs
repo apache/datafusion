@@ -97,8 +97,7 @@ fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::UInt64 => array!(args, UInt64Array, UInt64Builder),
         data_type => {
             return Err(DataFusionError::NotImplemented(format!(
-                "Array is not implemented for type '{:?}'.",
-                data_type
+                "Array is not implemented for type '{data_type:?}'."
             )))
         }
     };

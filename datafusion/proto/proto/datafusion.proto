@@ -71,6 +71,7 @@ message LogicalPlanNode {
     DistinctNode distinct = 23;
     ViewTableScanNode view_scan = 24;
     CustomTableScanNode custom_scan = 25;
+    PrepareNode prepare = 26;
   }
 }
 
@@ -89,7 +90,8 @@ message CsvFormat {
 }
 
 message ParquetFormat {
-  bool enable_pruning = 1;
+  // Used to be bool enable_pruning = 1;
+  reserved 1;
 }
 
 message AvroFormat {}
@@ -99,8 +101,8 @@ message ListingTableScanNode {
   repeated string paths = 2;
   string file_extension = 3;
   ProjectionColumns projection = 4;
-  datafusion.Schema schema = 5;
-  repeated datafusion.LogicalExprNode filters = 6;
+  Schema schema = 5;
+  repeated LogicalExprNode filters = 6;
   repeated string table_partition_cols = 7;
   bool collect_stat = 8;
   uint32 target_partitions = 9;
@@ -109,13 +111,13 @@ message ListingTableScanNode {
     ParquetFormat parquet = 11;
     AvroFormat avro = 12;
   }
-  repeated datafusion.LogicalExprNode file_sort_order = 13;
+  repeated LogicalExprNode file_sort_order = 13;
 }
 
 message ViewTableScanNode {
   string table_name = 1;
   LogicalPlanNode input = 2;
-  datafusion.Schema schema = 3;
+  Schema schema = 3;
   ProjectionColumns projection = 4;
   string definition = 5;
 }
@@ -124,14 +126,14 @@ message ViewTableScanNode {
 message CustomTableScanNode {
   string table_name = 1;
   ProjectionColumns projection = 2;
-  datafusion.Schema schema = 3;
-  repeated datafusion.LogicalExprNode filters = 4;
+  Schema schema = 3;
+  repeated LogicalExprNode filters = 4;
   bytes custom_table_data = 5;
 }
 
 message ProjectionNode {
   LogicalPlanNode input = 1;
-  repeated datafusion.LogicalExprNode expr = 2;
+  repeated LogicalExprNode expr = 2;
   oneof optional_alias {
     string alias = 3;
   }
@@ -139,12 +141,12 @@ message ProjectionNode {
 
 message SelectionNode {
   LogicalPlanNode input = 1;
-  datafusion.LogicalExprNode expr = 2;
+  LogicalExprNode expr = 2;
 }
 
 message SortNode {
   LogicalPlanNode input = 1;
-  repeated datafusion.LogicalExprNode expr = 2;
+  repeated LogicalExprNode expr = 2;
   // Maximum number of highest/lowest rows to fetch; negative means no limit
   int64 fetch = 3;
 }
@@ -158,7 +160,7 @@ message RepartitionNode {
 }
 
 message HashRepartition {
-  repeated datafusion.LogicalExprNode hash_expr = 1;
+  repeated LogicalExprNode hash_expr = 1;
   uint64 partition_count = 2;
 }
 
@@ -167,11 +169,12 @@ message EmptyRelationNode {
 }
 
 message CreateExternalTableNode {
-  string name = 1;
+  reserved 1; // was string name
+  OwnedTableReference name = 12;
   string location = 2;
   string file_type = 3;
   bool has_header = 4;
-  datafusion.DfSchema schema = 5;
+  DfSchema schema = 5;
   repeated string table_partition_cols = 6;
   bool if_not_exists = 7;
   string delimiter = 8;
@@ -180,20 +183,27 @@ message CreateExternalTableNode {
   map<string, string> options = 11;
 }
 
+message PrepareNode {
+  string name = 1;
+  repeated ArrowType data_types = 2;
+  LogicalPlanNode input = 3;
+}
+
 message CreateCatalogSchemaNode {
   string schema_name = 1;
   bool if_not_exists = 2;
-  datafusion.DfSchema schema = 3;
+  DfSchema schema = 3;
 }
 
 message CreateCatalogNode {
   string catalog_name = 1;
   bool if_not_exists = 2;
-  datafusion.DfSchema schema = 3;
+  DfSchema schema = 3;
 }
 
 message CreateViewNode {
-  string name = 1;
+  reserved 1; // was string name
+  OwnedTableReference name = 5;
   LogicalPlanNode input = 2;
   bool or_replace = 3;
   string definition = 4;
@@ -203,7 +213,7 @@ message CreateViewNode {
 // the list is flattened, and with the field n_cols it can be parsed and partitioned into rows
 message ValuesNode {
   uint64 n_cols = 1;
-  repeated datafusion.LogicalExprNode values_list = 2;
+  repeated LogicalExprNode values_list = 2;
 }
 
 message AnalyzeNode {
@@ -218,13 +228,13 @@ message ExplainNode {
 
 message AggregateNode {
   LogicalPlanNode input = 1;
-  repeated datafusion.LogicalExprNode group_expr = 2;
-  repeated datafusion.LogicalExprNode aggr_expr = 3;
+  repeated LogicalExprNode group_expr = 2;
+  repeated LogicalExprNode aggr_expr = 3;
 }
 
 message WindowNode {
   LogicalPlanNode input = 1;
-  repeated datafusion.LogicalExprNode window_expr = 2;
+  repeated LogicalExprNode window_expr = 2;
 }
 
 enum JoinType {
@@ -248,8 +258,8 @@ message JoinNode {
   LogicalPlanNode right = 2;
   JoinType join_type = 3;
   JoinConstraint join_constraint = 4;
-  repeated datafusion.Column left_join_column = 5;
-  repeated datafusion.Column right_join_column = 6;
+  repeated LogicalExprNode left_join_key = 5;
+  repeated LogicalExprNode right_join_key = 6;
   bool null_equals_null = 7;
   LogicalExprNode filter = 8;
 }
@@ -276,7 +286,7 @@ message LimitNode {
 }
 
 message SelectionExecNode {
-  datafusion.LogicalExprNode expr = 1;
+  LogicalExprNode expr = 1;
 }
 
 message SubqueryAliasNode {
@@ -343,7 +353,14 @@ message LogicalExprNode {
     ILikeNode ilike = 32;
     SimilarToNode similar_to = 33;
 
+    PlaceholderNode placeholder = 34;
+
   }
+}
+
+message PlaceholderNode {
+  string id = 1;
+  ArrowType data_type = 2;
 }
 
 message LogicalExprList {
@@ -429,79 +446,79 @@ message InListNode {
 }
 
 enum ScalarFunction {
-  Abs=0;
-  Acos=1;
-  Asin=2;
-  Atan=3;
-  Ascii=4;
-  Ceil=5;
-  Cos=6;
-  Digest=7;
-  Exp=8;
-  Floor=9;
-  Ln=10;
-  Log=11;
-  Log10=12;
-  Log2=13;
-  Round=14;
-  Signum=15;
-  Sin=16;
-  Sqrt=17;
-  Tan=18;
-  Trunc=19;
-  Array=20;
-  RegexpMatch=21;
-  BitLength=22;
-  Btrim=23;
-  CharacterLength=24;
-  Chr=25;
-  Concat=26;
-  ConcatWithSeparator=27;
-  DatePart=28;
-  DateTrunc=29;
-  InitCap=30;
-  Left=31;
-  Lpad=32;
-  Lower=33;
-  Ltrim=34;
-  MD5=35;
-  NullIf=36;
-  OctetLength=37;
-  Random=38;
-  RegexpReplace=39;
-  Repeat=40;
-  Replace=41;
-  Reverse=42;
-  Right=43;
-  Rpad=44;
-  Rtrim=45;
-  SHA224=46;
-  SHA256=47;
-  SHA384=48;
-  SHA512=49;
-  SplitPart=50;
-  StartsWith=51;
-  Strpos=52;
-  Substr=53;
-  ToHex=54;
-  ToTimestamp=55;
-  ToTimestampMillis=56;
-  ToTimestampMicros=57;
-  ToTimestampSeconds=58;
-  Now=59;
-  Translate=60;
-  Trim=61;
-  Upper=62;
-  Coalesce=63;
-  Power=64;
-  StructFun=65;
-  FromUnixtime=66;
-  Atan2=67;
-  DateBin=68;
-  ArrowTypeof=69;
-  CurrentDate=70;
-  CurrentTime=71;
-  Uuid=72;
+  Abs = 0;
+  Acos = 1;
+  Asin = 2;
+  Atan = 3;
+  Ascii = 4;
+  Ceil = 5;
+  Cos = 6;
+  Digest = 7;
+  Exp = 8;
+  Floor = 9;
+  Ln = 10;
+  Log = 11;
+  Log10 = 12;
+  Log2 = 13;
+  Round = 14;
+  Signum = 15;
+  Sin = 16;
+  Sqrt = 17;
+  Tan = 18;
+  Trunc = 19;
+  Array = 20;
+  RegexpMatch = 21;
+  BitLength = 22;
+  Btrim = 23;
+  CharacterLength = 24;
+  Chr = 25;
+  Concat = 26;
+  ConcatWithSeparator = 27;
+  DatePart = 28;
+  DateTrunc = 29;
+  InitCap = 30;
+  Left = 31;
+  Lpad = 32;
+  Lower = 33;
+  Ltrim = 34;
+  MD5 = 35;
+  NullIf = 36;
+  OctetLength = 37;
+  Random = 38;
+  RegexpReplace = 39;
+  Repeat = 40;
+  Replace = 41;
+  Reverse = 42;
+  Right = 43;
+  Rpad = 44;
+  Rtrim = 45;
+  SHA224 = 46;
+  SHA256 = 47;
+  SHA384 = 48;
+  SHA512 = 49;
+  SplitPart = 50;
+  StartsWith = 51;
+  Strpos = 52;
+  Substr = 53;
+  ToHex = 54;
+  ToTimestamp = 55;
+  ToTimestampMillis = 56;
+  ToTimestampMicros = 57;
+  ToTimestampSeconds = 58;
+  Now = 59;
+  Translate = 60;
+  Trim = 61;
+  Upper = 62;
+  Coalesce = 63;
+  Power = 64;
+  StructFun = 65;
+  FromUnixtime = 66;
+  Atan2 = 67;
+  DateBin = 68;
+  ArrowTypeof = 69;
+  CurrentDate = 70;
+  CurrentTime = 71;
+  Uuid = 72;
 }
 
 message ScalarFunctionNode {
@@ -517,18 +534,18 @@ enum AggregateFunction {
   COUNT = 4;
   APPROX_DISTINCT = 5;
   ARRAY_AGG = 6;
-  VARIANCE=7;
-  VARIANCE_POP=8;
-  COVARIANCE=9;
-  COVARIANCE_POP=10;
-  STDDEV=11;
-  STDDEV_POP=12;
-  CORRELATION=13;
+  VARIANCE = 7;
+  VARIANCE_POP = 8;
+  COVARIANCE = 9;
+  COVARIANCE_POP = 10;
+  STDDEV = 11;
+  STDDEV_POP = 12;
+  CORRELATION = 13;
   APPROX_PERCENTILE_CONT = 14;
-  APPROX_MEDIAN=15;
+  APPROX_MEDIAN = 15;
   APPROX_PERCENTILE_CONT_WITH_WEIGHT = 16;
   GROUPING = 17;
-  MEDIAN=18;
+  MEDIAN = 18;
 }
 
 message AggregateExprNode {
@@ -663,7 +680,7 @@ message WindowFrameBound {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 message Schema {
-  repeated datafusion.Field columns = 1;
+  repeated Field columns = 1;
 }
 
 message Field {
@@ -676,30 +693,30 @@ message Field {
 }
 
 message FixedSizeBinary{
-    int32 length = 1;
+  int32 length = 1;
 }
 
 message Timestamp{
-    TimeUnit time_unit = 1;
-    string timezone = 2;
+  TimeUnit time_unit = 1;
+  string timezone = 2;
 }
 
 enum DateUnit{
-    Day = 0;
-    DateMillisecond = 1;
+  Day = 0;
+  DateMillisecond = 1;
 }
 
 enum TimeUnit{
-    Second = 0;
-    Millisecond = 1;
-    Microsecond = 2;
-    Nanosecond = 3;
+  Second = 0;
+  Millisecond = 1;
+  Microsecond = 2;
+  Nanosecond = 3;
 }
 
 enum IntervalUnit{
-    YearMonth = 0;
-    DayTime = 1;
-    MonthDayNano = 2;
+  YearMonth = 0;
+  DayTime = 1;
+  MonthDayNano = 2;
 }
 
 message Decimal{
@@ -709,21 +726,21 @@ message Decimal{
 }
 
 message List{
-    Field field_type = 1;
+  Field field_type = 1;
 }
 
 message FixedSizeList{
-    Field field_type = 1;
-    int32 list_size = 2;
+  Field field_type = 1;
+  int32 list_size = 2;
 }
 
 message Dictionary{
-    ArrowType key = 1;
-    ArrowType value = 2;
+  ArrowType key = 1;
+  ArrowType value = 2;
 }
 
 message Struct{
-    repeated Field sub_field_types = 1;
+  repeated Field sub_field_types = 1;
 }
 
 enum UnionMode{
@@ -732,17 +749,17 @@ enum UnionMode{
 }
 
 message Union{
-    repeated Field union_types = 1;
-    UnionMode union_mode = 2;
-    repeated int32 type_ids = 3;
+  repeated Field union_types = 1;
+  UnionMode union_mode = 2;
+  repeated int32 type_ids = 3;
 }
 
 message ScalarListValue{
-    // encode null explicitly to distinguish a list with a null value
-    // from a list with no values)
-    bool is_null = 3;
-    Field field = 1;
-    repeated ScalarValue values = 2;
+  // encode null explicitly to distinguish a list with a null value
+  // from a list with no values)
+  bool is_null = 3;
+  Field field = 1;
+  repeated ScalarValue values = 2;
 }
 
 message ScalarTime32Value {
@@ -789,8 +806,8 @@ message StructValue {
 }
 
 message ScalarFixedSizeBinary{
-    bytes values =  1;
-    int32 length = 2;
+  bytes values = 1;
+  int32 length = 2;
 }
 
 message ScalarValue{
@@ -798,42 +815,42 @@ message ScalarValue{
   reserved 19;
 
   oneof value {
-        // was PrimitiveScalarType null_value = 19;
-        // Null value of any type
-        ArrowType null_value = 33;
+    // was PrimitiveScalarType null_value = 19;
+    // Null value of any type
+    ArrowType null_value = 33;
 
-        bool   bool_value = 1;
-        string utf8_value = 2;
-        string large_utf8_value = 3;
-        int32  int8_value = 4;
-        int32  int16_value = 5;
-        int32  int32_value = 6;
-        int64  int64_value = 7;
-        uint32 uint8_value = 8;
-        uint32 uint16_value = 9;
-        uint32 uint32_value = 10;
-        uint64 uint64_value = 11;
-        float  float32_value = 12;
-        double float64_value = 13;
-        // Literal Date32 value always has a unit of day
-        int32  date_32_value = 14;
-        ScalarTime32Value time32_value = 15;
-        ScalarListValue list_value = 17;
-        //WAS: ScalarType null_list_value = 18;
+    bool   bool_value = 1;
+    string utf8_value = 2;
+    string large_utf8_value = 3;
+    int32  int8_value = 4;
+    int32  int16_value = 5;
+    int32  int32_value = 6;
+    int64  int64_value = 7;
+    uint32 uint8_value = 8;
+    uint32 uint16_value = 9;
+    uint32 uint32_value = 10;
+    uint64 uint64_value = 11;
+    float  float32_value = 12;
+    double float64_value = 13;
+    // Literal Date32 value always has a unit of day
+    int32  date_32_value = 14;
+    ScalarTime32Value time32_value = 15;
+    ScalarListValue list_value = 17;
+    //WAS: ScalarType null_list_value = 18;
 
-        Decimal128 decimal128_value = 20;
-        int64 date_64_value = 21;
-        int32 interval_yearmonth_value = 24;
-        int64 interval_daytime_value = 25;
-        ScalarTimestampValue timestamp_value = 26;
-        ScalarDictionaryValue dictionary_value = 27;
-        bytes binary_value = 28;
-        bytes large_binary_value = 29;
-        ScalarTime64Value time64_value = 30;
-        IntervalMonthDayNanoValue interval_month_day_nano = 31;
-        StructValue struct_value = 32;
-        ScalarFixedSizeBinary fixed_size_binary_value = 34;
-    }
+    Decimal128 decimal128_value = 20;
+    int64 date_64_value = 21;
+    int32 interval_yearmonth_value = 24;
+    int64 interval_daytime_value = 25;
+    ScalarTimestampValue timestamp_value = 26;
+    ScalarDictionaryValue dictionary_value = 27;
+    bytes binary_value = 28;
+    bytes large_binary_value = 29;
+    ScalarTime64Value time64_value = 30;
+    IntervalMonthDayNanoValue interval_month_day_nano = 31;
+    StructValue struct_value = 32;
+    ScalarFixedSizeBinary fixed_size_binary_value = 34;
+  }
 }
 
 message Decimal128{
@@ -844,40 +861,40 @@ message Decimal128{
 
 // Serialized data type
 message ArrowType{
-    oneof arrow_type_enum {
-        EmptyMessage NONE = 1;     // arrow::Type::NA
-        EmptyMessage BOOL =  2;     // arrow::Type::BOOL
-        EmptyMessage UINT8 = 3;    // arrow::Type::UINT8
-        EmptyMessage INT8 =  4;     // arrow::Type::INT8
-        EmptyMessage UINT16 =5;   // represents arrow::Type fields in src/arrow/type.h
-        EmptyMessage INT16 = 6;
-        EmptyMessage UINT32 =7;
-        EmptyMessage INT32 = 8;
-        EmptyMessage UINT64 =9;
-        EmptyMessage INT64 =10 ;
-        EmptyMessage FLOAT16 =11 ;
-        EmptyMessage FLOAT32 =12 ;
-        EmptyMessage FLOAT64 =13 ;
-        EmptyMessage UTF8 =14 ;
-        EmptyMessage LARGE_UTF8 = 32;
-        EmptyMessage BINARY =15 ;
-        int32 FIXED_SIZE_BINARY =16 ;
-        EmptyMessage LARGE_BINARY = 31;
-        EmptyMessage DATE32 =17 ;
-        EmptyMessage DATE64 =18 ;
-        TimeUnit DURATION = 19;
-        Timestamp TIMESTAMP =20 ;
-        TimeUnit TIME32 =21 ;
-        TimeUnit TIME64 =22 ;
-        IntervalUnit INTERVAL =23 ;
-        Decimal DECIMAL =24 ;
-        List LIST =25;
-        List LARGE_LIST = 26;
-        FixedSizeList FIXED_SIZE_LIST = 27;
-        Struct STRUCT =28;
-        Union UNION =29;
-        Dictionary DICTIONARY =30;
-    }
+  oneof arrow_type_enum {
+    EmptyMessage NONE = 1;     // arrow::Type::NA
+    EmptyMessage BOOL = 2;     // arrow::Type::BOOL
+    EmptyMessage UINT8 = 3;    // arrow::Type::UINT8
+    EmptyMessage INT8 = 4;     // arrow::Type::INT8
+    EmptyMessage UINT16 = 5;   // represents arrow::Type fields in src/arrow/type.h
+    EmptyMessage INT16 = 6;
+    EmptyMessage UINT32 = 7;
+    EmptyMessage INT32 = 8;
+    EmptyMessage UINT64 = 9;
+    EmptyMessage INT64 = 10 ;
+    EmptyMessage FLOAT16 = 11 ;
+    EmptyMessage FLOAT32 = 12 ;
+    EmptyMessage FLOAT64 = 13 ;
+    EmptyMessage UTF8 = 14 ;
+    EmptyMessage LARGE_UTF8 = 32;
+    EmptyMessage BINARY = 15 ;
+    int32 FIXED_SIZE_BINARY = 16 ;
+    EmptyMessage LARGE_BINARY = 31;
+    EmptyMessage DATE32 = 17 ;
+    EmptyMessage DATE64 = 18 ;
+    TimeUnit DURATION = 19;
+    Timestamp TIMESTAMP = 20 ;
+    TimeUnit TIME32 = 21 ;
+    TimeUnit TIME64 = 22 ;
+    IntervalUnit INTERVAL = 23 ;
+    Decimal DECIMAL = 24 ;
+    List LIST = 25;
+    List LARGE_LIST = 26;
+    FixedSizeList FIXED_SIZE_LIST = 27;
+    Struct STRUCT = 28;
+    Union UNION = 29;
+    Dictionary DICTIONARY = 30;
+  }
 }
 
 //Useful for representing an empty enum variant in rust
@@ -913,6 +930,29 @@ message PlanType {
 message StringifiedPlan {
   PlanType plan_type = 1;
   string plan = 2;
+}
+
+message BareTableReference {
+  string table = 1;
+}
+
+message PartialTableReference {
+  string schema = 1;
+  string table = 2;
+}
+
+message FullTableReference {
+  string catalog = 1;
+  string schema = 2;
+  string table = 3;
+}
+
+message OwnedTableReference {
+  oneof table_reference_enum {
+    BareTableReference bare = 1;
+    PartialTableReference partial = 2;
+    FullTableReference full = 3;
+  }
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -954,7 +994,7 @@ message PhysicalExprNode {
     // column references
     PhysicalColumn column = 1;
 
-    datafusion.ScalarValue literal = 2;
+    ScalarValue literal = 2;
 
     // binary expressions
     PhysicalBinaryExprNode binary_expr = 3;
@@ -981,25 +1021,27 @@ message PhysicalExprNode {
     PhysicalScalarUdfNode scalar_udf = 16;
 
     PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
+
+    PhysicalLikeExprNode like_expr = 18;
   }
 }
 
 message PhysicalScalarUdfNode {
   string name = 1;
   repeated PhysicalExprNode args = 2;
-  datafusion.ArrowType return_type = 4;
+  ArrowType return_type = 4;
 }
 
 message PhysicalAggregateExprNode {
-  datafusion.AggregateFunction aggr_function = 1;
+  AggregateFunction aggr_function = 1;
   repeated PhysicalExprNode expr = 2;
   bool distinct = 3;
 }
 
 message PhysicalWindowExprNode {
   oneof window_function {
-    datafusion.AggregateFunction aggr_function = 1;
-    datafusion.BuiltInWindowFunction built_in_function = 2;
+    AggregateFunction aggr_function = 1;
+    BuiltInWindowFunction built_in_function = 2;
     // udaf = 3
   }
   PhysicalExprNode expr = 4;
@@ -1034,6 +1076,13 @@ message PhysicalDateTimeIntervalExprNode {
   string op = 3;
 }
 
+message PhysicalLikeExprNode {
+  bool negated = 1;
+  bool case_insensitive = 2;
+  PhysicalExprNode expr = 3;
+  PhysicalExprNode pattern = 4;
+}
+
 message PhysicalSortExprNode {
   PhysicalExprNode expr = 1;
   bool asc = 2;
@@ -1059,19 +1108,19 @@ message PhysicalCaseNode {
 
 message PhysicalScalarFunctionNode {
   string name = 1;
-  datafusion.ScalarFunction fun = 2;
+  ScalarFunction fun = 2;
   repeated PhysicalExprNode args = 3;
-  datafusion.ArrowType return_type = 4;
+  ArrowType return_type = 4;
 }
 
 message PhysicalTryCastNode {
   PhysicalExprNode expr = 1;
-  datafusion.ArrowType arrow_type = 2;
+  ArrowType arrow_type = 2;
 }
 
 message PhysicalCastNode {
   PhysicalExprNode expr = 1;
-  datafusion.ArrowType arrow_type = 2;
+  ArrowType arrow_type = 2;
 }
 
 message PhysicalNegativeNode {
@@ -1093,18 +1142,22 @@ message ScanLimit {
 }
 
 message FileScanExecConf {
+  // Was repeated ConfigOption options = 10;
+  reserved 10;
+
   repeated FileGroup file_groups = 1;
-  datafusion.Schema schema = 2;
+  Schema schema = 2;
   repeated uint32 projection = 4;
   ScanLimit limit = 5;
   Statistics statistics = 6;
   repeated string table_partition_cols = 7;
   string object_store_url = 8;
+  repeated PhysicalSortExprNode output_ordering = 9;
 }
 
 message ParquetScanExecNode {
   FileScanExecConf base_conf = 1;
-  datafusion.LogicalExprNode pruning_predicate = 2;
+  LogicalExprNode pruning_predicate = 2;
 }
 
 message CsvScanExecNode {
@@ -1127,7 +1180,7 @@ message HashJoinExecNode {
   PhysicalPlanNode left = 1;
   PhysicalPlanNode right = 2;
   repeated JoinOn on = 3;
-  datafusion.JoinType join_type = 4;
+  JoinType join_type = 4;
   PartitionMode partition_mode = 6;
   bool null_equals_null = 7;
   JoinFilter filter = 8;
@@ -1138,8 +1191,8 @@ message UnionExecNode {
 }
 
 message ExplainExecNode {
-  datafusion.Schema schema = 1;
-  repeated datafusion.StringifiedPlan stringified_plans = 2;
+  Schema schema = 1;
+  repeated StringifiedPlan stringified_plans = 2;
   bool verbose = 3;
 }
 
@@ -1160,7 +1213,7 @@ message JoinOn {
 
 message EmptyExecNode {
   bool produce_one_row = 1;
-  datafusion.Schema schema = 2;
+  Schema schema = 2;
 }
 
 message ProjectionExecNode {
@@ -1179,7 +1232,7 @@ message WindowAggExecNode {
   PhysicalPlanNode input = 1;
   repeated PhysicalExprNode window_expr = 2;
   repeated string window_expr_name = 3;
-  datafusion.Schema input_schema = 4;
+  Schema input_schema = 4;
 }
 
 message AggregateExecNode {
@@ -1190,7 +1243,7 @@ message AggregateExecNode {
   repeated string group_expr_name = 5;
   repeated string aggr_expr_name = 6;
   // we need the input schema to the partial aggregate to pass to the final aggregate
-  datafusion.Schema input_schema = 7;
+  Schema input_schema = 7;
   repeated PhysicalExprNode null_expr = 8;
   repeated bool groups = 9;
 }
@@ -1246,7 +1299,7 @@ message RepartitionExecNode{
 message JoinFilter{
   PhysicalExprNode expression = 1;
   repeated ColumnIndex column_indices = 2;
-  datafusion.Schema schema = 3;
+  Schema schema = 3;
 }
 
 message ColumnIndex{
@@ -1291,77 +1344,4 @@ message ColumnStats {
   ScalarValue max_value = 2;
   uint32 null_count = 3;
   uint32 distinct_count = 4;
-}
-
-message PartitionLocation {
-  // partition_id of the map stage who produces the shuffle.
-  uint32 map_partition_id = 1;
-  // partition_id of the shuffle, a composition of(job_id + map_stage_id + partition_id).
-  PartitionId partition_id = 2;
-  ExecutorMetadata executor_meta = 3;
-  PartitionStats partition_stats = 4;
-  string path = 5;
-}
-
-// Unique identifier for a materialized partition of data
-message PartitionId {
-  string job_id = 1;
-  uint32 stage_id = 2;
-  uint32 partition_id = 4;
-}
-
-// Used by scheduler
-message ExecutorMetadata {
-  string id = 1;
-  string host = 2;
-  uint32 port = 3;
-  uint32 grpc_port = 4;
-  ExecutorSpecification specification = 5;
-}
-
-// Used by grpc
-message ExecutorRegistration {
-  string id = 1;
-  // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
-  // this syntax is ugly but is binary compatible with the "optional" keyword (see https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3)
-  oneof optional_host {
-    string host = 2;
-  }
-  uint32 port = 3;
-  uint32 grpc_port = 4;
-  ExecutorSpecification specification = 5;
-}
-
-message ExecutorHeartbeat {
-  string executor_id = 1;
-  // Unix epoch-based timestamp in seconds
-  uint64 timestamp = 2;
-  repeated ExecutorMetric metrics = 3;
-  ExecutorStatus status = 4;
-}
-
-message ExecutorSpecification {
-  repeated ExecutorResource resources = 1;
-}
-
-message ExecutorResource {
-  // TODO add more resources
-  oneof resource {
-    uint32 task_slots = 1;
-  }
-}
-
-message ExecutorMetric {
-  // TODO add more metrics
-  oneof metric {
-    uint64 available_memory = 1;
-  }
-}
-
-message ExecutorStatus {
-  oneof status {
-    string active = 1;
-    string dead = 2;
-    string unknown = 3;
-  }
 }

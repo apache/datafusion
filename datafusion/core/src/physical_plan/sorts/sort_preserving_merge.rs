@@ -164,12 +164,12 @@ impl ExecutionPlan for SortPreservingMergeExec {
         );
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "SortPreservingMergeExec invalid partition {}",
-                partition
+                "SortPreservingMergeExec invalid partition {partition}"
             )));
         }
 
-        let tracking_metrics = MemTrackingMetrics::new(&self.metrics, partition);
+        let tracking_metrics =
+            MemTrackingMetrics::new(&self.metrics, context.memory_pool(), partition);
 
         let input_partitions = self.input.output_partitioning().partition_count();
         debug!(
@@ -342,7 +342,7 @@ impl SortPreservingMergeStream {
         streams: Vec<SortedStream>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
-        tracking_metrics: MemTrackingMetrics,
+        mut tracking_metrics: MemTrackingMetrics,
         batch_size: usize,
     ) -> Result<Self> {
         let stream_count = streams.len();
@@ -1008,8 +1008,7 @@ mod tests {
 
         assert_eq!(
             basic, partition,
-            "basic:\n\n{}\n\npartition:\n\n{}\n\n",
-            basic, partition
+            "basic:\n\n{basic}\n\npartition:\n\n{partition}\n\n"
         );
     }
 
@@ -1258,7 +1257,8 @@ mod tests {
         }
 
         let metrics = ExecutionPlanMetricsSet::new();
-        let tracking_metrics = MemTrackingMetrics::new(&metrics, 0);
+        let tracking_metrics =
+            MemTrackingMetrics::new(&metrics, task_ctx.memory_pool(), 0);
 
         let merge_stream = SortPreservingMergeStream::new_from_streams(
             streams,
@@ -1284,8 +1284,7 @@ mod tests {
 
         assert_eq!(
             basic, partition,
-            "basic:\n\n{}\n\npartition:\n\n{}\n\n",
-            basic, partition
+            "basic:\n\n{basic}\n\npartition:\n\n{partition}\n\n"
         );
     }
 

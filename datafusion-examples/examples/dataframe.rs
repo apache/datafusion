@@ -19,7 +19,6 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use std::fs;
-use std::sync::Arc;
 
 /// This example demonstrates executing a simple query against an Arrow data source (Parquet) and
 /// fetching results, using the DataFrame trait
@@ -30,7 +29,7 @@ async fn main() -> Result<()> {
 
     let testdata = datafusion::test_util::parquet_test_data();
 
-    let filename = &format!("{}/alltypes_plain.parquet", testdata);
+    let filename = &format!("{testdata}/alltypes_plain.parquet");
 
     // define the query using the DataFrame trait
     let df = ctx
@@ -64,7 +63,7 @@ a2,"08 9, 2013",2,1376006400,4.5"#;
 }
 
 // Example to read data from a csv file with inferred schema
-async fn example_read_csv_file_with_inferred_schema() -> Arc<DataFrame> {
+async fn example_read_csv_file_with_inferred_schema() -> DataFrame {
     let path = "example.csv";
     // Create a csv file using the predefined function
     create_csv_file(path.to_string());
@@ -75,7 +74,7 @@ async fn example_read_csv_file_with_inferred_schema() -> Arc<DataFrame> {
 }
 
 // Example to read csv file with a defined schema for the csv file
-async fn example_read_csv_file_with_schema() -> Arc<DataFrame> {
+async fn example_read_csv_file_with_schema() -> DataFrame {
     let path = "example.csv";
     // Create a csv file using the predefined function
     create_csv_file(path.to_string());

@@ -21,8 +21,15 @@ use crate::error::{DataFusionError, Result};
 use crate::logical_expr::JoinType;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::SchemaRef;
-use arrow::datatypes::{Field, Schema};
-use arrow::error::ArrowError;
+use arrow::array::{
+    new_null_array, Array, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
+    UInt32Builder, UInt64Array,
+};
+use arrow::compute;
+use arrow::datatypes::{Field, Schema, UInt32Type, UInt64Type};
+use arrow::error::{ArrowError, Result as ArrowResult};
+use arrow::record_batch::RecordBatch;
+use datafusion_common::cast::as_boolean_array;
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{EquivalentClass, PhysicalExpr};
 use futures::future::{BoxFuture, Shared};
@@ -78,9 +85,7 @@ fn check_join_set_is_valid(
 
     if !left_missing.is_empty() | !right_missing.is_empty() {
         return Err(DataFusionError::Plan(format!(
-                "The left or right side of the join does not have all columns on \"on\": \nMissing on the left: {:?}\nMissing on the right: {:?}",
-                left_missing,
-                right_missing,
+                "The left or right side of the join does not have all columns on \"on\": \nMissing on the left: {left_missing:?}\nMissing on the right: {right_missing:?}",
             )));
     };
 
@@ -691,6 +696,242 @@ impl<T: 'static> OnceFut<T> {
             ),
         }
     }
+}
+
+/// Some type `join_type` of join need to maintain the matched indices bit map for the left side, and
+/// use the bit map to generate the part of result of the join.
+///
+/// For example of the `Left` join, in each iteration of right side, can get the matched result, but need
+/// to maintain the matched indices bit map to get the unmatched row for the left side.
+pub(crate) fn need_produce_result_in_final(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
+        JoinType::Left | JoinType::LeftAnti | JoinType::LeftSemi | JoinType::Full
+    )
+}
+
+/// In the end of join execution, need to use bit map of the matched indices to generate the final left and
+/// right indices.
+///
+/// For example:
+/// left_bit_map: [true, false, true, true, false]
+/// join_type: `Left`
+///
+/// The result is: ([1,4], [null, null])
+pub(crate) fn get_final_indices_from_bit_map(
+    left_bit_map: &BooleanBufferBuilder,
+    join_type: JoinType,
+) -> (UInt64Array, UInt32Array) {
+    let left_size = left_bit_map.len();
+    let left_indices = if join_type == JoinType::LeftSemi {
+        (0..left_size)
+            .filter_map(|idx| (left_bit_map.get_bit(idx)).then_some(idx as u64))
+            .collect::<UInt64Array>()
+    } else {
+        // just for `Left`, `LeftAnti` and `Full` join
+        // `LeftAnti`, `Left` and `Full` will produce the unmatched left row finally
+        (0..left_size)
+            .filter_map(|idx| (!left_bit_map.get_bit(idx)).then_some(idx as u64))
+            .collect::<UInt64Array>()
+    };
+    // right_indices
+    // all the element in the right side is None
+    let mut builder = UInt32Builder::with_capacity(left_indices.len());
+    builder.append_nulls(left_indices.len());
+    let right_indices = builder.finish();
+    (left_indices, right_indices)
+}
+
+/// Use the `left_indices` and `right_indices` to restructure tuples, and apply the `filter` to
+/// all of them to get the matched left and right indices.
+pub(crate) fn apply_join_filter_to_indices(
+    left: &RecordBatch,
+    right: &RecordBatch,
+    left_indices: UInt64Array,
+    right_indices: UInt32Array,
+    filter: &JoinFilter,
+) -> Result<(UInt64Array, UInt32Array)> {
+    if left_indices.is_empty() && right_indices.is_empty() {
+        return Ok((left_indices, right_indices));
+    };
+
+    let intermediate_batch = build_batch_from_indices(
+        filter.schema(),
+        left,
+        right,
+        PrimitiveArray::from(left_indices.data().clone()),
+        PrimitiveArray::from(right_indices.data().clone()),
+        filter.column_indices(),
+    )?;
+    let filter_result = filter
+        .expression()
+        .evaluate(&intermediate_batch)?
+        .into_array(intermediate_batch.num_rows());
+    let mask = as_boolean_array(&filter_result)?;
+
+    let left_filtered = PrimitiveArray::<UInt64Type>::from(
+        compute::filter(&left_indices, mask)?.data().clone(),
+    );
+    let right_filtered = PrimitiveArray::<UInt32Type>::from(
+        compute::filter(&right_indices, mask)?.data().clone(),
+    );
+
+    Ok((left_filtered, right_filtered))
+}
+
+/// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
+/// The resulting batch has [Schema] `schema`.
+pub(crate) fn build_batch_from_indices(
+    schema: &Schema,
+    left: &RecordBatch,
+    right: &RecordBatch,
+    left_indices: UInt64Array,
+    right_indices: UInt32Array,
+    column_indices: &[ColumnIndex],
+) -> ArrowResult<RecordBatch> {
+    // build the columns of the new [RecordBatch]:
+    // 1. pick whether the column is from the left or right
+    // 2. based on the pick, `take` items from the different RecordBatches
+    let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
+
+    for column_index in column_indices {
+        let array = match column_index.side {
+            JoinSide::Left => {
+                let array = left.column(column_index.index);
+                if array.is_empty() || left_indices.null_count() == left_indices.len() {
+                    // Outer join would generate a null index when finding no match at our side.
+                    // Therefore, it's possible we are empty but need to populate an n-length null array,
+                    // where n is the length of the index array.
+                    assert_eq!(left_indices.null_count(), left_indices.len());
+                    new_null_array(array.data_type(), left_indices.len())
+                } else {
+                    compute::take(array.as_ref(), &left_indices, None)?
+                }
+            }
+            JoinSide::Right => {
+                let array = right.column(column_index.index);
+                if array.is_empty() || right_indices.null_count() == right_indices.len() {
+                    assert_eq!(right_indices.null_count(), right_indices.len());
+                    new_null_array(array.data_type(), right_indices.len())
+                } else {
+                    compute::take(array.as_ref(), &right_indices, None)?
+                }
+            }
+        };
+        columns.push(array);
+    }
+    RecordBatch::try_new(Arc::new(schema.clone()), columns)
+}
+
+/// The input is the matched indices for left and right and
+/// adjust the indices according to the join type
+pub(crate) fn adjust_indices_by_join_type(
+    left_indices: UInt64Array,
+    right_indices: UInt32Array,
+    count_right_batch: usize,
+    join_type: JoinType,
+) -> (UInt64Array, UInt32Array) {
+    match join_type {
+        JoinType::Inner => {
+            // matched
+            (left_indices, right_indices)
+        }
+        JoinType::Left => {
+            // matched
+            (left_indices, right_indices)
+            // unmatched left row will be produced in the end of loop, and it has been set in the left visited bitmap
+        }
+        JoinType::Right | JoinType::Full => {
+            // matched
+            // unmatched right row will be produced in this batch
+            let right_unmatched_indices =
+                get_anti_indices(count_right_batch, &right_indices);
+            // combine the matched and unmatched right result together
+            append_right_indices(left_indices, right_indices, right_unmatched_indices)
+        }
+        JoinType::RightSemi => {
+            // need to remove the duplicated record in the right side
+            let right_indices = get_semi_indices(count_right_batch, &right_indices);
+            // the left_indices will not be used later for the `right semi` join
+            (left_indices, right_indices)
+        }
+        JoinType::RightAnti => {
+            // need to remove the duplicated record in the right side
+            // get the anti index for the right side
+            let right_indices = get_anti_indices(count_right_batch, &right_indices);
+            // the left_indices will not be used later for the `right anti` join
+            (left_indices, right_indices)
+        }
+        JoinType::LeftSemi | JoinType::LeftAnti => {
+            // matched or unmatched left row will be produced in the end of loop
+            // When visit the right batch, we can output the matched left row and don't need to wait the end of loop
+            (
+                UInt64Array::from_iter_values(vec![]),
+                UInt32Array::from_iter_values(vec![]),
+            )
+        }
+    }
+}
+
+/// Appends the `right_unmatched_indices` to the `right_indices`,
+/// and fills Null to tail of `left_indices` to
+/// keep the length of `right_indices` and `left_indices` consistent.
+pub(crate) fn append_right_indices(
+    left_indices: UInt64Array,
+    right_indices: UInt32Array,
+    right_unmatched_indices: UInt32Array,
+) -> (UInt64Array, UInt32Array) {
+    // left_indices, right_indices and right_unmatched_indices must not contain the null value
+    if right_unmatched_indices.is_empty() {
+        (left_indices, right_indices)
+    } else {
+        let unmatched_size = right_unmatched_indices.len();
+        // the new left indices: left_indices + null array
+        // the new right indices: right_indices + right_unmatched_indices
+        let new_left_indices = left_indices
+            .iter()
+            .chain(std::iter::repeat(None).take(unmatched_size))
+            .collect::<UInt64Array>();
+        let new_right_indices = right_indices
+            .iter()
+            .chain(right_unmatched_indices.iter())
+            .collect::<UInt32Array>();
+        (new_left_indices, new_right_indices)
+    }
+}
+
+/// Get unmatched and deduplicated indices
+pub(crate) fn get_anti_indices(
+    row_count: usize,
+    input_indices: &UInt32Array,
+) -> UInt32Array {
+    let mut bitmap = BooleanBufferBuilder::new(row_count);
+    bitmap.append_n(row_count, false);
+    input_indices.iter().flatten().for_each(|v| {
+        bitmap.set_bit(v as usize, true);
+    });
+
+    // get the anti index
+    (0..row_count)
+        .filter_map(|idx| (!bitmap.get_bit(idx)).then_some(idx as u32))
+        .collect::<UInt32Array>()
+}
+
+/// Get matched and deduplicated indices
+pub(crate) fn get_semi_indices(
+    row_count: usize,
+    input_indices: &UInt32Array,
+) -> UInt32Array {
+    let mut bitmap = BooleanBufferBuilder::new(row_count);
+    bitmap.append_n(row_count, false);
+    input_indices.iter().flatten().for_each(|v| {
+        bitmap.set_bit(v as usize, true);
+    });
+
+    // get the semi index
+    (0..row_count)
+        .filter_map(|idx| (bitmap.get_bit(idx)).then_some(idx as u32))
+        .collect::<UInt32Array>()
 }
 
 #[cfg(test)]

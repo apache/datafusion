@@ -19,30 +19,51 @@
 
 # DataFusion Command-line SQL Utility
 
-The DataFusion CLI is a command-line interactive SQL utility that allows
-queries to be executed against any supported data files. It is a convenient way to
+The DataFusion CLI is a command-line interactive SQL utility for executing
+queries against any supported data files. It is a convenient way to
 try DataFusion out with your own data sources, and test out its SQL support.
 
 ## Example
 
 Create a CSV file to query.
 
-```bash
-$ echo "1,2" > data.csv
+```shell
+$ echo "a,b" > data.csv
+$ echo "1,2" >> data.csv
 ```
 
-```bash
+Query that single file (the CLI also supports parquet, compressed csv, avro, json and more)
+
+```shell
 $ datafusion-cli
-DataFusion CLI v12.0.0
-❯ CREATE EXTERNAL TABLE foo STORED AS CSV LOCATION 'data.csv';
-0 rows in set. Query took 0.017 seconds.
-❯ select * from foo;
-+----------+----------+
-| column_1 | column_2 |
-+----------+----------+
-| 1        | 2        |
-+----------+----------+
-1 row in set. Query took 0.012 seconds.
+DataFusion CLI v17.0.0
+❯ select * from 'data.csv';
++---+---+
+| a | b |
++---+---+
+| 1 | 2 |
++---+---+
+1 row in set. Query took 0.007 seconds.
+```
+
+You can also query directories of files with compatible schemas:
+
+```shell
+$ ls data_dir/
+data.csv   data2.csv
+```
+
+```shell
+$ datafusion-cli
+DataFusion CLI v16.0.0
+❯ select * from 'data_dir';
++---+---+
+| a | b |
++---+---+
+| 3 | 4 |
+| 1 | 2 |
++---+---+
+2 rows in set. Query took 0.007 seconds.
 ```
 
 ## Installation
@@ -87,6 +108,8 @@ docker run -it -v $(your_data_location):/data datafusion-cli
 
 ## Usage
 
+See the current usage using `datafusion-cli --help`:
+
 ```bash
 Apache Arrow <dev@arrow.apache.org>
 Command Line Client for DataFusion query engine.
@@ -104,9 +127,15 @@ OPTIONS:
     -q, --quiet                      Reduce printing other than the results and work quietly
     -r, --rc <RC>...                 Run the provided files on startup instead of ~/.datafusionrc
     -V, --version                    Print version information
-
-Type `exit` or `quit` to exit the CLI.
 ```
+
+## Selecting files directly
+
+Files can be queried directly by enclosing the file or
+directory name in single `'` quotes as shown in the example.
+
+It is also possible to create a table backed by files by explicitly
+via `CREATE EXTERNAL TABLE` as shown below.
 
 ## Registering Parquet Data Sources
 

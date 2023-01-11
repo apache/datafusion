@@ -19,7 +19,8 @@
 //! that can evaluated at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::BuiltInWindowFunctionExpr;
+use crate::window::window_expr::{BuiltinWindowState, NthValueState};
+use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
@@ -121,18 +122,61 @@ impl BuiltInWindowFunctionExpr for NthValue {
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        Ok(Box::new(NthValueEvaluator { kind: self.kind }))
+        Ok(Box::new(NthValueEvaluator {
+            state: NthValueState::default(),
+            kind: self.kind,
+        }))
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
+    }
+
+    fn uses_window_frame(&self) -> bool {
+        true
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+        let reversed_kind = match self.kind {
+            NthValueKind::First => NthValueKind::Last,
+            NthValueKind::Last => NthValueKind::First,
+            NthValueKind::Nth(_) => return None,
+        };
+        Some(Arc::new(Self {
+            name: self.name.clone(),
+            expr: self.expr.clone(),
+            data_type: self.data_type.clone(),
+            kind: reversed_kind,
+        }))
     }
 }
 
 /// Value evaluator for nth_value functions
+#[derive(Debug)]
 pub(crate) struct NthValueEvaluator {
+    state: NthValueState,
     kind: NthValueKind,
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
-    fn uses_window_frame(&self) -> bool {
-        true
+    fn state(&self) -> Result<BuiltinWindowState> {
+        // If we do not use state we just return Default
+        Ok(BuiltinWindowState::NthValue(self.state.clone()))
+    }
+
+    fn update_state(
+        &mut self,
+        state: &WindowAggState,
+        _range_columns: &[ArrayRef],
+        _sort_partition_points: &[Range<usize>],
+    ) -> Result<()> {
+        // If we do not use state, update_state does nothing
+        self.state.range = state.window_frame_range.clone();
+        Ok(())
+    }
+
+    fn evaluate_stateful(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
+        self.evaluate_inside_range(values, self.state.range.clone())
     }
 
     fn evaluate_inside_range(

@@ -26,7 +26,7 @@ use arrow::{
 };
 
 use crate::physical_expr::down_cast_any_ref;
-use crate::{AnalysisContext, ExprBoundaries, PhysicalExpr};
+use crate::{AnalysisContext, PhysicalExpr};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
@@ -104,9 +104,10 @@ impl PhysicalExpr for Column {
     }
 
     /// Return the boundaries of this column, if known.
-    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
+    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
         assert!(self.index < context.column_boundaries.len());
-        context.column_boundaries[self.index].clone()
+        let col_bounds = context.column_boundaries[self.index].clone();
+        context.with_boundaries(col_bounds)
     }
 }
 
@@ -224,7 +225,7 @@ mod test {
         assert_eq!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
             but input schema only has 1 columns: [\"foo\"]. This was likely caused by a bug in \
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
-           &format!("{}", error))
+           &format!("{error}"))
     }
 
     #[test]
@@ -235,7 +236,7 @@ mod test {
         assert_eq!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
             but input schema only has 1 columns: [\"foo\"]. This was likely caused by a bug in \
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
-                   &format!("{}", error))
+                   &format!("{error}"))
     }
 
     #[test]
@@ -248,7 +249,7 @@ mod test {
         assert_eq!("Internal error: PhysicalExpr Column references column 'id' at index 9 (zero-based) \
             but input schema only has 1 columns: [\"foo\"]. This was likely caused by a bug in \
             DataFusion's code and we would welcome that you file an bug report in our issue tracker",
-                   &format!("{}", error));
+                   &format!("{error}"));
         Ok(())
     }
 
@@ -317,8 +318,8 @@ mod test {
 
         for (name, index, expected) in cases {
             let col = Column::new(name, index);
-            let boundaries = col.boundaries(&context);
-            assert_eq!(boundaries, expected);
+            let test_ctx = col.analyze(context.clone());
+            assert_eq!(test_ctx.boundaries, expected);
         }
 
         Ok(())

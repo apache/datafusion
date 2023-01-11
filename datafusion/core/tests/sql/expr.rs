@@ -1296,10 +1296,10 @@ async fn test_extract_date_part() -> Result<()> {
         "EXTRACT(microsecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
         "12123456.78"
     );
-    // test_expression!(
-    //     "EXTRACT(nanosecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
-    //     "1212345678"
-    // );
+    test_expression!(
+        "EXTRACT(nanosecond FROM to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
+        "12123456780"
+    );
     test_expression!(
         "date_part('second', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
         "12.12345678"
@@ -1316,6 +1316,86 @@ async fn test_extract_date_part() -> Result<()> {
         "date_part('nanosecond', to_timestamp('2020-09-08T12:00:12.12345678+00:00'))",
         "12123456780"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_extract_date_part_func() -> Result<()> {
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "year"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "quarter"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "month"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "week"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!("(date_part('{0}', now()) = EXTRACT({0} FROM now()))", "day"),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "hour"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "minute"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "second"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "millisecond"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "microsecond"
+        ),
+        "true"
+    );
+    test_expression!(
+        format!(
+            "(date_part('{0}', now()) = EXTRACT({0} FROM now()))",
+            "nanosecond"
+        ),
+        "true"
+    );
+
     Ok(())
 }
 
@@ -1636,7 +1716,7 @@ async fn comparisons_with_null_lt() {
     ];
 
     for sql in cases {
-        println!("Computing: {}", sql);
+        println!("Computing: {sql}");
 
         let mut actual = execute_to_batches(&ctx, sql).await;
         assert_eq!(actual.len(), 1);
@@ -1684,7 +1764,7 @@ async fn binary_mathematical_operator_with_null_lt() {
     ];
 
     for sql in cases {
-        println!("Computing: {}", sql);
+        println!("Computing: {sql}");
 
         let mut actual = execute_to_batches(&ctx, sql).await;
         assert_eq!(actual.len(), 1);

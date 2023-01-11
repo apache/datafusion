@@ -101,8 +101,7 @@ where
                 unary_string_to_primitive_function::<i64, O, _>(&[a.as_ref()], op, name)?,
             ))),
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, name,
+                "Unsupported data type {other:?} for function {name}",
             ))),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -115,8 +114,7 @@ where
                 Ok(ColumnarValue::Scalar(S::scalar(result)))
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, name
+                "Unsupported data type {other:?} for function {name}"
             ))),
         },
     }
@@ -219,7 +217,7 @@ fn quarter_month(date: &NaiveDateTime) -> u32 {
 fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
     let value = timestamp_ns_to_datetime(value)
         .ok_or_else(|| {
-            DataFusionError::Execution(format!("Timestamp {} out of range", value))
+            DataFusionError::Execution(format!("Timestamp {value} out of range"))
         })?
         .with_nanosecond(0);
     let value = match granularity {
@@ -256,8 +254,7 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
             .and_then(|d| d.with_month0(0)),
         unsupported => {
             return Err(DataFusionError::Execution(format!(
-                "Unsupported date_trunc granularity: {}",
-                unsupported
+                "Unsupported date_trunc granularity: {unsupported}"
             )));
         }
     };
@@ -413,7 +410,7 @@ macro_rules! extract_date_part {
                 Ok($FN(array)
                     .map(|v| cast(&(Arc::new(v) as ArrayRef), &DataType::Float64))?)
             }
-            DataType::Timestamp(time_unit, None) => match time_unit {
+            DataType::Timestamp(time_unit, _) => match time_unit {
                 TimeUnit::Second => {
                     let array = as_timestamp_second_array($ARRAY)?;
                     Ok($FN(array)
@@ -482,8 +479,7 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         "microsecond" => extract_date_part!(&array, micros),
         "nanosecond" => extract_date_part!(&array, nanos),
         _ => Err(DataFusionError::Execution(format!(
-            "Date part '{}' not supported",
-            date_part
+            "Date part '{date_part}' not supported"
         ))),
     }?;
 
@@ -670,7 +666,7 @@ mod tests {
             let left = string_to_timestamp_nanos(original).unwrap();
             let right = string_to_timestamp_nanos(expected).unwrap();
             let result = date_trunc_single(granularity, left).unwrap();
-            assert_eq!(result, right, "{} = {}", original, expected);
+            assert_eq!(result, right, "{original} = {expected}");
         });
     }
 
@@ -730,7 +726,7 @@ mod tests {
 
                 let expected1 = string_to_timestamp_nanos(expected).unwrap();
                 let result = date_bin_single(stride1, source1, origin1);
-                assert_eq!(result, expected1, "{} = {}", source, expected);
+                assert_eq!(result, expected1, "{source} = {expected}");
             })
     }
 
@@ -862,9 +858,7 @@ mod tests {
             Err(e) => {
                 assert!(
                     e.to_string().contains(expected_err),
-                    "Can not find expected error '{}'. Actual error '{}'",
-                    expected_err,
-                    e
+                    "Can not find expected error '{expected_err}'. Actual error '{e}'"
                 );
             }
         }

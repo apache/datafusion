@@ -58,4 +58,18 @@ pub trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
 
     /// Create built-in window evaluator with a batch
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>>;
+
+    /// Construct Reverse Expression that produces the same result
+    /// on a reversed window.  For example `lead(10)` --> `lag(10)`
+    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+        None
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        false
+    }
+
+    fn uses_window_frame(&self) -> bool {
+        false
+    }
 }

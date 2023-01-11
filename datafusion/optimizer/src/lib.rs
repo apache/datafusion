@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod alias;
 pub mod common_subexpr_eliminate;
 pub mod decorrelate_where_exists;
 pub mod decorrelate_where_in;
@@ -22,6 +23,7 @@ pub mod eliminate_cross_join;
 pub mod eliminate_filter;
 pub mod eliminate_limit;
 pub mod eliminate_outer_join;
+pub mod extract_equijoin_predicate;
 pub mod filter_null_join_keys;
 pub mod inline_table_scan;
 pub mod optimizer;
@@ -32,7 +34,6 @@ pub mod push_down_projection;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
-pub mod subquery_filter_to_join;
 pub mod type_coercion;
 pub mod utils;
 
@@ -41,5 +42,5 @@ pub mod rewrite_disjunctive_predicate;
 pub mod test;
 pub mod unwrap_cast_in_comparison;
 
-pub use optimizer::{OptimizerConfig, OptimizerRule};
+pub use optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
 pub use utils::optimize_children;

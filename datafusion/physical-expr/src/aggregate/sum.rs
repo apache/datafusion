@@ -32,9 +32,11 @@ use arrow::{
     datatypes::Field,
 };
 use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 
-use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::aggregate::row_accumulator::{
+    is_row_accumulator_support_dtype, RowAccumulator,
+};
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
@@ -42,7 +44,7 @@ use arrow::compute::cast;
 use datafusion_row::accessor::RowAccessor;
 
 /// SUM aggregate expression
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sum {
     name: String,
     data_type: DataType,
@@ -87,12 +89,12 @@ impl AggregateExpr for Sum {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
-                &format_state_name(&self.name, "sum"),
+                format_state_name(&self.name, "sum"),
                 self.data_type.clone(),
                 self.nullable,
             ),
             Field::new(
-                &format_state_name(&self.name, "count"),
+                format_state_name(&self.name, "count"),
                 DataType::UInt64,
                 self.nullable,
             ),
@@ -108,19 +110,11 @@ impl AggregateExpr for Sum {
     }
 
     fn row_accumulator_supported(&self) -> bool {
-        matches!(
-            self.data_type,
-            DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::Float32
-                | DataType::Float64
-        )
+        is_row_accumulator_support_dtype(&self.data_type)
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
     }
 
     fn create_row_accumulator(
@@ -131,6 +125,14 @@ impl AggregateExpr for Sum {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        Some(Arc::new(self.clone()))
+    }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(SumAccumulator::try_new(&self.data_type)?))
     }
 }
 
@@ -195,8 +197,7 @@ pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<Scalar
         DataType::UInt8 => typed_sum_delta_batch!(values, UInt8Array, UInt8),
         e => {
             return Err(DataFusionError::Internal(format!(
-                "Sum is not expected to receive the type {:?}",
-                e
+                "Sum is not expected to receive the type {e:?}"
             )));
         }
     })
@@ -231,10 +232,8 @@ pub(crate) fn add_to_row(
             sum_row!(index, accessor, rhs, i64)
         }
         _ => {
-            let msg = format!(
-                "Row sum updater is not expected to receive a scalar {:?}",
-                s
-            );
+            let msg =
+                format!("Row sum updater is not expected to receive a scalar {s:?}");
             return Err(DataFusionError::Internal(msg));
         }
     }
@@ -242,11 +241,8 @@ pub(crate) fn add_to_row(
 }
 
 impl Accumulator for SumAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![
-            AggregateState::Scalar(self.sum.clone()),
-            AggregateState::Scalar(ScalarValue::from(self.count)),
-        ])
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.sum.clone(), ScalarValue::from(self.count)])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {

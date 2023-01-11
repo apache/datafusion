@@ -33,7 +33,7 @@ pub struct DfSchema {
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -89,6 +89,8 @@ pub mod logical_plan_node {
         ViewScan(::prost::alloc::boxed::Box<super::ViewTableScanNode>),
         #[prost(message, tag = "25")]
         CustomScan(super::CustomTableScanNode),
+        #[prost(message, tag = "26")]
+        Prepare(::prost::alloc::boxed::Box<super::PrepareNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -111,10 +113,7 @@ pub struct CsvFormat {
     pub delimiter: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ParquetFormat {
-    #[prost(bool, tag = "1")]
-    pub enable_pruning: bool,
-}
+pub struct ParquetFormat {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvroFormat {}
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -248,8 +247,8 @@ pub struct EmptyRelationNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateExternalTableNode {
-    #[prost(string, tag = "1")]
-    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "12")]
+    pub name: ::core::option::Option<OwnedTableReference>,
     #[prost(string, tag = "2")]
     pub location: ::prost::alloc::string::String,
     #[prost(string, tag = "3")]
@@ -275,6 +274,15 @@ pub struct CreateExternalTableNode {
     >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrepareNode {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub data_types: ::prost::alloc::vec::Vec<ArrowType>,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateCatalogSchemaNode {
     #[prost(string, tag = "1")]
     pub schema_name: ::prost::alloc::string::String,
@@ -294,8 +302,8 @@ pub struct CreateCatalogNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateViewNode {
-    #[prost(string, tag = "1")]
-    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "5")]
+    pub name: ::core::option::Option<OwnedTableReference>,
     #[prost(message, optional, boxed, tag = "2")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(bool, tag = "3")]
@@ -353,9 +361,9 @@ pub struct JoinNode {
     #[prost(enumeration = "JoinConstraint", tag = "4")]
     pub join_constraint: i32,
     #[prost(message, repeated, tag = "5")]
-    pub left_join_column: ::prost::alloc::vec::Vec<Column>,
+    pub left_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "6")]
-    pub right_join_column: ::prost::alloc::vec::Vec<Column>,
+    pub right_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(bool, tag = "7")]
     pub null_equals_null: bool,
     #[prost(message, optional, tag = "8")]
@@ -406,7 +414,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -488,7 +496,16 @@ pub mod logical_expr_node {
         Ilike(::prost::alloc::boxed::Box<super::ILikeNode>),
         #[prost(message, tag = "33")]
         SimilarTo(::prost::alloc::boxed::Box<super::SimilarToNode>),
+        #[prost(message, tag = "34")]
+        Placeholder(super::PlaceholderNode),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PlaceholderNode {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub data_type: ::core::option::Option<ArrowType>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogicalExprList {
@@ -1148,6 +1165,46 @@ pub struct StringifiedPlan {
     #[prost(string, tag = "2")]
     pub plan: ::prost::alloc::string::String,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BareTableReference {
+    #[prost(string, tag = "1")]
+    pub table: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartialTableReference {
+    #[prost(string, tag = "1")]
+    pub schema: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub table: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FullTableReference {
+    #[prost(string, tag = "1")]
+    pub catalog: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub schema: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub table: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnedTableReference {
+    #[prost(oneof = "owned_table_reference::TableReferenceEnum", tags = "1, 2, 3")]
+    pub table_reference_enum: ::core::option::Option<
+        owned_table_reference::TableReferenceEnum,
+    >,
+}
+/// Nested message and enum types in `OwnedTableReference`.
+pub mod owned_table_reference {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum TableReferenceEnum {
+        #[prost(message, tag = "1")]
+        Bare(super::BareTableReference),
+        #[prost(message, tag = "2")]
+        Partial(super::PartialTableReference),
+        #[prost(message, tag = "3")]
+        Full(super::FullTableReference),
+    }
+}
 /// PhysicalPlanNode is a nested type
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalPlanNode {
@@ -1217,7 +1274,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1266,6 +1323,8 @@ pub mod physical_expr_node {
         DateTimeIntervalExpr(
             ::prost::alloc::boxed::Box<super::PhysicalDateTimeIntervalExprNode>,
         ),
+        #[prost(message, tag = "18")]
+        LikeExpr(::prost::alloc::boxed::Box<super::PhysicalLikeExprNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1345,6 +1404,17 @@ pub struct PhysicalDateTimeIntervalExprNode {
     pub r: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(string, tag = "3")]
     pub op: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalLikeExprNode {
+    #[prost(bool, tag = "1")]
+    pub negated: bool,
+    #[prost(bool, tag = "2")]
+    pub case_insensitive: bool,
+    #[prost(message, optional, boxed, tag = "3")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(message, optional, boxed, tag = "4")]
+    pub pattern: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalSortExprNode {
@@ -1444,6 +1514,8 @@ pub struct FileScanExecConf {
     pub table_partition_cols: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "8")]
     pub object_store_url: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "9")]
+    pub output_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
@@ -1708,135 +1780,6 @@ pub struct ColumnStats {
     pub null_count: u32,
     #[prost(uint32, tag = "4")]
     pub distinct_count: u32,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PartitionLocation {
-    /// partition_id of the map stage who produces the shuffle.
-    #[prost(uint32, tag = "1")]
-    pub map_partition_id: u32,
-    /// partition_id of the shuffle, a composition of(job_id + map_stage_id + partition_id).
-    #[prost(message, optional, tag = "2")]
-    pub partition_id: ::core::option::Option<PartitionId>,
-    #[prost(message, optional, tag = "3")]
-    pub executor_meta: ::core::option::Option<ExecutorMetadata>,
-    #[prost(message, optional, tag = "4")]
-    pub partition_stats: ::core::option::Option<PartitionStats>,
-    #[prost(string, tag = "5")]
-    pub path: ::prost::alloc::string::String,
-}
-/// Unique identifier for a materialized partition of data
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PartitionId {
-    #[prost(string, tag = "1")]
-    pub job_id: ::prost::alloc::string::String,
-    #[prost(uint32, tag = "2")]
-    pub stage_id: u32,
-    #[prost(uint32, tag = "4")]
-    pub partition_id: u32,
-}
-/// Used by scheduler
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorMetadata {
-    #[prost(string, tag = "1")]
-    pub id: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
-    pub host: ::prost::alloc::string::String,
-    #[prost(uint32, tag = "3")]
-    pub port: u32,
-    #[prost(uint32, tag = "4")]
-    pub grpc_port: u32,
-    #[prost(message, optional, tag = "5")]
-    pub specification: ::core::option::Option<ExecutorSpecification>,
-}
-/// Used by grpc
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorRegistration {
-    #[prost(string, tag = "1")]
-    pub id: ::prost::alloc::string::String,
-    #[prost(uint32, tag = "3")]
-    pub port: u32,
-    #[prost(uint32, tag = "4")]
-    pub grpc_port: u32,
-    #[prost(message, optional, tag = "5")]
-    pub specification: ::core::option::Option<ExecutorSpecification>,
-    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see <https://github.com/tokio-rs/prost/issues/430> and <https://github.com/tokio-rs/prost/pull/455>)
-    /// this syntax is ugly but is binary compatible with the "optional" keyword (see <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
-    #[prost(oneof = "executor_registration::OptionalHost", tags = "2")]
-    pub optional_host: ::core::option::Option<executor_registration::OptionalHost>,
-}
-/// Nested message and enum types in `ExecutorRegistration`.
-pub mod executor_registration {
-    /// "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see <https://github.com/tokio-rs/prost/issues/430> and <https://github.com/tokio-rs/prost/pull/455>)
-    /// this syntax is ugly but is binary compatible with the "optional" keyword (see <https://stackoverflow.com/questions/42622015/how-to-define-an-optional-field-in-protobuf-3>)
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum OptionalHost {
-        #[prost(string, tag = "2")]
-        Host(::prost::alloc::string::String),
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorHeartbeat {
-    #[prost(string, tag = "1")]
-    pub executor_id: ::prost::alloc::string::String,
-    /// Unix epoch-based timestamp in seconds
-    #[prost(uint64, tag = "2")]
-    pub timestamp: u64,
-    #[prost(message, repeated, tag = "3")]
-    pub metrics: ::prost::alloc::vec::Vec<ExecutorMetric>,
-    #[prost(message, optional, tag = "4")]
-    pub status: ::core::option::Option<ExecutorStatus>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorSpecification {
-    #[prost(message, repeated, tag = "1")]
-    pub resources: ::prost::alloc::vec::Vec<ExecutorResource>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorResource {
-    /// TODO add more resources
-    #[prost(oneof = "executor_resource::Resource", tags = "1")]
-    pub resource: ::core::option::Option<executor_resource::Resource>,
-}
-/// Nested message and enum types in `ExecutorResource`.
-pub mod executor_resource {
-    /// TODO add more resources
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Resource {
-        #[prost(uint32, tag = "1")]
-        TaskSlots(u32),
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorMetric {
-    /// TODO add more metrics
-    #[prost(oneof = "executor_metric::Metric", tags = "1")]
-    pub metric: ::core::option::Option<executor_metric::Metric>,
-}
-/// Nested message and enum types in `ExecutorMetric`.
-pub mod executor_metric {
-    /// TODO add more metrics
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Metric {
-        #[prost(uint64, tag = "1")]
-        AvailableMemory(u64),
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ExecutorStatus {
-    #[prost(oneof = "executor_status::Status", tags = "1, 2, 3")]
-    pub status: ::core::option::Option<executor_status::Status>,
-}
-/// Nested message and enum types in `ExecutorStatus`.
-pub mod executor_status {
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Status {
-        #[prost(string, tag = "1")]
-        Active(::prost::alloc::string::String),
-        #[prost(string, tag = "2")]
-        Dead(::prost::alloc::string::String),
-        #[prost(string, tag = "3")]
-        Unknown(::prost::alloc::string::String),
-    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

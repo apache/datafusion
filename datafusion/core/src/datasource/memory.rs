@@ -29,7 +29,7 @@ use async_trait::async_trait;
 
 use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::{SessionState, TaskContext};
+use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::common;
 use crate::physical_plan::memory::MemoryExec;
@@ -66,15 +66,15 @@ impl MemTable {
     pub async fn load(
         t: Arc<dyn TableProvider>,
         output_partitions: Option<usize>,
-        ctx: &SessionState,
+        state: &SessionState,
     ) -> Result<Self> {
         let schema = t.schema();
-        let exec = t.scan(ctx, None, &[], None).await?;
+        let exec = t.scan(state, None, &[], None).await?;
         let partition_count = exec.output_partitioning().partition_count();
 
         let tasks = (0..partition_count)
             .map(|part_i| {
-                let task = Arc::new(TaskContext::from(ctx));
+                let task = state.task_ctx();
                 let exec = exec.clone();
                 tokio::spawn(async move {
                     let stream = exec.execute(part_i, task)?;
@@ -104,7 +104,7 @@ impl MemTable {
             let mut output_partitions = vec![];
             for i in 0..exec.output_partitioning().partition_count() {
                 // execute this *output* partition and collect all batches
-                let task_ctx = Arc::new(TaskContext::from(ctx));
+                let task_ctx = state.task_ctx();
                 let mut stream = exec.execute(i, task_ctx)?;
                 let mut batches = vec![];
                 while let Some(result) = stream.next().await {
@@ -135,7 +135,7 @@ impl TableProvider for MemTable {
 
     async fn scan(
         &self,
-        _ctx: &SessionState,
+        _state: &SessionState,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
@@ -257,10 +257,10 @@ mod tests {
             Err(DataFusionError::ArrowError(ArrowError::SchemaError(e))) => {
                 assert_eq!(
                     "\"project index 4 out of bounds, max field 3\"",
-                    format!("{:?}", e)
+                    format!("{e:?}")
                 )
             }
-            res => panic!("Scan should failed on invalid projection, got {:?}", res),
+            res => panic!("Scan should failed on invalid projection, got {res:?}"),
         };
 
         Ok(())
@@ -290,10 +290,9 @@ mod tests {
         )?;
 
         match MemTable::try_new(schema2, vec![vec![batch]]) {
-            Err(DataFusionError::Plan(e)) => assert_eq!(
-                "\"Mismatch between schema and batches\"",
-                format!("{:?}", e)
-            ),
+            Err(DataFusionError::Plan(e)) => {
+                assert_eq!("\"Mismatch between schema and batches\"", format!("{e:?}"))
+            }
             _ => panic!("MemTable::new should have failed due to schema mismatch"),
         }
 
@@ -322,10 +321,9 @@ mod tests {
         )?;
 
         match MemTable::try_new(schema2, vec![vec![batch]]) {
-            Err(DataFusionError::Plan(e)) => assert_eq!(
-                "\"Mismatch between schema and batches\"",
-                format!("{:?}", e)
-            ),
+            Err(DataFusionError::Plan(e)) => {
+                assert_eq!("\"Mismatch between schema and batches\"", format!("{e:?}"))
+            }
             _ => panic!("MemTable::new should have failed due to schema mismatch"),
         }
 

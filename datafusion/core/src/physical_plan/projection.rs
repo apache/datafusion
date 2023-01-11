@@ -159,6 +159,13 @@ impl ExecutionPlan for ProjectionExec {
         self.schema.clone()
     }
 
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        Ok(children[0])
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
     }
@@ -241,7 +248,7 @@ impl ExecutionPlan for ProjectionExec {
                     .map(|(e, alias)| {
                         let e = e.to_string();
                         if &e != alias {
-                            format!("{} as {}", e, alias)
+                            format!("{e} as {alias}")
                         } else {
                             e
                         }

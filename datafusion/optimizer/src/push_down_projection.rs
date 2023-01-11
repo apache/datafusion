@@ -46,11 +46,11 @@ use std::{
 pub struct PushDownProjection {}
 
 impl OptimizerRule for PushDownProjection {
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         // set of all columns referred by the plan (and thus considered required by the root)
         let required_columns = plan
             .schema()
@@ -58,7 +58,13 @@ impl OptimizerRule for PushDownProjection {
             .iter()
             .map(|f| f.qualified_column())
             .collect::<HashSet<Column>>();
-        optimize_plan(self, plan, &required_columns, false, optimizer_config)
+        Ok(Some(optimize_plan(
+            self,
+            plan,
+            &required_columns,
+            false,
+            config,
+        )?))
     }
 
     fn name(&self) -> &str {
@@ -79,7 +85,7 @@ fn optimize_plan(
     plan: &LogicalPlan,
     required_columns: &HashSet<Column>, // set of columns required up to this step
     has_projection: bool,
-    _optimizer_config: &OptimizerConfig,
+    _config: &dyn OptimizerConfig,
 ) -> Result<LogicalPlan> {
     let mut new_required_columns = required_columns.clone();
     let new_plan = match plan {
@@ -87,6 +93,7 @@ fn optimize_plan(
             input,
             expr,
             schema,
+            ..
         }) => {
             // projection:
             // * remove any expression that is not required
@@ -111,13 +118,8 @@ fn optimize_plan(
                 expr_to_columns(e, &mut new_required_columns)?
             }
 
-            let new_input = optimize_plan(
-                _optimizer,
-                input,
-                &new_required_columns,
-                true,
-                _optimizer_config,
-            )?;
+            let new_input =
+                optimize_plan(_optimizer, input, &new_required_columns, true, _config)?;
 
             let new_required_columns_optimized = new_input
                 .schema()
@@ -155,8 +157,8 @@ fn optimize_plan(
             ..
         }) => {
             for (l, r) in on {
-                new_required_columns.insert(l.clone());
-                new_required_columns.insert(r.clone());
+                new_required_columns.extend(l.to_columns()?);
+                new_required_columns.extend(r.to_columns()?);
             }
 
             if let Some(expr) = filter {
@@ -168,7 +170,7 @@ fn optimize_plan(
                 left,
                 &new_required_columns,
                 true,
-                _optimizer_config,
+                _config,
             )?);
 
             let optimized_right = Arc::new(optimize_plan(
@@ -176,7 +178,7 @@ fn optimize_plan(
                 right,
                 &new_required_columns,
                 true,
-                _optimizer_config,
+                _config,
             )?);
 
             let schema = build_join_schema(
@@ -223,7 +225,7 @@ fn optimize_plan(
                     input,
                     required_columns,
                     true,
-                    _optimizer_config,
+                    _config,
                 )?)
                 .build();
             };
@@ -239,7 +241,7 @@ fn optimize_plan(
                 input,
                 &new_required_columns,
                 true,
-                _optimizer_config,
+                _config,
             )?)
             .window(new_window_expr)?
             .build()
@@ -280,7 +282,7 @@ fn optimize_plan(
                     input,
                     &new_required_columns,
                     true,
-                    _optimizer_config,
+                    _config,
                 )?),
                 group_expr.clone(),
                 new_aggr_expr,
@@ -310,7 +312,7 @@ fn optimize_plan(
                     &a.input,
                     &required_columns,
                     false,
-                    _optimizer_config,
+                    _config,
                 )?),
                 verbose: a.verbose,
                 schema: a.schema.clone(),
@@ -342,7 +344,7 @@ fn optimize_plan(
                         input_plan,
                         &new_required_columns,
                         has_projection,
-                        _optimizer_config,
+                        _config,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -368,9 +370,27 @@ fn optimize_plan(
                 input,
                 &new_required_columns,
                 has_projection,
-                _optimizer_config,
+                _config,
             )?;
             from_plan(plan, &plan.expressions(), &[child])
+        }
+        // at a distinct, all columns are required
+        LogicalPlan::Distinct(distinct) => {
+            let new_required_columns = distinct
+                .input
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.qualified_column())
+                .collect();
+            let child = optimize_plan(
+                _optimizer,
+                distinct.input.as_ref(),
+                &new_required_columns,
+                has_projection,
+                _config,
+            )?;
+            from_plan(plan, &[], &[child])
         }
         // all other nodes: Add any additional columns used by
         // expressions in this node to the list of required columns
@@ -390,8 +410,8 @@ fn optimize_plan(
         | LogicalPlan::DropView(_)
         | LogicalPlan::SetVariable(_)
         | LogicalPlan::CrossJoin(_)
-        | LogicalPlan::Distinct(_)
-        | LogicalPlan::Extension { .. } => {
+        | LogicalPlan::Extension { .. }
+        | LogicalPlan::Prepare(_) => {
             let expr = plan.expressions();
             // collect all required columns by this plan
             exprlist_to_columns(&expr, &mut new_required_columns)?;
@@ -406,7 +426,7 @@ fn optimize_plan(
                         input_plan,
                         &new_required_columns,
                         has_projection,
-                        _optimizer_config,
+                        _config,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -520,7 +540,9 @@ fn push_down_scan(
 mod tests {
     use super::*;
     use crate::test::*;
+    use crate::OptimizerContext;
     use arrow::datatypes::{DataType, Schema};
+    use datafusion_expr::expr;
     use datafusion_expr::expr::Cast;
     use datafusion_expr::{
         col, count, lit,
@@ -659,7 +681,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
+            .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
             .project(vec![col("a"), col("b"), col("c1")])?
             .build()?;
 
@@ -670,7 +692,7 @@ mod tests {
         \n    TableScan: test2 projection=[c1]";
 
         let optimized_plan = optimize(&plan)?;
-        let formatted_plan = format!("{:?}", optimized_plan);
+        let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(formatted_plan, expected);
 
         // make sure schema for join node include both join columns
@@ -700,7 +722,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join(&table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
+            .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
             // projecting joined column `a` should push the right side column `c1` projection as
             // well into test2 table even though `c1` is not referenced in projection.
             .project(vec![col("a"), col("b")])?
@@ -713,7 +735,7 @@ mod tests {
         \n    TableScan: test2 projection=[c1]";
 
         let optimized_plan = optimize(&plan)?;
-        let formatted_plan = format!("{:?}", optimized_plan);
+        let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(formatted_plan, expected);
 
         // make sure schema for join node include both join columns
@@ -743,7 +765,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join_using(&table2_scan, JoinType::Left, vec!["a"])?
+            .join_using(table2_scan, JoinType::Left, vec!["a"])?
             .project(vec![col("a"), col("b")])?
             .build()?;
 
@@ -754,7 +776,7 @@ mod tests {
         \n    TableScan: test2 projection=[a]";
 
         let optimized_plan = optimize(&plan)?;
-        let formatted_plan = format!("{:?}", optimized_plan);
+        let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(formatted_plan, expected);
 
         // make sure schema for join node include both join columns
@@ -946,8 +968,8 @@ mod tests {
         let optimized_plan2 =
             optimize(&optimized_plan1).expect("failed to optimize plan");
 
-        let formatted_plan1 = format!("{:?}", optimized_plan1);
-        let formatted_plan2 = format!("{:?}", optimized_plan2);
+        let formatted_plan1 = format!("{optimized_plan1:?}");
+        let formatted_plan2 = format!("{optimized_plan2:?}");
         assert_eq!(formatted_plan1, formatted_plan2);
         Ok(())
     }
@@ -982,12 +1004,12 @@ mod tests {
     fn aggregate_filter_pushdown() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let aggr_with_filter = Expr::AggregateFunction {
-            fun: AggregateFunction::Count,
-            args: vec![col("b")],
-            distinct: false,
-            filter: Some(Box::new(col("c").gt(lit(42)))),
-        };
+        let aggr_with_filter = Expr::AggregateFunction(expr::AggregateFunction::new(
+            AggregateFunction::Count,
+            vec![col("b")],
+            false,
+            Some(Box::new(col("c").gt(lit(42)))),
+        ));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(
@@ -1004,14 +1026,33 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn pushdown_through_distinct() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .distinct()?
+            .project(vec![col("a")])?
+            .build()?;
+
+        let expected = "Projection: test.a\
+        \n  Distinct:\
+        \n    TableScan: test projection=[a, b]";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let optimized_plan = optimize(plan).expect("failed to optimize plan");
-        let formatted_plan = format!("{:?}", optimized_plan);
+        let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(formatted_plan, expected);
     }
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         let rule = PushDownProjection::new();
-        rule.optimize(plan, &mut OptimizerConfig::new())
+        Ok(rule.try_optimize(plan, &OptimizerContext::new())?.unwrap())
     }
 }

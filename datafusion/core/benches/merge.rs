@@ -459,7 +459,7 @@ impl DataGenerator {
     /// array of low cardinality (100 distinct) values
     fn utf8_low_cardinality_values(&mut self) -> Vec<Option<Arc<str>>> {
         let strings = (0..100)
-            .map(|s| format!("value{}", s).into())
+            .map(|s| format!("value{s}").into())
             .collect::<Vec<_>>();
 
         // pick from the 100 strings randomly

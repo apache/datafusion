@@ -37,13 +37,17 @@ use arrow::{
 };
 use datafusion_common::ScalarValue;
 use datafusion_common::{downcast_value, DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 
-use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::aggregate::row_accumulator::{
+    is_row_accumulator_support_dtype, RowAccumulator,
+};
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::Decimal128Array;
 use datafusion_row::accessor::RowAccessor;
+
+use super::moving_min_max;
 
 // Min/max aggregation can take Dictionary encode input but always produces unpacked
 // (aka non Dictionary) output. We need to adjust the output data type to reflect this.
@@ -58,7 +62,7 @@ fn min_max_aggregate_data_type(input_type: DataType) -> DataType {
 }
 
 /// MAX aggregate expression
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Max {
     name: String,
     data_type: DataType,
@@ -98,7 +102,7 @@ impl AggregateExpr for Max {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "max"),
+            format_state_name(&self.name, "max"),
             self.data_type.clone(),
             true,
         )])
@@ -117,19 +121,11 @@ impl AggregateExpr for Max {
     }
 
     fn row_accumulator_supported(&self) -> bool {
-        matches!(
-            self.data_type,
-            DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::Float32
-                | DataType::Float64
-        )
+        is_row_accumulator_support_dtype(&self.data_type)
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
     }
 
     fn create_row_accumulator(
@@ -140,6 +136,14 @@ impl AggregateExpr for Max {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        Some(Arc::new(self.clone()))
+    }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(SlidingMaxAccumulator::try_new(&self.data_type)?))
     }
 }
 
@@ -564,8 +568,64 @@ impl Accumulator for MaxAccumulator {
         self.update_batch(states)
     }
 
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![AggregateState::Scalar(self.max.clone())])
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.max.clone()])
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Ok(self.max.clone())
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.max) + self.max.size()
+    }
+}
+
+/// An accumulator to compute the maximum value
+#[derive(Debug)]
+pub struct SlidingMaxAccumulator {
+    max: ScalarValue,
+    moving_max: moving_min_max::MovingMax<ScalarValue>,
+}
+
+impl SlidingMaxAccumulator {
+    /// new max accumulator
+    pub fn try_new(datatype: &DataType) -> Result<Self> {
+        Ok(Self {
+            max: ScalarValue::try_from(datatype)?,
+            moving_max: moving_min_max::MovingMax::<ScalarValue>::new(),
+        })
+    }
+}
+
+impl Accumulator for SlidingMaxAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        for idx in 0..values[0].len() {
+            let val = ScalarValue::try_from_array(&values[0], idx)?;
+            self.moving_max.push(val);
+        }
+        if let Some(res) = self.moving_max.max() {
+            self.max = res.clone();
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        for _idx in 0..values[0].len() {
+            (self.moving_max).pop();
+        }
+        if let Some(res) = self.moving_max.max() {
+            self.max = res.clone();
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
+    }
+
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.max.clone()])
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
@@ -620,7 +680,7 @@ impl RowAccumulator for MaxRowAccumulator {
 }
 
 /// MIN aggregate expression
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Min {
     name: String,
     data_type: DataType,
@@ -664,7 +724,7 @@ impl AggregateExpr for Min {
 
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "min"),
+            format_state_name(&self.name, "min"),
             self.data_type.clone(),
             true,
         )])
@@ -679,19 +739,11 @@ impl AggregateExpr for Min {
     }
 
     fn row_accumulator_supported(&self) -> bool {
-        matches!(
-            self.data_type,
-            DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::Float32
-                | DataType::Float64
-        )
+        is_row_accumulator_support_dtype(&self.data_type)
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
     }
 
     fn create_row_accumulator(
@@ -702,6 +754,14 @@ impl AggregateExpr for Min {
             start_index,
             self.data_type.clone(),
         )))
+    }
+
+    fn reverse_expr(&self) -> Option<Arc<dyn AggregateExpr>> {
+        Some(Arc::new(self.clone()))
+    }
+
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(SlidingMinAccumulator::try_new(&self.data_type)?))
     }
 }
 
@@ -721,14 +781,75 @@ impl MinAccumulator {
 }
 
 impl Accumulator for MinAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(vec![AggregateState::Scalar(self.min.clone())])
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.min.clone()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = &min_batch(values)?;
         self.min = min(&self.min, delta)?;
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Ok(self.min.clone())
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.min) + self.min.size()
+    }
+}
+
+/// An accumulator to compute the minimum value
+#[derive(Debug)]
+pub struct SlidingMinAccumulator {
+    min: ScalarValue,
+    moving_min: moving_min_max::MovingMin<ScalarValue>,
+}
+
+impl SlidingMinAccumulator {
+    /// new min accumulator
+    pub fn try_new(datatype: &DataType) -> Result<Self> {
+        Ok(Self {
+            min: ScalarValue::try_from(datatype)?,
+            moving_min: moving_min_max::MovingMin::<ScalarValue>::new(),
+        })
+    }
+}
+
+impl Accumulator for SlidingMinAccumulator {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.min.clone()])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        for idx in 0..values[0].len() {
+            let val = ScalarValue::try_from_array(&values[0], idx)?;
+            if !val.is_null() {
+                self.moving_min.push(val);
+            }
+        }
+        if let Some(res) = self.moving_min.min() {
+            self.min = res.clone();
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        for idx in 0..values[0].len() {
+            let val = ScalarValue::try_from_array(&values[0], idx)?;
+            if !val.is_null() {
+                (self.moving_min).pop();
+            }
+        }
+        if let Some(res) = self.moving_min.min() {
+            self.min = res.clone();
+        }
         Ok(())
     }
 

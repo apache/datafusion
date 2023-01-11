@@ -27,7 +27,7 @@ async fn qualified_table_references() -> Result<()> {
         "public.aggregate_test_100",
         "datafusion.public.aggregate_test_100",
     ] {
-        let sql = format!("SELECT COUNT(*) FROM {}", table_ref);
+        let sql = format!("SELECT COUNT(*) FROM {table_ref}");
         let actual = execute_to_batches(&ctx, &sql).await;
         let expected = vec![
             "+-----------------+",
@@ -64,7 +64,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
 
     // referring to the unquoted column is an error
     let sql = r#"SELECT f1.c1 from test"#;
-    let error = ctx.create_logical_plan(sql).unwrap_err();
+    let error = ctx.sql(sql).await.unwrap_err();
     assert_contains!(
         error.to_string(),
         "No field named 'f1'.'c1'. Valid fields are 'test'.'f.c1', 'test'.'test.c2'"

@@ -66,6 +66,7 @@ impl BuiltInWindowFunctionExpr for CumeDist {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct CumeDistEvaluator;
 
 impl PartitionEvaluator for CumeDistEvaluator {
@@ -73,19 +74,19 @@ impl PartitionEvaluator for CumeDistEvaluator {
         true
     }
 
-    fn evaluate_partition_with_rank(
+    fn evaluate_with_rank(
         &self,
-        partition: Range<usize>,
+        num_rows: usize,
         ranks_in_partition: &[Range<usize>],
     ) -> Result<ArrayRef> {
-        let scaler = (partition.end - partition.start) as f64;
+        let scalar = num_rows as f64;
         let result = Float64Array::from_iter_values(
             ranks_in_partition
                 .iter()
                 .scan(0_u64, |acc, range| {
                     let len = range.end - range.start;
                     *acc += len as u64;
-                    let value: f64 = (*acc as f64) / scaler;
+                    let value: f64 = (*acc as f64) / scalar;
                     let result = iter::repeat(value).take(len);
                     Some(result)
                 })
@@ -102,15 +103,14 @@ mod tests {
 
     fn test_i32_result(
         expr: &CumeDist,
-        partition: Range<usize>,
+        num_rows: usize,
         ranks: Vec<Range<usize>>,
         expected: Vec<f64>,
     ) -> Result<()> {
         let result = expr
             .create_evaluator()?
-            .evaluate_with_rank(vec![partition], ranks)?;
-        assert_eq!(1, result.len());
-        let result = as_float64_array(&result[0])?;
+            .evaluate_with_rank(num_rows, &ranks)?;
+        let result = as_float64_array(&result)?;
         let result = result.values();
         assert_eq!(expected, result);
         Ok(())
@@ -121,19 +121,19 @@ mod tests {
         let r = cume_dist("arr".into());
 
         let expected = vec![0.0; 0];
-        test_i32_result(&r, 0..0, vec![], expected)?;
+        test_i32_result(&r, 0, vec![], expected)?;
 
         let expected = vec![1.0; 1];
-        test_i32_result(&r, 0..1, vec![0..1], expected)?;
+        test_i32_result(&r, 1, vec![0..1], expected)?;
 
         let expected = vec![1.0; 2];
-        test_i32_result(&r, 0..2, vec![0..2], expected)?;
+        test_i32_result(&r, 2, vec![0..2], expected)?;
 
         let expected = vec![0.5, 0.5, 1.0, 1.0];
-        test_i32_result(&r, 0..4, vec![0..2, 2..4], expected)?;
+        test_i32_result(&r, 4, vec![0..2, 2..4], expected)?;
 
         let expected = vec![0.25, 0.5, 0.75, 1.0];
-        test_i32_result(&r, 0..4, vec![0..1, 1..2, 2..3, 3..4], expected)?;
+        test_i32_result(&r, 4, vec![0..1, 1..2, 2..3, 3..4], expected)?;
 
         Ok(())
     }

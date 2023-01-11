@@ -174,9 +174,8 @@ impl DFSchema {
                     Some(qualifier) => {
                         if (qualifier.to_owned() + "." + self.fields[i].name()) == name {
                             return Err(DataFusionError::Plan(format!(
-                                "Fully qualified field name '{}' was supplied to `index_of` \
-                                which is deprecated. Please use `index_of_column_by_name` instead",
-                                name
+                                "Fully qualified field name '{name}' was supplied to `index_of` \
+                                which is deprecated. Please use `index_of_column_by_name` instead"
                             )));
                         }
                     }
@@ -206,7 +205,7 @@ impl DFSchema {
                 (Some(qq), None) => {
                     // the original field may now be aliased with a name that matches the
                     // original qualified name
-                    let table_ref: TableReference = field.name().as_str().into();
+                    let table_ref = TableReference::parse_str(field.name().as_str());
                     match table_ref {
                         TableReference::Partial { schema, table } => {
                             schema == qq && table == name
@@ -669,7 +668,7 @@ mod tests {
         let err = schema.index_of_column_by_name(None, "t1.c0").err().unwrap();
         assert_eq!(
             "Schema error: No field named 't1.c0'. Valid fields are 't1'.'c0', 't1'.'c1'.",
-            &format!("{}", err)
+            &format!("{err}")
         );
         Ok(())
     }
@@ -1024,7 +1023,7 @@ mod tests {
 
         impl<'a> TestCase<'a> {
             fn run(self) {
-                println!("Running {:#?}", self);
+                println!("Running {self:#?}");
                 let schema1 = to_df_schema(self.fields1);
                 let schema2 = to_df_schema(self.fields2);
                 assert_eq!(
@@ -1123,7 +1122,7 @@ mod tests {
     fn test_metadata_n(n: usize) -> HashMap<String, String> {
         (0..n)
             .into_iter()
-            .map(|i| (format!("k{}", i), format!("v{}", i)))
+            .map(|i| (format!("k{i}"), format!("v{i}")))
             .collect()
     }
 }

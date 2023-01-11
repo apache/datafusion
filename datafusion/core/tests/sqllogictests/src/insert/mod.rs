@@ -24,25 +24,25 @@ use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchema, DataFusionError};
 use datafusion_expr::Expr as DFExpr;
-use datafusion_sql::planner::{PlannerContext, SqlToRel};
+use datafusion_sql::planner::{object_name_to_table_reference, PlannerContext, SqlToRel};
+use sqllogictest::DBOutput;
 use sqlparser::ast::{Expr, SetExpr, Statement as SQLStatement};
 use std::sync::Arc;
 
-pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<String> {
+pub async fn insert(ctx: &SessionContext, insert_stmt: SQLStatement) -> Result<DBOutput> {
     // First, use sqlparser to get table name and insert values
-    let table_name;
+    let table_reference;
     let insert_values: Vec<Vec<Expr>>;
     match insert_stmt {
         SQLStatement::Insert {
-            table_name: name,
-            source,
-            ..
+            table_name, source, ..
         } => {
+            table_reference = object_name_to_table_reference(table_name)?;
+
             // Todo: check columns match table schema
-            table_name = name.to_string();
-            match &*source.body {
+            match *source.body {
                 SetExpr::Values(values) => {
-                    insert_values = values.0.clone();
+                    insert_values = values.rows;
                 }
                 _ => {
                     // Directly panic: make it easy to find the location of the error.
@@ -54,18 +54,19 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<
     }
 
     // Second, get batches in table and destroy the old table
-    let mut origin_batches = ctx.table(table_name.as_str())?.collect().await?;
-    let schema = ctx.table_provider(table_name.as_str())?.schema();
-    ctx.deregister_table(table_name.as_str())?;
+    let mut origin_batches = ctx.table(&table_reference).await?.collect().await?;
+    let schema = ctx.table_provider(&table_reference).await?.schema();
+    ctx.deregister_table(&table_reference)?;
 
     // Third, transfer insert values to `RecordBatch`
     // Attention: schema info can be ignored. (insert values don't contain schema info)
     let sql_to_rel = SqlToRel::new(&LogicTestContextProvider {});
+    let num_rows = insert_values.len();
     for row in insert_values.into_iter() {
         let logical_exprs = row
             .into_iter()
             .map(|expr| {
-                sql_to_rel.sql_to_rex(
+                sql_to_rel.sql_to_expr(
                     expr,
                     &DFSchema::empty(),
                     &mut PlannerContext::new(),
@@ -84,7 +85,7 @@ pub async fn insert(ctx: &SessionContext, insert_stmt: &SQLStatement) -> Result<
 
     // Final, create new memtable with same schema.
     let new_provider = MemTable::try_new(schema, vec![origin_batches])?;
-    ctx.register_table(table_name.as_str(), Arc::new(new_provider))?;
+    ctx.register_table(&table_reference, Arc::new(new_provider))?;
 
-    Ok("".to_string())
+    Ok(DBOutput::StatementComplete(num_rows as u64))
 }

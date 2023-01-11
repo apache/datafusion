@@ -28,6 +28,13 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWrite, BufReader};
 
 /// Wraps a [`ObjectStore`] and makes its get response return chunks
+/// in a controllable manner.
+///
+/// A `ChunkedStore` makes the memory consumption and performance of
+/// the wrapped [`ObjectStore`] worse. It is intended for use within
+/// tests, to control the chunks in the produced output streams. For
+/// example, it is used to verify the delimiting logic in
+/// newline_delimited_stream.
 ///
 /// TODO: Upstream into object_store_rs
 #[derive(Debug)]

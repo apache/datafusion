@@ -17,21 +17,20 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{
-    array::{Int32Array, StringArray},
+    array::{Int32Array, StringArray, UInt32Array},
     record_batch::RecordBatch,
 };
 use datafusion::from_slice::FromSlice;
 use std::sync::Arc;
 
-use datafusion::assert_batches_eq;
 use datafusion::dataframe::DataFrame;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::JoinType;
-use datafusion_expr::expr::GroupingSet;
-use datafusion_expr::{avg, count, lit, sum};
-use datafusion_expr::{col, Expr};
+use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
+use datafusion_expr::expr::{GroupingSet, Sort};
+use datafusion_expr::{avg, col, count, lit, sum, Expr, ExprSchemable};
 
 #[tokio::test]
 async fn join() -> Result<()> {
@@ -65,11 +64,11 @@ async fn join() -> Result<()> {
 
     ctx.register_batch("aa", batch1)?;
 
-    let df1 = ctx.table("aa")?;
+    let df1 = ctx.table("aa").await?;
 
     ctx.register_batch("aaa", batch2)?;
 
-    let df2 = ctx.table("aaa")?;
+    let df2 = ctx.table("aaa").await?;
 
     let a = df1.join(df2, JoinType::Inner, &["a"], &["a"], None)?;
 
@@ -101,14 +100,11 @@ async fn sort_on_unprojected_columns() -> Result<()> {
 
     let df = ctx
         .table("t")
+        .await
         .unwrap()
         .select(vec![col("a")])
         .unwrap()
-        .sort(vec![Expr::Sort {
-            expr: Box::new(col("b")),
-            asc: false,
-            nulls_first: true,
-        }])
+        .sort(vec![Expr::Sort(Sort::new(Box::new(col("b")), false, true))])
         .unwrap();
     let results = df.collect().await.unwrap();
 
@@ -143,6 +139,7 @@ async fn filter_with_alias_overwrite() -> Result<()> {
 
     let df = ctx
         .table("t")
+        .await
         .unwrap()
         .select(vec![(col("a").eq(lit(10))).alias("a")])
         .unwrap()
@@ -179,6 +176,7 @@ async fn select_with_alias_overwrite() -> Result<()> {
 
     let df = ctx
         .table("t")
+        .await
         .unwrap()
         .select(vec![col("a").alias("a")])
         .unwrap()
@@ -213,19 +211,12 @@ async fn test_grouping_sets() -> Result<()> {
         vec![col("a"), col("b")],
     ]));
 
-    let df = create_test_table()?
+    let df = create_test_table()
+        .await?
         .aggregate(vec![grouping_set_expr], vec![count(col("a"))])?
         .sort(vec![
-            Expr::Sort {
-                expr: Box::new(col("a")),
-                asc: false,
-                nulls_first: true,
-            },
-            Expr::Sort {
-                expr: Box::new(col("b")),
-                asc: false,
-                nulls_first: true,
-            },
+            Expr::Sort(Sort::new(Box::new(col("a")), false, true)),
+            Expr::Sort(Sort::new(Box::new(col("b")), false, true)),
         ])?;
 
     let results = df.collect().await?;
@@ -265,16 +256,8 @@ async fn test_grouping_sets_count() -> Result<()> {
         .await?
         .aggregate(vec![grouping_set_expr], vec![count(lit(1))])?
         .sort(vec![
-            Expr::Sort {
-                expr: Box::new(col("c1")),
-                asc: false,
-                nulls_first: true,
-            },
-            Expr::Sort {
-                expr: Box::new(col("c2")),
-                asc: false,
-                nulls_first: true,
-            },
+            Expr::Sort(Sort::new(Box::new(col("c1")), false, true)),
+            Expr::Sort(Sort::new(Box::new(col("c2")), false, true)),
         ])?;
 
     let results = df.collect().await?;
@@ -320,16 +303,8 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
             ],
         )?
         .sort(vec![
-            Expr::Sort {
-                expr: Box::new(col("c1")),
-                asc: false,
-                nulls_first: true,
-            },
-            Expr::Sort {
-                expr: Box::new(col("c2")),
-                asc: false,
-                nulls_first: true,
-            },
+            Expr::Sort(Sort::new(Box::new(col("c1")), false, true)),
+            Expr::Sort(Sort::new(Box::new(col("c2")), false, true)),
         ])?;
 
     let results = df.collect().await?;
@@ -380,7 +355,63 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
     Ok(())
 }
 
-fn create_test_table() -> Result<Arc<DataFrame>> {
+#[tokio::test]
+async fn join_with_alias_filter() -> Result<()> {
+    let join_ctx = create_join_context()?;
+    let t1 = join_ctx.table("t1").await?;
+    let t2 = join_ctx.table("t2").await?;
+    let t1_schema = t1.schema().clone();
+    let t2_schema = t2.schema().clone();
+
+    // filter: t1.a + CAST(Int64(1), UInt32) = t2.a + CAST(Int64(2), UInt32) as t1.a + 1 = t2.a + 2
+    let filter = Expr::eq(
+        col("t1.a") + lit(3i64).cast_to(&DataType::UInt32, &t1_schema)?,
+        col("t2.a") + lit(1i32).cast_to(&DataType::UInt32, &t2_schema)?,
+    )
+    .alias("t1.b + 1 = t2.a + 2");
+
+    let df = t1
+        .join(t2, JoinType::Inner, &[], &[], Some(filter))?
+        .select(vec![
+            col("t1.a"),
+            col("t2.a"),
+            col("t1.b"),
+            col("t1.c"),
+            col("t2.b"),
+            col("t2.c"),
+        ])?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+
+    let expected = vec![
+        "Projection: t1.a, t2.a, t1.b, t1.c, t2.b, t2.c [a:UInt32, a:UInt32, b:Utf8, c:Int32, b:Utf8, c:Int32]",
+        "  Inner Join: t1.a + UInt32(3) = t2.a + UInt32(1) [a:UInt32, b:Utf8, c:Int32, a:UInt32, b:Utf8, c:Int32]",
+        "    TableScan: t1 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
+        "    TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
+    ];
+
+    let formatted = optimized_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let results = df.collect().await?;
+    let expected: Vec<&str> = vec![
+        "+----+----+---+----+---+---+",
+        "| a  | a  | b | c  | b | c |",
+        "+----+----+---+----+---+---+",
+        "| 11 | 13 | c | 30 | c | 3 |",
+        "| 1  | 3  | a | 10 | a | 1 |",
+        "+----+----+---+----+---+---+",
+    ];
+
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+async fn create_test_table() -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),
@@ -404,15 +435,54 @@ fn create_test_table() -> Result<Arc<DataFrame>> {
 
     ctx.register_batch("test", batch)?;
 
-    ctx.table("test")
+    ctx.table("test").await
 }
 
-async fn aggregates_table(ctx: &SessionContext) -> Result<Arc<DataFrame>> {
+async fn aggregates_table(ctx: &SessionContext) -> Result<DataFrame> {
     let testdata = datafusion::test_util::arrow_test_data();
 
     ctx.read_csv(
-        format!("{}/csv/aggregate_test_100.csv", testdata),
+        format!("{testdata}/csv/aggregate_test_100.csv"),
         CsvReadOptions::default(),
     )
     .await
+}
+
+fn create_join_context() -> Result<SessionContext> {
+    let t1 = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::UInt32, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Int32, false),
+    ]));
+    let t2 = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::UInt32, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Int32, false),
+    ]));
+
+    // define data.
+    let batch1 = RecordBatch::try_new(
+        t1,
+        vec![
+            Arc::new(UInt32Array::from_slice([1, 10, 11, 100])),
+            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from_slice([10, 20, 30, 40])),
+        ],
+    )?;
+    // define data.
+    let batch2 = RecordBatch::try_new(
+        t2,
+        vec![
+            Arc::new(UInt32Array::from_slice([3, 10, 13, 100])),
+            Arc::new(StringArray::from_slice(["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from_slice([1, 2, 3, 4])),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("t1", batch1)?;
+    ctx.register_batch("t2", batch2)?;
+
+    Ok(ctx)
 }

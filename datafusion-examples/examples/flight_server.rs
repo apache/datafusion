@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_flight::SchemaAsIpc;
 use datafusion::arrow::error::ArrowError;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
-use futures::Stream;
+use futures::stream::BoxStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -39,27 +38,13 @@ pub struct FlightServiceImpl {}
 
 #[tonic::async_trait]
 impl FlightService for FlightServiceImpl {
-    type HandshakeStream = Pin<
-        Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + Sync + 'static>,
-    >;
-    type ListFlightsStream =
-        Pin<Box<dyn Stream<Item = Result<FlightInfo, Status>> + Send + Sync + 'static>>;
-    type DoGetStream =
-        Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + Sync + 'static>>;
-    type DoPutStream =
-        Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + Sync + 'static>>;
-    type DoActionStream = Pin<
-        Box<
-            dyn Stream<Item = Result<arrow_flight::Result, Status>>
-                + Send
-                + Sync
-                + 'static,
-        >,
-    >;
-    type ListActionsStream =
-        Pin<Box<dyn Stream<Item = Result<ActionType, Status>> + Send + Sync + 'static>>;
-    type DoExchangeStream =
-        Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + Sync + 'static>>;
+    type HandshakeStream = BoxStream<'static, Result<HandshakeResponse, Status>>;
+    type ListFlightsStream = BoxStream<'static, Result<FlightInfo, Status>>;
+    type DoGetStream = BoxStream<'static, Result<FlightData, Status>>;
+    type DoPutStream = BoxStream<'static, Result<PutResult, Status>>;
+    type DoActionStream = BoxStream<'static, Result<arrow_flight::Result, Status>>;
+    type ListActionsStream = BoxStream<'static, Result<ActionType, Status>>;
+    type DoExchangeStream = BoxStream<'static, Result<FlightData, Status>>;
 
     async fn get_schema(
         &self,
@@ -67,9 +52,7 @@ impl FlightService for FlightServiceImpl {
     ) -> Result<Response<SchemaResult>, Status> {
         let request = request.into_inner();
 
-        let config = SessionConfig::new();
-        let listing_options =
-            ListingOptions::new(Arc::new(ParquetFormat::new(config.config_options())));
+        let listing_options = ListingOptions::new(Arc::new(ParquetFormat::default()));
         let table_path =
             ListingTableUrl::parse(&request.path[0]).map_err(to_tonic_err)?;
 
@@ -79,10 +62,10 @@ impl FlightService for FlightServiceImpl {
             .await
             .unwrap();
 
-        let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
+        let options = arrow::ipc::writer::IpcWriteOptions::default();
         let schema_result = SchemaAsIpc::new(&schema, &options)
             .try_into()
-            .map_err(|e: ArrowError| tonic::Status::internal(e.to_string()))?;
+            .map_err(|e: ArrowError| Status::internal(e.to_string()))?;
 
         Ok(Response::new(schema_result))
     }
@@ -94,7 +77,7 @@ impl FlightService for FlightServiceImpl {
         let ticket = request.into_inner();
         match std::str::from_utf8(&ticket.ticket) {
             Ok(sql) => {
-                println!("do_get: {}", sql);
+                println!("do_get: {sql}");
 
                 // create local execution context
                 let ctx = SessionContext::new();
@@ -104,7 +87,7 @@ impl FlightService for FlightServiceImpl {
                 // register parquet file with the execution context
                 ctx.register_parquet(
                     "alltypes_plain",
-                    &format!("{}/alltypes_plain.parquet", testdata),
+                    &format!("{testdata}/alltypes_plain.parquet"),
                     ParquetReadOptions::default(),
                 )
                 .await
@@ -114,6 +97,7 @@ impl FlightService for FlightServiceImpl {
                 let df = ctx.sql(sql).await.map_err(to_tonic_err)?;
 
                 // execute the query
+                let schema = df.schema().clone().into();
                 let results = df.collect().await.map_err(to_tonic_err)?;
                 if results.is_empty() {
                     return Err(Status::internal("There were no results from ticket"));
@@ -121,8 +105,7 @@ impl FlightService for FlightServiceImpl {
 
                 // add an initial FlightData message that sends schema
                 let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
-                let schema_flight_data =
-                    SchemaAsIpc::new(&df.schema().clone().into(), &options).into();
+                let schema_flight_data = SchemaAsIpc::new(&schema, &options).into();
 
                 let mut flights: Vec<Result<FlightData, Status>> =
                     vec![Ok(schema_flight_data)];
@@ -148,7 +131,7 @@ impl FlightService for FlightServiceImpl {
 
                 Ok(Response::new(Box::pin(output) as Self::DoGetStream))
             }
-            Err(e) => Err(Status::invalid_argument(format!("Invalid ticket: {:?}", e))),
+            Err(e) => Err(Status::invalid_argument(format!("Invalid ticket: {e:?}"))),
         }
     }
 
@@ -203,7 +186,7 @@ impl FlightService for FlightServiceImpl {
 }
 
 fn to_tonic_err(e: datafusion::error::DataFusionError) -> Status {
-    Status::internal(format!("{:?}", e))
+    Status::internal(format!("{e:?}"))
 }
 
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
@@ -216,7 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let svc = FlightServiceServer::new(service);
 
-    println!("Listening on {:?}", addr);
+    println!("Listening on {addr:?}");
 
     Server::builder().add_service(svc).serve(addr).await?;
 

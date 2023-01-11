@@ -28,7 +28,6 @@ use datafusion_common::DataFusionError;
 use datafusion_optimizer::utils::conjunction;
 use hashbrown::HashMap;
 use object_store::{ObjectMeta, ObjectStore};
-use parking_lot::RwLock;
 use parquet::arrow::parquet_to_arrow_schema;
 use parquet::file::footer::{decode_footer, decode_metadata};
 use parquet::file::metadata::ParquetMetaData;
@@ -41,11 +40,10 @@ use crate::arrow::array::{
 };
 use crate::arrow::datatypes::{DataType, Field};
 use crate::config::ConfigOptions;
-use crate::config::OPT_PARQUET_ENABLE_PRUNING;
-use crate::config::OPT_PARQUET_METADATA_SIZE_HINT;
-use crate::config::OPT_PARQUET_SKIP_METADATA;
+
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
+use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
@@ -55,25 +53,26 @@ use crate::physical_plan::{Accumulator, ExecutionPlan, Statistics};
 pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
 
 /// The Apache Parquet `FileFormat` implementation
-#[derive(Debug)]
+///
+/// Note it is recommended these are instead configured on the [`ConfigOptions`]
+/// associated with the [`SessionState`] instead of overridden on a format-basis
+///
+/// TODO: Deprecate and remove overrides
+/// <https://github.com/apache/arrow-datafusion/issues/4349>
+#[derive(Debug, Default)]
 pub struct ParquetFormat {
-    // Session level configuration
-    config_options: Arc<RwLock<ConfigOptions>>,
-    // local overides
+    /// Override the global setting for enable_pruning
     enable_pruning: Option<bool>,
+    /// Override the global setting for metadata_size_hint
     metadata_size_hint: Option<usize>,
+    /// Override the global setting for skip_metadata
     skip_metadata: Option<bool>,
 }
 
 impl ParquetFormat {
-    /// construct a new Format with the specified `ConfigOptions`
-    pub fn new(config_options: Arc<RwLock<ConfigOptions>>) -> Self {
-        Self {
-            config_options,
-            enable_pruning: None,
-            metadata_size_hint: None,
-            skip_metadata: None,
-        }
+    /// construct a new Format with no local overrides
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Activate statistics based row group level pruning
@@ -84,14 +83,9 @@ impl ParquetFormat {
     }
 
     /// Return true if pruning is enabled
-    pub fn enable_pruning(&self) -> bool {
+    pub fn enable_pruning(&self, config_options: &ConfigOptions) -> bool {
         self.enable_pruning
-            .or_else(|| {
-                self.config_options
-                    .read()
-                    .get_bool(OPT_PARQUET_ENABLE_PRUNING)
-            })
-            .unwrap_or(true)
+            .unwrap_or(config_options.execution.parquet.pruning)
     }
 
     /// Provide a hint to the size of the file metadata. If a hint is provided
@@ -106,12 +100,9 @@ impl ParquetFormat {
     }
 
     /// Return the metadata size hint if set
-    pub fn metadata_size_hint(&self) -> Option<usize> {
-        self.metadata_size_hint.or_else(|| {
-            self.config_options
-                .read()
-                .get_usize(OPT_PARQUET_METADATA_SIZE_HINT)
-        })
+    pub fn metadata_size_hint(&self, config_options: &ConfigOptions) -> Option<usize> {
+        let hint = config_options.execution.parquet.metadata_size_hint;
+        self.metadata_size_hint.or(hint)
     }
 
     /// Tell the parquet reader to skip any metadata that may be in
@@ -126,14 +117,9 @@ impl ParquetFormat {
 
     /// returns true if schema metadata will be cleared prior to
     /// schema merging.
-    pub fn skip_metadata(&self) -> bool {
+    pub fn skip_metadata(&self, config_options: &ConfigOptions) -> bool {
         self.skip_metadata
-            .or_else(|| {
-                self.config_options
-                    .read()
-                    .get_bool(OPT_PARQUET_SKIP_METADATA)
-            })
-            .unwrap_or(true)
+            .unwrap_or(config_options.execution.parquet.skip_metadata)
     }
 }
 
@@ -162,6 +148,7 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_schema(
         &self,
+        state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -172,7 +159,7 @@ impl FileFormat for ParquetFormat {
             schemas.push(schema)
         }
 
-        let schema = if self.skip_metadata() {
+        let schema = if self.skip_metadata(state.config_options()) {
             Schema::try_merge(clear_metadata(schemas))
         } else {
             Schema::try_merge(schemas)
@@ -183,6 +170,7 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_stats(
         &self,
+        _state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         object: &ObjectMeta,
@@ -199,13 +187,14 @@ impl FileFormat for ParquetFormat {
 
     async fn create_physical_plan(
         &self,
+        state: &SessionState,
         conf: FileScanConfig,
         filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
-        let predicate = if self.enable_pruning() {
+        let predicate = if self.enable_pruning(state.config_options()) {
             conjunction(filters.to_vec())
         } else {
             None
@@ -214,7 +203,7 @@ impl FileFormat for ParquetFormat {
         Ok(Arc::new(ParquetExec::new(
             conf,
             predicate,
-            self.metadata_size_hint(),
+            self.metadata_size_hint(state.config_options()),
         )))
     }
 }
@@ -649,9 +638,10 @@ mod tests {
         let store = Arc::new(LocalFileSystem::new()) as _;
         let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
 
-        let ctx = SessionContext::new();
-        let format = ParquetFormat::new(ctx.config_options());
-        let schema = format.infer_schema(&store, &meta).await.unwrap();
+        let session = SessionContext::new();
+        let ctx = session.state();
+        let format = ParquetFormat::default();
+        let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
 
         let stats =
             fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None).await?;
@@ -797,10 +787,13 @@ mod tests {
 
         assert_eq!(store.request_count(), 2);
 
-        let ctx = SessionContext::new();
-        let format =
-            ParquetFormat::new(ctx.config_options()).with_metadata_size_hint(Some(9));
-        let schema = format.infer_schema(&store.upcast(), &meta).await.unwrap();
+        let session = SessionContext::new();
+        let ctx = session.state();
+        let format = ParquetFormat::default().with_metadata_size_hint(Some(9));
+        let schema = format
+            .infer_schema(&ctx, &store.upcast(), &meta)
+            .await
+            .unwrap();
 
         let stats =
             fetch_statistics(store.upcast().as_ref(), schema.clone(), &meta[0], Some(9))
@@ -826,10 +819,11 @@ mod tests {
         // ensure the requests were coalesced into a single request
         assert_eq!(store.request_count(), 1);
 
-        let ctx = SessionContext::new();
-        let format = ParquetFormat::new(ctx.config_options())
-            .with_metadata_size_hint(Some(size_hint));
-        let schema = format.infer_schema(&store.upcast(), &meta).await.unwrap();
+        let format = ParquetFormat::default().with_metadata_size_hint(Some(size_hint));
+        let schema = format
+            .infer_schema(&ctx, &store.upcast(), &meta)
+            .await
+            .unwrap();
         let stats = fetch_statistics(
             store.upcast().as_ref(),
             schema.clone(),
@@ -863,10 +857,11 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::with_config(config);
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = None;
-        let exec = get_exec(&ctx, "alltypes_plain.parquet", projection, None).await?;
-        let task_ctx = ctx.task_ctx();
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
         let stream = exec.execute(0, task_ctx)?;
 
         let tt_batches = stream
@@ -890,7 +885,8 @@ mod tests {
     #[tokio::test]
     async fn capture_bytes_scanned_metric() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let ctx = SessionContext::with_config(config);
+        let session = SessionContext::with_config(config);
+        let ctx = session.state();
 
         // Read the full file
         let projection = None;
@@ -915,10 +911,11 @@ mod tests {
     #[tokio::test]
     async fn read_limit() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = None;
         let exec =
-            get_exec(&session_ctx, "alltypes_plain.parquet", projection, Some(1)).await?;
+            get_exec(&state, "alltypes_plain.parquet", projection, Some(1)).await?;
 
         // note: even if the limit is set, the executor rounds up to the batch size
         assert_eq!(exec.statistics().num_rows, Some(8));
@@ -935,10 +932,10 @@ mod tests {
     #[tokio::test]
     async fn read_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = None;
-        let exec =
-            get_exec(&session_ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -974,10 +971,10 @@ mod tests {
     #[tokio::test]
     async fn read_bool_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![1]);
-        let exec =
-            get_exec(&session_ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -992,7 +989,7 @@ mod tests {
 
         assert_eq!(
             "[true, false, true, false, true, false, true, false]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -1001,10 +998,10 @@ mod tests {
     #[tokio::test]
     async fn read_i32_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![0]);
-        let exec =
-            get_exec(&session_ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -1017,7 +1014,7 @@ mod tests {
             values.push(array.value(i));
         }
 
-        assert_eq!("[4, 5, 6, 7, 2, 3, 0, 1]", format!("{:?}", values));
+        assert_eq!("[4, 5, 6, 7, 2, 3, 0, 1]", format!("{values:?}"));
 
         Ok(())
     }
@@ -1025,10 +1022,10 @@ mod tests {
     #[tokio::test]
     async fn read_i96_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![10]);
-        let exec =
-            get_exec(&session_ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -1041,7 +1038,7 @@ mod tests {
             values.push(array.value(i));
         }
 
-        assert_eq!("[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]", format!("{:?}", values));
+        assert_eq!("[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]", format!("{values:?}"));
 
         Ok(())
     }
@@ -1049,10 +1046,10 @@ mod tests {
     #[tokio::test]
     async fn read_f32_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![6]);
-        let exec =
-            get_exec(&session_ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -1067,7 +1064,7 @@ mod tests {
 
         assert_eq!(
             "[0.0, 1.1, 0.0, 1.1, 0.0, 1.1, 0.0, 1.1]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -1076,10 +1073,10 @@ mod tests {
     #[tokio::test]
     async fn read_f64_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![7]);
-        let exec =
-            get_exec(&session_ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -1094,7 +1091,7 @@ mod tests {
 
         assert_eq!(
             "[0.0, 10.1, 0.0, 10.1, 0.0, 10.1, 0.0, 10.1]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -1103,10 +1100,10 @@ mod tests {
     #[tokio::test]
     async fn read_binary_alltypes_plain_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![9]);
-        let exec =
-            get_exec(&session_ctx, "alltypes_plain.parquet", projection, None).await?;
+        let exec = get_exec(&state, "alltypes_plain.parquet", projection, None).await?;
 
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -1121,7 +1118,7 @@ mod tests {
 
         assert_eq!(
             "[\"0\", \"1\", \"0\", \"1\", \"0\", \"1\", \"0\", \"1\"]",
-            format!("{:?}", values)
+            format!("{values:?}")
         );
 
         Ok(())
@@ -1130,10 +1127,11 @@ mod tests {
     #[tokio::test]
     async fn read_decimal_parquet() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
 
         // parquet use the int32 as the physical type to store decimal
-        let exec = get_exec(&session_ctx, "int32_decimal.parquet", None, None).await?;
+        let exec = get_exec(&state, "int32_decimal.parquet", None, None).await?;
         let batches = collect(exec, task_ctx.clone()).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
@@ -1141,7 +1139,7 @@ mod tests {
         assert_eq!(&DataType::Decimal128(4, 2), column.data_type());
 
         // parquet use the int64 as the physical type to store decimal
-        let exec = get_exec(&session_ctx, "int64_decimal.parquet", None, None).await?;
+        let exec = get_exec(&state, "int64_decimal.parquet", None, None).await?;
         let batches = collect(exec, task_ctx.clone()).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
@@ -1149,21 +1147,15 @@ mod tests {
         assert_eq!(&DataType::Decimal128(10, 2), column.data_type());
 
         // parquet use the fixed length binary as the physical type to store decimal
-        let exec =
-            get_exec(&session_ctx, "fixed_length_decimal.parquet", None, None).await?;
+        let exec = get_exec(&state, "fixed_length_decimal.parquet", None, None).await?;
         let batches = collect(exec, task_ctx.clone()).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         let column = batches[0].column(0);
         assert_eq!(&DataType::Decimal128(25, 2), column.data_type());
 
-        let exec = get_exec(
-            &session_ctx,
-            "fixed_length_decimal_legacy.parquet",
-            None,
-            None,
-        )
-        .await?;
+        let exec =
+            get_exec(&state, "fixed_length_decimal_legacy.parquet", None, None).await?;
         let batches = collect(exec, task_ctx.clone()).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
@@ -1180,7 +1172,7 @@ mod tests {
     #[tokio::test]
     async fn test_read_parquet_page_index() -> Result<()> {
         let testdata = crate::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_tiny_pages.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages.parquet");
         let file = File::open(path).await.unwrap();
         let options = ArrowReaderOptions::new().with_page_index(true);
         let builder =
@@ -1191,7 +1183,7 @@ mod tests {
                 .clone();
         check_page_index_validation(builder.page_indexes(), builder.offset_indexes());
 
-        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let file = File::open(path).await.unwrap();
 
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
@@ -1257,13 +1249,13 @@ mod tests {
     }
 
     async fn get_exec(
-        ctx: &SessionContext,
+        state: &SessionState,
         file_name: &str,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::parquet_test_data();
-        let format = ParquetFormat::new(ctx.config_options());
-        scan_format(&format, &testdata, file_name, projection, limit).await
+        let format = ParquetFormat::default();
+        scan_format(state, &format, &testdata, file_name, projection, limit).await
     }
 }

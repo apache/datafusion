@@ -19,10 +19,59 @@
 use sqlparser::parser::ParserError;
 
 use crate::{DataFusionError, Result, ScalarValue};
+use std::result;
 use std::str::FromStr;
 
 const SECONDS_PER_HOUR: f64 = 3_600_f64;
 const NANOS_PER_SECOND: f64 = 1_000_000_000_f64;
+
+/// Readable file compression type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionTypeVariant {
+    /// Gzip-ed file
+    GZIP,
+    /// Bzip2-ed file
+    BZIP2,
+    /// Xz-ed file (liblzma)
+    XZ,
+    /// Uncompressed file
+    UNCOMPRESSED,
+}
+
+impl FromStr for CompressionTypeVariant {
+    type Err = ParserError;
+
+    fn from_str(s: &str) -> result::Result<Self, ParserError> {
+        let s = s.to_uppercase();
+        match s.as_str() {
+            "GZIP" | "GZ" => Ok(Self::GZIP),
+            "BZIP2" | "BZ2" => Ok(Self::BZIP2),
+            "XZ" => Ok(Self::XZ),
+            "" => Ok(Self::UNCOMPRESSED),
+            _ => Err(ParserError::ParserError(format!(
+                "Unsupported file compression type {s}"
+            ))),
+        }
+    }
+}
+
+impl ToString for CompressionTypeVariant {
+    fn to_string(&self) -> String {
+        match self {
+            Self::GZIP => "GZIP",
+            Self::BZIP2 => "BZIP2",
+            Self::XZ => "XZ",
+            Self::UNCOMPRESSED => "",
+        }
+        .to_string()
+    }
+}
+
+impl CompressionTypeVariant {
+    pub const fn is_compressed(&self) -> bool {
+        !matches!(self, &Self::UNCOMPRESSED)
+    }
+}
 
 #[derive(Clone, Copy)]
 #[repr(u16)]
@@ -55,8 +104,7 @@ impl FromStr for IntervalType {
             "second" | "seconds" => Ok(Self::Second),
             "millisecond" | "milliseconds" => Ok(Self::Millisecond),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unknown interval type: {}",
-                s
+                "Unknown interval type: {s}"
             ))),
         }
     }
@@ -93,31 +141,27 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
             Ok(n) => n,
             Err(_) => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported Interval Expression with value {:?}",
-                    value
+                    "Unsupported Interval Expression with value {value:?}"
                 )));
             }
         };
 
         if interval_period > (i64::MAX as f64) {
             return Err(DataFusionError::NotImplemented(format!(
-                "Interval field value out of range: {:?}",
-                value
+                "Interval field value out of range: {value:?}"
             )));
         }
 
         let it = IntervalType::from_str(interval_type).map_err(|_| {
             DataFusionError::NotImplemented(format!(
-                "Invalid input syntax for type interval: {:?}",
-                value
+                "Invalid input syntax for type interval: {value:?}"
             ))
         })?;
 
         // Disallow duplicate interval types
         if used_interval_types & (it as u16) != 0 {
             return Err(DataFusionError::SQL(ParserError::ParserError(format!(
-                "Invalid input syntax for type interval: {:?}. Repeated type '{}'",
-                value, interval_type
+                "Invalid input syntax for type interval: {value:?}. Repeated type '{interval_type}'"
             ))));
         } else {
             used_interval_types |= it as u16;
@@ -170,8 +214,7 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
 
         if result_month > (i32::MAX as i64) {
             return Err(DataFusionError::NotImplemented(format!(
-                "Interval field value out of range: {:?}",
-                value
+                "Interval field value out of range: {value:?}"
             )));
         }
 
@@ -179,8 +222,7 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
 
         if result_days > (i32::MAX as i64) {
             return Err(DataFusionError::NotImplemented(format!(
-                "Interval field value out of range: {:?}",
-                value
+                "Interval field value out of range: {value:?}"
             )));
         }
 
@@ -188,8 +230,7 @@ pub fn parse_interval(leading_field: &str, value: &str) -> Result<ScalarValue> {
 
         if result_nanos > (i64::MAX as i128) {
             return Err(DataFusionError::NotImplemented(format!(
-                "Interval field value out of range: {:?}",
-                value
+                "Interval field value out of range: {value:?}"
             )));
         }
     }
@@ -344,7 +385,7 @@ mod test {
             .expect_err("parsing interval should have failed");
         assert_eq!(
             r#"SQL(ParserError("Invalid input syntax for type interval: \"1 month 1 second 1 second\". Repeated type 'second'"))"#,
-            format!("{:?}", err)
+            format!("{err:?}")
         );
     }
 }

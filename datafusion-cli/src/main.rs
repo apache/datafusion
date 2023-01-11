@@ -21,6 +21,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionContext;
+use datafusion_cli::catalog::DynamicFileCatalog;
 use datafusion_cli::object_storage::DatafusionCliObjectStoreProvider;
 use datafusion_cli::{
     exec, print_format::PrintFormat, print_options::PrintOptions, DATAFUSION_CLI_VERSION,
@@ -96,7 +97,7 @@ pub async fn main() -> Result<()> {
         env::set_current_dir(p).unwrap();
     };
 
-    let mut session_config = SessionConfig::from_env().with_information_schema(true);
+    let mut session_config = SessionConfig::from_env()?.with_information_schema(true);
 
     if let Some(batch_size) = args.batch_size {
         session_config = session_config.with_batch_size(batch_size);
@@ -106,6 +107,11 @@ pub async fn main() -> Result<()> {
     let mut ctx =
         SessionContext::with_config_rt(session_config.clone(), Arc::new(runtime_env));
     ctx.refresh_catalogs().await?;
+    // install dynamic catalog provider that knows how to open files
+    ctx.register_catalog_list(Arc::new(DynamicFileCatalog::new(
+        ctx.state().catalog_list(),
+        ctx.state_weak_ref(),
+    )));
 
     let mut print_options = PrintOptions {
         format: args.format,

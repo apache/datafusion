@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::error::Result;
+use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::SessionContext;
@@ -31,16 +31,12 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn test_with_parquet() -> Result<()> {
-    let session_ctx = SessionContext::new();
-    let task_ctx = session_ctx.task_ctx();
+    let ctx = SessionContext::new();
+    let state = ctx.state();
+    let task_ctx = state.task_ctx();
     let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    let exec = get_exec(
-        &session_ctx,
-        "alltypes_plain.parquet",
-        projection.as_ref(),
-        None,
-    )
-    .await?;
+    let exec =
+        get_exec(&state, "alltypes_plain.parquet", projection.as_ref(), None).await?;
     let schema = exec.schema().clone();
 
     let batches = collect(exec, task_ctx).await?;
@@ -58,16 +54,12 @@ async fn test_with_parquet() -> Result<()> {
 
 #[tokio::test]
 async fn test_with_parquet_word_aligned() -> Result<()> {
-    let session_ctx = SessionContext::new();
-    let task_ctx = session_ctx.task_ctx();
+    let ctx = SessionContext::new();
+    let state = ctx.state();
+    let task_ctx = state.task_ctx();
     let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7]);
-    let exec = get_exec(
-        &session_ctx,
-        "alltypes_plain.parquet",
-        projection.as_ref(),
-        None,
-    )
-    .await?;
+    let exec =
+        get_exec(&state, "alltypes_plain.parquet", projection.as_ref(), None).await?;
     let schema = exec.schema().clone();
 
     let batches = collect(exec, task_ctx).await?;
@@ -84,33 +76,34 @@ async fn test_with_parquet_word_aligned() -> Result<()> {
 }
 
 async fn get_exec(
-    ctx: &SessionContext,
+    state: &SessionState,
     file_name: &str,
     projection: Option<&Vec<usize>>,
     limit: Option<usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let testdata = datafusion::test_util::parquet_test_data();
-    let filename = format!("{}/{}", testdata, file_name);
+    let filename = format!("{testdata}/{file_name}");
 
     let path = Path::from_filesystem_path(filename).unwrap();
 
-    let format = ParquetFormat::new(ctx.config_options());
+    let format = ParquetFormat::default();
     let object_store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
     let object_store_url = ObjectStoreUrl::local_filesystem();
 
     let meta = object_store.head(&path).await.unwrap();
 
     let file_schema = format
-        .infer_schema(&object_store, &[meta.clone()])
+        .infer_schema(state, &object_store, &[meta.clone()])
         .await
         .expect("Schema inference");
     let statistics = format
-        .infer_stats(&object_store, file_schema.clone(), &meta)
+        .infer_stats(state, &object_store, file_schema.clone(), &meta)
         .await
         .expect("Stats inference");
     let file_groups = vec![vec![meta.into()]];
     let exec = format
         .create_physical_plan(
+            state,
             FileScanConfig {
                 object_store_url,
                 file_schema,
@@ -119,8 +112,8 @@ async fn get_exec(
                 projection: projection.cloned(),
                 limit,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
+                infinite_source: false,
             },
             &[],
         )

@@ -64,6 +64,7 @@ jobs:
       - name: Check Cargo.lock for datafusion-cli
         run: |
           # If this test fails, try running `cargo update` in the `datafusion-cli` directory
+          # and check in the updated Cargo.lock file.
           cargo check --manifest-path datafusion-cli/Cargo.toml --locked
 
   # test the crate
@@ -329,8 +330,8 @@ jobs:
           cd datafusion
           cargo test --features=pyarrow
 
-  lint:
-    name: Lint
+  check-fmt:
+    name: Check cargo fmt
     runs-on: ubuntu-latest
     container:
       image: amd64/rust

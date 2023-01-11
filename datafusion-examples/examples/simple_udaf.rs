@@ -21,7 +21,6 @@ use datafusion::arrow::{
     array::ArrayRef, array::Float32Array, datatypes::DataType, record_batch::RecordBatch,
 };
 use datafusion::from_slice::FromSlice;
-use datafusion::logical_expr::AggregateState;
 use datafusion::{error::Result, physical_plan::Accumulator};
 use datafusion::{logical_expr::Volatility, prelude::*, scalar::ScalarValue};
 use datafusion_common::cast::as_float64_array;
@@ -108,10 +107,10 @@ impl Accumulator for GeometricMean {
     // This function serializes our state to `ScalarValue`, which DataFusion uses
     // to pass this state between execution stages.
     // Note that this can be arbitrary data.
-    fn state(&self) -> Result<Vec<AggregateState>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
-            AggregateState::Scalar(ScalarValue::from(self.prod)),
-            AggregateState::Scalar(ScalarValue::from(self.n)),
+            ScalarValue::from(self.prod),
+            ScalarValue::from(self.n),
         ])
     }
 
@@ -180,7 +179,7 @@ async fn main() -> Result<()> {
 
     // get a DataFrame from the context
     // this table has 1 column `a` f32 with values {2,4,8,64}, whose geometric mean is 8.0.
-    let df = ctx.table("t")?;
+    let df = ctx.table("t").await?;
 
     // perform the aggregation
     let df = df.aggregate(vec![], vec![geometric_mean.call(vec![col("a")])])?;

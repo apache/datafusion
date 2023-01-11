@@ -147,7 +147,7 @@ pub fn negative(
         Ok(arg)
     } else if !is_signed_numeric(&data_type) {
         Err(DataFusionError::Internal(
-            format!("Can't create negative physical expr for (- '{:?}'), the type of child expr is {}, not signed numeric", arg, data_type),
+            format!("Can't create negative physical expr for (- '{arg:?}'), the type of child expr is {data_type}, not signed numeric"),
         ))
     } else {
         Ok(Arc::new(NegativeExpr::new(arg)))

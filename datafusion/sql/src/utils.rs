@@ -21,12 +21,13 @@ use arrow_schema::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
 use sqlparser::ast::Ident;
 
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::Cast;
 use datafusion_expr::expr::{
-    Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
+    AggregateFunction, Between, BinaryExpr, Case, GetIndexedField, GroupingSet, Like,
+    WindowFunction,
 };
+use datafusion_expr::expr::{Cast, Sort};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
-use datafusion_expr::{Expr, LogicalPlan};
+use datafusion_expr::{Expr, LogicalPlan, TryCast};
 use std::collections::HashMap;
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
@@ -124,7 +125,7 @@ fn check_column_satisfies_expr(
             expr,
             columns
                 .iter()
-                .map(|e| format!("{}", e))
+                .map(|e| format!("{e}"))
                 .collect::<Vec<String>>()
                 .join(", ")
         )));
@@ -162,42 +163,40 @@ where
         // No replacement was provided, clone the node and recursively call
         // clone_with_replacement() on any nested expressions.
         None => match expr {
-            Expr::AggregateFunction {
+            Expr::AggregateFunction(AggregateFunction {
                 fun,
                 args,
                 distinct,
                 filter,
-            } => Ok(Expr::AggregateFunction {
-                fun: fun.clone(),
-                args: args
-                    .iter()
+            }) => Ok(Expr::AggregateFunction(AggregateFunction::new(
+                fun.clone(),
+                args.iter()
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<Expr>>>()?,
-                distinct: *distinct,
-                filter: filter.clone(),
-            }),
-            Expr::WindowFunction {
+                *distinct,
+                filter.clone(),
+            ))),
+            Expr::WindowFunction(WindowFunction {
                 fun,
                 args,
                 partition_by,
                 order_by,
                 window_frame,
-            } => Ok(Expr::WindowFunction {
-                fun: fun.clone(),
-                args: args
+            }) => Ok(Expr::WindowFunction(WindowFunction::new(
+                fun.clone(),
+                args.iter()
+                    .map(|e| clone_with_replacement(e, replacement_fn))
+                    .collect::<Result<Vec<_>>>()?,
+                partition_by
                     .iter()
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<_>>>()?,
-                partition_by: partition_by
+                order_by
                     .iter()
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<_>>>()?,
-                order_by: order_by
-                    .iter()
-                    .map(|e| clone_with_replacement(e, replacement_fn))
-                    .collect::<Result<Vec<_>>>()?,
-                window_frame: window_frame.clone(),
-            }),
+                window_frame.clone(),
+            ))),
             Expr::AggregateUDF { fun, args, filter } => Ok(Expr::AggregateUDF {
                 fun: fun.clone(),
                 args: args
@@ -345,22 +344,22 @@ where
                 Box::new(clone_with_replacement(expr, replacement_fn)?),
                 data_type.clone(),
             ))),
-            Expr::TryCast {
+            Expr::TryCast(TryCast {
                 expr: nested_expr,
                 data_type,
-            } => Ok(Expr::TryCast {
-                expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
-                data_type: data_type.clone(),
-            }),
-            Expr::Sort {
+            }) => Ok(Expr::TryCast(TryCast::new(
+                Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
+                data_type.clone(),
+            ))),
+            Expr::Sort(Sort {
                 expr: nested_expr,
                 asc,
                 nulls_first,
-            } => Ok(Expr::Sort {
-                expr: Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
-                asc: *asc,
-                nulls_first: *nulls_first,
-            }),
+            }) => Ok(Expr::Sort(Sort::new(
+                Box::new(clone_with_replacement(nested_expr, replacement_fn)?),
+                *asc,
+                *nulls_first,
+            ))),
             Expr::Column { .. }
             | Expr::Literal(_)
             | Expr::ScalarVariable(_, _)
@@ -411,6 +410,10 @@ where
                     )))
                 }
             },
+            Expr::Placeholder { id, data_type } => Ok(Expr::Placeholder {
+                id: id.clone(),
+                data_type: data_type.clone(),
+            }),
         },
     }
 }
@@ -477,20 +480,20 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
     let all_partition_keys = window_exprs
         .iter()
         .map(|expr| match expr {
-            Expr::WindowFunction { partition_by, .. } => Ok(partition_by),
+            Expr::WindowFunction(WindowFunction { partition_by, .. }) => Ok(partition_by),
             Expr::Alias(expr, _) => {
                 // convert &Box<T> to &T
                 match &**expr {
-                    Expr::WindowFunction { partition_by, .. } => Ok(partition_by),
+                    Expr::WindowFunction(WindowFunction { partition_by, .. }) => {
+                        Ok(partition_by)
+                    }
                     expr => Err(DataFusionError::Execution(format!(
-                        "Impossibly got non-window expr {:?}",
-                        expr
+                        "Impossibly got non-window expr {expr:?}"
                     ))),
                 }
             }
             expr => Err(DataFusionError::Execution(format!(
-                "Impossibly got non-window expr {:?}",
-                expr
+                "Impossibly got non-window expr {expr:?}"
             ))),
         })
         .collect::<Result<Vec<_>>>()?;
@@ -527,18 +530,17 @@ pub(crate) fn make_decimal_type(
         || scale.unsigned_abs() > precision
     {
         Err(DataFusionError::Internal(format!(
-            "Decimal(precision = {}, scale = {}) should satisfy `0 < precision <= 38`, and `scale <= precision`.",
-            precision, scale
+            "Decimal(precision = {precision}, scale = {scale}) should satisfy `0 < precision <= 38`, and `scale <= precision`."
         )))
     } else {
         Ok(DataType::Decimal128(precision, scale))
     }
 }
 
-// Normalize an identifier to a lowercase string unless the identifier is quoted.
-pub(crate) fn normalize_ident(id: &Ident) -> String {
+// Normalize an owned identifier to a lowercase string unless the identifier is quoted.
+pub(crate) fn normalize_ident(id: Ident) -> String {
     match id.quote_style {
-        Some(_) => id.value.clone(),
+        Some(_) => id.value,
         None => id.value.to_ascii_lowercase(),
     }
 }

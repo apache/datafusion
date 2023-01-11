@@ -78,7 +78,7 @@ mod tests {
             Schema::new(
                 t.iter()
                     .enumerate()
-                    .map(|(i, t)| Field::new(&format!("c{}", i), t.clone(), true))
+                    .map(|(i, t)| Field::new(format!("c{i}"), t.clone(), true))
                     .collect(),
             )
         };
@@ -88,7 +88,7 @@ mod tests {
             t.iter()
                 .enumerate()
                 .map(|(i, t)| {
-                    try_cast(col(&format!("c{}", i), &schema)?, &schema, t.clone())
+                    try_cast(col(&format!("c{i}"), &schema)?, &schema, t.clone())
                 })
                 .collect::<Result<Vec<_>>>()
         };
@@ -190,8 +190,7 @@ mod tests {
         for case in cases {
             if coerce(&case.0, &case.1, &case.2).is_ok() {
                 return Err(DataFusionError::Plan(format!(
-                    "Error was expected in {:?}",
-                    case
+                    "Error was expected in {case:?}"
                 )));
             }
         }

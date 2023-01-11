@@ -51,11 +51,12 @@ impl Column {
     }
 
     /// Deserialize a fully qualified name string into a column
-    pub fn from_qualified_name(flat_name: &str) -> Self {
+    pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
+        let flat_name = flat_name.into();
         use sqlparser::tokenizer::Token;
 
         let dialect = sqlparser::dialect::GenericDialect {};
-        let mut tokenizer = sqlparser::tokenizer::Tokenizer::new(&dialect, flat_name);
+        let mut tokenizer = sqlparser::tokenizer::Tokenizer::new(&dialect, &flat_name);
         if let Ok(tokens) = tokenizer.tokenize() {
             if let [Token::Word(relation), Token::Period, Token::Word(name)] =
                 tokens.as_slice()
@@ -70,7 +71,7 @@ impl Column {
         // name
         Column {
             relation: None,
-            name: String::from(flat_name),
+            name: flat_name,
         }
     }
 
@@ -82,7 +83,25 @@ impl Column {
         }
     }
 
-    // Internal implementation of normalize
+    /// Qualify column if not done yet.
+    ///
+    /// If this column already has a [relation](Self::relation), it will be returned as is and the given parameters are
+    /// ignored. Otherwise this will search through the given schemas to find the column. This will use the first schema
+    /// that matches.
+    ///
+    /// A schema matches if there is a single column that -- when unqualified -- matches this column. There is an
+    /// exception for `USING` statements, see below.
+    ///
+    /// # Using columns
+    /// Take the following SQL statement:
+    ///
+    /// ```sql
+    /// SELECT id FROM t1 JOIN t2 USING(id)
+    /// ```
+    ///
+    /// In this case, both `t1.id` and `t2.id` will match unqualified column `id`. To express this possibility, use
+    /// `using_columns`. Each entry in this array is a set of columns that are bound together via a `USING` clause. So
+    /// in this example this would be `[{t1.id, t2.id}]`.
     pub fn normalize_with_schemas(
         self,
         schemas: &[&Arc<DFSchema>],
@@ -141,6 +160,20 @@ impl Column {
 
 impl From<&str> for Column {
     fn from(c: &str) -> Self {
+        Self::from_qualified_name(c)
+    }
+}
+
+/// Create a column, cloning the string
+impl From<&String> for Column {
+    fn from(c: &String) -> Self {
+        Self::from_qualified_name(c)
+    }
+}
+
+/// Create a column, reusing the existing string
+impl From<String> for Column {
+    fn from(c: String) -> Self {
         Self::from_qualified_name(c)
     }
 }

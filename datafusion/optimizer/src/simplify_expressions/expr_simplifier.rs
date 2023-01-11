@@ -18,7 +18,9 @@
 //! Expression simplification API
 
 use super::utils::*;
-use crate::type_coercion::TypeCoercionRewriter;
+use crate::{
+    simplify_expressions::regex::simplify_regex_expr, type_coercion::TypeCoercionRewriter,
+};
 use arrow::{
     array::new_null_array,
     datatypes::{DataType, Field, Schema},
@@ -253,7 +255,8 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Sort { .. }
             | Expr::GroupingSet(_)
             | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. } => false,
+            | Expr::QualifiedWildcard { .. }
+            | Expr::Placeholder { .. } => false,
             Expr::ScalarFunction { fun, .. } => Self::volatility_ok(fun.volatility()),
             Expr::ScalarUDF { fun, .. } => Self::volatility_ok(fun.signature.volatility),
             Expr::Literal(_)
@@ -331,7 +334,10 @@ impl<'a, S> Simplifier<'a, S> {
 impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
     /// rewrite the expression simplifying any constant expressions
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        use datafusion_expr::Operator::{And, Divide, Eq, Modulo, Multiply, NotEq, Or};
+        use datafusion_expr::Operator::{
+            And, Divide, Eq, Modulo, Multiply, NotEq, Or, RegexIMatch, RegexMatch,
+            RegexNotIMatch, RegexNotMatch,
+        };
 
         let info = self.info;
         let new_expr = match expr {
@@ -778,10 +784,18 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
                     )
                 }
             }
-            expr => {
-                // no additional rewrites possible
-                expr
-            }
+
+            //
+            // Rules for regexes
+            //
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: op @ (RegexMatch | RegexNotMatch | RegexIMatch | RegexNotIMatch),
+                right,
+            }) => simplify_regex_expr(left, op, right)?,
+
+            // no additional rewrites possible
+            expr => expr,
         };
         Ok(new_expr)
     }
@@ -802,7 +816,7 @@ mod tests {
         datatypes::{DataType, Field, Schema},
     };
     use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_common::{cast::as_int32_array, DFField, ToDFSchema};
+    use datafusion_common::{assert_contains, cast::as_int32_array, DFField, ToDFSchema};
     use datafusion_expr::*;
     use datafusion_physical_expr::{
         execution_props::ExecutionProps, functions::make_scalar_function,
@@ -908,8 +922,7 @@ mod tests {
 
         assert_eq!(
             evaluated_expr, expected_expr,
-            "Mismatch evaluating {}\n  Expected:{}\n  Got:{}",
-            input_expr, expected_expr, evaluated_expr
+            "Mismatch evaluating {input_expr}\n  Expected:{expected_expr}\n  Got:{evaluated_expr}"
         );
     }
 
@@ -1575,17 +1588,168 @@ mod tests {
         assert_eq!(simplify(expr), expected)
     }
 
+    #[test]
+    fn test_simplify_regex() {
+        // malformed regex
+        assert_contains!(
+            try_simplify(regex_match(col("c1"), lit("foo{")))
+                .unwrap_err()
+                .to_string(),
+            "regex parse error"
+        );
+
+        // unsupported cases
+        assert_no_change(regex_match(col("c1"), lit("foo.*")));
+        assert_no_change(regex_match(col("c1"), lit("(foo)")));
+        assert_no_change(regex_match(col("c1"), lit("^foo")));
+        assert_no_change(regex_match(col("c1"), lit("foo$")));
+        assert_no_change(regex_match(col("c1"), lit("%")));
+        assert_no_change(regex_match(col("c1"), lit("_")));
+        assert_no_change(regex_match(col("c1"), lit("f%o")));
+        assert_no_change(regex_match(col("c1"), lit("f_o")));
+
+        // empty cases
+        assert_change(regex_match(col("c1"), lit("")), like(col("c1"), "%"));
+        assert_change(
+            regex_not_match(col("c1"), lit("")),
+            not_like(col("c1"), "%"),
+        );
+        assert_change(regex_imatch(col("c1"), lit("")), ilike(col("c1"), "%"));
+        assert_change(
+            regex_not_imatch(col("c1"), lit("")),
+            not_ilike(col("c1"), "%"),
+        );
+
+        // single character
+        assert_change(regex_match(col("c1"), lit("x")), like(col("c1"), "%x%"));
+
+        // single word
+        assert_change(regex_match(col("c1"), lit("foo")), like(col("c1"), "%foo%"));
+
+        // OR-chain
+        assert_change(
+            regex_match(col("c1"), lit("foo|bar|baz")),
+            like(col("c1"), "%foo%")
+                .or(like(col("c1"), "%bar%"))
+                .or(like(col("c1"), "%baz%")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("foo|x|baz")),
+            like(col("c1"), "%foo%")
+                .or(like(col("c1"), "%x%"))
+                .or(like(col("c1"), "%baz%")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("foo||baz")),
+            like(col("c1"), "%foo%")
+                .or(like(col("c1"), "%"))
+                .or(like(col("c1"), "%baz%")),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("foo|bar|baz")),
+            not_like(col("c1"), "%foo%")
+                .and(not_like(col("c1"), "%bar%"))
+                .and(not_like(col("c1"), "%baz%")),
+        );
+        // Too many patterns (MAX_REGEX_ALTERNATIONS_EXPANSION)
+        assert_no_change(regex_match(col("c1"), lit("foo|bar|baz|blarg|bozo|etc")));
+    }
+
+    #[track_caller]
+    fn assert_no_change(expr: Expr) {
+        let optimized = simplify(expr.clone());
+        assert_eq!(expr, optimized);
+    }
+
+    #[track_caller]
+    fn assert_change(expr: Expr, expected: Expr) {
+        let optimized = simplify(expr);
+        assert_eq!(optimized, expected);
+    }
+
+    fn regex_match(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(left),
+            op: Operator::RegexMatch,
+            right: Box::new(right),
+        })
+    }
+
+    fn regex_not_match(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(left),
+            op: Operator::RegexNotMatch,
+            right: Box::new(right),
+        })
+    }
+
+    fn regex_imatch(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(left),
+            op: Operator::RegexIMatch,
+            right: Box::new(right),
+        })
+    }
+
+    fn regex_not_imatch(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(left),
+            op: Operator::RegexNotIMatch,
+            right: Box::new(right),
+        })
+    }
+
+    fn like(expr: Expr, pattern: &str) -> Expr {
+        Expr::Like(Like {
+            negated: false,
+            expr: Box::new(expr),
+            pattern: Box::new(lit(pattern)),
+            escape_char: None,
+        })
+    }
+
+    fn not_like(expr: Expr, pattern: &str) -> Expr {
+        Expr::Like(Like {
+            negated: true,
+            expr: Box::new(expr),
+            pattern: Box::new(lit(pattern)),
+            escape_char: None,
+        })
+    }
+
+    fn ilike(expr: Expr, pattern: &str) -> Expr {
+        Expr::ILike(Like {
+            negated: false,
+            expr: Box::new(expr),
+            pattern: Box::new(lit(pattern)),
+            escape_char: None,
+        })
+    }
+
+    fn not_ilike(expr: Expr, pattern: &str) -> Expr {
+        Expr::ILike(Like {
+            negated: true,
+            expr: Box::new(expr),
+            pattern: Box::new(lit(pattern)),
+            escape_char: None,
+        })
+    }
+
     // ------------------------------
     // ----- Simplifier tests -------
     // ------------------------------
 
-    fn simplify(expr: Expr) -> Expr {
+    fn try_simplify(expr: Expr) -> Result<Expr> {
         let schema = expr_test_schema();
         let execution_props = ExecutionProps::new();
         let simplifier = ExprSimplifier::new(
             SimplifyContext::new(&execution_props).with_schema(schema),
         );
-        simplifier.simplify(expr).unwrap()
+        simplifier.simplify(expr)
+    }
+
+    fn simplify(expr: Expr) -> Expr {
+        try_simplify(expr).unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {

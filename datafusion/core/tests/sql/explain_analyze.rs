@@ -16,16 +16,16 @@
 // under the License.
 
 use super::*;
-use datafusion::{
-    config::{OPT_EXPLAIN_LOGICAL_PLAN_ONLY, OPT_EXPLAIN_PHYSICAL_PLAN_ONLY},
-    physical_plan::display::DisplayableExecutionPlan,
-};
+use datafusion::config::ConfigOptions;
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
 
 #[tokio::test]
 async fn explain_analyze_baseline_metrics() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
     // and then validate the presence of baseline metrics for supported operators
-    let config = SessionConfig::new().with_target_partitions(3);
+    let config = SessionConfig::new()
+        .with_target_partitions(3)
+        .with_batch_size(4096);
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv_by_sql(&ctx).await;
     // a query with as many operators as we have metrics for
@@ -41,16 +41,15 @@ async fn explain_analyze_baseline_metrics() {
                  UNION ALL \
                SELECT lead(c1, 1) OVER () as cnt FROM (select 1 as c1) AS b \
                LIMIT 3";
-    println!("running query: {}", sql);
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-    let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
+    println!("running query: {sql}");
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let task_ctx = ctx.task_ctx();
     let results = collect(physical_plan.clone(), task_ctx).await.unwrap();
     let formatted = arrow::util::pretty::pretty_format_batches(&results)
         .unwrap()
         .to_string();
-    println!("Query Output:\n\n{}", formatted);
+    println!("Query Output:\n\n{formatted}");
 
     assert_metrics!(
         &formatted,
@@ -60,11 +59,6 @@ async fn explain_analyze_baseline_metrics() {
     assert_metrics!(
         &formatted,
         "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
-        "metrics=[output_rows=5, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
-        "SortExec: [c1@0 ASC NULLS LAST]",
         "metrics=[output_rows=5, elapsed_compute="
     );
     assert_metrics!(
@@ -92,10 +86,11 @@ async fn explain_analyze_baseline_metrics() {
         "CoalesceBatchesExec: target_batch_size=4096",
         "metrics=[output_rows=5, elapsed_compute"
     );
+    // The number of output rows becomes less after changing the global sort to the local sort with limit push down
     assert_metrics!(
         &formatted,
         "CoalescePartitionsExec",
-        "metrics=[output_rows=5, elapsed_compute="
+        "metrics=[output_rows=3, elapsed_compute="
     );
     assert_metrics!(
         &formatted,
@@ -186,11 +181,13 @@ async fn csv_explain_plans() {
 
     // Logical plan
     // Create plan
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let logical_schema = plan.schema();
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let logical_schema = dataframe.schema();
+    let plan = dataframe.logical_plan();
+
     //
-    println!("SQL: {}", sql);
+    println!("SQL: {sql}");
     //
     // Verify schema
     let expected = vec![
@@ -203,8 +200,7 @@ async fn csv_explain_plans() {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
     //
     // Verify the text format of the plan
@@ -218,8 +214,7 @@ async fn csv_explain_plans() {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
     //
     // verify the grahviz format of the plan
@@ -255,17 +250,16 @@ async fn csv_explain_plans() {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     // Optimized logical plan
-    //
-    let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.optimize(&plan).expect(&msg);
+    let state = ctx.state();
+    let msg = format!("Optimizing logical plan for '{sql}': {plan:?}");
+    let plan = state.optimize(plan).expect(&msg);
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
-    assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
+    assert_eq!(logical_schema, optimized_logical_schema.as_ref());
     //
     // Verify schema
     let expected = vec![
@@ -278,8 +272,7 @@ async fn csv_explain_plans() {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
     //
     // Verify the text format of the plan
@@ -293,8 +286,7 @@ async fn csv_explain_plans() {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
     //
     // verify the grahviz format of the plan
@@ -330,19 +322,17 @@ async fn csv_explain_plans() {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     // Physical plan
     // Create plan
-    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
+    let msg = format!("Creating physical plan for '{sql}': {plan:?}");
+    let plan = state.create_physical_plan(&plan).await.expect(&msg);
     //
     // Execute plan
-    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx).await.expect(&msg);
+    let msg = format!("Executing physical plan for '{sql}': {plan:?}");
+    let results = collect(plan, state.task_ctx()).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
@@ -409,11 +399,11 @@ async fn csv_explain_verbose_plans() {
 
     // Logical plan
     // Create plan
-    let msg = format!("Creating logical plan for '{}'", sql);
-    let plan = ctx.create_logical_plan(sql).expect(&msg);
-    let logical_schema = plan.schema();
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(sql).await.expect(&msg);
+    let logical_schema = dataframe.schema().clone();
     //
-    println!("SQL: {}", sql);
+    println!("SQL: {sql}");
 
     //
     // Verify schema
@@ -423,12 +413,11 @@ async fn csv_explain_verbose_plans() {
         "    Filter: aggregate_test_100.c2 > Int64(10) [c1:Utf8, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]",
         "      TableScan: aggregate_test_100 [c1:Utf8, c2:Int8, c3:Int16, c4:Int16, c5:Int32, c6:Int64, c7:Int16, c8:Int32, c9:UInt32, c10:UInt64, c11:Float32, c12:Float64, c13:Utf8]",
     ];
-    let formatted = plan.display_indent_schema().to_string();
+    let formatted = dataframe.logical_plan().display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
     //
     // Verify the text format of the plan
@@ -438,12 +427,11 @@ async fn csv_explain_verbose_plans() {
         "    Filter: aggregate_test_100.c2 > Int64(10)",
         "      TableScan: aggregate_test_100",
     ];
-    let formatted = plan.display_indent().to_string();
+    let formatted = dataframe.logical_plan().display_indent().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
     //
     // verify the grahviz format of the plan
@@ -475,21 +463,20 @@ async fn csv_explain_verbose_plans() {
         "}",
         "// End DataFusion GraphViz Plan",
     ];
-    let formatted = plan.display_graphviz().to_string();
+    let formatted = dataframe.logical_plan().display_graphviz().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     // Optimized logical plan
-    //
-    let msg = format!("Optimizing logical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.optimize(&plan).expect(&msg);
+    let msg = format!("Optimizing logical plan for '{sql}': {dataframe:?}");
+    let (state, plan) = dataframe.into_parts();
+    let plan = state.optimize(&plan).expect(&msg);
     let optimized_logical_schema = plan.schema();
     // Both schema has to be the same
-    assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
+    assert_eq!(&logical_schema, optimized_logical_schema.as_ref());
     //
     // Verify schema
     let expected = vec![
@@ -502,8 +489,7 @@ async fn csv_explain_verbose_plans() {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
     //
     // Verify the text format of the plan
@@ -517,8 +503,7 @@ async fn csv_explain_verbose_plans() {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
     //
     // verify the grahviz format of the plan
@@ -554,17 +539,16 @@ async fn csv_explain_verbose_plans() {
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
         expected, actual,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected, actual
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
     // Physical plan
     // Create plan
-    let msg = format!("Creating physical plan for '{}': {:?}", sql, plan);
-    let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
+    let msg = format!("Creating physical plan for '{sql}': {plan:?}");
+    let plan = state.create_physical_plan(&plan).await.expect(&msg);
     //
     // Execute plan
-    let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
+    let msg = format!("Executing physical plan for '{sql}': {plan:?}");
     let task_ctx = ctx.task_ctx();
     let results = collect(plan, task_ctx).await.expect(&msg);
     let actual = result_vec(&results);
@@ -607,71 +591,11 @@ async fn explain_analyze_runs_optimizers() {
 }
 
 #[tokio::test]
-async fn tpch_explain_q10() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    register_tpch_csv(&ctx, "customer").await?;
-    register_tpch_csv(&ctx, "orders").await?;
-    register_tpch_csv(&ctx, "lineitem").await?;
-    register_tpch_csv(&ctx, "nation").await?;
-
-    let sql = "select
-    c_custkey,
-    c_name,
-    sum(l_extendedprice * (1 - l_discount)) as revenue,
-    c_acctbal,
-    n_name,
-    c_address,
-    c_phone,
-    c_comment
-from
-    customer,
-    orders,
-    lineitem,
-    nation
-where
-        c_custkey = o_custkey
-  and l_orderkey = o_orderkey
-  and o_orderdate >= date '1993-10-01'
-  and o_orderdate < date '1994-01-01'
-  and l_returnflag = 'R'
-  and c_nationkey = n_nationkey
-group by
-    c_custkey,
-    c_name,
-    c_acctbal,
-    c_phone,
-    n_name,
-    c_address,
-    c_comment
-order by
-    revenue desc;";
-
-    let mut plan = ctx.create_logical_plan(sql);
-    plan = ctx.optimize(&plan.unwrap());
-
-    let expected = "\
-    Sort: revenue DESC NULLS FIRST\
-    \n  Projection: customer.c_custkey, customer.c_name, SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS revenue, customer.c_acctbal, nation.n_name, customer.c_address, customer.c_phone, customer.c_comment\
-    \n    Aggregate: groupBy=[[customer.c_custkey, customer.c_name, customer.c_acctbal, customer.c_phone, nation.n_name, customer.c_address, customer.c_comment]], aggr=[[SUM(CAST(lineitem.l_extendedprice AS Decimal128(38, 4)) * CAST(Decimal128(Some(100),23,2) - CAST(lineitem.l_discount AS Decimal128(23, 2)) AS Decimal128(38, 4))) AS SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]\
-    \n      Inner Join: customer.c_nationkey = nation.n_nationkey\
-    \n        Inner Join: orders.o_orderkey = lineitem.l_orderkey\
-    \n          Inner Join: customer.c_custkey = orders.o_custkey\
-    \n            TableScan: customer projection=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_comment]\
-    \n            Filter: orders.o_orderdate >= Date32(\"8674\") AND orders.o_orderdate < Date32(\"8766\")\
-    \n              TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate], partial_filters=[orders.o_orderdate >= Date32(\"8674\"), orders.o_orderdate < Date32(\"8766\")]\
-    \n          Filter: lineitem.l_returnflag = Utf8(\"R\")\
-    \n            TableScan: lineitem projection=[l_orderkey, l_extendedprice, l_discount, l_returnflag], partial_filters=[lineitem.l_returnflag = Utf8(\"R\")]\
-    \n        TableScan: nation projection=[n_nationkey, n_name]";
-    assert_eq!(expected, format!("{:?}", plan.unwrap()));
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_physical_plan_display_indent() {
     // Hard code target_partitions as it appears in the RepartitionExec output
-    let config = SessionConfig::new().with_target_partitions(9000);
+    let config = SessionConfig::new()
+        .with_target_partitions(9000)
+        .with_batch_size(4096);
     let ctx = SessionContext::with_config(config);
     register_aggregate_csv(&ctx).await.unwrap();
     let sql = "SELECT c1, MAX(c12), MIN(c12) as the_min \
@@ -680,10 +604,8 @@ async fn test_physical_plan_display_indent() {
                GROUP BY c1 \
                ORDER BY the_min DESC \
                LIMIT 10";
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-
-    let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let expected = vec![
         "GlobalLimitExec: skip=0, fetch=10",
         "  SortPreservingMergeExec: [the_min@2 DESC]",
@@ -708,15 +630,16 @@ async fn test_physical_plan_display_indent() {
         .collect::<Vec<_>>();
     assert_eq!(
         expected, actual,
-        "expected:\n{:#?}\nactual:\n\n{:#?}\n",
-        expected, actual
+        "expected:\n{expected:#?}\nactual:\n\n{actual:#?}\n"
     );
 }
 
 #[tokio::test]
 async fn test_physical_plan_display_indent_multi_children() {
     // Hard code target_partitions as it appears in the RepartitionExec output
-    let config = SessionConfig::new().with_target_partitions(9000);
+    let config = SessionConfig::new()
+        .with_target_partitions(9000)
+        .with_batch_size(4096);
     let ctx = SessionContext::with_config(config);
     // ensure indenting works for nodes with multiple children
     register_aggregate_csv(&ctx).await.unwrap();
@@ -727,10 +650,8 @@ async fn test_physical_plan_display_indent_multi_children() {
                ON c1=c2\
                ";
 
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-
-    let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let physical_plan = dataframe.create_physical_plan().await.unwrap();
     let expected = vec![
         "ProjectionExec: expr=[c1@0 as c1]",
         "  CoalesceBatchesExec: target_batch_size=4096",
@@ -757,8 +678,7 @@ async fn test_physical_plan_display_indent_multi_children() {
 
     assert_eq!(
         expected, actual,
-        "expected:\n{:#?}\nactual:\n\n{:#?}\n",
-        expected, actual
+        "expected:\n{expected:#?}\nactual:\n\n{actual:#?}\n"
     );
 }
 
@@ -767,7 +687,7 @@ async fn test_physical_plan_display_indent_multi_children() {
 async fn csv_explain() {
     // This test uses the execute function that create full plan cycle: logical, optimized logical, and physical,
     // then execute the physical plan and return the final explain results
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::with_config(SessionConfig::new().with_batch_size(4096));
     register_aggregate_csv_by_sql(&ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > cast(10 as int)";
     let actual = execute(&ctx, sql).await;
@@ -872,8 +792,9 @@ async fn csv_explain_analyze_verbose() {
 
 #[tokio::test]
 async fn explain_logical_plan_only() {
-    let config = SessionConfig::new().set_bool(OPT_EXPLAIN_LOGICAL_PLAN_ONLY, true);
-    let ctx = SessionContext::with_config(config);
+    let mut config = ConfigOptions::new();
+    config.explain.logical_plan_only = true;
+    let ctx = SessionContext::with_config(config.into());
     let sql = "EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c3)";
     let actual = execute(&ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
@@ -884,16 +805,16 @@ async fn explain_logical_plan_only() {
             "Projection: COUNT(UInt8(1))\
             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
             \n    SubqueryAlias: t\
-            \n      SubqueryAlias: t\
-            \n        Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))",
+            \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))",
         ]];
     assert_eq!(expected, actual);
 }
 
 #[tokio::test]
 async fn explain_physical_plan_only() {
-    let config = SessionConfig::new().set_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY, true);
-    let ctx = SessionContext::with_config(config);
+    let mut config = ConfigOptions::new();
+    config.explain.physical_plan_only = true;
+    let ctx = SessionContext::with_config(config.into());
     let sql = "EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c3)";
     let actual = execute(&ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
@@ -911,19 +832,12 @@ async fn explain_physical_plan_only() {
 #[tokio::test]
 async fn explain_nested() {
     async fn test_nested_explain(explain_phy_plan_flag: bool) {
-        let config = SessionConfig::new()
-            .set_bool(OPT_EXPLAIN_PHYSICAL_PLAN_ONLY, explain_phy_plan_flag);
-        let ctx = SessionContext::with_config(config);
+        let mut config = ConfigOptions::new();
+        config.explain.physical_plan_only = explain_phy_plan_flag;
+        let ctx = SessionContext::with_config(config.into());
         let sql = "EXPLAIN explain select 1";
-        let plan = ctx.create_logical_plan(sql).unwrap();
-
-        let plan = ctx.create_physical_plan(&plan).await;
-
-        assert!(plan
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("Explain must be root of the plan"));
+        let err = ctx.sql(sql).await.unwrap_err();
+        assert!(err.to_string().contains("Explain must be root of the plan"));
     }
 
     test_nested_explain(true).await;

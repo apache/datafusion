@@ -22,7 +22,7 @@ use arrow::{
     compute::SortOptions,
     record_batch::RecordBatch,
 };
-use datafusion::execution::memory_manager::MemoryManagerConfig;
+use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::physical_plan::expressions::{col, PhysicalSortExpr};
 use datafusion::physical_plan::memory::MemoryExec;
@@ -31,18 +31,18 @@ use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use rand::Rng;
 use std::sync::Arc;
-use test_utils::{batches_to_vec, partitions_to_sorted_vec, stagger_batch_with_seed};
+use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
 async fn test_sort_1k_mem() {
-    run_sort(1024, vec![(5, false), (2000, true), (1000000, true)]).await
+    run_sort(10240, vec![(5, false), (20000, true), (1000000, true)]).await
 }
 
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
 async fn test_sort_100k_mem() {
-    run_sort(102400, vec![(5, false), (2000, false), (1000000, true)]).await
+    run_sort(102400, vec![(5, false), (20000, false), (1000000, true)]).await
 }
 
 #[tokio::test]
@@ -76,9 +76,8 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
         let exec = MemoryExec::try_new(&input, schema, None).unwrap();
         let sort = Arc::new(SortExec::try_new(sort, Arc::new(exec), None).unwrap());
 
-        let runtime_config = RuntimeConfig::new().with_memory_manager(
-            MemoryManagerConfig::try_new_limit(pool_size, 1.0).unwrap(),
-        );
+        let runtime_config = RuntimeConfig::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)));
         let runtime = Arc::new(RuntimeEnv::new(runtime_config).unwrap());
         let session_ctx = SessionContext::with_config_rt(SessionConfig::new(), runtime);
 
@@ -95,14 +94,11 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
         }
 
         assert_eq!(
-            session_ctx
-                .runtime_env()
-                .memory_manager
-                .get_requester_total(),
+            session_ctx.runtime_env().memory_pool.reserved(),
             0,
-            "The sort should have returned all memory used back to the memory manager"
+            "The sort should have returned all memory used back to the memory pool"
         );
-        assert_eq!(expected, actual, "failure in @ pool_size {}", pool_size);
+        assert_eq!(expected, actual, "failure in @ pool_size {pool_size}");
     }
 }
 
@@ -110,12 +106,23 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
 /// with randomized i32 content
 fn make_staggered_batches(len: usize) -> Vec<RecordBatch> {
     let mut rng = rand::thread_rng();
-    let mut input: Vec<i32> = vec![0; len];
-    rng.fill(&mut input[..]);
-    let input = Int32Array::from_iter_values(input.into_iter());
+    let max_batch = 1024;
 
-    // split into several record batches
-    let batch =
-        RecordBatch::try_from_iter(vec![("x", Arc::new(input) as ArrayRef)]).unwrap();
-    stagger_batch_with_seed(batch, 42)
+    let mut batches = vec![];
+    let mut remaining = len;
+    while remaining != 0 {
+        let to_read = rng.gen_range(0..=remaining.min(max_batch));
+        remaining -= to_read;
+
+        batches.push(
+            RecordBatch::try_from_iter(vec![(
+                "x",
+                Arc::new(Int32Array::from_iter_values(
+                    std::iter::from_fn(|| Some(rng.gen())).take(to_read),
+                )) as ArrayRef,
+            )])
+            .unwrap(),
+        )
+    }
+    batches
 }

@@ -110,7 +110,7 @@ async fn run_query_with_options(options: ListingOptions, num_files: usize) -> St
     let ctx = SessionContext::new();
 
     let testdata = datafusion::test_util::parquet_test_data();
-    let file_path = format!("{}/alltypes_plain.parquet", testdata);
+    let file_path = format!("{testdata}/alltypes_plain.parquet");
 
     // Create a directory of parquet files with names
     // 0.parquet
@@ -157,11 +157,8 @@ async fn fixed_size_binary_columns() {
     .await
     .unwrap();
     let sql = "SELECT ids FROM t0 ORDER BY ids";
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx).await.unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let results = dataframe.collect().await.unwrap();
     for batch in results {
         assert_eq!(466, batch.num_rows());
         assert_eq!(1, batch.num_columns());
@@ -174,17 +171,14 @@ async fn parquet_single_nan_schema() {
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "single_nan",
-        &format!("{}/single_nan.parquet", testdata),
+        &format!("{testdata}/single_nan.parquet"),
         ParquetReadOptions::default(),
     )
     .await
     .unwrap();
     let sql = "SELECT mycol FROM single_nan";
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx).await.unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let results = dataframe.collect().await.unwrap();
     for batch in results {
         assert_eq!(1, batch.num_rows());
         assert_eq!(1, batch.num_columns());
@@ -198,7 +192,7 @@ async fn parquet_list_columns() {
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "list_columns",
-        &format!("{}/list_columns.parquet", testdata),
+        &format!("{testdata}/list_columns.parquet"),
         ParquetReadOptions::default(),
     )
     .await
@@ -218,11 +212,8 @@ async fn parquet_list_columns() {
     ]));
 
     let sql = "SELECT int64_list, utf8_list FROM list_columns";
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx).await.unwrap();
+    let dataframe = ctx.sql(sql).await.unwrap();
+    let results = dataframe.collect().await.unwrap();
 
     //   int64_list              utf8_list
     // 0  [1, 2, 3]        [abc, efg, hij]

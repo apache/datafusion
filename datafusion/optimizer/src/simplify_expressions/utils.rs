@@ -21,7 +21,7 @@ use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     expr::{Between, BinaryExpr},
     expr_fn::{and, concat_ws, or},
-    lit, BuiltinScalarFunction, Expr, Operator,
+    lit, BuiltinScalarFunction, Expr, Like, Operator,
 };
 
 pub static POWS_OF_TEN: [i128; 38] = [
@@ -165,8 +165,7 @@ pub fn as_bool_lit(expr: Expr) -> Result<Option<bool>> {
     match expr {
         Expr::Literal(ScalarValue::Boolean(v)) => Ok(v),
         _ => Err(DataFusionError::Internal(format!(
-            "Expected boolean literal, got {:?}",
-            expr
+            "Expected boolean literal, got {expr:?}"
         ))),
     }
 }
@@ -233,6 +232,20 @@ pub fn negate_clause(expr: Expr) -> Expr {
             between.low,
             between.high,
         )),
+        // not (A like B) ===> A not like B
+        Expr::Like(like) => Expr::Like(Like::new(
+            !like.negated,
+            like.expr,
+            like.pattern,
+            like.escape_char,
+        )),
+        // not (A ilike B) ===> A not ilike B
+        Expr::ILike(like) => Expr::ILike(Like::new(
+            !like.negated,
+            like.expr,
+            like.pattern,
+            like.escape_char,
+        )),
         // use not clause
         _ => Expr::Not(Box::new(expr)),
     }
@@ -260,8 +273,7 @@ pub fn simpl_concat(args: Vec<Expr>) -> Result<Expr> {
             ) => contiguous_scalar += &v,
             Expr::Literal(x) => {
                 return Err(DataFusionError::Internal(format!(
-                "The scalar {} should be casted to string type during the type coercion.",
-                x
+                "The scalar {x} should be casted to string type during the type coercion."
             )))
             }
             // If the arg is not a literal, we should first push the current `contiguous_scalar`
@@ -318,7 +330,7 @@ pub fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
                                     }
                                 }
                             }
-                            Expr::Literal(s) => return Err(DataFusionError::Internal(format!("The scalar {} should be casted to string type during the type coercion.", s))),
+                            Expr::Literal(s) => return Err(DataFusionError::Internal(format!("The scalar {s} should be casted to string type during the type coercion."))),
                             // If the arg is not a literal, we should first push the current `contiguous_scalar`
                             // to the `new_args` and reset it to None.
                             // Then pushing this arg to the `new_args`.
@@ -344,8 +356,7 @@ pub fn simpl_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<Expr> {
             }
         }
         Expr::Literal(d) => Err(DataFusionError::Internal(format!(
-            "The scalar {} should be casted to string type during the type coercion.",
-            d
+            "The scalar {d} should be casted to string type during the type coercion."
         ))),
         d => Ok(concat_ws(
             d.clone(),

@@ -152,8 +152,8 @@ impl TDigest {
             max_size,
             sum: 0_f64,
             count: 0_f64,
-            max: std::f64::NAN,
-            min: std::f64::NAN,
+            max: f64::NAN,
+            min: f64::NAN,
         }
     }
 
@@ -202,8 +202,8 @@ impl Default for TDigest {
             max_size: 100,
             sum: 0_f64,
             count: 0_f64,
-            max: std::f64::NAN,
-            min: std::f64::NAN,
+            max: f64::NAN,
+            min: f64::NAN,
         }
     }
 }
@@ -220,13 +220,10 @@ impl TDigest {
     }
 
     fn clamp(v: f64, lo: f64, hi: f64) -> f64 {
-        if v > hi {
-            hi
-        } else if v < lo {
-            lo
-        } else {
-            v
+        if lo.is_nan() && hi.is_nan() {
+            return v;
         }
+        v.clamp(lo, hi)
     }
 
     #[cfg(test)]
@@ -382,8 +379,8 @@ impl TDigest {
         let mut starts: Vec<usize> = Vec::with_capacity(digests.len());
 
         let mut count: f64 = 0.0;
-        let mut min = std::f64::INFINITY;
-        let mut max = std::f64::NEG_INFINITY;
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
 
         let mut start: usize = 0;
         for digest in digests.iter() {
@@ -599,7 +596,7 @@ impl TDigest {
 
         let max_size = match &state[0] {
             ScalarValue::UInt64(Some(v)) => *v as usize,
-            v => panic!("invalid max_size type {:?}", v),
+            v => panic!("invalid max_size type {v:?}"),
         };
 
         let centroids: Vec<_> = match &state[5] {
@@ -607,7 +604,7 @@ impl TDigest {
                 .chunks(2)
                 .map(|v| Centroid::new(cast_scalar_f64!(v[0]), cast_scalar_f64!(v[1])))
                 .collect(),
-            v => panic!("invalid centroids type {:?}", v),
+            v => panic!("invalid centroids type {v:?}"),
         };
 
         let max = cast_scalar_f64!(&state[3]);

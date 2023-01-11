@@ -21,27 +21,6 @@ use datafusion::test_util::scan_empty;
 use datafusion_common::cast::as_float64_array;
 
 #[tokio::test]
-async fn csv_query_avg_multi_batch() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql = "SELECT avg(c12) FROM aggregate_test_100";
-    let plan = ctx.create_logical_plan(sql).unwrap();
-    let plan = ctx.optimize(&plan).unwrap();
-    let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let task_ctx = ctx.task_ctx();
-    let results = collect(plan, task_ctx).await.unwrap();
-    let batch = &results[0];
-    let column = batch.column(0);
-    let array = as_float64_array(column)?;
-    let actual = array.value(0);
-    let expected = 0.5089725;
-    // Due to float number's accuracy, different batch size will lead to different
-    // answers.
-    assert!((expected - actual).abs() < 0.01);
-    Ok(())
-}
-
-#[tokio::test]
 #[ignore] // https://github.com/apache/arrow-datafusion/issues/3353
 async fn csv_query_approx_count() -> Result<()> {
     let ctx = SessionContext::new();
@@ -120,60 +99,6 @@ async fn csv_query_approx_percentile_cont_with_histogram_bins() -> Result<()> {
     .unwrap_err();
     assert_eq!(results.to_string(), "Error during planning: The percentile sample points count for ApproxPercentileCont must be integer, not Float64.");
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn csv_query_array_agg() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql =
-        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------------------------------------------------------------------+",
-        "| ARRAYAGG(test.c13)                                               |",
-        "+------------------------------------------------------------------+",
-        "| [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB] |",
-        "+------------------------------------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn csv_query_array_agg_empty() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql =
-        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+--------------------+",
-        "| ARRAYAGG(test.c13) |",
-        "+--------------------+",
-        "| []                 |",
-        "+--------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn csv_query_array_agg_one() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_aggregate_csv(&ctx).await?;
-    let sql =
-        "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------------------------------+",
-        "| ARRAYAGG(test.c13)               |",
-        "+----------------------------------+",
-        "| [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm] |",
-        "+----------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -683,6 +608,60 @@ async fn aggregate_grouped_min() -> Result<()> {
 }
 
 #[tokio::test]
+async fn aggregate_min_max_w_custom_window_frames() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql =
+        "SELECT
+        MIN(c12) OVER (ORDER BY C12 RANGE BETWEEN 0.3 PRECEDING AND 0.2 FOLLOWING) as min1,
+        MAX(c12) OVER (ORDER BY C11 RANGE BETWEEN 0.1 PRECEDING AND 0.2 FOLLOWING) as max1
+        FROM aggregate_test_100
+        ORDER BY C9
+        LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+--------------------+",
+        "| min1                | max1               |",
+        "+---------------------+--------------------+",
+        "| 0.01479305307777301 | 0.9965400387585364 |",
+        "| 0.01479305307777301 | 0.9800193410444061 |",
+        "| 0.01479305307777301 | 0.9706712283358269 |",
+        "| 0.2667177795079635  | 0.9965400387585364 |",
+        "| 0.3600766362333053  | 0.9706712283358269 |",
+        "+---------------------+--------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_min_max_w_custom_window_frames_unbounded_start() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql =
+        "SELECT
+        MIN(c12) OVER (ORDER BY C12 RANGE BETWEEN UNBOUNDED PRECEDING AND 0.2 FOLLOWING) as min1,
+        MAX(c12) OVER (ORDER BY C11 RANGE BETWEEN UNBOUNDED PRECEDING AND 0.2 FOLLOWING) as max1
+        FROM aggregate_test_100
+        ORDER BY C9
+        LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------+--------------------+",
+        "| min1                | max1               |",
+        "+---------------------+--------------------+",
+        "| 0.01479305307777301 | 0.9965400387585364 |",
+        "| 0.01479305307777301 | 0.9800193410444061 |",
+        "| 0.01479305307777301 | 0.9800193410444061 |",
+        "| 0.01479305307777301 | 0.9965400387585364 |",
+        "| 0.01479305307777301 | 0.9800193410444061 |",
+        "+---------------------+--------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn aggregate_avg_add() -> Result<()> {
     let results = execute_with_partition(
         "SELECT AVG(c1), AVG(c1) + 1, AVG(c1) + 2, 1 + AVG(c1) FROM test",
@@ -949,7 +928,7 @@ async fn run_count_distinct_integers_aggregated_scenario(
     ]));
 
     for (i, partition) in partitions.iter().enumerate() {
-        let filename = format!("partition-{}.csv", i);
+        let filename = format!("partition-{i}.csv");
         let file_path = tmp_dir.path().join(filename);
         let mut file = File::create(file_path)?;
         for row in partition {
@@ -1058,6 +1037,7 @@ async fn count_distinct_integers_aggregated_multiple_partitions() -> Result<()> 
 #[tokio::test]
 async fn aggregate_with_alias() -> Result<()> {
     let ctx = SessionContext::new();
+    let state = ctx.state();
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Utf8, false),
@@ -1069,47 +1049,12 @@ async fn aggregate_with_alias() -> Result<()> {
         .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
         .build()?;
 
-    let plan = ctx.optimize(&plan)?;
-
-    let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
+    let plan = state.optimize(&plan)?;
+    let physical_plan = state.create_physical_plan(&Arc::new(plan)).await?;
     assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
     assert_eq!(
         "total_salary",
         physical_plan.schema().field(1).name().as_str()
     );
-    Ok(())
-}
-
-#[tokio::test]
-async fn array_agg_zero() -> Result<()> {
-    let ctx = SessionContext::new();
-    // 2 different aggregate functions: avg and sum(distinct)
-    let sql = "SELECT ARRAY_AGG([]);";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+------------------------+",
-        "| ARRAYAGG(List([NULL])) |",
-        "+------------------------+",
-        "| []                     |",
-        "+------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn array_agg_one() -> Result<()> {
-    let ctx = SessionContext::new();
-    // 2 different aggregate functions: avg and sum(distinct)
-    let sql = "SELECT ARRAY_AGG([1]);";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------+",
-        "| ARRAYAGG(List([1])) |",
-        "+---------------------+",
-        "| [[1]]               |",
-        "+---------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
     Ok(())
 }

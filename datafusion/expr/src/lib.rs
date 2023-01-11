@@ -52,12 +52,12 @@ pub mod utils;
 pub mod window_frame;
 pub mod window_function;
 
-pub use accumulator::{Accumulator, AggregateState};
+pub use accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;
 pub use built_in_function::BuiltinScalarFunction;
 pub use columnar_value::ColumnarValue;
 pub use expr::{
-    Between, BinaryExpr, Case, Cast, Expr, GetIndexedField, GroupingSet, Like,
+    Between, BinaryExpr, Case, Cast, Expr, GetIndexedField, GroupingSet, Like, TryCast,
 };
 pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
@@ -67,7 +67,9 @@ pub use function::{
 };
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use logical_plan::{
-    builder::{build_join_schema, union, UNNAMED_TABLE},
+    builder::{
+        build_join_schema, union, wrap_projection_for_join_if_necessary, UNNAMED_TABLE,
+    },
     Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
     CreateMemoryTable, CreateView, CrossJoin, Distinct, DropTable, DropView,
     EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint, JoinType, Limit,

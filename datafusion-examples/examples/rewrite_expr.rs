@@ -16,13 +16,14 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
 use datafusion_expr::{
     AggregateUDF, Between, Expr, Filter, LogicalPlan, ScalarUDF, TableSource,
 };
 use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::{utils, OptimizerConfig, OptimizerRule};
+use datafusion_optimizer::{utils, OptimizerConfig, OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::dialect::PostgreSqlDialect;
 use datafusion_sql::sqlparser::parser::Parser;
@@ -37,7 +38,7 @@ pub fn main() -> Result<()> {
     let statements = Parser::parse_sql(&dialect, sql)?;
 
     // produce a logical plan using the datafusion-sql crate
-    let context_provider = MyContextProvider {};
+    let context_provider = MyContextProvider::default();
     let sql_to_rel = SqlToRel::new(&context_provider);
     let logical_plan = sql_to_rel.sql_statement_to_plan(statements[0].clone())?;
     println!(
@@ -47,9 +48,8 @@ pub fn main() -> Result<()> {
 
     // now run the optimizer with our custom rule
     let optimizer = Optimizer::with_rules(vec![Arc::new(MyRule {})]);
-    let mut optimizer_config = OptimizerConfig::default().with_skip_failing_rules(false);
-    let optimized_plan =
-        optimizer.optimize(&logical_plan, &mut optimizer_config, observe)?;
+    let config = OptimizerContext::default().with_skip_failing_rules(false);
+    let optimized_plan = optimizer.optimize(&logical_plan, &config, observe)?;
     println!(
         "Optimized Logical Plan:\n\n{}\n",
         optimized_plan.display_indent()
@@ -73,25 +73,25 @@ impl OptimizerRule for MyRule {
         "my_rule"
     }
 
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         // recurse down and optimize children first
-        let plan = utils::optimize_children(self, plan, _config)?;
+        let plan = utils::optimize_children(self, plan, config)?;
 
         match plan {
             LogicalPlan::Filter(filter) => {
                 let mut expr_rewriter = MyExprRewriter {};
-                let predicate = filter.predicate().clone();
+                let predicate = filter.predicate.clone();
                 let predicate = predicate.rewrite(&mut expr_rewriter)?;
-                Ok(LogicalPlan::Filter(Filter::try_new(
+                Ok(Some(LogicalPlan::Filter(Filter::try_new(
                     predicate,
-                    filter.input().clone(),
-                )?))
+                    filter.input,
+                )?)))
             }
-            _ => Ok(plan.clone()),
+            _ => Ok(Some(plan.clone())),
         }
     }
 }
@@ -121,7 +121,10 @@ impl ExprRewriter for MyExprRewriter {
     }
 }
 
-struct MyContextProvider {}
+#[derive(Default)]
+struct MyContextProvider {
+    options: ConfigOptions,
+}
 
 impl ContextProvider for MyContextProvider {
     fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
@@ -149,11 +152,8 @@ impl ContextProvider for MyContextProvider {
         None
     }
 
-    fn get_config_option(
-        &self,
-        _variable: &str,
-    ) -> Option<datafusion_common::ScalarValue> {
-        None
+    fn options(&self) -> &ConfigOptions {
+        &self.options
     }
 }
 

@@ -20,7 +20,6 @@ use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use datafusion::assert_batches_sorted_eq;
-use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -83,8 +82,8 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
+            infinite_source: false,
         },
         None,
         None,
@@ -94,7 +93,6 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
     )));
 
     let session_ctx = SessionContext::new();
-
     let task_ctx = session_ctx.task_ctx();
     let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
 
@@ -223,7 +221,7 @@ impl AsyncFileReader for ParquetFileReader {
         self.store
             .get_range(&self.meta.location, range)
             .map_err(|e| {
-                ParquetError::General(format!("AsyncChunkReader::get_bytes error: {}", e))
+                ParquetError::General(format!("AsyncChunkReader::get_bytes error: {e}"))
             })
             .boxed()
     }
@@ -240,8 +238,7 @@ impl AsyncFileReader for ParquetFileReader {
             .await
             .map_err(|e| {
                 ParquetError::General(format!(
-                    "AsyncChunkReader::get_metadata error: {}",
-                    e
+                    "AsyncChunkReader::get_metadata error: {e}"
                 ))
             })?;
             Ok(Arc::new(metadata))

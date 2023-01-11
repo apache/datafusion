@@ -17,7 +17,10 @@
 
 //! Expression rewriter
 
-use crate::expr::{Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet, Like};
+use crate::expr::{
+    AggregateFunction, Between, BinaryExpr, Case, Cast, GetIndexedField, GroupingSet,
+    Like, Sort, TryCast, WindowFunction,
+};
 use crate::logical_plan::{Aggregate, Projection};
 use crate::utils::{from_plan, grouping_set_to_exprlist};
 use crate::{Expr, ExprSchemable, LogicalPlan};
@@ -206,19 +209,14 @@ impl ExprRewritable for Expr {
             Expr::Cast(Cast { expr, data_type }) => {
                 Expr::Cast(Cast::new(rewrite_boxed(expr, rewriter)?, data_type))
             }
-            Expr::TryCast { expr, data_type } => Expr::TryCast {
-                expr: rewrite_boxed(expr, rewriter)?,
-                data_type,
-            },
-            Expr::Sort {
+            Expr::TryCast(TryCast { expr, data_type }) => {
+                Expr::TryCast(TryCast::new(rewrite_boxed(expr, rewriter)?, data_type))
+            }
+            Expr::Sort(Sort {
                 expr,
                 asc,
                 nulls_first,
-            } => Expr::Sort {
-                expr: rewrite_boxed(expr, rewriter)?,
-                asc,
-                nulls_first,
-            },
+            }) => Expr::Sort(Sort::new(rewrite_boxed(expr, rewriter)?, asc, nulls_first)),
             Expr::ScalarFunction { args, fun } => Expr::ScalarFunction {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
@@ -227,30 +225,30 @@ impl ExprRewritable for Expr {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
             },
-            Expr::WindowFunction {
+            Expr::WindowFunction(WindowFunction {
                 args,
                 fun,
                 partition_by,
                 order_by,
                 window_frame,
-            } => Expr::WindowFunction {
-                args: rewrite_vec(args, rewriter)?,
+            }) => Expr::WindowFunction(WindowFunction::new(
                 fun,
-                partition_by: rewrite_vec(partition_by, rewriter)?,
-                order_by: rewrite_vec(order_by, rewriter)?,
+                rewrite_vec(args, rewriter)?,
+                rewrite_vec(partition_by, rewriter)?,
+                rewrite_vec(order_by, rewriter)?,
                 window_frame,
-            },
-            Expr::AggregateFunction {
+            )),
+            Expr::AggregateFunction(AggregateFunction {
                 args,
                 fun,
                 distinct,
                 filter,
-            } => Expr::AggregateFunction {
-                args: rewrite_vec(args, rewriter)?,
+            }) => Expr::AggregateFunction(AggregateFunction::new(
                 fun,
+                rewrite_vec(args, rewriter)?,
                 distinct,
                 filter,
-            },
+            )),
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => {
                     Expr::GroupingSet(GroupingSet::Rollup(rewrite_vec(exprs, rewriter)?))
@@ -291,6 +289,7 @@ impl ExprRewritable for Expr {
                     key,
                 ))
             }
+            Expr::Placeholder { id, data_type } => Expr::Placeholder { id, data_type },
         };
 
         // now rewrite this expression itself
@@ -345,16 +344,16 @@ pub fn rewrite_sort_cols_by_aggs(
         .map(|e| {
             let expr = e.into();
             match expr {
-                Expr::Sort {
+                Expr::Sort(Sort {
                     expr,
                     asc,
                     nulls_first,
-                } => {
-                    let sort = Expr::Sort {
-                        expr: Box::new(rewrite_sort_col_by_aggs(*expr, plan)?),
+                }) => {
+                    let sort = Expr::Sort(Sort::new(
+                        Box::new(rewrite_sort_col_by_aggs(*expr, plan)?),
                         asc,
                         nulls_first,
-                    };
+                    ));
                     Ok(sort)
                 }
                 expr => Ok(expr),
@@ -565,12 +564,12 @@ mod test {
 
     impl ExprRewriter for RecordingRewriter {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-            self.v.push(format!("Mutated {:?}", expr));
+            self.v.push(format!("Mutated {expr:?}"));
             Ok(expr)
         }
 
         fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
-            self.v.push(format!("Previsited {:?}", expr));
+            self.v.push(format!("Previsited {expr:?}"));
             Ok(RewriteRecursion::Continue)
         }
     }

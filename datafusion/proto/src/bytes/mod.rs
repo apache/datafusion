@@ -16,16 +16,16 @@
 // under the License.
 
 //! Serialization / Deserialization to Bytes
-use crate::logical_plan::{AsLogicalPlan, LogicalExtensionCodec};
-use crate::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
-use crate::{from_proto::parse_expr, protobuf};
-use arrow::datatypes::SchemaRef;
-use datafusion::datasource::TableProvider;
+use crate::logical_plan::{
+    self, AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
+};
+use crate::physical_plan::{
+    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
+};
+use crate::protobuf;
 use datafusion::physical_plan::functions::make_scalar_function;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{
-    create_udaf, create_udf, Expr, Extension, LogicalPlan, Volatility,
-};
+use datafusion_expr::{create_udaf, create_udf, Expr, LogicalPlan, Volatility};
 use prost::{
     bytes::{Bytes, BytesMut},
     Message,
@@ -81,11 +81,11 @@ impl Serializeable for Expr {
     fn to_bytes(&self) -> Result<Bytes> {
         let mut buffer = BytesMut::new();
         let protobuf: protobuf::LogicalExprNode = self.try_into().map_err(|e| {
-            DataFusionError::Plan(format!("Error encoding expr as protobuf: {}", e))
+            DataFusionError::Plan(format!("Error encoding expr as protobuf: {e}"))
         })?;
 
         protobuf.encode(&mut buffer).map_err(|e| {
-            DataFusionError::Plan(format!("Error encoding protobuf as bytes: {}", e))
+            DataFusionError::Plan(format!("Error encoding protobuf as bytes: {e}"))
         })?;
 
         let bytes: Bytes = buffer.into();
@@ -134,11 +134,11 @@ impl Serializeable for Expr {
         registry: &dyn FunctionRegistry,
     ) -> Result<Self> {
         let protobuf = protobuf::LogicalExprNode::decode(bytes).map_err(|e| {
-            DataFusionError::Plan(format!("Error decoding expr as protobuf: {}", e))
+            DataFusionError::Plan(format!("Error decoding expr as protobuf: {e}"))
         })?;
 
-        parse_expr(&protobuf, registry).map_err(|e| {
-            DataFusionError::Plan(format!("Error parsing protobuf into Expr: {}", e))
+        logical_plan::from_proto::parse_expr(&protobuf, registry).map_err(|e| {
+            DataFusionError::Plan(format!("Error parsing protobuf into Expr: {e}"))
         })
     }
 }
@@ -171,7 +171,7 @@ pub fn logical_plan_to_bytes_with_extension_codec(
         protobuf::LogicalPlanNode::try_from_logical_plan(plan, extension_codec)?;
     let mut buffer = BytesMut::new();
     protobuf.encode(&mut buffer).map_err(|e| {
-        DataFusionError::Plan(format!("Error encoding protobuf as bytes: {}", e))
+        DataFusionError::Plan(format!("Error encoding protobuf as bytes: {e}"))
     })?;
     Ok(buffer.into())
 }
@@ -201,7 +201,7 @@ pub fn logical_plan_from_bytes_with_extension_codec(
     extension_codec: &dyn LogicalExtensionCodec,
 ) -> Result<LogicalPlan> {
     let protobuf = protobuf::LogicalPlanNode::decode(bytes).map_err(|e| {
-        DataFusionError::Plan(format!("Error decoding expr as protobuf: {}", e))
+        DataFusionError::Plan(format!("Error decoding expr as protobuf: {e}"))
     })?;
     protobuf.try_into_logical_plan(ctx, extension_codec)
 }
@@ -234,7 +234,7 @@ pub fn physical_plan_to_bytes_with_extension_codec(
         protobuf::PhysicalPlanNode::try_from_physical_plan(plan, extension_codec)?;
     let mut buffer = BytesMut::new();
     protobuf.encode(&mut buffer).map_err(|e| {
-        DataFusionError::Plan(format!("Error encoding protobuf as bytes: {}", e))
+        DataFusionError::Plan(format!("Error encoding protobuf as bytes: {e}"))
     })?;
     Ok(buffer.into())
 }
@@ -267,78 +267,9 @@ pub fn physical_plan_from_bytes_with_extension_codec(
     extension_codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let protobuf = protobuf::PhysicalPlanNode::decode(bytes).map_err(|e| {
-        DataFusionError::Plan(format!("Error decoding expr as protobuf: {}", e))
+        DataFusionError::Plan(format!("Error decoding expr as protobuf: {e}"))
     })?;
     protobuf.try_into_physical_plan(ctx, &ctx.runtime_env(), extension_codec)
-}
-
-#[derive(Debug)]
-struct DefaultLogicalExtensionCodec {}
-
-impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
-    fn try_decode(
-        &self,
-        _buf: &[u8],
-        _inputs: &[LogicalPlan],
-        _ctx: &SessionContext,
-    ) -> Result<Extension> {
-        Err(DataFusionError::NotImplemented(
-            "No extension codec provided".to_string(),
-        ))
-    }
-
-    fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
-        Err(DataFusionError::NotImplemented(
-            "No extension codec provided".to_string(),
-        ))
-    }
-
-    fn try_decode_table_provider(
-        &self,
-        _buf: &[u8],
-        _schema: SchemaRef,
-        _ctx: &SessionContext,
-    ) -> std::result::Result<Arc<dyn TableProvider>, DataFusionError> {
-        Err(DataFusionError::NotImplemented(
-            "No codec provided to for TableProviders".to_string(),
-        ))
-    }
-
-    fn try_encode_table_provider(
-        &self,
-        _node: Arc<dyn TableProvider>,
-        _buf: &mut Vec<u8>,
-    ) -> std::result::Result<(), DataFusionError> {
-        Err(DataFusionError::NotImplemented(
-            "No codec provided to for TableProviders".to_string(),
-        ))
-    }
-}
-
-#[derive(Debug)]
-pub struct DefaultPhysicalExtensionCodec {}
-
-impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
-    fn try_decode(
-        &self,
-        _buf: &[u8],
-        _inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Err(DataFusionError::NotImplemented(
-            "PhysicalExtensionCodec is not provided".to_string(),
-        ))
-    }
-
-    fn try_encode(
-        &self,
-        _node: Arc<dyn ExecutionPlan>,
-        _buf: &mut Vec<u8>,
-    ) -> Result<()> {
-        Err(DataFusionError::NotImplemented(
-            "PhysicalExtensionCodec is not provided".to_string(),
-        ))
-    }
 }
 
 #[cfg(test)]
@@ -553,7 +484,7 @@ mod test {
             scalar_fn,
         );
 
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.register_udf(udf);
 
         ctx

@@ -80,7 +80,7 @@ impl AggregateExpr for AggregateFunctionExpr {
             .enumerate()
             .map(|(i, data_type)| {
                 Field::new(
-                    &format_state_name(&self.name, &format!("{}", i)),
+                    format_state_name(&self.name, &format!("{i}")),
                     data_type.clone(),
                     true,
                 )

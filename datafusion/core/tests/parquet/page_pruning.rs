@@ -17,11 +17,11 @@
 
 use crate::parquet::Unit::Page;
 use crate::parquet::{ContextWithParquet, Scenario};
-use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
@@ -31,15 +31,12 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 use tokio_stream::StreamExt;
 
-async fn get_parquet_exec(filter: Expr, session_ctx: SessionContext) -> ParquetExec {
+async fn get_parquet_exec(state: &SessionState, filter: Expr) -> ParquetExec {
     let object_store_url = ObjectStoreUrl::local_filesystem();
-    let store = session_ctx
-        .runtime_env()
-        .object_store(&object_store_url)
-        .unwrap();
+    let store = state.runtime_env().object_store(&object_store_url).unwrap();
 
     let testdata = datafusion::test_util::parquet_test_data();
-    let filename = format!("{}/alltypes_tiny_pages.parquet", testdata);
+    let filename = format!("{testdata}/alltypes_tiny_pages.parquet");
 
     let location = Path::from_filesystem_path(filename.as_str()).unwrap();
     let metadata = std::fs::metadata(filename).expect("Local file metadata");
@@ -49,8 +46,8 @@ async fn get_parquet_exec(filter: Expr, session_ctx: SessionContext) -> ParquetE
         size: metadata.len() as usize,
     };
 
-    let schema = ParquetFormat::new(session_ctx.config_options())
-        .infer_schema(&store, &[meta.clone()])
+    let schema = ParquetFormat::default()
+        .infer_schema(state, &store, &[meta.clone()])
         .await
         .unwrap();
 
@@ -71,8 +68,8 @@ async fn get_parquet_exec(filter: Expr, session_ctx: SessionContext) -> ParquetE
             projection: None,
             limit: None,
             table_partition_cols: vec![],
-            config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
+            infinite_source: false,
         },
         Some(filter),
         None,
@@ -83,12 +80,13 @@ async fn get_parquet_exec(filter: Expr, session_ctx: SessionContext) -> ParquetE
 #[tokio::test]
 async fn page_index_filter_one_col() {
     let session_ctx = SessionContext::new();
-    let task_ctx = session_ctx.task_ctx();
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
 
     // 1.create filter month == 1;
     let filter = col("month").eq(lit(1_i32));
 
-    let parquet_exec = get_parquet_exec(filter, session_ctx.clone()).await;
+    let parquet_exec = get_parquet_exec(&state, filter).await;
 
     let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
 
@@ -97,35 +95,37 @@ async fn page_index_filter_one_col() {
     // `month = 1` from the page index should create below RowSelection
     //  vec.push(RowSelector::select(312));
     //  vec.push(RowSelector::skip(3330));
-    //  vec.push(RowSelector::select(333));
-    //  vec.push(RowSelector::skip(3330));
-    // total 645 row
-    assert_eq!(batch.num_rows(), 645);
+    //  vec.push(RowSelector::select(339));
+    //  vec.push(RowSelector::skip(3319));
+    // total 651 row
+    assert_eq!(batch.num_rows(), 651);
 
     // 2. create filter month == 1 or month == 2;
     let filter = col("month").eq(lit(1_i32)).or(col("month").eq(lit(2_i32)));
 
-    let parquet_exec = get_parquet_exec(filter, session_ctx.clone()).await;
+    let parquet_exec = get_parquet_exec(&state, filter).await;
 
     let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
 
     let batch = results.next().await.unwrap().unwrap();
 
-    // `month = 12` from the page index should create below RowSelection
-    //  vec.push(RowSelector::skip(894));
-    //  vec.push(RowSelector::select(339));
-    //  vec.push(RowSelector::skip(3330));
+    // `month = 1` or `month = 2` from the page index should create below RowSelection
     //  vec.push(RowSelector::select(312));
-    //  vec.push(RowSelector::skip(2430));
-    //  combine with before filter total 1275 row
-    assert_eq!(batch.num_rows(), 1275);
+    //  vec.push(RowSelector::skip(900));
+    //  vec.push(RowSelector::select(312));
+    //  vec.push(RowSelector::skip(2118));
+    //  vec.push(RowSelector::select(339));
+    //  vec.push(RowSelector::skip(873));
+    //  vec.push(RowSelector::select(318));
+    //  vec.push(RowSelector::skip(2128));
+    assert_eq!(batch.num_rows(), 1281);
 
     // 3. create filter month == 1 and month == 12;
     let filter = col("month")
         .eq(lit(1_i32))
         .and(col("month").eq(lit(12_i32)));
 
-    let parquet_exec = get_parquet_exec(filter, session_ctx.clone()).await;
+    let parquet_exec = get_parquet_exec(&state, filter).await;
 
     let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
 
@@ -136,21 +136,21 @@ async fn page_index_filter_one_col() {
     // 4.create filter 0 < month < 2 ;
     let filter = col("month").gt(lit(0_i32)).and(col("month").lt(lit(2_i32)));
 
-    let parquet_exec = get_parquet_exec(filter, session_ctx.clone()).await;
+    let parquet_exec = get_parquet_exec(&state, filter).await;
 
     let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
 
     let batch = results.next().await.unwrap().unwrap();
 
     // should same with `month = 1`
-    assert_eq!(batch.num_rows(), 645);
+    assert_eq!(batch.num_rows(), 651);
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
 
     // 5.create filter date_string_col == 1;
     let filter = col("date_string_col").eq(lit("01/01/09"));
-    let parquet_exec = get_parquet_exec(filter, session_ctx.clone()).await;
+    let parquet_exec = get_parquet_exec(&state, filter).await;
     let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
     let batch = results.next().await.unwrap().unwrap();
 
@@ -165,12 +165,13 @@ async fn page_index_filter_one_col() {
 #[tokio::test]
 async fn page_index_filter_multi_col() {
     let session_ctx = SessionContext::new();
+    let state = session_ctx.state();
     let task_ctx = session_ctx.task_ctx();
 
     // create filter month == 1 and year = 2009;
     let filter = col("month").eq(lit(1_i32)).and(col("year").eq(lit(2009)));
 
-    let parquet_exec = get_parquet_exec(filter, session_ctx.clone()).await;
+    let parquet_exec = get_parquet_exec(&state, filter).await;
 
     let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
 
@@ -188,18 +189,18 @@ async fn page_index_filter_multi_col() {
         .eq(lit(1_i32))
         .and(col("year").eq(lit(2009)).or(col("id").eq(lit(1))));
 
-    let parquet_exec = get_parquet_exec(filter, session_ctx.clone()).await;
+    let parquet_exec = get_parquet_exec(&state, filter).await;
 
     let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
 
     let batch = results.next().await.unwrap().unwrap();
-    assert_eq!(batch.num_rows(), 645);
+    assert_eq!(batch.num_rows(), 651);
 
     // create filter (year = 2009 or id = 1)
     // this filter use two columns will not push down
     let filter = col("year").eq(lit(2009)).or(col("id").eq(lit(1)));
 
-    let parquet_exec = get_parquet_exec(filter, session_ctx.clone()).await;
+    let parquet_exec = get_parquet_exec(&state, filter).await;
 
     let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
 
@@ -215,7 +216,7 @@ async fn page_index_filter_multi_col() {
         .and(col("id").eq(lit(1)))
         .or(col("year").eq(lit(2010)));
 
-    let parquet_exec = get_parquet_exec(filter, session_ctx.clone()).await;
+    let parquet_exec = get_parquet_exec(&state, filter).await;
 
     let mut results = parquet_exec.execute(0, task_ctx.clone()).unwrap();
 

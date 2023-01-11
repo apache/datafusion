@@ -31,6 +31,7 @@ use async_compression::tokio::bufread::{
 use bytes::Bytes;
 #[cfg(feature = "compression")]
 use bzip2::read::BzDecoder;
+use datafusion_common::parsers::CompressionTypeVariant;
 #[cfg(feature = "compression")]
 use flate2::read::GzDecoder;
 use futures::Stream;
@@ -41,6 +42,7 @@ use std::str::FromStr;
 use tokio_util::io::{ReaderStream, StreamReader};
 #[cfg(feature = "compression")]
 use xz2::read::XzDecoder;
+use CompressionTypeVariant::*;
 
 /// Define each `FileType`/`FileCompressionType`'s extension
 pub trait GetExt {
@@ -50,25 +52,24 @@ pub trait GetExt {
 
 /// Readable file compression type
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FileCompressionType {
-    /// Gzip-ed file
-    GZIP,
-    /// Bzip2-ed file
-    BZIP2,
-    /// Xz-ed file (liblzma)
-    XZ,
-    /// Uncompressed file
-    UNCOMPRESSED,
+pub struct FileCompressionType {
+    variant: CompressionTypeVariant,
 }
 
 impl GetExt for FileCompressionType {
     fn get_ext(&self) -> String {
-        match self {
-            FileCompressionType::GZIP => ".gz".to_owned(),
-            FileCompressionType::BZIP2 => ".bz2".to_owned(),
-            FileCompressionType::XZ => ".xz".to_owned(),
-            FileCompressionType::UNCOMPRESSED => "".to_owned(),
+        match self.variant {
+            GZIP => ".gz".to_owned(),
+            BZIP2 => ".bz2".to_owned(),
+            XZ => ".xz".to_owned(),
+            UNCOMPRESSED => "".to_owned(),
         }
+    }
+}
+
+impl From<CompressionTypeVariant> for FileCompressionType {
+    fn from(t: CompressionTypeVariant) -> Self {
+        Self { variant: t }
     }
 }
 
@@ -76,22 +77,34 @@ impl FromStr for FileCompressionType {
     type Err = DataFusionError;
 
     fn from_str(s: &str) -> Result<Self> {
-        let s = s.to_uppercase();
-        match s.as_str() {
-            "GZIP" | "GZ" => Ok(FileCompressionType::GZIP),
-            "BZIP2" | "BZ2" => Ok(FileCompressionType::BZIP2),
-            "XZ" => Ok(FileCompressionType::XZ),
-            "" => Ok(FileCompressionType::UNCOMPRESSED),
-            _ => Err(DataFusionError::NotImplemented(format!(
-                "Unknown FileCompressionType: {}",
-                s
-            ))),
-        }
+        let variant = CompressionTypeVariant::from_str(s).map_err(|_| {
+            DataFusionError::NotImplemented(format!("Unknown FileCompressionType: {s}"))
+        })?;
+        Ok(Self { variant })
     }
 }
 
 /// `FileCompressionType` implementation
 impl FileCompressionType {
+    /// Gzip-ed file
+    pub const GZIP: Self = Self { variant: GZIP };
+
+    /// Bzip2-ed file
+    pub const BZIP2: Self = Self { variant: BZIP2 };
+
+    /// Xz-ed file (liblzma)
+    pub const XZ: Self = Self { variant: XZ };
+
+    /// Uncompressed file
+    pub const UNCOMPRESSED: Self = Self {
+        variant: UNCOMPRESSED,
+    };
+
+    /// The file is compressed or not
+    pub const fn is_compressed(&self) -> bool {
+        self.variant.is_compressed()
+    }
+
     /// Given a `Stream`, create a `Stream` which data are decompressed with `FileCompressionType`.
     pub fn convert_stream<T: Stream<Item = Result<Bytes>> + Unpin + Send + 'static>(
         &self,
@@ -111,31 +124,29 @@ impl FileCompressionType {
             None => Into::<DataFusionError>::into(e),
         };
 
-        Ok(match self {
+        Ok(match self.variant {
             #[cfg(feature = "compression")]
-            FileCompressionType::GZIP => Box::new(
+            GZIP => Box::new(
                 ReaderStream::new(AsyncGzDecoder::new(StreamReader::new(s)))
                     .map_err(err_converter),
             ),
             #[cfg(feature = "compression")]
-            FileCompressionType::BZIP2 => Box::new(
+            BZIP2 => Box::new(
                 ReaderStream::new(AsyncBzDecoder::new(StreamReader::new(s)))
                     .map_err(err_converter),
             ),
             #[cfg(feature = "compression")]
-            FileCompressionType::XZ => Box::new(
+            XZ => Box::new(
                 ReaderStream::new(AsyncXzDecoder::new(StreamReader::new(s)))
                     .map_err(err_converter),
             ),
             #[cfg(not(feature = "compression"))]
-            FileCompressionType::GZIP
-            | FileCompressionType::BZIP2
-            | FileCompressionType::XZ => {
+            GZIP | BZIP2 | XZ => {
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
                 ))
             }
-            FileCompressionType::UNCOMPRESSED => Box::new(s),
+            UNCOMPRESSED => Box::new(s),
         })
     }
 
@@ -144,22 +155,20 @@ impl FileCompressionType {
         &self,
         r: T,
     ) -> Result<Box<dyn std::io::Read + Send>> {
-        Ok(match self {
+        Ok(match self.variant {
             #[cfg(feature = "compression")]
-            FileCompressionType::GZIP => Box::new(GzDecoder::new(r)),
+            GZIP => Box::new(GzDecoder::new(r)),
             #[cfg(feature = "compression")]
-            FileCompressionType::BZIP2 => Box::new(BzDecoder::new(r)),
+            BZIP2 => Box::new(BzDecoder::new(r)),
             #[cfg(feature = "compression")]
-            FileCompressionType::XZ => Box::new(XzDecoder::new(r)),
+            XZ => Box::new(XzDecoder::new(r)),
             #[cfg(not(feature = "compression"))]
-            FileCompressionType::GZIP
-            | FileCompressionType::BZIP2
-            | FileCompressionType::XZ => {
+            GZIP | BZIP2 | XZ => {
                 return Err(DataFusionError::NotImplemented(
                     "Compression feature is not enabled".to_owned(),
                 ))
             }
-            FileCompressionType::UNCOMPRESSED => Box::new(r),
+            UNCOMPRESSED => Box::new(r),
         })
     }
 }
@@ -199,8 +208,7 @@ impl FromStr for FileType {
             "CSV" => Ok(FileType::CSV),
             "JSON" | "NDJSON" => Ok(FileType::JSON),
             _ => Err(DataFusionError::NotImplemented(format!(
-                "Unknown FileType: {}",
-                s
+                "Unknown FileType: {s}"
             ))),
         }
     }
@@ -213,8 +221,8 @@ impl FileType {
 
         match self {
             FileType::JSON | FileType::CSV => Ok(format!("{}{}", ext, c.get_ext())),
-            FileType::PARQUET | FileType::AVRO => match c {
-                FileCompressionType::UNCOMPRESSED => Ok(ext),
+            FileType::PARQUET | FileType::AVRO => match c.variant {
+                UNCOMPRESSED => Ok(ext),
                 _ => Err(DataFusionError::Internal(
                     "FileCompressionType can be specified for CSV/JSON FileType.".into(),
                 )),

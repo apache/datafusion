@@ -21,10 +21,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::file_type::FileCompressionType;
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFrame;
@@ -35,9 +32,7 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{Column, PhysicalSortExpr};
-use datafusion::physical_plan::file_format::{
-    AvroExec, CsvExec, FileScanConfig, ParquetExec,
-};
+use datafusion::physical_plan::file_format::{AvroExec, CsvExec, ParquetExec};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::CrossJoinExec;
@@ -53,14 +48,15 @@ use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
 use datafusion_common::DataFusionError;
-use parking_lot::RwLock;
 use prost::bytes::BufMut;
 use prost::Message;
 
 use crate::common::proto_error;
 use crate::common::{csv_delimiter_to_string, str_to_byte};
-use crate::from_proto::parse_expr;
-use crate::physical_plan::from_proto::parse_physical_expr;
+use crate::logical_plan;
+use crate::physical_plan::from_proto::{
+    parse_physical_expr, parse_protobuf_file_scan_config,
+};
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::repartition_exec_node::PartitionMethod;
@@ -76,7 +72,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
         Self: Sized,
     {
         protobuf::PhysicalPlanNode::decode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to decode physical plan: {:?}", e))
+            DataFusionError::Internal(format!("failed to decode physical plan: {e:?}"))
         })
     }
 
@@ -86,7 +82,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
         Self: Sized,
     {
         self.encode(buf).map_err(|e| {
-            DataFusionError::Internal(format!("failed to encode physical plan: {:?}", e))
+            DataFusionError::Internal(format!("failed to encode physical plan: {e:?}"))
         })
     }
 
@@ -99,8 +95,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let plan = self.physical_plan_type.as_ref().ok_or_else(|| {
             proto_error(format!(
-                "physical_plan::from_proto() Unsupported physical plan '{:?}'",
-                self
+                "physical_plan::from_proto() Unsupported physical plan '{self:?}'"
             ))
         })?;
         match plan {
@@ -152,7 +147,10 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(FilterExec::try_new(predicate, input)?))
             }
             PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
-                decode_scan_config(scan.base_conf.as_ref().unwrap())?,
+                parse_protobuf_file_scan_config(
+                    scan.base_conf.as_ref().unwrap(),
+                    registry,
+                )?,
                 scan.has_header,
                 str_to_byte(&scan.delimiter)?,
                 FileCompressionType::UNCOMPRESSED,
@@ -161,17 +159,23 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 let predicate = scan
                     .pruning_predicate
                     .as_ref()
-                    .map(|expr| parse_expr(expr, registry))
+                    .map(|expr| logical_plan::from_proto::parse_expr(expr, registry))
                     .transpose()?;
                 Ok(Arc::new(ParquetExec::new(
-                    decode_scan_config(scan.base_conf.as_ref().unwrap())?,
+                    parse_protobuf_file_scan_config(
+                        scan.base_conf.as_ref().unwrap(),
+                        registry,
+                    )?,
                     predicate,
                     None,
                 )))
             }
-            PhysicalPlanType::AvroScan(scan) => Ok(Arc::new(AvroExec::new(
-                decode_scan_config(scan.base_conf.as_ref().unwrap())?,
-            ))),
+            PhysicalPlanType::AvroScan(scan) => {
+                Ok(Arc::new(AvroExec::new(parse_protobuf_file_scan_config(
+                    scan.base_conf.as_ref().unwrap(),
+                    registry,
+                )?)))
+            }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
                     coalesce_batches.input,
@@ -557,7 +561,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     runtime,
                     extension_codec
                 )?;
-                Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
+                Ok(Arc::new(CrossJoinExec::new(left, right)))
             }
             PhysicalPlanType::Empty(empty) => {
                 let schema = Arc::new(convert_required!(empty.schema)?);
@@ -572,8 +576,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .map(|expr| {
                         let expr = expr.expr_type.as_ref().ok_or_else(|| {
                             proto_error(format!(
-                                "physical_plan::from_proto() Unexpected expr {:?}",
-                                self
+                                "physical_plan::from_proto() Unexpected expr {self:?}"
                             ))
                         })?;
                         if let protobuf::physical_expr_node::ExprType::Sort(sort_expr) = expr {
@@ -582,8 +585,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 .as_ref()
                                 .ok_or_else(|| {
                                     proto_error(format!(
-                                        "physical_plan::from_proto() Unexpected sort expr {:?}",
-                                        self
+                                        "physical_plan::from_proto() Unexpected sort expr {self:?}"
                                     ))
                                 })?
                                 .as_ref();
@@ -596,8 +598,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             })
                         } else {
                             Err(DataFusionError::Internal(format!(
-                                "physical_plan::from_proto() {:?}",
-                                self
+                                "physical_plan::from_proto() {self:?}"
                             )))
                         }
                     })
@@ -618,8 +619,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .map(|expr| {
                         let expr = expr.expr_type.as_ref().ok_or_else(|| {
                             proto_error(format!(
-                                "physical_plan::from_proto() Unexpected expr {:?}",
-                                self
+                                "physical_plan::from_proto() Unexpected expr {self:?}"
                             ))
                         })?;
                         if let protobuf::physical_expr_node::ExprType::Sort(sort_expr) = expr {
@@ -628,8 +628,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 .as_ref()
                                 .ok_or_else(|| {
                                     proto_error(format!(
-                                        "physical_plan::from_proto() Unexpected sort expr {:?}",
-                                        self
+                                        "physical_plan::from_proto() Unexpected sort expr {self:?}"
                                     ))
                                 })?
                                 .as_ref();
@@ -642,8 +641,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                             })
                         } else {
                             Err(DataFusionError::Internal(format!(
-                                "physical_plan::from_proto() {:?}",
-                                self
+                                "physical_plan::from_proto() {self:?}"
                             )))
                         }
                     })
@@ -1112,52 +1110,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     })
                 }
                 Err(e) => Err(DataFusionError::Internal(format!(
-                    "Unsupported plan and extension codec failed with [{}]. Plan: {:?}",
-                    e, plan_clone
+                    "Unsupported plan and extension codec failed with [{e}]. Plan: {plan_clone:?}"
                 ))),
             }
         }
     }
-}
-
-fn decode_scan_config(
-    proto: &protobuf::FileScanExecConf,
-) -> Result<FileScanConfig, DataFusionError> {
-    let schema = Arc::new(convert_required!(proto.schema)?);
-    let projection = proto
-        .projection
-        .iter()
-        .map(|i| *i as usize)
-        .collect::<Vec<_>>();
-    let projection = if projection.is_empty() {
-        None
-    } else {
-        Some(projection)
-    };
-    let statistics = convert_required!(proto.statistics)?;
-
-    let file_groups: Vec<Vec<PartitionedFile>> = proto
-        .file_groups
-        .iter()
-        .map(|f| f.try_into())
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let object_store_url = match proto.object_store_url.is_empty() {
-        false => ObjectStoreUrl::parse(&proto.object_store_url)?,
-        true => ObjectStoreUrl::local_filesystem(),
-    };
-
-    Ok(FileScanConfig {
-        config_options: Arc::new(RwLock::new(ConfigOptions::new())), // TODO add serde
-        object_store_url,
-        file_schema: schema,
-        file_groups,
-        statistics,
-        projection,
-        limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
-        table_partition_cols: vec![],
-        output_ordering: None,
-    })
 }
 
 pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
@@ -1200,6 +1157,32 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     ) -> Result<(), DataFusionError>;
 }
 
+#[derive(Debug)]
+pub struct DefaultPhysicalExtensionCodec {}
+
+impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[Arc<dyn ExecutionPlan>],
+        _registry: &dyn FunctionRegistry,
+    ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+        Err(DataFusionError::NotImplemented(
+            "PhysicalExtensionCodec is not provided".to_string(),
+        ))
+    }
+
+    fn try_encode(
+        &self,
+        _node: Arc<dyn ExecutionPlan>,
+        _buf: &mut Vec<u8>,
+    ) -> Result<(), DataFusionError> {
+        Err(DataFusionError::NotImplemented(
+            "PhysicalExtensionCodec is not provided".to_string(),
+        ))
+    }
+}
+
 #[macro_export]
 macro_rules! into_physical_plan {
     ($PB:expr, $REG:expr, $RUNTIME:expr, $CODEC:expr) => {{
@@ -1219,11 +1202,9 @@ mod roundtrip_tests {
     use std::sync::Arc;
 
     use super::super::protobuf;
-    use crate::bytes::DefaultPhysicalExtensionCodec;
-    use crate::physical_plan::AsExecutionPlan;
+    use crate::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
     use datafusion::arrow::array::ArrayRef;
     use datafusion::arrow::datatypes::IntervalUnit;
-    use datafusion::config::ConfigOptions;
     use datafusion::datasource::object_store::ObjectStoreUrl;
     use datafusion::execution::context::ExecutionProps;
     use datafusion::logical_expr::create_udf;
@@ -1231,6 +1212,7 @@ mod roundtrip_tests {
     use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
+    use datafusion::physical_plan::expressions::like;
     use datafusion::physical_plan::functions;
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
@@ -1257,7 +1239,6 @@ mod roundtrip_tests {
         scalar::ScalarValue,
     };
     use datafusion_common::Result;
-    use parking_lot::RwLock;
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
         let ctx = SessionContext::new();
@@ -1269,10 +1250,7 @@ mod roundtrip_tests {
         let result_exec_plan: Arc<dyn ExecutionPlan> = proto
             .try_into_physical_plan(&ctx, runtime.deref(), &codec)
             .expect("from proto");
-        assert_eq!(
-            format!("{:?}", exec_plan),
-            format!("{:?}", result_exec_plan)
-        );
+        assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
         Ok(())
     }
 
@@ -1288,10 +1266,7 @@ mod roundtrip_tests {
         let result_exec_plan: Arc<dyn ExecutionPlan> = proto
             .try_into_physical_plan(&ctx, runtime.deref(), &codec)
             .expect("from proto");
-        assert_eq!(
-            format!("{:?}", exec_plan),
-            format!("{:?}", result_exec_plan)
-        );
+        assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
         Ok(())
     }
 
@@ -1469,7 +1444,6 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         let scan_config = FileScanConfig {
-            config_options: Arc::new(RwLock::new(ConfigOptions::new())), // TODO add serde
             object_store_url: ObjectStoreUrl::local_filesystem(),
             file_schema: Arc::new(Schema::new(vec![Field::new(
                 "col",
@@ -1490,6 +1464,7 @@ mod roundtrip_tests {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: None,
+            infinite_source: false,
         };
 
         let predicate = datafusion::prelude::col("col").eq(datafusion::prelude::lit("1"));
@@ -1558,7 +1533,7 @@ mod roundtrip_tests {
         let project =
             ProjectionExec::try_new(vec![(Arc::new(expr), "a".to_string())], input)?;
 
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
 
         ctx.register_udf(udf);
 
@@ -1588,5 +1563,26 @@ mod roundtrip_tests {
             Arc::new(EmptyExec::new(false, schema.clone())),
             schema,
         )?))
+    }
+
+    #[test]
+    fn roundtrip_like() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+        let like_expr = like(
+            false,
+            false,
+            col("a", &schema)?,
+            col("b", &schema)?,
+            &schema,
+        )?;
+        let plan = Arc::new(ProjectionExec::try_new(
+            vec![(like_expr, "result".to_string())],
+            input,
+        )?);
+        roundtrip_test(plan)
     }
 }

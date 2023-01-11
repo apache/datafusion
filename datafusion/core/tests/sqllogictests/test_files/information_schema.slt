@@ -15,6 +15,83 @@
 # specific language governing permissions and limitations
 # under the License.
 
+
+# Verify the information schema does not exit by default
+statement error DataFusion error: Error during planning: table 'datafusion.information_schema.tables' not found
+SELECT * from information_schema.tables
+
+statement error DataFusion error: Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
+show all
+
+# Turn it on
+
+# expect that the queries now work
+statement ok
+set datafusion.catalog.information_schema = true;
+
+# Verify the information schema now does exist and is empty
+query CCC rowsort
+SELECT * from information_schema.tables;
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+
+# Disable information_schema and verify it now errors again
+statement ok
+set datafusion.catalog.information_schema = false
+
+statement error DataFusion error: Error during planning: table 'datafusion.information_schema.tables' not found
+SELECT * from information_schema.tables
+
+
+############
+## Enable information schema for the rest of the test
+############
+statement ok
+set datafusion.catalog.information_schema = true
+
+############
+# New tables should show up in information schema
+###########
+statement ok
+create table t as values (1);
+
+query CCC rowsort
+SELECT * from information_schema.tables;
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+datafusion public t BASE TABLE
+
+# Another new  table should show up in information schema
+statement ok
+create table t2 as values (1);
+
+query CCC rowsort
+SELECT * from information_schema.tables;
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+datafusion public t BASE TABLE
+datafusion public t2 BASE TABLE
+
+# Cleanup
+statement ok
+drop table t
+
+statement ok
+drop table t2
+
+############
+## SHOW VARIABLES should work
+###########
+
 # target_partitions defaults to num_cores, so set
 # to a known value that is unlikely to be
 # the real number of cores on a system
@@ -26,13 +103,15 @@ query R
 SHOW ALL
 ----
 datafusion.catalog.create_default_catalog_and_schema true
+datafusion.catalog.default_catalog datafusion
+datafusion.catalog.default_schema public
+datafusion.catalog.format NULL
+datafusion.catalog.has_header false
 datafusion.catalog.information_schema true
 datafusion.catalog.location NULL
-datafusion.catalog.type NULL
-datafusion.execuction_collect_statistics false
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
-datafusion.execution.coalesce_target_batch_size 4096
+datafusion.execution.collect_statistics false
 datafusion.execution.parquet.enable_page_index false
 datafusion.execution.parquet.metadata_size_hint NULL
 datafusion.execution.parquet.pruning true
@@ -43,6 +122,7 @@ datafusion.execution.target_partitions 7
 datafusion.execution.time_zone +00:00
 datafusion.explain.logical_plan_only false
 datafusion.explain.physical_plan_only false
+datafusion.optimizer.enable_round_robin_repartition true
 datafusion.optimizer.filter_null_join_keys false
 datafusion.optimizer.hash_join_single_partition_threshold 1048576
 datafusion.optimizer.max_passes 3

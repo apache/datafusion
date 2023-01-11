@@ -85,8 +85,7 @@ fn utf8_or_binary_to_binary_type(arg_type: &DataType, name: &str) -> Result<Data
         _ => {
             // this error is internal as `data_types` should have captured this.
             return Err(DataFusionError::Internal(format!(
-                "The {:?} function can only accept strings or binary arrays.",
-                name
+                "The {name:?} function can only accept strings or binary arrays."
             )));
         }
     })
@@ -102,8 +101,7 @@ pub fn return_type(
 
     if input_expr_types.is_empty() && !fun.supports_zero_argument() {
         return Err(DataFusionError::Internal(format!(
-            "Builtin scalar function {} does not support empty arguments",
-            fun
+            "Builtin scalar function {fun} does not support empty arguments"
         )));
     }
 
@@ -473,6 +471,10 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
                 TypeSignature::Exact(vec![
                     DataType::Utf8,
                     DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".to_owned())),
                 ]),
             ],
             fun.volatility(),

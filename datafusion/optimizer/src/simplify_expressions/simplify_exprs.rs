@@ -43,15 +43,14 @@ impl OptimizerRule for SimplifyExpressions {
         "simplify_expressions"
     }
 
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         let mut execution_props = ExecutionProps::new();
-        execution_props.query_execution_start_time =
-            optimizer_config.query_execution_start_time();
-        Self::optimize_internal(plan, &execution_props)
+        execution_props.query_execution_start_time = config.query_execution_start_time();
+        Ok(Some(Self::optimize_internal(plan, &execution_props)?))
     }
 }
 
@@ -121,6 +120,7 @@ mod tests {
     use crate::simplify_expressions::utils::for_test::{
         cast_to_int64_expr, now_expr, to_timestamp_expr,
     };
+    use crate::test::test_table_scan_with_name;
 
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -128,10 +128,11 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::{or, Between, BinaryExpr, Cast, Operator};
 
+    use crate::OptimizerContext;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         and, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Expr,
-        ExprSchemable,
+        ExprSchemable, JoinType,
     };
 
     /// A macro to assert that one string is contained within another with
@@ -172,9 +173,10 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) -> Result<()> {
         let rule = SimplifyExpressions::new();
         let optimized_plan = rule
-            .optimize(plan, &mut OptimizerConfig::new())
+            .try_optimize(plan, &OptimizerContext::new())
+            .unwrap()
             .expect("failed to optimize plan");
-        let formatted_plan = format!("{:?}", optimized_plan);
+        let formatted_plan = format!("{optimized_plan:?}");
         assert_eq!(formatted_plan, expected);
         Ok(())
     }
@@ -379,12 +381,11 @@ mod tests {
 
     // expect optimizing will result in an error, returning the error string
     fn get_optimized_plan_err(plan: &LogicalPlan, date_time: &DateTime<Utc>) -> String {
-        let mut config =
-            OptimizerConfig::new().with_query_execution_start_time(*date_time);
+        let config = OptimizerContext::new().with_query_execution_start_time(*date_time);
         let rule = SimplifyExpressions::new();
 
         let err = rule
-            .optimize(plan, &mut config)
+            .try_optimize(plan, &config)
             .expect_err("expected optimization to fail");
 
         err.to_string()
@@ -394,14 +395,14 @@ mod tests {
         plan: &LogicalPlan,
         date_time: &DateTime<Utc>,
     ) -> String {
-        let mut config =
-            OptimizerConfig::new().with_query_execution_start_time(*date_time);
+        let config = OptimizerContext::new().with_query_execution_start_time(*date_time);
         let rule = SimplifyExpressions::new();
 
         let optimized_plan = rule
-            .optimize(plan, &mut config)
+            .try_optimize(plan, &config)
+            .unwrap()
             .expect("failed to optimize plan");
-        format!("{:?}", optimized_plan)
+        format!("{optimized_plan:?}")
     }
 
     #[test]
@@ -745,6 +746,26 @@ mod tests {
     }
 
     #[test]
+    fn simplify_not_ilike() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)
+            .expect("creating scan")
+            .build()
+            .expect("building plan");
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").ilike(col("b")).not())?
+            .build()?;
+        let expected = "Filter: test.a NOT ILIKE test.b\
+        \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
     fn simplify_not_distinct_from() -> Result<()> {
         let table_scan = test_table_scan();
 
@@ -766,6 +787,32 @@ mod tests {
             .build()?;
         let expected = "Filter: test.d IS DISTINCT FROM Int32(10)\
         \n  TableScan: test";
+
+        assert_optimized_plan_eq(&plan, expected)
+    }
+
+    #[test]
+    fn simplify_equijoin_predicate() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let left_key = col("t1.a") + lit(1i64).cast_to(&DataType::UInt32, t1.schema())?;
+        let right_key =
+            col("t2.a") + lit(2i64).cast_to(&DataType::UInt32, t2.schema())?;
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_with_expr_keys(
+                t2,
+                JoinType::Inner,
+                (vec![left_key], vec![right_key]),
+                None,
+            )?
+            .build()?;
+
+        // before simplify: t1.a + CAST(Int64(1), UInt32) = t2.a + CAST(Int64(2), UInt32)
+        // after simplify: t1.a + UInt32(1) = t2.a + UInt32(2) AS t1.a + Int64(1) = t2.a + Int64(2)
+        let expected = "Inner Join: t1.a + UInt32(1) = t2.a + UInt32(2)\
+            \n  TableScan: t1\
+            \n  TableScan: t2";
 
         assert_optimized_plan_eq(&plan, expected)
     }

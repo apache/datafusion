@@ -28,7 +28,7 @@ use std::collections::HashSet;
 use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 
 /// Expression for a SUM(DISTINCT) aggregation.
 #[derive(Debug)]
@@ -68,7 +68,7 @@ impl AggregateExpr for DistinctSum {
     fn state_fields(&self) -> Result<Vec<Field>> {
         // State field is a List which stores items to rebuild hash set.
         Ok(vec![Field::new(
-            &format_state_name(&self.name, "sum distinct"),
+            format_state_name(&self.name, "sum distinct"),
             DataType::List(Box::new(Field::new("item", self.data_type.clone(), true))),
             false,
         )])
@@ -119,15 +119,14 @@ impl DistinctSumAccumulator {
         states.iter().try_for_each(|state| match state {
             ScalarValue::List(Some(values), _) => self.update(values.as_ref()),
             _ => Err(DataFusionError::Internal(format!(
-                "Unexpected accumulator state {:?}",
-                state
+                "Unexpected accumulator state {state:?}"
             ))),
         })
     }
 }
 
 impl Accumulator for DistinctSumAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         // 1. Stores aggregate state in `ScalarValue::List`
         // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
         let state_out = {
@@ -135,10 +134,10 @@ impl Accumulator for DistinctSumAccumulator {
             self.hash_values
                 .iter()
                 .for_each(|distinct_value| distinct_values.push(distinct_value.clone()));
-            vec![AggregateState::Scalar(ScalarValue::new_list(
+            vec![ScalarValue::new_list(
                 Some(distinct_values),
                 self.data_type.clone(),
-            ))]
+            )]
         };
         Ok(state_out)
     }
@@ -177,16 +176,16 @@ impl Accumulator for DistinctSumAccumulator {
     }
 
     fn size(&self) -> usize {
-        // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
         std::mem::size_of_val(self) + ScalarValue::size_of_hashset(&self.hash_values)
             - std::mem::size_of_val(&self.hash_values)
+            + self.data_type.size()
+            - std::mem::size_of_val(&self.data_type)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregate::utils::get_accum_scalar_values;
     use crate::expressions::col;
     use crate::expressions::tests::aggregate;
     use arrow::record_batch::RecordBatch;
@@ -202,7 +201,7 @@ mod tests {
         let mut accum = agg.create_accumulator()?;
         accum.update_batch(arrays)?;
 
-        Ok((get_accum_scalar_values(accum.as_ref())?, accum.evaluate()?))
+        Ok((accum.state()?, accum.evaluate()?))
     }
 
     macro_rules! generic_test_sum_distinct {

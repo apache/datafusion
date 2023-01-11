@@ -17,6 +17,15 @@
 
 //! DataFrame API for building and executing query plans.
 
+use std::any::Any;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use parquet::file::properties::WriterProperties;
+
+use datafusion_common::{Column, DFSchema, ScalarValue};
+use datafusion_expr::TableProviderFilterPushDown;
+
 use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
@@ -36,13 +45,6 @@ use crate::physical_plan::SendableRecordBatchStream;
 use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
 use crate::prelude::SessionContext;
-use async_trait::async_trait;
-use datafusion_common::{Column, DFSchema};
-use datafusion_expr::TableProviderFilterPushDown;
-use parking_lot::RwLock;
-use parquet::file::properties::WriterProperties;
-use std::any::Any;
-use std::sync::Arc;
 
 /// DataFrame represents a logical set of rows with the same named columns.
 /// Similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html) or
@@ -61,7 +63,7 @@ use std::sync::Arc;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
-/// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+/// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
 ///            .limit(0, Some(100))?;
@@ -69,42 +71,24 @@ use std::sync::Arc;
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DataFrame {
-    session_state: Arc<RwLock<SessionState>>,
+    session_state: SessionState,
     plan: LogicalPlan,
 }
 
 impl DataFrame {
     /// Create a new Table based on an existing logical plan
-    pub fn new(session_state: Arc<RwLock<SessionState>>, plan: &LogicalPlan) -> Self {
+    pub fn new(session_state: SessionState, plan: LogicalPlan) -> Self {
         Self {
             session_state,
-            plan: plan.clone(),
+            plan,
         }
     }
 
     /// Create a physical plan
-    pub async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
-        // this function is copied from SessionContext function of the
-        // same name
-        let state_cloned = {
-            let mut state = self.session_state.write();
-            state.execution_props.start_execution();
-
-            // We need to clone `state` to release the lock that is not `Send`. We could
-            // make the lock `Send` by using `tokio::sync::Mutex`, but that would require to
-            // propagate async even to the `LogicalPlan` building methods.
-            // Cloning `state` here is fine as we then pass it as immutable `&state`, which
-            // means that we avoid write consistency issues as the cloned version will not
-            // be written to. As for eventual modifications that would be applied to the
-            // original state after it has been cloned, they will not be picked up by the
-            // clone but that is okay, as it is equivalent to postponing the state update
-            // by keeping the lock until the end of the function scope.
-            state.clone()
-        };
-
-        state_cloned.create_physical_plan(&self.plan).await
+    pub async fn create_physical_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
+        self.session_state.create_physical_plan(&self.plan).await
     }
 
     /// Filter the DataFrame by column. Returns a new DataFrame only containing the
@@ -116,12 +100,12 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.select_columns(&["a", "b"])?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn select_columns(&self, columns: &[&str]) -> Result<Arc<DataFrame>> {
+    pub fn select_columns(self, columns: &[&str]) -> Result<DataFrame> {
         let fields = columns
             .iter()
             .map(|name| self.plan.schema().field_with_unqualified_name(name))
@@ -141,24 +125,21 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.select(vec![col("a") * col("b"), col("c")])?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn select(&self, expr_list: Vec<Expr>) -> Result<Arc<DataFrame>> {
+    pub fn select(self, expr_list: Vec<Expr>) -> Result<DataFrame> {
         let window_func_exprs = find_window_exprs(&expr_list);
         let plan = if window_func_exprs.is_empty() {
-            self.plan.clone()
+            self.plan
         } else {
-            LogicalPlanBuilder::window_plan(self.plan.clone(), window_func_exprs)?
+            LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
         };
         let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
 
-        Ok(Arc::new(DataFrame::new(
-            self.session_state.clone(),
-            &project_plan,
-        )))
+        Ok(DataFrame::new(self.session_state, project_plan))
     }
 
     /// Filter a DataFrame to only include rows that match the specified filter expression.
@@ -169,16 +150,16 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.filter(col("a").lt_eq(col("b")))?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn filter(&self, predicate: Expr) -> Result<Arc<DataFrame>> {
-        let plan = LogicalPlanBuilder::from(self.plan.clone())
+    pub fn filter(self, predicate: Expr) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
             .filter(predicate)?
             .build()?;
-        Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
+        Ok(DataFrame::new(self.session_state, plan))
     }
 
     /// Perform an aggregate query with optional grouping expressions.
@@ -189,10 +170,10 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     ///
     /// // The following use is the equivalent of "SELECT MIN(b) GROUP BY a"
-    /// let _ = df.aggregate(vec![col("a")], vec![min(col("b"))])?;
+    /// let _ = df.clone().aggregate(vec![col("a")], vec![min(col("b"))])?;
     ///
     /// // The following use is the equivalent of "SELECT MIN(b)"
     /// let _ = df.aggregate(vec![], vec![min(col("b"))])?;
@@ -200,14 +181,14 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn aggregate(
-        &self,
+        self,
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
-    ) -> Result<Arc<DataFrame>> {
-        let plan = LogicalPlanBuilder::from(self.plan.clone())
+    ) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
             .aggregate(group_expr, aggr_expr)?
             .build()?;
-        Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
+        Ok(DataFrame::new(self.session_state, plan))
     }
 
     /// Limit the number of rows returned from this DataFrame.
@@ -221,16 +202,16 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.limit(0, Some(100))?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn limit(&self, skip: usize, fetch: Option<usize>) -> Result<Arc<DataFrame>> {
-        let plan = LogicalPlanBuilder::from(self.plan.clone())
+    pub fn limit(self, skip: usize, fetch: Option<usize>) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
             .limit(skip, fetch)?
             .build()?;
-        Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
+        Ok(DataFrame::new(self.session_state, plan))
     }
 
     /// Calculate the union of two [`DataFrame`]s, preserving duplicate rows.The
@@ -242,16 +223,17 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.union(df.clone())?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let d2 = df.clone();
+    /// let df = df.union(d2)?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn union(&self, dataframe: Arc<DataFrame>) -> Result<Arc<DataFrame>> {
-        let plan = LogicalPlanBuilder::from(self.plan.clone())
-            .union(dataframe.plan.clone())?
+    pub fn union(self, dataframe: DataFrame) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .union(dataframe.plan)?
             .build()?;
-        Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
+        Ok(DataFrame::new(self.session_state, plan))
     }
 
     /// Calculate the distinct union of two [`DataFrame`]s.  The
@@ -263,18 +245,19 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.union_distinct(df.clone())?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let d2 = df.clone();
+    /// let df = df.union_distinct(d2)?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn union_distinct(&self, dataframe: Arc<DataFrame>) -> Result<Arc<DataFrame>> {
-        Ok(Arc::new(DataFrame::new(
-            self.session_state.clone(),
-            &LogicalPlanBuilder::from(self.plan.clone())
-                .union_distinct(dataframe.plan.clone())?
+    pub fn union_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
+        Ok(DataFrame::new(
+            self.session_state,
+            LogicalPlanBuilder::from(self.plan)
+                .union_distinct(dataframe.plan)?
                 .build()?,
-        )))
+        ))
     }
 
     /// Filter out duplicate rows
@@ -285,18 +268,16 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.distinct()?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn distinct(&self) -> Result<Arc<DataFrame>> {
-        Ok(Arc::new(DataFrame::new(
-            self.session_state.clone(),
-            &LogicalPlanBuilder::from(self.plan.clone())
-                .distinct()?
-                .build()?,
-        )))
+    pub fn distinct(self) -> Result<DataFrame> {
+        Ok(DataFrame::new(
+            self.session_state,
+            LogicalPlanBuilder::from(self.plan).distinct()?.build()?,
+        ))
     }
 
     /// Sort the DataFrame by the specified sorting expressions. Any expression can be turned into
@@ -308,16 +289,14 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.sort(vec![col("a").sort(true, true), col("b").sort(false, false)])?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn sort(&self, expr: Vec<Expr>) -> Result<Arc<DataFrame>> {
-        let plan = LogicalPlanBuilder::from(self.plan.clone())
-            .sort(expr)?
-            .build()?;
-        Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
+    pub fn sort(self, expr: Vec<Expr>) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan).sort(expr)?.build()?;
+        Ok(DataFrame::new(self.session_state, plan))
     }
 
     /// Join this DataFrame with another DataFrame using the specified columns as join keys.
@@ -332,8 +311,8 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let left = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let right = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?
+    /// let left = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let right = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
     ///   .select(vec![
     ///     col("a").alias("a2"),
     ///     col("b").alias("b2"),
@@ -344,22 +323,22 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn join(
-        &self,
-        right: Arc<DataFrame>,
+        self,
+        right: DataFrame,
         join_type: JoinType,
         left_cols: &[&str],
         right_cols: &[&str],
         filter: Option<Expr>,
-    ) -> Result<Arc<DataFrame>> {
-        let plan = LogicalPlanBuilder::from(self.plan.clone())
+    ) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
             .join(
-                &right.plan.clone(),
+                right.plan,
                 join_type,
                 (left_cols.to_vec(), right_cols.to_vec()),
                 filter,
             )?
             .build()?;
-        Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
+        Ok(DataFrame::new(self.session_state, plan))
     }
 
     /// Repartition a DataFrame based on a logical partitioning scheme.
@@ -370,19 +349,16 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df1 = df.repartition(Partitioning::RoundRobinBatch(4))?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn repartition(
-        &self,
-        partitioning_scheme: Partitioning,
-    ) -> Result<Arc<DataFrame>> {
-        let plan = LogicalPlanBuilder::from(self.plan.clone())
+    pub fn repartition(self, partitioning_scheme: Partitioning) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
             .repartition(partitioning_scheme)?
             .build()?;
-        Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
+        Ok(DataFrame::new(self.session_state, plan))
     }
 
     /// Convert the logical plan represented by this DataFrame into a physical plan and
@@ -394,14 +370,14 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let batches = df.collect().await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn collect(&self) -> Result<Vec<RecordBatch>> {
+    pub async fn collect(self) -> Result<Vec<RecordBatch>> {
+        let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        let task_ctx = Arc::new(TaskContext::from(&self.session_state.read().clone()));
         collect(plan, task_ctx).await
     }
 
@@ -413,12 +389,12 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// df.show().await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn show(&self) -> Result<()> {
+    pub async fn show(self) -> Result<()> {
         let results = self.collect().await?;
         Ok(pretty::print_batches(&results)?)
     }
@@ -431,14 +407,18 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// df.show_limit(10).await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn show_limit(&self, num: usize) -> Result<()> {
+    pub async fn show_limit(self, num: usize) -> Result<()> {
         let results = self.limit(0, Some(num))?.collect().await?;
         Ok(pretty::print_batches(&results)?)
+    }
+
+    fn task_ctx(&self) -> TaskContext {
+        TaskContext::from(&self.session_state)
     }
 
     /// Executes this DataFrame and returns a stream over a single partition
@@ -449,15 +429,15 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let stream = df.execute_stream().await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn execute_stream(&self) -> Result<SendableRecordBatchStream> {
+    pub async fn execute_stream(self) -> Result<SendableRecordBatchStream> {
+        let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        let task_ctx = Arc::new(TaskContext::from(&self.session_state.read().clone()));
-        execute_stream(plan, task_ctx).await
+        execute_stream(plan, task_ctx)
     }
 
     /// Executes this DataFrame and collects all results into a vector of vector of RecordBatch
@@ -469,14 +449,14 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let batches = df.collect_partitioned().await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn collect_partitioned(&self) -> Result<Vec<Vec<RecordBatch>>> {
+    pub async fn collect_partitioned(self) -> Result<Vec<Vec<RecordBatch>>> {
+        let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        let task_ctx = Arc::new(TaskContext::from(&self.session_state.read().clone()));
         collect_partitioned(plan, task_ctx).await
     }
 
@@ -488,17 +468,17 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let batches = df.execute_stream_partitioned().await?;
     /// # Ok(())
     /// # }
     /// ```
     pub async fn execute_stream_partitioned(
-        &self,
+        self,
     ) -> Result<Vec<SendableRecordBatchStream>> {
+        let task_ctx = Arc::new(self.task_ctx());
         let plan = self.create_physical_plan().await?;
-        let task_ctx = Arc::new(TaskContext::from(&self.session_state.read().clone()));
-        execute_stream_partitioned(plan, task_ctx).await
+        execute_stream_partitioned(plan, task_ctx)
     }
 
     /// Returns the schema describing the output of this DataFrame in terms of columns returned,
@@ -510,7 +490,7 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let schema = df.schema();
     /// # Ok(())
     /// # }
@@ -519,16 +499,52 @@ impl DataFrame {
         self.plan.schema()
     }
 
-    /// Return the unoptimized logical plan represented by this DataFrame.
-    pub fn to_unoptimized_plan(&self) -> LogicalPlan {
-        self.plan.clone()
+    /// Return the unoptimized logical plan
+    pub fn logical_plan(&self) -> &LogicalPlan {
+        &self.plan
+    }
+
+    /// Returns both the [`LogicalPlan`] and [`SessionState`] that comprise this [`DataFrame`]
+    pub fn into_parts(self) -> (SessionState, LogicalPlan) {
+        (self.session_state, self.plan)
+    }
+
+    /// Return the logical plan represented by this DataFrame without running the optimizers
+    ///
+    /// Note: This method should not be used outside testing, as it loses the snapshot
+    /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
+    /// operations may take place against a different state
+    pub fn into_unoptimized_plan(self) -> LogicalPlan {
+        self.plan
     }
 
     /// Return the optimized logical plan represented by this DataFrame.
-    pub fn to_logical_plan(&self) -> Result<LogicalPlan> {
+    ///
+    /// Note: This method should not be used outside testing, as it loses the snapshot
+    /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
+    /// operations may take place against a different state
+    pub fn into_optimized_plan(self) -> Result<LogicalPlan> {
         // Optimize the plan first for better UX
-        let state = self.session_state.read().clone();
-        state.optimize(&self.plan)
+        self.session_state.optimize(&self.plan)
+    }
+
+    /// Converts this [`DataFrame`] into a [`TableProvider`] that can be registered
+    /// as a table view using [`SessionContext::register_table`].
+    ///
+    /// Note: This discards the [`SessionState`] associated with this
+    /// [`DataFrame`] in favour of the one passed to [`TableProvider::scan`]
+    pub fn into_view(self) -> Arc<dyn TableProvider> {
+        Arc::new(DataFrameTableProvider { plan: self.plan })
+    }
+
+    /// Return the optimized logical plan represented by this DataFrame.
+    ///
+    /// Note: This method should not be used outside testing, as it loses the snapshot
+    /// of the [`SessionState`] attached to this [`DataFrame`] and consequently subsequent
+    /// operations may take place against a different state
+    #[deprecated(note = "Use DataFrame::into_optimized_plan")]
+    pub fn to_logical_plan(self) -> Result<LogicalPlan> {
+        self.into_optimized_plan()
     }
 
     /// Return a DataFrame with the explanation of its plan so far.
@@ -541,16 +557,16 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let batches = df.limit(0, Some(100))?.explain(false, false)?.collect().await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn explain(&self, verbose: bool, analyze: bool) -> Result<Arc<DataFrame>> {
-        let plan = LogicalPlanBuilder::from(self.plan.clone())
+    pub fn explain(self, verbose: bool, analyze: bool) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan)
             .explain(verbose, analyze)?
             .build()?;
-        Ok(Arc::new(DataFrame::new(self.session_state.clone(), &plan)))
+        Ok(DataFrame::new(self.session_state, plan))
     }
 
     /// Return a `FunctionRegistry` used to plan udf's calls
@@ -561,15 +577,14 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let f = df.registry();
     /// // use f.udf("name", vec![...]) to use the udf
     /// # Ok(())
     /// # }
     /// ```
-    pub fn registry(&self) -> Arc<dyn FunctionRegistry> {
-        let registry = self.session_state.read().clone();
-        Arc::new(registry)
+    pub fn registry(&self) -> &dyn FunctionRegistry {
+        &self.session_state
     }
 
     /// Calculate the intersection of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
@@ -580,18 +595,19 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.intersect(df.clone())?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let d2 = df.clone();
+    /// let df = df.intersect(d2)?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn intersect(&self, dataframe: Arc<DataFrame>) -> Result<Arc<DataFrame>> {
-        let left_plan = self.plan.clone();
-        let right_plan = dataframe.plan.clone();
-        Ok(Arc::new(DataFrame::new(
-            self.session_state.clone(),
-            &LogicalPlanBuilder::intersect(left_plan, right_plan, true)?,
-        )))
+    pub fn intersect(self, dataframe: DataFrame) -> Result<DataFrame> {
+        let left_plan = self.plan;
+        let right_plan = dataframe.plan;
+        Ok(DataFrame::new(
+            self.session_state,
+            LogicalPlanBuilder::intersect(left_plan, right_plan, true)?,
+        ))
     }
 
     /// Calculate the exception of two [`DataFrame`]s.  The two [`DataFrame`]s must have exactly the same schema
@@ -602,44 +618,42 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
-    /// let df = df.except(df.clone())?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// let d2 = df.clone();
+    /// let df = df.except(d2)?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn except(&self, dataframe: Arc<DataFrame>) -> Result<Arc<DataFrame>> {
-        let left_plan = self.plan.clone();
-        let right_plan = dataframe.plan.clone();
+    pub fn except(self, dataframe: DataFrame) -> Result<DataFrame> {
+        let left_plan = self.plan;
+        let right_plan = dataframe.plan;
 
-        Ok(Arc::new(DataFrame::new(
-            self.session_state.clone(),
-            &LogicalPlanBuilder::except(left_plan, right_plan, true)?,
-        )))
+        Ok(DataFrame::new(
+            self.session_state,
+            LogicalPlanBuilder::except(left_plan, right_plan, true)?,
+        ))
     }
 
     /// Write a `DataFrame` to a CSV file.
-    pub async fn write_csv(&self, path: &str) -> Result<()> {
-        let plan = self.create_physical_plan().await?;
-        let state = self.session_state.read().clone();
-        plan_to_csv(&state, plan, path).await
+    pub async fn write_csv(self, path: &str) -> Result<()> {
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
+        plan_to_csv(&self.session_state, plan, path).await
     }
 
     /// Write a `DataFrame` to a Parquet file.
     pub async fn write_parquet(
-        &self,
+        self,
         path: &str,
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
-        let plan = self.create_physical_plan().await?;
-        let state = self.session_state.read().clone();
-        plan_to_parquet(&state, plan, path, writer_properties).await
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
+        plan_to_parquet(&self.session_state, plan, path, writer_properties).await
     }
 
     /// Executes a query and writes the results to a partitioned JSON file.
-    pub async fn write_json(&self, path: impl AsRef<str>) -> Result<()> {
-        let plan = self.create_physical_plan().await?;
-        let state = self.session_state.read().clone();
-        plan_to_json(&state, plan, path).await
+    pub async fn write_json(self, path: impl AsRef<str>) -> Result<()> {
+        let plan = self.session_state.create_physical_plan(&self.plan).await?;
+        plan_to_json(&self.session_state, plan, path).await
     }
 
     /// Add an additional column to the DataFrame.
@@ -650,17 +664,17 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.with_column("ab_sum", col("a") + col("b"))?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_column(&self, name: &str, expr: Expr) -> Result<Arc<DataFrame>> {
+    pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
         let window_func_exprs = find_window_exprs(&[expr.clone()]);
         let plan = if window_func_exprs.is_empty() {
-            self.plan.clone()
+            self.plan
         } else {
-            LogicalPlanBuilder::window_plan(self.plan.clone(), window_func_exprs)?
+            LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
         };
 
         let new_column = expr.alias(name);
@@ -688,10 +702,7 @@ impl DataFrame {
 
         let project_plan = LogicalPlanBuilder::from(plan).project(fields)?.build()?;
 
-        Ok(Arc::new(DataFrame::new(
-            self.session_state.clone(),
-            &project_plan,
-        )))
+        Ok(DataFrame::new(self.session_state, project_plan))
     }
 
     /// Rename one column by applying a new projection. This is a no-op if the column to be
@@ -703,16 +714,16 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.with_column_renamed("ab_sum", "total")?;
     /// # Ok(())
     /// # }
     /// ```
     pub fn with_column_renamed(
-        &self,
+        self,
         old_name: &str,
         new_name: &str,
-    ) -> Result<Arc<DataFrame>> {
+    ) -> Result<DataFrame> {
         let mut projection = vec![];
         let mut rename_applied = false;
         for field in self.plan.schema().fields() {
@@ -725,19 +736,19 @@ impl DataFrame {
             }
         }
         if rename_applied {
-            let project_plan = LogicalPlanBuilder::from(self.plan.clone())
+            let project_plan = LogicalPlanBuilder::from(self.plan)
                 .project(projection)?
                 .build()?;
-            Ok(Arc::new(DataFrame::new(
-                self.session_state.clone(),
-                &project_plan,
-            )))
+            Ok(DataFrame::new(self.session_state, project_plan))
         } else {
-            Ok(Arc::new(DataFrame::new(
-                self.session_state.clone(),
-                &self.plan,
-            )))
+            Ok(DataFrame::new(self.session_state, self.plan))
         }
+    }
+
+    /// Convert a prepare logical plan into its inner logical plan with all params replaced with their corresponding values
+    pub fn with_param_values(self, param_values: Vec<ScalarValue>) -> Result<Self> {
+        let plan = self.plan.with_param_values(param_values)?;
+        Ok(Self::new(self.session_state, plan))
     }
 
     /// Cache DataFrame as a memory table.
@@ -748,25 +759,28 @@ impl DataFrame {
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
-    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.cache().await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn cache(&self) -> Result<Arc<DataFrame>> {
+    pub async fn cache(self) -> Result<DataFrame> {
+        let context = SessionContext::with_state(self.session_state.clone());
         let mem_table = MemTable::try_new(
             SchemaRef::from(self.schema().clone()),
             self.collect_partitioned().await?,
         )?;
 
-        SessionContext::with_state(self.session_state.read().clone())
-            .read_table(Arc::new(mem_table))
+        context.read_table(Arc::new(mem_table))
     }
 }
 
-// TODO: This will introduce a ref cycle (#2659)
+struct DataFrameTableProvider {
+    plan: LogicalPlan,
+}
+
 #[async_trait]
-impl TableProvider for DataFrame {
+impl TableProvider for DataFrameTableProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -794,43 +808,27 @@ impl TableProvider for DataFrame {
 
     async fn scan(
         &self,
-        _ctx: &SessionState,
+        state: &SessionState,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut expr = projection
-            // construct projections
-            .map_or_else(
-                || {
-                    Ok(Arc::new(Self::new(self.session_state.clone(), &self.plan))
-                        as Arc<_>)
-                },
-                |projection| {
-                    let schema = TableProvider::schema(self).project(projection)?;
-                    let names = schema
-                        .fields()
-                        .iter()
-                        .map(|field| field.name().as_str())
-                        .collect::<Vec<_>>();
-                    self.select_columns(names.as_slice())
-                },
-            )?;
+        let mut expr = LogicalPlanBuilder::from(self.plan.clone());
+        if let Some(p) = projection {
+            expr = expr.select(p.iter().copied())?
+        }
+
         // Add filter when given
         let filter = filters.iter().cloned().reduce(|acc, new| acc.and(new));
         if let Some(filter) = filter {
             expr = expr.filter(filter)?
         }
         // add a limit if given
-        Self::new(
-            self.session_state.clone(),
-            &limit
-                .map_or_else(|| Ok(expr.clone()), |n| expr.limit(0, Some(n)))?
-                .plan
-                .clone(),
-        )
-        .create_physical_plan()
-        .await
+        if let Some(l) = limit {
+            expr = expr.limit(0, Some(l))?
+        }
+        let plan = expr.build()?;
+        state.create_physical_plan(&plan).await
     }
 }
 
@@ -838,7 +836,16 @@ impl TableProvider for DataFrame {
 mod tests {
     use std::vec;
 
-    use super::*;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::DataType;
+
+    use datafusion_expr::{
+        avg, cast, count, count_distinct, create_udf, expr, lit, max, min, sum,
+        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
+        WindowFunction,
+    };
+    use datafusion_physical_expr::expressions::Column;
+
     use crate::execution::context::SessionConfig;
     use crate::execution::options::{CsvReadOptions, ParquetReadOptions};
     use crate::physical_plan::ColumnarValue;
@@ -847,14 +854,8 @@ mod tests {
     use crate::test_util;
     use crate::test_util::parquet_test_data;
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
-    use arrow::array::Int32Array;
-    use arrow::datatypes::DataType;
-    use datafusion_expr::{
-        avg, cast, count, count_distinct, create_udf, lit, max, min, sum,
-        BuiltInWindowFunction, ScalarFunctionImplementation, Volatility, WindowFrame,
-        WindowFunction,
-    };
-    use datafusion_physical_expr::expressions::Column;
+
+    use super::*;
 
     #[tokio::test]
     async fn select_columns() -> Result<()> {
@@ -893,13 +894,13 @@ mod tests {
     async fn select_with_window_exprs() -> Result<()> {
         // build plan using Table API
         let t = test_table().await?;
-        let first_row = Expr::WindowFunction {
-            fun: WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::FirstValue),
-            args: vec![col("aggregate_test_100.c1")],
-            partition_by: vec![col("aggregate_test_100.c2")],
-            order_by: vec![],
-            window_frame: WindowFrame::new(false),
-        };
+        let first_row = Expr::WindowFunction(expr::WindowFunction::new(
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::FirstValue),
+            vec![col("aggregate_test_100.c1")],
+            vec![col("aggregate_test_100.c2")],
+            vec![],
+            WindowFrame::new(false),
+        ));
         let t2 = t.select(vec![col("c1"), first_row])?;
         let plan = t2.plan.clone();
 
@@ -921,7 +922,7 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.register_batch("t", batch)?;
 
-        let df = ctx.table("t")?.select_columns(&["f.c1"])?;
+        let df = ctx.table("t").await?.select_columns(&["f.c1"])?;
 
         let df_results = df.collect().await?;
 
@@ -973,8 +974,8 @@ mod tests {
         let right = test_table_with_name("c2")
             .await?
             .select_columns(&["c1", "c3"])?;
-        let left_rows = left.collect().await?;
-        let right_rows = right.collect().await?;
+        let left_rows = left.clone().collect().await?;
+        let right_rows = right.clone().collect().await?;
         let join = left.join(right, JoinType::Inner, &["c1"], &["c1"], None)?;
         let join_rows = join.collect().await?;
         assert_eq!(100, left_rows.iter().map(|x| x.num_rows()).sum::<usize>());
@@ -1040,19 +1041,16 @@ mod tests {
         ));
 
         // build query with a UDF using DataFrame API
-        let df = ctx.table("aggregate_test_100")?;
+        let df = ctx.table("aggregate_test_100").await?;
 
-        let f = df.registry();
-
-        let df = df.select(vec![f.udf("my_fn")?.call(vec![col("c12")])])?;
-        let plan = df.plan.clone();
+        let expr = df.registry().udf("my_fn")?.call(vec![col("c12")]);
+        let df = df.select(vec![expr])?;
 
         // build query using SQL
-        let sql_plan =
-            ctx.create_logical_plan("SELECT my_fn(c12) FROM aggregate_test_100")?;
+        let sql_plan = ctx.sql("SELECT my_fn(c12) FROM aggregate_test_100").await?;
 
         // the two plans should be identical
-        assert_same_plan(&plan, &sql_plan);
+        assert_same_plan(&df.plan, &sql_plan.plan);
 
         Ok(())
     }
@@ -1071,7 +1069,8 @@ mod tests {
     #[tokio::test]
     async fn intersect() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1", "c3"])?;
-        let plan = df.intersect(df.clone())?;
+        let d2 = df.clone();
+        let plan = df.intersect(d2)?;
         let result = plan.plan.clone();
         let expected = create_plan(
             "SELECT c1, c3 FROM aggregate_test_100
@@ -1085,7 +1084,8 @@ mod tests {
     #[tokio::test]
     async fn except() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1", "c3"])?;
-        let plan = df.except(df.clone())?;
+        let d2 = df.clone();
+        let plan = df.except(d2)?;
         let result = plan.plan.clone();
         let expected = create_plan(
             "SELECT c1, c3 FROM aggregate_test_100
@@ -1100,19 +1100,19 @@ mod tests {
     async fn register_table() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1", "c12"])?;
         let ctx = SessionContext::new();
-        let df_impl = Arc::new(DataFrame::new(ctx.state.clone(), &df.plan.clone()));
+        let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
 
         // register a dataframe as a table
-        ctx.register_table("test_table", df_impl.clone())?;
+        ctx.register_table("test_table", df_impl.clone().into_view())?;
 
         // pull the table out
-        let table = ctx.table("test_table")?;
+        let table = ctx.table("test_table").await?;
 
         let group_expr = vec![col("c1")];
         let aggr_expr = vec![sum(col("c12"))];
 
         // check that we correctly read from the table
-        let df_results = &df_impl
+        let df_results = df_impl
             .aggregate(group_expr.clone(), aggr_expr.clone())?
             .collect()
             .await?;
@@ -1130,7 +1130,7 @@ mod tests {
                 "| e  | 10.206140546981722          |",
                 "+----+-----------------------------+",
             ],
-            df_results
+            &df_results
         );
 
         // the results are the same as the results from the view, modulo the leaf table name
@@ -1153,23 +1153,23 @@ mod tests {
 
     /// Compare the formatted string representation of two plans for equality
     fn assert_same_plan(plan1: &LogicalPlan, plan2: &LogicalPlan) {
-        assert_eq!(format!("{:?}", plan1), format!("{:?}", plan2));
+        assert_eq!(format!("{plan1:?}"), format!("{plan2:?}"));
     }
 
     /// Create a logical plan from a SQL query
     async fn create_plan(sql: &str) -> Result<LogicalPlan> {
         let mut ctx = SessionContext::new();
         register_aggregate_csv(&mut ctx, "aggregate_test_100").await?;
-        ctx.create_logical_plan(sql)
+        Ok(ctx.sql(sql).await?.into_unoptimized_plan())
     }
 
-    async fn test_table_with_name(name: &str) -> Result<Arc<DataFrame>> {
+    async fn test_table_with_name(name: &str) -> Result<DataFrame> {
         let mut ctx = SessionContext::new();
         register_aggregate_csv(&mut ctx, name).await?;
-        ctx.table(name)
+        ctx.table(name).await
     }
 
-    async fn test_table() -> Result<Arc<DataFrame>> {
+    async fn test_table() -> Result<DataFrame> {
         test_table_with_name("aggregate_test_100").await
     }
 
@@ -1181,7 +1181,7 @@ mod tests {
         let testdata = test_util::arrow_test_data();
         ctx.register_csv(
             table_name,
-            &format!("{}/csv/aggregate_test_100.csv", testdata),
+            &format!("{testdata}/csv/aggregate_test_100.csv"),
             CsvReadOptions::new().schema(schema.as_ref()),
         )
         .await?;
@@ -1192,14 +1192,14 @@ mod tests {
     async fn with_column() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1", "c2", "c3"])?;
         let ctx = SessionContext::new();
-        let df_impl = Arc::new(DataFrame::new(ctx.state.clone(), &df.plan.clone()));
+        let df_impl = DataFrame::new(ctx.state(), df.plan.clone());
 
-        let df = &df_impl
+        let df = df_impl
             .filter(col("c2").eq(lit(3)).and(col("c1").eq(lit("a"))))?
             .with_column("sum", col("c2") + col("c3"))?;
 
         // check that new column added
-        let df_results = df.collect().await?;
+        let df_results = df.clone().collect().await?;
 
         assert_batches_sorted_eq!(
             vec![
@@ -1219,6 +1219,7 @@ mod tests {
 
         // check that col with the same name ovwewritten
         let df_results_overwrite = df
+            .clone()
             .with_column("c1", col("c2") + col("c3"))?
             .collect()
             .await?;
@@ -1240,8 +1241,11 @@ mod tests {
         );
 
         // check that col with the same name ovwewritten using same name as reference
-        let df_results_overwrite_self =
-            df.with_column("c2", col("c2") + lit(1))?.collect().await?;
+        let df_results_overwrite_self = df
+            .clone()
+            .with_column("c2", col("c2") + lit(1))?
+            .collect()
+            .await?;
 
         assert_batches_sorted_eq!(
             vec![
@@ -1297,11 +1301,20 @@ mod tests {
     async fn with_column_renamed_join() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1", "c2", "c3"])?;
         let ctx = SessionContext::new();
-        ctx.register_table("t1", df.clone())?;
-        ctx.register_table("t2", df)?;
+
+        let table = df.into_view();
+        ctx.register_table("t1", table.clone())?;
+        ctx.register_table("t2", table)?;
         let df = ctx
-            .table("t1")?
-            .join(ctx.table("t2")?, JoinType::Inner, &["c1"], &["c1"], None)?
+            .table("t1")
+            .await?
+            .join(
+                ctx.table("t2").await?,
+                JoinType::Inner,
+                &["c1"],
+                &["c1"],
+                None,
+            )?
             .sort(vec![
                 // make the test deterministic
                 col("t1.c1").sort(true, true),
@@ -1313,7 +1326,7 @@ mod tests {
             ])?
             .limit(0, Some(1))?;
 
-        let df_results = df.collect().await?;
+        let df_results = df.clone().collect().await?;
         assert_batches_sorted_eq!(
             vec![
                 "+----+----+-----+----+----+-----+",
@@ -1325,7 +1338,7 @@ mod tests {
             &df_results
         );
 
-        let df_renamed = df.with_column_renamed("t1.c1", "AAA")?;
+        let df_renamed = df.clone().with_column_renamed("t1.c1", "AAA")?;
 
         assert_eq!("\
         Projection: t1.c1 AS AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3\
@@ -1334,7 +1347,7 @@ mod tests {
         \n      Inner Join: t1.c1 = t2.c1\
         \n        TableScan: t1\
         \n        TableScan: t2",
-                   format!("{:?}", df_renamed.to_unoptimized_plan())
+                   format!("{:?}", df_renamed.logical_plan())
         );
 
         assert_eq!("\
@@ -1348,7 +1361,7 @@ mod tests {
         \n        SubqueryAlias: t2\
         \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
         \n            TableScan: aggregate_test_100 projection=[c1, c2, c3]",
-                   format!("{:?}", df_renamed.to_logical_plan()?)
+                   format!("{:?}", df_renamed.clone().into_optimized_plan()?)
         );
 
         let df_results = df_renamed.collect().await?;
@@ -1378,10 +1391,11 @@ mod tests {
         )
         .await?;
 
-        ctx.register_table("t1", ctx.table("test")?)?;
+        ctx.register_table("t1", ctx.table("test").await?.into_view())?;
 
         let df = ctx
-            .table("t1")?
+            .table("t1")
+            .await?
             .filter(col("id").eq(lit(1)))?
             .select_columns(&["bool_col", "int_col"])?;
 
@@ -1401,8 +1415,8 @@ mod tests {
             .limit(0, Some(1))?
             .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?;
 
-        let df_results = df.collect().await?;
-        df.show().await?;
+        let df_results = df.clone().collect().await?;
+        df.clone().show().await?;
         assert_batches_sorted_eq!(
             vec![
                 "+----+----+-----+",
@@ -1462,7 +1476,8 @@ mod tests {
         ctx.register_batch("t", batch)?;
 
         let df = ctx
-            .table("t")?
+            .table("t")
+            .await?
             // try and create a column with a '.' in it
             .with_column("f.c2", lit("hello"))?;
 
@@ -1491,11 +1506,11 @@ mod tests {
             .limit(0, Some(1))?
             .with_column("sum", cast(col("c2") + col("c3"), DataType::Int64))?;
 
-        let cached_df = df.cache().await?;
+        let cached_df = df.clone().cache().await?;
 
         assert_eq!(
             "TableScan: ?table? projection=[c2, c3, sum]",
-            format!("{:?}", cached_df.to_logical_plan()?)
+            format!("{:?}", cached_df.clone().into_optimized_plan()?)
         );
 
         let df_results = df.collect().await?;
@@ -1524,15 +1539,20 @@ mod tests {
             .select_columns(&["c1", "c3"])?
             .with_column_renamed("c2.c1", "c2_c1")?;
 
-        let left_rows = left.collect().await?;
-        let right_rows = right.collect().await?;
-        let join1 =
-            left.join(right.clone(), JoinType::Inner, &["c1"], &["c2_c1"], None)?;
+        let left_rows = left.clone().collect().await?;
+        let right_rows = right.clone().collect().await?;
+        let join1 = left.clone().join(
+            right.clone(),
+            JoinType::Inner,
+            &["c1"],
+            &["c2_c1"],
+            None,
+        )?;
         let join2 = left.join(right, JoinType::Inner, &["c1"], &["c2_c1"], None)?;
 
         let union = join1.union(join2)?;
 
-        let union_rows = union.collect().await?;
+        let union_rows = union.clone().collect().await?;
 
         assert_eq!(100, left_rows.iter().map(|x| x.num_rows()).sum::<usize>());
         assert_eq!(100, right_rows.iter().map(|x| x.num_rows()).sum::<usize>());
@@ -1566,9 +1586,9 @@ mod tests {
             .with_column_renamed("c2.c1", "c2_c1")?
             .with_column_renamed("c2.c2", "c2_c2")?;
 
-        let left_rows = left.collect().await?;
-        let right_rows = right.collect().await?;
-        let join1 = left.join(
+        let left_rows = left.clone().collect().await?;
+        let right_rows = right.clone().collect().await?;
+        let join1 = left.clone().join(
             right.clone(),
             JoinType::Inner,
             &["c1", "c2"],
@@ -1587,7 +1607,7 @@ mod tests {
 
         let union = join1.union(join2)?;
 
-        let union_rows = union.collect().await?;
+        let union_rows = union.clone().collect().await?;
 
         assert_eq!(100, left_rows.iter().map(|x| x.num_rows()).sum::<usize>());
         assert_eq!(100, right_rows.iter().map(|x| x.num_rows()).sum::<usize>());
@@ -1626,7 +1646,7 @@ mod tests {
         let default_partition_count = SessionConfig::new().target_partitions();
 
         for join_type in all_join_types {
-            let join = left.join(
+            let join = left.clone().join(
                 right.clone(),
                 join_type,
                 &["c1", "c2"],

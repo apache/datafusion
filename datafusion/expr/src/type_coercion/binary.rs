@@ -17,7 +17,7 @@
 
 //! Coercion rules for matching argument types for binary operators
 
-use crate::type_coercion::is_numeric;
+use crate::type_coercion::{is_date, is_numeric, is_timestamp};
 use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
@@ -45,8 +45,6 @@ pub fn binary_operator_data_type(
         | Operator::NotEq
         | Operator::And
         | Operator::Or
-        | Operator::Like
-        | Operator::NotLike
         | Operator::Lt
         | Operator::Gt
         | Operator::GtEq
@@ -86,7 +84,7 @@ pub fn binary_operator_data_type(
 /// when the input argument types do not match the output argument
 /// types
 ///
-/// Tracking issue is https://github.com/apache/arrow-datafusion/issues/3419
+/// Tracking issue is <https://github.com/apache/arrow-datafusion/issues/3419>
 pub fn coerce_types(
     lhs_type: &DataType,
     op: &Operator,
@@ -115,16 +113,21 @@ pub fn coerce_types(
         | Operator::Gt
         | Operator::GtEq
         | Operator::LtEq => comparison_coercion(lhs_type, rhs_type),
-        // "like" operators operate on strings and always return a boolean
-        Operator::Like | Operator::NotLike => like_coercion(lhs_type, rhs_type),
-        // date +/- interval returns date
         Operator::Plus | Operator::Minus
-            if (*lhs_type == DataType::Date32
-                || *lhs_type == DataType::Date64
-                || matches!(lhs_type, DataType::Timestamp(_, _))) =>
+            if is_date(lhs_type) || is_timestamp(lhs_type) =>
         {
             match rhs_type {
+                // timestamp/date +/- interval returns timestamp/date
                 DataType::Interval(_) => Some(lhs_type.clone()),
+                // providing more helpful error message
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
+                    return Err(DataFusionError::Plan(
+                        format!(
+                            "'{lhs_type:?} {op} {rhs_type:?}' is an unsupported operation. \
+                                addition/subtraction on dates/timestamps only supported with interval types"
+                        ),
+                    ));
+                }
                 _ => None,
             }
         }
@@ -150,8 +153,7 @@ pub fn coerce_types(
     match result {
         None => Err(DataFusionError::Plan(
             format!(
-                "'{:?} {} {:?}' can't be evaluated because there isn't a common type to coerce the types to",
-                lhs_type, op, rhs_type
+                "'{lhs_type:?} {op} {rhs_type:?}' can't be evaluated because there isn't a common type to coerce the types to"
             ),
         )),
         Some(t) => Ok(t)
@@ -515,7 +517,7 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 
 /// coercion rules for like operations.
 /// This is a union of string coercion rules and dictionary coercion rules
-fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
         .or_else(|| null_coercion(lhs_type, rhs_type))
@@ -561,6 +563,11 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
             false => None,
             true => Some(Time64(unit.clone())),
         },
+        (Timestamp(_, tz), Utf8) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
+        (Utf8, Timestamp(_, tz)) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
+        // TODO: need to investigate the result type for the comparison between timestamp and date
+        (Timestamp(_, _), Date32) => Some(Date32),
+        (Timestamp(_, _), Date64) => Some(Date64),
         (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
             let tz = match (lhs_tz, rhs_tz) {
                 // can't cast across timezones
@@ -666,6 +673,7 @@ mod tests {
     use super::*;
     use crate::Operator;
     use arrow::datatypes::DataType;
+    use datafusion_common::assert_contains;
     use datafusion_common::DataFusionError;
     use datafusion_common::Result;
 
@@ -843,13 +851,30 @@ mod tests {
     }
 
     #[test]
+    fn test_date_timestamp_arithmetic_error() -> Result<()> {
+        let err = coerce_types(
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            &Operator::Minus,
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )
+        .unwrap_err()
+        .to_string();
+        assert_contains!(&err, "'Timestamp(Nanosecond, None) - Timestamp(Nanosecond, None)' is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types");
+
+        let err = coerce_types(&DataType::Date32, &Operator::Plus, &DataType::Date64)
+            .unwrap_err()
+            .to_string();
+        assert_contains!(&err, "'Date32 + Date64' is an unsupported operation. addition/subtraction on dates/timestamps only supported with interval types");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_type_coercion() -> Result<()> {
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8,
-            Operator::Like,
-            DataType::Utf8
-        );
+        // test like coercion rule
+        let result = like_coercion(&DataType::Utf8, &DataType::Utf8);
+        assert_eq!(result, Some(DataType::Utf8));
+
         test_coercion_binary_rule!(
             DataType::Utf8,
             DataType::Date32,
@@ -885,6 +910,30 @@ mod tests {
             DataType::Time64(TimeUnit::Nanosecond),
             Operator::Eq,
             DataType::Time64(TimeUnit::Nanosecond)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Second, None),
+            Operator::Lt,
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            Operator::Lt,
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            Operator::Lt,
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+        test_coercion_binary_rule!(
+            DataType::Utf8,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            Operator::Lt,
+            DataType::Timestamp(TimeUnit::Nanosecond, None)
         );
         test_coercion_binary_rule!(
             DataType::Utf8,

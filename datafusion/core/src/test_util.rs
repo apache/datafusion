@@ -121,7 +121,7 @@ macro_rules! assert_batches_sorted_eq {
 pub fn arrow_test_data() -> String {
     match get_data_dir("ARROW_TEST_DATA", "../../testing/data") {
         Ok(pb) => pb.display().to_string(),
-        Err(err) => panic!("failed to get arrow data dir: {}", err),
+        Err(err) => panic!("failed to get arrow data dir: {err}"),
     }
 }
 
@@ -143,7 +143,7 @@ pub fn arrow_test_data() -> String {
 pub fn parquet_test_data() -> String {
     match get_data_dir("PARQUET_TEST_DATA", "../../parquet-testing/data") {
         Ok(pb) => pb.display().to_string(),
-        Err(err) => panic!("failed to get parquet data dir: {}", err),
+        Err(err) => panic!("failed to get parquet data dir: {err}"),
     }
 }
 
@@ -320,7 +320,7 @@ impl TableProvider for TestTableProvider {
 
     async fn scan(
         &self,
-        _ctx: &SessionState,
+        _state: &SessionState,
         _projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,

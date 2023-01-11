@@ -43,6 +43,15 @@ pub const TPCH_TABLES: &[&str] = &[
     "part", "supplier", "partsupp", "customer", "orders", "lineitem", "nation", "region",
 ];
 
+/// The `.tbl` file contains a trailing column
+pub fn get_tbl_tpch_table_schema(table: &str) -> Schema {
+    let mut schema = get_tpch_table_schema(table);
+    schema
+        .fields
+        .push(Field::new("__placeholder", DataType::Utf8, false));
+    schema
+}
+
 /// Get the schema for the benchmarks derived from TPC-H
 pub fn get_tpch_table_schema(table: &str) -> Schema {
     // note that the schema intentionally uses signed integers so that any generated Parquet
@@ -292,8 +301,8 @@ pub fn get_answer_schema(n: usize) -> Schema {
 pub fn get_query_sql(query: usize) -> Result<Vec<String>> {
     if query > 0 && query < 23 {
         let possibilities = vec![
-            format!("queries/q{}.sql", query),
-            format!("benchmarks/queries/q{}.sql", query),
+            format!("queries/q{query}.sql"),
+            format!("benchmarks/queries/q{query}.sql"),
         ];
         let mut errors = vec![];
         for filename in possibilities {
@@ -306,12 +315,11 @@ pub fn get_query_sql(query: usize) -> Result<Vec<String>> {
                         .map(|s| s.to_string())
                         .collect());
                 }
-                Err(e) => errors.push(format!("{}: {}", filename, e)),
+                Err(e) => errors.push(format!("{filename}: {e}")),
             };
         }
         Err(DataFusionError::Plan(format!(
-            "invalid query. Could not find query: {:?}",
-            errors
+            "invalid query. Could not find query: {errors:?}"
         )))
     } else {
         Err(DataFusionError::Plan(
@@ -332,9 +340,9 @@ pub async fn convert_tbl(
     let output_root_path = Path::new(output_path);
     for table in TPCH_TABLES {
         let start = Instant::now();
-        let schema = get_tpch_table_schema(table);
+        let schema = get_tbl_tpch_table_schema(table);
 
-        let input_path = format!("{}/{}.tbl", input_path, table);
+        let input_path = format!("{input_path}/{table}.tbl");
         let options = CsvReadOptions::new()
             .schema(&schema)
             .has_header(false)
@@ -347,14 +355,23 @@ pub async fn convert_tbl(
         // build plan to read the TBL file
         let mut csv = ctx.read_csv(&input_path, options).await?;
 
+        // Select all apart from the padding column
+        let selection = csv
+            .schema()
+            .fields()
+            .iter()
+            .take(schema.fields.len() - 1)
+            .map(|d| Expr::Column(d.qualified_column()))
+            .collect();
+
+        csv = csv.select(selection)?;
         // optionally, repartition the file
         if partitions > 1 {
             csv = csv.repartition(Partitioning::RoundRobinBatch(partitions))?
         }
 
         // create the physical plan
-        let csv = csv.to_logical_plan()?;
-        let csv = ctx.create_physical_plan(&csv).await?;
+        let csv = csv.create_physical_plan().await?;
 
         let output_path = output_root_path.join(table);
         let output_path = output_path.to_str().unwrap().to_owned();
@@ -373,8 +390,7 @@ pub async fn convert_tbl(
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Invalid output format: {}",
-                    other
+                    "Invalid output format: {other}"
                 )));
             }
         }
@@ -448,7 +464,7 @@ fn col_to_scalar(column: &ArrayRef, row_index: usize) -> ScalarValue {
             let array = as_string_array(column).unwrap();
             ScalarValue::Utf8(Some(array.value(row_index).to_string()))
         }
-        other => panic!("unexpected data type in benchmark: {}", other),
+        other => panic!("unexpected data type in benchmark: {other}"),
     }
 }
 

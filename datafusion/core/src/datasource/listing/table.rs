@@ -24,13 +24,12 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use dashmap::DashMap;
+use datafusion_expr::expr::Sort;
 use datafusion_physical_expr::PhysicalSortExpr;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::ObjectMeta;
-use parking_lot::RwLock;
 
-use crate::config::ConfigOptions;
 use crate::datasource::file_format::file_type::{FileCompressionType, FileType};
 use crate::datasource::{
     file_format::{
@@ -109,11 +108,8 @@ impl ListingTableConfig {
         }
     }
 
-    fn infer_format(
-        config_options: Arc<RwLock<ConfigOptions>>,
-        path: &str,
-    ) -> Result<(Arc<dyn FileFormat>, String)> {
-        let err_msg = format!("Unable to infer file type from path: {}", path);
+    fn infer_format(path: &str) -> Result<(Arc<dyn FileFormat>, String)> {
+        let err_msg = format!("Unable to infer file type from path: {path}");
 
         let mut exts = path.rsplit('.');
 
@@ -122,7 +118,7 @@ impl ListingTableConfig {
         let file_compression_type = FileCompressionType::from_str(splitted)
             .unwrap_or(FileCompressionType::UNCOMPRESSED);
 
-        if file_compression_type != FileCompressionType::UNCOMPRESSED {
+        if file_compression_type.is_compressed() {
             splitted = exts.next().unwrap_or("");
         }
 
@@ -141,7 +137,7 @@ impl ListingTableConfig {
             FileType::JSON => Arc::new(
                 JsonFormat::default().with_file_compression_type(file_compression_type),
             ),
-            FileType::PARQUET => Arc::new(ParquetFormat::new(config_options)),
+            FileType::PARQUET => Arc::new(ParquetFormat::default()),
         };
 
         Ok((file_format, ext))
@@ -150,7 +146,7 @@ impl ListingTableConfig {
     /// Infer `ListingOptions` based on `table_path` suffix.
     pub async fn infer_options(self, state: &SessionState) -> Result<Self> {
         let store = state
-            .runtime_env
+            .runtime_env()
             .object_store(self.table_paths.get(0).unwrap())?;
 
         let file = self
@@ -162,14 +158,12 @@ impl ListingTableConfig {
             .await
             .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
 
-        let (format, file_extension) = ListingTableConfig::infer_format(
-            state.config_options(),
-            file.location.as_ref(),
-        )?;
+        let (format, file_extension) =
+            ListingTableConfig::infer_format(file.location.as_ref())?;
 
         let listing_options = ListingOptions::new(format)
             .with_file_extension(file_extension)
-            .with_target_partitions(state.config.target_partitions());
+            .with_target_partitions(state.config().target_partitions());
 
         Ok(Self {
             table_paths: self.table_paths,
@@ -179,11 +173,11 @@ impl ListingTableConfig {
     }
 
     /// Infer `SchemaRef` based on `table_path` suffix.  Requires `self.options` to be set prior to using.
-    pub async fn infer_schema(self, ctx: &SessionState) -> Result<Self> {
+    pub async fn infer_schema(self, state: &SessionState) -> Result<Self> {
         match self.options {
             Some(options) => {
                 let schema = options
-                    .infer_schema(ctx, self.table_paths.get(0).unwrap())
+                    .infer_schema(state, self.table_paths.get(0).unwrap())
                     .await?;
 
                 Ok(Self {
@@ -199,8 +193,8 @@ impl ListingTableConfig {
     }
 
     /// Convenience wrapper for calling `infer_options` and `infer_schema`
-    pub async fn infer(self, ctx: &SessionState) -> Result<Self> {
-        self.infer_options(ctx).await?.infer_schema(ctx).await
+    pub async fn infer(self, state: &SessionState) -> Result<Self> {
+        self.infer_options(state).await?.infer_schema(state).await
     }
 }
 
@@ -235,6 +229,11 @@ pub struct ListingOptions {
     ///
     /// See <https://github.com/apache/arrow-datafusion/issues/4177>
     pub file_sort_order: Option<Vec<Expr>>,
+    /// Infinite source means that the input is not guaranteed to end.
+    /// Currently, CSV, JSON, and AVRO formats are supported.
+    /// In order to support infinite inputs, DataFusion may adjust query
+    /// plans (e.g. joins) to run the given query in full pipelining mode.
+    pub infinite_source: bool,
 }
 
 impl ListingOptions {
@@ -252,7 +251,26 @@ impl ListingOptions {
             collect_stat: true,
             target_partitions: 1,
             file_sort_order: None,
+            infinite_source: false,
         }
+    }
+
+    /// Set unbounded assumption on [`ListingOptions`] and returns self.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use datafusion::datasource::{listing::ListingOptions, file_format::csv::CsvFormat};
+    /// use datafusion::prelude::SessionContext;
+    /// let ctx = SessionContext::new();
+    /// let listing_options = ListingOptions::new(Arc::new(
+    ///     CsvFormat::default()
+    ///   )).with_infinite_source(true);
+    ///
+    /// assert_eq!(listing_options.infinite_source, true);
+    /// ```
+    pub fn with_infinite_source(mut self, infinite_source: bool) -> Self {
+        self.infinite_source = infinite_source;
+        self
     }
 
     /// Set file extension on [`ListingOptions`] and returns self.
@@ -262,9 +280,8 @@ impl ListingOptions {
     /// # use datafusion::prelude::SessionContext;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let ctx = SessionContext::new();
     /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::new(ctx.config_options())
+    ///     ParquetFormat::default()
     ///   ))
     ///   .with_file_extension(".parquet");
     ///
@@ -280,12 +297,11 @@ impl ListingOptions {
     /// ```
     /// # use std::sync::Arc;
     /// # use arrow::datatypes::DataType;
-    /// # use datafusion::prelude::{col, SessionContext};
+    /// # use datafusion::prelude::col;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let ctx = SessionContext::new();
     /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::new(ctx.config_options())
+    ///     ParquetFormat::default()
     ///   ))
     ///   .with_table_partition_cols(vec![("col_a".to_string(), DataType::Utf8),
     ///       ("col_b".to_string(), DataType::Utf8)]);
@@ -305,12 +321,10 @@ impl ListingOptions {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::prelude::SessionContext;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let ctx = SessionContext::new();
     /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::new(ctx.config_options())
+    ///     ParquetFormat::default()
     ///   ))
     ///   .with_collect_stat(true);
     ///
@@ -325,12 +339,10 @@ impl ListingOptions {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::prelude::SessionContext;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
-    /// let ctx = SessionContext::new();
     /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::new(ctx.config_options())
+    ///     ParquetFormat::default()
     ///   ))
     ///   .with_target_partitions(8);
     ///
@@ -345,7 +357,7 @@ impl ListingOptions {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::prelude::{col, SessionContext};
+    /// # use datafusion::prelude::col;
     /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     ///  // Tell datafusion that the files are sorted by column "a"
@@ -353,9 +365,8 @@ impl ListingOptions {
     ///    col("a").sort(true, true)
     ///  ]);
     ///
-    /// let ctx = SessionContext::new();
     /// let listing_options = ListingOptions::new(Arc::new(
-    ///     ParquetFormat::new(ctx.config_options())
+    ///     ParquetFormat::default()
     ///   ))
     ///   .with_file_sort_order(file_sort_order.clone());
     ///
@@ -374,17 +385,17 @@ impl ListingOptions {
     /// locally or ask a remote service to do it (e.g a scheduler).
     pub async fn infer_schema<'a>(
         &'a self,
-        ctx: &SessionState,
+        state: &SessionState,
         table_path: &'a ListingTableUrl,
     ) -> Result<SchemaRef> {
-        let store = ctx.runtime_env.object_store(table_path)?;
+        let store = state.runtime_env().object_store(table_path)?;
 
         let files: Vec<_> = table_path
             .list_all_files(store.as_ref(), &self.file_extension)
             .try_collect()
             .await?;
 
-        self.format.infer_schema(&store, &files).await
+        self.format.infer_schema(state, &store, &files).await
     }
 }
 
@@ -432,6 +443,7 @@ pub struct ListingTable {
     options: ListingOptions,
     definition: Option<String>,
     collected_statistics: StatisticsCache,
+    infinite_source: bool,
 }
 
 impl ListingTable {
@@ -460,6 +472,7 @@ impl ListingTable {
                 false,
             ));
         }
+        let infinite_source = options.infinite_source;
 
         let table = Self {
             table_paths: config.table_paths,
@@ -468,6 +481,7 @@ impl ListingTable {
             options,
             definition: None,
             collected_statistics: Default::default(),
+            infinite_source,
         };
 
         Ok(table)
@@ -502,7 +516,7 @@ impl ListingTable {
         let sort_exprs = file_sort_order
             .iter()
             .map(|expr| {
-                if let Expr::Sort { expr, asc, nulls_first } = expr {
+                if let Expr::Sort(Sort { expr, asc, nulls_first }) = expr {
                     if let Expr::Column(col) = expr.as_ref() {
                         let expr = physical_plan::expressions::col(&col.name, self.table_schema.as_ref())?;
                         Ok(PhysicalSortExpr {
@@ -515,12 +529,12 @@ impl ListingTable {
                     }
                     else {
                         Err(DataFusionError::Plan(
-                            format!("Only support single column references in output_ordering, got {:?}", expr)
+                            format!("Only support single column references in output_ordering, got {expr:?}")
                         ))
                     }
                 } else {
                     Err(DataFusionError::Plan(
-                        format!("Expected Expr::Sort in output_ordering, but got {:?}", expr)
+                        format!("Expected Expr::Sort in output_ordering, but got {expr:?}")
                     ))
                 }
             })
@@ -546,13 +560,13 @@ impl TableProvider for ListingTable {
 
     async fn scan(
         &self,
-        ctx: &SessionState,
+        state: &SessionState,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let (partitioned_file_lists, statistics) =
-            self.list_files_for_scan(ctx, filters, limit).await?;
+            self.list_files_for_scan(state, filters, limit).await?;
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
@@ -581,6 +595,7 @@ impl TableProvider for ListingTable {
         self.options
             .format
             .create_physical_plan(
+                state,
                 FileScanConfig {
                     object_store_url: self.table_paths.get(0).unwrap().object_store(),
                     file_schema: Arc::clone(&self.file_schema),
@@ -590,7 +605,7 @@ impl TableProvider for ListingTable {
                     limit,
                     output_ordering: self.try_create_output_ordering()?,
                     table_partition_cols,
-                    config_options: ctx.config.config_options(),
+                    infinite_source: self.infinite_source,
                 },
                 filters,
             )
@@ -635,7 +650,7 @@ impl ListingTable {
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
         let store = ctx
-            .runtime_env
+            .runtime_env()
             .object_store(self.table_paths.get(0).unwrap())?;
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
@@ -662,6 +677,7 @@ impl ListingTable {
                             .options
                             .format
                             .infer_stats(
+                                ctx,
                                 &store,
                                 self.file_schema.clone(),
                                 &part_file.object_meta,
@@ -690,8 +706,9 @@ impl ListingTable {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::datasource::file_format::file_type::GetExt;
-    use crate::prelude::SessionContext;
+    use crate::prelude::*;
     use crate::{
         datasource::file_format::{avro::AvroFormat, parquet::ParquetFormat},
         logical_expr::{col, lit},
@@ -700,8 +717,37 @@ mod tests {
     use arrow::datatypes::DataType;
     use chrono::DateTime;
     use datafusion_common::assert_contains;
+    use rstest::*;
+    use std::fs::File;
+    use tempfile::TempDir;
 
-    use super::*;
+    /// It creates dummy file and checks if it can create unbounded input executors.
+    async fn unbounded_table_helper(
+        file_type: FileType,
+        listing_option: ListingOptions,
+        infinite_data: bool,
+    ) -> Result<()> {
+        let ctx = SessionContext::new();
+        register_test_store(
+            &ctx,
+            &[(&format!("table/file{}", file_type.get_ext()), 100)],
+        );
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+
+        let table_path = ListingTableUrl::parse("test:///table/").unwrap();
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(listing_option)
+            .with_schema(Arc::new(schema));
+        // Create a table
+        let table = ListingTable::try_new(config)?;
+        // Create executor from table
+        let source_exec = table.scan(&ctx.state(), None, &[], None).await?;
+
+        assert_eq!(source_exec.unbounded_output(&[])?, infinite_data);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn read_single_file() -> Result<()> {
@@ -733,7 +779,7 @@ mod tests {
         let ctx = SessionContext::new();
         let state = ctx.state();
 
-        let opt = ListingOptions::new(Arc::new(ParquetFormat::new(ctx.config_options())));
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
         let schema = opt.infer_schema(&state, &table_path).await?;
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(opt)
@@ -748,6 +794,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_table_stats_when_no_stats() -> Result<()> {
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
+        let table_path = ListingTableUrl::parse(filename).unwrap();
+
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()))
+            .with_collect_stat(false);
+        let schema = opt.infer_schema(&state, &table_path).await?;
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(schema);
+        let table = ListingTable::try_new(config)?;
+
+        let exec = table.scan(&state, None, &[], None).await?;
+        assert_eq!(exec.statistics().num_rows, None);
+        assert_eq!(exec.statistics().total_byte_size, None);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_try_create_output_ordering() {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
@@ -755,11 +825,10 @@ mod tests {
 
         let ctx = SessionContext::new();
         let state = ctx.state();
-        let options =
-            ListingOptions::new(Arc::new(ParquetFormat::new(ctx.config_options())));
+        let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
         let schema = options.infer_schema(&state, &table_path).await.unwrap();
 
-        use physical_plan::expressions::col as physical_col;
+        use crate::physical_plan::expressions::col as physical_col;
         use std::ops::Add;
 
         // (file_sort_order, expected_result)
@@ -841,8 +910,7 @@ mod tests {
                 }
                 (expected_result, ordering_result) => {
                     panic!(
-                        "expected: {:#?}\n\nactual:{:#?}",
-                        expected_result, ordering_result
+                        "expected: {expected_result:#?}\n\nactual:{ordering_result:#?}"
                     );
                 }
             }
@@ -891,6 +959,96 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn unbounded_csv_table_without_schema() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let file_path = tmp_dir.path().join("dummy.csv");
+        File::create(file_path)?;
+        let ctx = SessionContext::new();
+        let error = ctx
+            .register_csv(
+                "test",
+                tmp_dir.path().to_str().unwrap(),
+                CsvReadOptions::new().mark_infinite(true),
+            )
+            .await
+            .unwrap_err();
+        match error {
+            DataFusionError::Plan(_) => Ok(()),
+            val => Err(val),
+        }
+    }
+
+    #[tokio::test]
+    async fn unbounded_json_table_without_schema() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let file_path = tmp_dir.path().join("dummy.json");
+        File::create(file_path)?;
+        let ctx = SessionContext::new();
+        let error = ctx
+            .register_json(
+                "test",
+                tmp_dir.path().to_str().unwrap(),
+                NdJsonReadOptions::default().mark_infinite(true),
+            )
+            .await
+            .unwrap_err();
+        match error {
+            DataFusionError::Plan(_) => Ok(()),
+            val => Err(val),
+        }
+    }
+
+    #[tokio::test]
+    async fn unbounded_avro_table_without_schema() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let file_path = tmp_dir.path().join("dummy.avro");
+        File::create(file_path)?;
+        let ctx = SessionContext::new();
+        let error = ctx
+            .register_avro(
+                "test",
+                tmp_dir.path().to_str().unwrap(),
+                AvroReadOptions::default().mark_infinite(true),
+            )
+            .await
+            .unwrap_err();
+        match error {
+            DataFusionError::Plan(_) => Ok(()),
+            val => Err(val),
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn unbounded_csv_table(
+        #[values(true, false)] infinite_data: bool,
+    ) -> Result<()> {
+        let config = CsvReadOptions::new().mark_infinite(infinite_data);
+        let listing_options = config.to_listing_options(1);
+        unbounded_table_helper(FileType::CSV, listing_options, infinite_data).await
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn unbounded_json_table(
+        #[values(true, false)] infinite_data: bool,
+    ) -> Result<()> {
+        let config = NdJsonReadOptions::default().mark_infinite(infinite_data);
+        let listing_options = config.to_listing_options(1);
+        unbounded_table_helper(FileType::JSON, listing_options, infinite_data).await
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn unbounded_avro_table(
+        #[values(true, false)] infinite_data: bool,
+    ) -> Result<()> {
+        let config = AvroReadOptions::default().mark_infinite(infinite_data);
+        let listing_options = config.to_listing_options(1);
+        unbounded_table_helper(FileType::AVRO, listing_options, infinite_data).await
     }
 
     #[tokio::test]
@@ -1034,7 +1192,7 @@ mod tests {
         name: &str,
     ) -> Result<Arc<dyn TableProvider>> {
         let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/{}", testdata, name);
+        let filename = format!("{testdata}/{name}");
         let table_path = ListingTableUrl::parse(filename).unwrap();
 
         let config = ListingTableConfig::new(table_path)

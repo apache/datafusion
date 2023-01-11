@@ -17,10 +17,11 @@
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use chrono::{DateTime, NaiveDateTime, Utc};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource};
 use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::{OptimizerConfig, OptimizerRule};
+use datafusion_optimizer::{OptimizerContext, OptimizerRule};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
@@ -43,13 +44,13 @@ fn case_when() -> Result<()> {
     let expected =
         "Projection: CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END AS CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END\
          \n  TableScan: test projection=[col_int32]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
 
     let sql = "SELECT CASE WHEN col_uint32 > 0 THEN 1 ELSE 0 END FROM test";
     let plan = test_sql(sql)?;
     let expected = "Projection: CASE WHEN test.col_uint32 > UInt32(0) THEN Int64(1) ELSE Int64(0) END AS CASE WHEN test.col_uint32 > Int64(0) THEN Int64(1) ELSE Int64(0) END\
                     \n  TableScan: test projection=[col_uint32]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -64,15 +65,15 @@ fn subquery_filter_with_cast() -> Result<()> {
     )";
     let plan = test_sql(sql)?;
     let expected = "Projection: test.col_int32\
-    \n  Filter: CAST(test.col_int32 AS Float64) > __sq_1.__value\
+    \n  Filter: CAST(test.col_int32 AS Float64) > __scalar_sq_1.__value\
     \n    CrossJoin:\
     \n      TableScan: test projection=[col_int32]\
-    \n      SubqueryAlias: __sq_1\
+    \n      SubqueryAlias: __scalar_sq_1\
     \n        Projection: AVG(test.col_int32) AS __value\
     \n          Aggregate: groupBy=[[]], aggr=[[AVG(test.col_int32)]]\
     \n            Filter: test.col_utf8 >= Utf8(\"2002-05-08\") AND test.col_utf8 <= Utf8(\"2002-05-13\")\
     \n              TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -83,7 +84,7 @@ fn case_when_aggregate() -> Result<()> {
     let expected = "Projection: test.col_utf8, SUM(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END) AS n\
                     \n  Aggregate: groupBy=[[test.col_utf8]], aggr=[[SUM(CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END) AS SUM(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END)]]\
                     \n    TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -94,7 +95,7 @@ fn unsigned_target_type() -> Result<()> {
     let expected = "Projection: test.col_utf8\
                     \n  Filter: test.col_uint32 > UInt32(0)\
                     \n    TableScan: test projection=[col_uint32, col_utf8]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -106,7 +107,7 @@ fn distribute_by() -> Result<()> {
     let expected = "Repartition: DistributeBy(col_utf8)\
     \n  Projection: test.col_int32, test.col_utf8\
     \n    TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -122,7 +123,7 @@ fn semi_join_with_join_filter() -> Result<()> {
                     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
                     \n    SubqueryAlias: t2\
                     \n      TableScan: test projection=[col_int32, col_uint32, col_utf8]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -138,7 +139,7 @@ fn anti_join_with_join_filter() -> Result<()> {
                     \n    TableScan: test projection=[col_int32, col_uint32, col_utf8]\
                     \n    SubqueryAlias: t2\
                     \n      TableScan: test projection=[col_int32, col_uint32, col_utf8]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -153,7 +154,7 @@ fn where_exists_distinct() -> Result<()> {
                     \n    TableScan: test projection=[col_int32]\
                     \n    SubqueryAlias: t2\
                     \n      TableScan: test projection=[col_int32]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -171,7 +172,7 @@ fn intersect() -> Result<()> {
     \n        TableScan: test projection=[col_int32, col_utf8]\
     \n      TableScan: test projection=[col_int32, col_utf8]\
     \n  TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -184,7 +185,7 @@ fn between_date32_plus_interval() -> Result<()> {
         "Projection: COUNT(Int64(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
         \n    Filter: test.col_date32 >= Date32(\"10303\") AND test.col_date32 <= Date32(\"10393\")\
         \n      TableScan: test projection=[col_date32]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -197,7 +198,7 @@ fn between_date64_plus_interval() -> Result<()> {
         "Projection: COUNT(Int64(1))\n  Aggregate: groupBy=[[]], aggr=[[COUNT(Int64(1))]]\
         \n    Filter: test.col_date64 >= Date64(\"890179200000\") AND test.col_date64 <= Date64(\"897955200000\")\
         \n      TableScan: test projection=[col_date64]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -210,7 +211,7 @@ fn concat_literals() -> Result<()> {
     let expected =
         "Projection: concat(Utf8(\"1\"), CAST(test.col_int32 AS Utf8), Utf8(\"0hello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
         \n  TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -223,7 +224,7 @@ fn concat_ws_literals() -> Result<()> {
     let expected =
         "Projection: concatwithseparator(Utf8(\"-\"), Utf8(\"1\"), CAST(test.col_int32 AS Utf8), Utf8(\"0-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
         \n  TableScan: test projection=[col_int32, col_utf8]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -240,7 +241,7 @@ fn timestamp_nano_ts_none_predicates() -> Result<()> {
         "Projection: test.col_int32\
          \n  Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)\
          \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
     Ok(())
 }
 
@@ -256,7 +257,7 @@ fn timestamp_nano_ts_utc_predicates() {
     let expected =
         "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
          \n    TableScan: test projection=[col_int32, col_ts_nano_utc]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
 }
 
 #[test]
@@ -265,7 +266,7 @@ fn propagate_empty_relation() {
     let plan = test_sql(sql).unwrap();
     // when children exist EmptyRelation, it will bottom-up propagate.
     let expected = "EmptyRelation";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
 }
 
 #[test]
@@ -281,7 +282,7 @@ fn join_keys_in_subquery_alias() {
     \n      Projection: test.col_int32 AS key\
     \n        Filter: test.col_int32 IS NOT NULL\
     \n          TableScan: test projection=[col_int32]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
 }
 
 #[test]
@@ -301,7 +302,7 @@ fn join_keys_in_subquery_alias_1() {
     \n          SubqueryAlias: c\
     \n            Filter: test.col_int32 IS NOT NULL\
     \n              TableScan: test projection=[col_int32]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
 }
 
 #[test]
@@ -313,7 +314,7 @@ fn push_down_filter_groupby_expr_contains_alias() {
     \n    Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[COUNT(UInt8(1))]]\
     \n      Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
     \n        TableScan: test projection=[col_int32, col_uint32]";
-    assert_eq!(expected, format!("{:?}", plan));
+    assert_eq!(expected, format!("{plan:?}"));
 }
 
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
@@ -323,22 +324,25 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let statement = &ast[0];
 
     // create a logical query plan
-    let schema_provider = MySchemaProvider {};
+    let schema_provider = MySchemaProvider::default();
     let sql_to_rel = SqlToRel::new(&schema_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
     // hard code the return value of now()
     let ts = NaiveDateTime::from_timestamp_opt(1666615693, 0).unwrap();
     let now_time = DateTime::<Utc>::from_utc(ts, Utc);
-    let mut config = OptimizerConfig::new()
+    let config = OptimizerContext::new()
         .with_skip_failing_rules(false)
         .with_query_execution_start_time(now_time);
-    let optimizer = Optimizer::new(&config);
+    let optimizer = Optimizer::new();
     // optimize the logical plan
-    optimizer.optimize(&plan, &mut config, &observe)
+    optimizer.optimize(&plan, &config, &observe)
 }
 
-struct MySchemaProvider {}
+#[derive(Default)]
+struct MySchemaProvider {
+    options: ConfigOptions,
+}
 
 impl ContextProvider for MySchemaProvider {
     fn get_table_provider(
@@ -390,11 +394,8 @@ impl ContextProvider for MySchemaProvider {
         None
     }
 
-    fn get_config_option(
-        &self,
-        _variable: &str,
-    ) -> Option<datafusion_common::ScalarValue> {
-        None
+    fn options(&self) -> &ConfigOptions {
+        &self.options
     }
 }
 

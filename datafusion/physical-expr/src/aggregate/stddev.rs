@@ -27,7 +27,7 @@ use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
 #[derive(Debug)]
@@ -73,23 +73,23 @@ impl AggregateExpr for Stddev {
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
     }
 
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
+    }
+
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
-                &format_state_name(&self.name, "count"),
+                format_state_name(&self.name, "count"),
                 DataType::UInt64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "mean"),
+                format_state_name(&self.name, "mean"),
                 DataType::Float64,
                 true,
             ),
-            Field::new(
-                &format_state_name(&self.name, "m2"),
-                DataType::Float64,
-                true,
-            ),
+            Field::new(format_state_name(&self.name, "m2"), DataType::Float64, true),
         ])
     }
 
@@ -132,23 +132,23 @@ impl AggregateExpr for StddevPop {
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
     }
 
+    fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
+    }
+
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
-                &format_state_name(&self.name, "count"),
+                format_state_name(&self.name, "count"),
                 DataType::UInt64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "mean"),
+                format_state_name(&self.name, "mean"),
                 DataType::Float64,
                 true,
             ),
-            Field::new(
-                &format_state_name(&self.name, "m2"),
-                DataType::Float64,
-                true,
-            ),
+            Field::new(format_state_name(&self.name, "m2"), DataType::Float64, true),
         ])
     }
 
@@ -180,16 +180,20 @@ impl StddevAccumulator {
 }
 
 impl Accumulator for StddevAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
-            AggregateState::Scalar(ScalarValue::from(self.variance.get_count())),
-            AggregateState::Scalar(ScalarValue::from(self.variance.get_mean())),
-            AggregateState::Scalar(ScalarValue::from(self.variance.get_m2())),
+            ScalarValue::from(self.variance.get_count()),
+            ScalarValue::from(self.variance.get_mean()),
+            ScalarValue::from(self.variance.get_m2()),
         ])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         self.variance.update_batch(values)
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.variance.retract_batch(values)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -315,8 +319,8 @@ mod tests {
             "bla".to_string(),
             DataType::Float64,
         ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
+        let actual = aggregate(&batch, agg).unwrap();
+        assert_eq!(actual, ScalarValue::Float64(None));
 
         Ok(())
     }
@@ -349,9 +353,8 @@ mod tests {
             "bla".to_string(),
             DataType::Float64,
         ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
-
+        let actual = aggregate(&batch, agg).unwrap();
+        assert_eq!(actual, ScalarValue::Float64(None));
         Ok(())
     }
 

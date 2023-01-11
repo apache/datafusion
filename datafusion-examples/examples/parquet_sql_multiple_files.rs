@@ -32,8 +32,7 @@ async fn main() -> Result<()> {
     let testdata = datafusion::test_util::parquet_test_data();
 
     // Configure listing options
-    let file_format =
-        ParquetFormat::new(ctx.config_options()).with_enable_pruning(Some(true));
+    let file_format = ParquetFormat::default().with_enable_pruning(Some(true));
     let listing_options = ListingOptions::new(Arc::new(file_format))
         .with_file_extension(FileType::PARQUET.get_ext());
 
@@ -41,7 +40,7 @@ async fn main() -> Result<()> {
     // for the query
     ctx.register_listing_table(
         "my_table",
-        &format!("file://{}", testdata),
+        &format!("file://{testdata}"),
         listing_options,
         None,
         None,
