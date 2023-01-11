@@ -2660,3 +2660,26 @@ async fn test_accumulator_row_accumulator() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_accumulator_row_accumulator_v2() -> Result<()> {
+    let config = SessionConfig::new();
+    let ctx = SessionContext::with_config(config);
+    register_aggregate_csv(&ctx).await?;
+
+    let sql = "SELECT MIN(c13) as min1, MIN(c9) as min2, MAX(c13) as max1, MAX(c9) as max2, AVG(c9) as avg1, MIN(c13) as min3, COUNT(C9) as cnt1, 0.5*SUM(c9-c8) as sum1
+    FROM aggregate_test_100
+    LIMIT 5";
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------------------------+----------+--------------------------------+------------+--------------+--------------------------------+------+----------------+",
+        "| min1                           | min2     | max1                           | max2       | avg1         | min3                           | cnt1 | sum1           |",
+        "+--------------------------------+----------+--------------------------------+------------+--------------+--------------------------------+------+----------------+",
+        "| 0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm | 28774375 | ydkwycaISlYSlEq3TlkS2m15I2pcp8 | 4268716378 | 2220897700.6 | 0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm | 100  | 111043376209.5 |",
+        "+--------------------------------+----------+--------------------------------+------------+--------------+--------------------------------+------+----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}

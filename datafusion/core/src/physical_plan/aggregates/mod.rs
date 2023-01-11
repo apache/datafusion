@@ -29,7 +29,7 @@ use crate::physical_plan::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
@@ -43,17 +43,13 @@ use std::sync::Arc;
 mod no_grouping;
 mod row_hash;
 
-use crate::physical_plan::aggregates::row_hash::{
-    read_as_batch, GroupedHashAggregateStreamV2, RowAggregationState,
-};
+use crate::physical_plan::aggregates::row_hash::GroupedHashAggregateStreamV2;
 use crate::physical_plan::EquivalenceProperties;
 pub use datafusion_expr::AggregateFunction;
 use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 use datafusion_physical_expr::equivalence::project_equivalence_properties;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
-use datafusion_row::accessor::RowAccessor;
-use datafusion_row::RowType;
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -619,14 +615,9 @@ fn create_accumulators_v2(
 /// final value (mode = Final) or states (mode = Partial)
 fn finalize_aggregation(
     accumulators: &[AccumulatorItem],
-    row_accumulators: &[AccumulatorItemV2],
     mode: &AggregateMode,
-    aggr_schema: &Schema,
-    aggr_state: &mut RowAggregationState,
-    output_schema: &Schema,
-    indices: &[Vec<(usize, (usize, usize))>],
 ) -> datafusion_common::Result<Vec<ArrayRef>> {
-    let acc_res = match mode {
+    match mode {
         AggregateMode::Partial => {
             // build the vector of states
             let a = accumulators
@@ -647,62 +638,7 @@ fn finalize_aggregation(
                 .map(|accumulator| accumulator.evaluate().map(|v| v.to_array()))
                 .collect::<datafusion_common::Result<Vec<ArrayRef>>>()
         }
-    }?;
-
-    let mut state_accessor = RowAccessor::new(aggr_schema, RowType::WordAligned);
-
-    let mut state_buffers = vec![aggr_state.group_states[0].aggregation_buffer.clone()];
-    let mut columns: Vec<ArrayRef> = vec![];
-    match mode {
-        AggregateMode::Partial => columns.extend(read_as_batch(
-            &state_buffers,
-            aggr_schema,
-            RowType::WordAligned,
-        )),
-        AggregateMode::Final | AggregateMode::FinalPartitioned => {
-            let mut results: Vec<Vec<ScalarValue>> = vec![vec![]; row_accumulators.len()];
-            for buffer in state_buffers.iter_mut() {
-                state_accessor.point_to(0, buffer);
-                for (i, acc) in row_accumulators.iter().enumerate() {
-                    results[i].push(acc.evaluate(&state_accessor).unwrap());
-                }
-            }
-            // We skip over the first `columns.len()` elements.
-            //
-            // This shouldn't panic if the `output_schema` has enough fields.
-            let remaining_field_iterator = output_schema.fields()[columns.len()..].iter();
-
-            for (scalars, field) in results.into_iter().zip(remaining_field_iterator) {
-                if !scalars.is_empty() {
-                    columns.push(ScalarValue::iter_to_array(scalars)?);
-                } else {
-                    columns.push(arrow::array::new_empty_array(field.data_type()))
-                }
-            }
-        }
-    };
-    let empty_arr = ScalarValue::iter_to_array(vec![ScalarValue::Null])?;
-    let n_res = indices[0]
-        .iter()
-        .map(|(_, range)| range.1 - range.0)
-        .sum::<usize>()
-        + indices[1]
-            .iter()
-            .map(|(_, range)| range.1 - range.0)
-            .sum::<usize>();
-    let mut res = vec![empty_arr; n_res];
-    let results = vec![acc_res, columns];
-    for (outer, cur_res) in results.into_iter().enumerate() {
-        let mut start_idx = 0;
-        let cur_indices = &indices[outer];
-        for (_idx, range) in cur_indices.iter() {
-            for elem in res.iter_mut().take(range.1).skip(range.0) {
-                *elem = cur_res[start_idx].clone();
-                start_idx += 1;
-            }
-        }
     }
-    Ok(res)
 }
 
 /// Evaluates expressions against a record batch.
