@@ -410,6 +410,7 @@ fn optimize_plan(
         | LogicalPlan::DropView(_)
         | LogicalPlan::SetVariable(_)
         | LogicalPlan::CrossJoin(_)
+        | LogicalPlan::Write(_)
         | LogicalPlan::Extension { .. }
         | LogicalPlan::Prepare(_) => {
             let expr = plan.expressions();

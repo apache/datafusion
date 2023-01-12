@@ -1180,6 +1180,12 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateView".to_string(),
                     ))
                 }
+                LogicalPlan::Write(_) => {
+                    // DataFusion is a read-only query engine, but also a library, so consumers may implement this
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: Write".to_string(),
+                    ))
+                }
                 LogicalPlan::SetVariable(_) => {
                     Err(DataFusionError::Internal(
                         "Unsupported logical plan: SetVariable must be root of the plan".to_string(),

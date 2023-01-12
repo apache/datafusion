@@ -27,7 +27,7 @@ pub use plan::{
     EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint, JoinType, Limit,
     LogicalPlan, Partitioning, PlanType, PlanVisitor, Prepare, Projection, Repartition,
     SetVariable, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
-    ToStringifiedPlan, Union, Values, Window,
+    ToStringifiedPlan, Union, Values, Window, WriteOp, WriteRel,
 };
 
 pub use display::display_schema;

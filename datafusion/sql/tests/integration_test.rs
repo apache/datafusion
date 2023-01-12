@@ -158,6 +158,43 @@ fn cast_to_invalid_decimal_type() {
 }
 
 #[test]
+fn plan_insert() {
+    let sql =
+        "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
+    let plan = r#"
+Write: op=[Insert] table=[person]
+  Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_update() {
+    let sql = "update person set last_name='Kay' where id=1";
+    let plan = r#"
+Write: op=[Update] table=[person]
+  Projection: Utf8("Kay") AS last_name, person.id AS id
+    Filter: person.id = Int64(1)
+      TableScan: person
+      "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_delete() {
+    let sql = "delete from person where id=1";
+    let plan = r#"
+Write: op=[Delete] table=[person]
+  Filter: id = Int64(1)
+    TableScan: person
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
 fn select_column_does_not_exist() {
     let sql = "SELECT doesnotexist FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");

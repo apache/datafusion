@@ -75,7 +75,7 @@ pub use logical_plan::{
     EmptyRelation, Explain, Extension, Filter, Join, JoinConstraint, JoinType, Limit,
     LogicalPlan, LogicalPlanBuilder, Partitioning, PlanType, PlanVisitor, Projection,
     Repartition, SetVariable, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
-    ToStringifiedPlan, Union, UserDefinedLogicalNode, Values, Window,
+    ToStringifiedPlan, Union, UserDefinedLogicalNode, Values, Window, WriteOp, WriteRel,
 };
 pub use nullif::SUPPORTED_NULLIF_TYPES;
 pub use operator::Operator;

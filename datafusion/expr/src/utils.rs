@@ -28,7 +28,7 @@ use crate::logical_plan::{
 };
 use crate::{
     BinaryExpr, Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator,
-    TableScan, TryCast,
+    TableScan, TryCast, WriteRel,
 };
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
@@ -489,6 +489,17 @@ pub fn from_plan(
                 schema.clone(),
             )?))
         }
+        LogicalPlan::Write(WriteRel {
+            table_name,
+            table_schema,
+            op,
+            ..
+        }) => Ok(LogicalPlan::Write(WriteRel {
+            table_name: table_name.clone(),
+            table_schema: table_schema.clone(),
+            op: op.clone(),
+            input: Arc::new(inputs[0].clone()),
+        })),
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),
             values: expr

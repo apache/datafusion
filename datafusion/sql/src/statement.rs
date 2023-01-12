@@ -25,21 +25,27 @@ use crate::planner::{
 use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, TableReference,
-    ToDFSchema,
+    DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
+    TableReference, ToDFSchema,
 };
+use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
+use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::{Analyze, Prepare};
+use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder, PlanType, SetVariable,
-    ToStringifiedPlan,
+    DropTable, DropView, Explain, Filter, LogicalPlan, LogicalPlanBuilder, PlanType,
+    SetVariable, ToStringifiedPlan, WriteOp, WriteRel,
 };
+use sqlparser::ast;
 use sqlparser::ast::{
-    Expr as SQLExpr, Ident, ObjectName, ObjectType, ShowCreateObject,
-    ShowStatementFilter, Statement, UnaryOperator, Value,
+    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query,
+    ShowCreateObject, ShowStatementFilter, Statement, TableFactor, TableWithJoins,
+    UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -253,6 +259,28 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table_name,
                 filter,
             } => self.show_columns_to_plan(extended, full, table_name, filter),
+
+            Statement::Insert {
+                table_name,
+                columns,
+                source,
+                ..
+            } => self.insert_to_plan(table_name, columns, source),
+
+            Statement::Update {
+                table,
+                assignments,
+                from,
+                selection,
+                ..
+            } => self.update_to_plan(table, assignments, from, selection),
+
+            Statement::Delete {
+                table_name,
+                selection,
+                ..
+            } => self.delete_to_plan(table_name, selection),
+
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL statement: {sql:?}"
             ))),
@@ -503,6 +531,191 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             value: value_string,
             schema: DFSchemaRef::new(DFSchema::empty()),
         }))
+    }
+
+    fn delete_to_plan(
+        &self,
+        table_factor: TableFactor,
+        predicate_expr: Option<Expr>,
+    ) -> Result<LogicalPlan> {
+        let table_name = match &table_factor {
+            TableFactor::Table { name, .. } => name.clone(),
+            _ => Err(DataFusionError::Plan(
+                "Unsupported table type for delete!".to_string(),
+            ))?,
+        };
+
+        // Do a table lookup to verify the table exists
+        let table_ref = object_name_to_table_reference(table_name.clone())?;
+        let provider = self
+            .schema_provider
+            .get_table_provider((&table_ref).into())?;
+        let schema = (*provider.schema()).clone();
+        let schema = DFSchema::try_from(schema)?;
+        let scan =
+            LogicalPlanBuilder::scan(table_name.to_string(), provider, None)?.build()?;
+        let mut planner_context = PlannerContext::new();
+
+        let source = match predicate_expr {
+            None => scan,
+            Some(predicate_expr) => {
+                let filter_expr =
+                    self.sql_to_expr(predicate_expr, &schema, &mut planner_context)?;
+                let schema = Arc::new(schema.clone());
+                let mut using_columns = HashSet::new();
+                expr_to_columns(&filter_expr, &mut using_columns)?;
+                let filter_expr = normalize_col_with_schemas(
+                    filter_expr,
+                    &[&schema],
+                    &[using_columns],
+                )?;
+                LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
+            }
+        };
+
+        let plan = LogicalPlan::Write(WriteRel {
+            table_name: table_ref,
+            table_schema: schema.into(),
+            op: WriteOp::Delete,
+            input: Arc::new(source),
+        });
+        Ok(plan)
+    }
+
+    fn update_to_plan(
+        &self,
+        table: TableWithJoins,
+        assignments: Vec<Assignment>,
+        from: Option<TableWithJoins>,
+        predicate_expr: Option<Expr>,
+    ) -> Result<LogicalPlan> {
+        let table_name = match &table.relation {
+            TableFactor::Table { name, .. } => name.clone(),
+            _ => Err(DataFusionError::Plan(
+                "Unsupported table type for update!".to_string(),
+            ))?,
+        };
+
+        // Do a table lookup to verify the table exists
+        let table_ref = object_name_to_table_reference(table_name)?;
+        let provider = self
+            .schema_provider
+            .get_table_provider((&table_ref).into())?;
+
+        // Build schema
+        let mut planner_context = PlannerContext::new();
+        let table_schema = provider.schema();
+        let mut fields = vec![];
+        let mut values = vec![];
+        for assign in assignments.iter() {
+            let col_name: &Ident = assign
+                .id
+                .iter()
+                .last()
+                .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
+            let col_name = col_name.value.as_str();
+            values.push((col_name.to_string(), assign.value.clone()));
+            let (_, field) =
+                table_schema
+                    .column_with_name(col_name)
+                    .ok_or(DataFusionError::Plan(format!(
+                        "Column not found: {col_name}"
+                    )))?;
+            let field = DFField::from(field.clone());
+            fields.push(field);
+        }
+
+        // Build scan
+        let from = from.unwrap_or(table);
+        let scan = self.plan_from_tables(vec![from], &mut planner_context)?;
+
+        // Filter
+        let source = match predicate_expr {
+            None => scan,
+            Some(predicate_expr) => {
+                let plan_schema = scan.schema();
+                let filter_expr =
+                    self.sql_to_expr(predicate_expr, plan_schema, &mut planner_context)?;
+                let schema = Arc::new(plan_schema.clone());
+                let mut using_columns = HashSet::new();
+                expr_to_columns(&filter_expr, &mut using_columns)?;
+                for use_col in using_columns.iter() {
+                    let col_name = use_col.name.clone();
+                    let rel = use_col.relation.as_ref().cloned();
+                    let field = plan_schema
+                        .field_with_name(rel.as_deref(), use_col.name.as_str())?
+                        .clone();
+                    fields.push(field.clone());
+                    values.push((
+                        col_name.clone(),
+                        ast::Expr::Identifier(ast::Ident::from(col_name.as_str())),
+                    ));
+                }
+                let filter_expr = normalize_col_with_schemas(
+                    filter_expr,
+                    &[&schema],
+                    &[using_columns],
+                )?;
+                LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
+            }
+        };
+
+        // Projection
+        let proj_schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
+        let mut exprs = vec![];
+        for (col_name, expr) in values.into_iter() {
+            let expr = self.sql_to_expr(expr, &proj_schema, &mut planner_context)?;
+            let expr = expr.alias(col_name);
+            exprs.push(expr);
+        }
+        let source = project(source, exprs)?;
+
+        let plan = LogicalPlan::Write(WriteRel {
+            table_name: table_ref,
+            table_schema: proj_schema.into(),
+            op: WriteOp::Update,
+            input: Arc::new(source),
+        });
+        Ok(plan)
+    }
+
+    fn insert_to_plan(
+        &self,
+        table_name: ObjectName,
+        columns: Vec<Ident>,
+        source: Box<Query>,
+    ) -> Result<LogicalPlan> {
+        // Do a table lookup to verify the table exists
+        let table_ref = object_name_to_table_reference(table_name)?;
+        let table = self
+            .schema_provider
+            .get_table_provider((&table_ref).into())?;
+
+        // Build schema
+        let schema = table.schema();
+        let mut fields = vec![];
+        for col in columns.iter() {
+            let (_, field) =
+                schema
+                    .column_with_name(&col.value)
+                    .ok_or(DataFusionError::Plan(format!(
+                        "Column not found: {}",
+                        col.value
+                    )))?;
+            let field = DFField::from(field.clone());
+            fields.push(field);
+        }
+        let schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
+
+        let mut planner_context = PlannerContext::new();
+        let source = self.query_to_plan(*source, &mut planner_context)?;
+        let plan = LogicalPlan::Write(WriteRel {
+            table_name: table_ref,
+            table_schema: Arc::new(schema),
+            op: WriteOp::Insert,
+            input: Arc::new(source),
+        });
+        Ok(plan)
     }
 
     fn show_columns_to_plan(
