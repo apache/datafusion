@@ -586,7 +586,7 @@ fn merge_expressions(
 }
 
 pub(crate) type AccumulatorItem = Box<dyn Accumulator>;
-pub(crate) type AccumulatorItemV2 = Box<dyn RowAccumulator>;
+pub(crate) type RowAccumulatorItem = Box<dyn RowAccumulator>;
 
 fn create_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],
@@ -599,7 +599,7 @@ fn create_accumulators(
 
 fn create_row_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],
-) -> datafusion_common::Result<Vec<AccumulatorItemV2>> {
+) -> datafusion_common::Result<Vec<RowAccumulatorItem>> {
     let mut state_index = 0;
     aggr_expr
         .iter()

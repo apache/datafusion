@@ -18,6 +18,7 @@
 //! Hash aggregation through row format
 
 use std::cmp::min;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
@@ -30,8 +31,8 @@ use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::execution::memory_pool::proxy::{RawTableAllocExt, VecAllocExt};
 use crate::physical_plan::aggregates::{
-    evaluate_group_by, evaluate_many, group_schema, AccumulatorItem, AccumulatorItemV2,
-    AggregateMode, PhysicalGroupBy,
+    evaluate_group_by, evaluate_many, group_schema, AccumulatorItem, AggregateMode,
+    PhysicalGroupBy, RowAccumulatorItem,
 };
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
@@ -91,7 +92,7 @@ struct GroupedHashAggregateStreamInner {
     row_aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
     group_by: PhysicalGroupBy,
-    row_accumulators: Vec<AccumulatorItemV2>,
+    row_accumulators: Vec<RowAccumulatorItem>,
 
     row_aggr_schema: SchemaRef,
     row_aggr_layout: Arc<RowLayout>,
@@ -307,7 +308,7 @@ fn group_aggregate_batch(
     random_state: &RandomState,
     grouping_set: &PhysicalGroupBy,
     normal_aggr_expr: &[Arc<dyn AggregateExpr>],
-    row_accumulators: &mut [AccumulatorItemV2],
+    row_accumulators: &mut [RowAccumulatorItem],
     state_layout: Arc<RowLayout>,
     batch: RecordBatch,
     aggr_state: &mut RowAggregationState,
@@ -605,7 +606,7 @@ fn create_batch_from_map(
     batch_size: usize,
     skip_items: usize,
     row_aggr_state: &mut RowAggregationState,
-    row_accumulators: &mut [AccumulatorItemV2],
+    row_accumulators: &mut [RowAccumulatorItem],
     output_schema: &Schema,
     indices: &[Vec<(usize, usize, usize)>],
     num_group_expr: usize,
@@ -633,7 +634,7 @@ fn create_batch_from_map(
         .collect::<Vec<_>>();
 
     let output_fields = output_schema.fields();
-    let mut row_columns = match mode {
+    let row_columns = match mode {
         AggregateMode::Partial => {
             read_as_batch(&state_buffers, aggr_schema, RowType::WordAligned)
         }
@@ -645,10 +646,13 @@ fn create_batch_from_map(
                     results[i].push(acc.evaluate(&state_accessor)?);
                 }
             }
-            // We skip over the first `columns.len()` elements.
-            //
-            // This shouldn't panic if the `output_schema` has enough fields.
-            let remaining_fields = output_fields[num_group_expr..].iter();
+            // We fill fields corresponding to row accumulators e.g indices[1]
+            let mut remaining_fields = vec![];
+            for (_, begin, end) in indices[1].iter() {
+                for field in &output_fields[*begin..*end] {
+                    remaining_fields.push(field);
+                }
+            }
             results
                 .into_iter()
                 .zip(remaining_fields)
@@ -656,27 +660,21 @@ fn create_batch_from_map(
                     if scalars.is_empty() {
                         Ok(arrow::array::new_empty_array(field.data_type()))
                     } else {
-                        ScalarValue::iter_to_array(scalars)
+                        let elem = ScalarValue::iter_to_array(scalars)?;
+                        // cast output if needed (e.g. for types like Dictionary where
+                        // the intermediate GroupByScalar type was not the same as the
+                        // output
+                        cast(&elem, field.data_type())
+                            .map_err(DataFusionError::ArrowError)
                     }
                 })
                 .collect::<Result<Vec<_>>>()?
         }
     };
 
-    // cast output if needed (e.g. for types like Dictionary where
-    // the intermediate GroupByScalar type was not the same as the
-    // output
-    let mut start_idx = 0;
-    for (_, begin, end) in indices[1].iter() {
-        for field in &output_fields[*begin..*end] {
-            row_columns[start_idx] = cast(&row_columns[start_idx], field.data_type())?;
-            start_idx += 1;
-        }
-    }
-
     // Calculate number/shape of state arrays
     let accs = &row_aggr_state.group_states[0].accumulator_set;
-    let acc_data_types = match mode {
+    let acc_state_lengths = match mode {
         AggregateMode::Partial => accs
             .iter()
             .map(|a| a.state().map(|s| s.len()))
@@ -686,40 +684,49 @@ fn create_batch_from_map(
         }
     };
 
+    // We fill fields corresponding to accumulators e.g indices[0]
+    let mut remaining_fields = VecDeque::new();
+    for (_, begin, end) in indices[0].iter() {
+        for field in &output_fields[*begin..*end] {
+            remaining_fields.push_back(field);
+        }
+    }
     // next, output aggregates: either intermediate state or final output
     let mut columns = vec![];
-    for (x, &state_len) in acc_data_types.iter().enumerate() {
+    for (idx, &state_len) in acc_state_lengths.iter().enumerate() {
         for y in 0..state_len {
-            columns.push(match mode {
+            let cur_col = match mode {
                 AggregateMode::Partial => ScalarValue::iter_to_array(
                     group_state_chunk.iter().map(|row_group_state| {
-                        row_group_state.accumulator_set[x]
+                        row_group_state.accumulator_set[idx]
                             .state()
-                            .map(|x| x[y].clone())
+                            .map(|elem| elem[y].clone())
                             .expect("unexpected accumulator state in hash aggregate")
                     }),
-                ),
+                )?,
                 AggregateMode::Final | AggregateMode::FinalPartitioned => {
                     ScalarValue::iter_to_array(group_state_chunk.iter().map(
                         |row_group_state| {
-                            row_group_state.accumulator_set[x]
+                            row_group_state.accumulator_set[idx]
                                 .evaluate()
                                 .expect("unexpected accumulator state in hash aggregate")
                         },
-                    ))
+                    ))?
                 }
-            }?);
-        }
-    }
-    // cast output if needed (e.g. for types like Dictionary where
-    // the intermediate GroupByScalar type was not the same as the
-    // output
-
-    let mut start_idx = 0;
-    for (_, begin, end) in indices[0].iter() {
-        for field in &output_fields[*begin..*end] {
-            columns[start_idx] = cast(&columns[start_idx], field.data_type())?;
-            start_idx += 1;
+            };
+            // cast output if needed (e.g. for types like Dictionary where
+            // the intermediate GroupByScalar type was not the same as the
+            // output
+            let casted_col = cast(
+                &cur_col,
+                remaining_fields
+                    .pop_front()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution("expects to have field".to_string())
+                    })?
+                    .data_type(),
+            )?;
+            columns.push(casted_col);
         }
     }
 
