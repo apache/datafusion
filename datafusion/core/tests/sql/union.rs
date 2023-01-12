@@ -175,6 +175,22 @@ async fn union_with_except_input() -> Result<()> {
         "      Projection: t1.name [name:UInt8;N]",
         "        TableScan: t1 projection=[name] [name:UInt8;N]",
     ];
+
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Union [name:UInt8;N]",
+        "    LeftAnti Join: t1.name = t2.name [name:UInt8;N]",
+        "      Distinct: [name:UInt8;N]",
+        "        TableScan: t1 projection=[name] [name:UInt8;N]",
+        "      Projection: t2.name [name:UInt8;N]",
+        "        TableScan: t2 projection=[name] [name:UInt8;N]",
+        "    LeftAnti Join: t2.name = t1.name [name:UInt8;N]",
+        "      Distinct: [name:UInt8;N]",
+        "        TableScan: t2 projection=[name] [name:UInt8;N]",
+        "      Projection: t1.name [name:UInt8;N]",
+        "        TableScan: t1 projection=[name] [name:UInt8;N]",
+    ];
+
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     assert_eq!(
@@ -207,15 +223,13 @@ async fn union_with_type_coercion() -> Result<()> {
         "  Union [id:Int32;N, name:UInt8;N]",
         "    LeftAnti Join: t1.id = CAST(t2.id AS Int32), t1.name = t2.name [id:Int32;N, name:UInt8;N]",
         "      Distinct: [id:Int32;N, name:UInt8;N]",
-        "        Projection: t1.id, t1.name [id:Int32;N, name:UInt8;N]",
-        "          TableScan: t1 projection=[id, name] [id:Int32;N, name:UInt8;N]",
+        "        TableScan: t1 projection=[id, name] [id:Int32;N, name:UInt8;N]",
         "      Projection: t2.id, t2.name [id:UInt8;N, name:UInt8;N]",
         "        TableScan: t2 projection=[id, name] [id:UInt8;N, name:UInt8;N]",
         "    Projection: CAST(t2.id AS Int32) AS id, t2.name [id:Int32;N, name:UInt8;N]",
         "      LeftAnti Join: CAST(t2.id AS Int32) = t1.id, t2.name = t1.name [id:UInt8;N, name:UInt8;N]",
         "        Distinct: [id:UInt8;N, name:UInt8;N]",
-        "          Projection: t2.id, t2.name [id:UInt8;N, name:UInt8;N]",
-        "            TableScan: t2 projection=[id, name] [id:UInt8;N, name:UInt8;N]",
+        "          TableScan: t2 projection=[id, name] [id:UInt8;N, name:UInt8;N]",
         "        Projection: t1.id, t1.name [id:Int32;N, name:UInt8;N]",
         "          TableScan: t1 projection=[id, name] [id:Int32;N, name:UInt8;N]",
     ];
