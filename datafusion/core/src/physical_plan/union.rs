@@ -30,6 +30,7 @@ use arrow::{
     datatypes::{Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_common::{DFSchemaRef, DataFusionError};
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use log::debug;
@@ -63,6 +64,38 @@ pub struct UnionExec {
 }
 
 impl UnionExec {
+    /// Create a new UnionExec with specified schema.
+    /// The `schema` should always be a subset of the schema of `inputs`,
+    /// otherwise, an error will be returned.
+    pub fn try_new_with_schema(
+        inputs: Vec<Arc<dyn ExecutionPlan>>,
+        schema: DFSchemaRef,
+    ) -> Result<Self> {
+        let mut exec = Self::new(inputs);
+        let exec_schema = exec.schema();
+        let fields = schema
+            .fields()
+            .iter()
+            .map(|dff| {
+                exec_schema
+                    .field_with_name(dff.name())
+                    .cloned()
+                    .map_err(|_| {
+                        DataFusionError::Internal(format!(
+                            "Cannot find the field {:?} in child schema",
+                            dff.name()
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<Field>>>()?;
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            exec.schema().metadata().clone(),
+        ));
+        exec.schema = schema;
+        Ok(exec)
+    }
+
     /// Create a new UnionExec
     pub fn new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Self {
         let fields: Vec<Field> = (0..inputs[0].schema().fields().len())
@@ -121,6 +154,13 @@ impl ExecutionPlan for UnionExec {
 
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.    
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        Ok(children.iter().any(|x| *x))
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -224,8 +264,7 @@ impl ExecutionPlan for UnionExec {
         warn!("Error in Union: Partition {} not found", partition);
 
         Err(crate::error::DataFusionError::Execution(format!(
-            "Partition {} not found in Union",
-            partition
+            "Partition {partition} not found in Union"
         )))
     }
 

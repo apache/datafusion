@@ -42,13 +42,10 @@
 
 pub mod context;
 pub mod disk_manager;
-pub mod memory_manager;
+pub mod memory_pool;
 pub mod options;
 pub mod registry;
 pub mod runtime_env;
 
 pub use disk_manager::DiskManager;
-pub use memory_manager::{
-    human_readable_size, MemoryConsumer, MemoryConsumerId, MemoryManager,
-};
 pub use registry::FunctionRegistry;

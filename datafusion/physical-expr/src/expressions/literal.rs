@@ -84,15 +84,14 @@ impl PhysicalExpr for Literal {
         Ok(self)
     }
 
-    #[allow(unused_variables)]
     /// Return the boundaries of this literal expression (which is the same as
     /// the value it represents).
-    fn boundaries(&self, context: &AnalysisContext) -> Option<ExprBoundaries> {
-        Some(ExprBoundaries::new(
+    fn analyze(&self, context: AnalysisContext) -> AnalysisContext {
+        context.with_boundaries(Some(ExprBoundaries::new(
             self.value.clone(),
             self.value.clone(),
             Some(1),
-        ))
+        )))
     }
 }
 
@@ -130,7 +129,7 @@ mod tests {
 
         // create and evaluate a literal expression
         let literal_expr = lit(42i32);
-        assert_eq!("42", format!("{}", literal_expr));
+        assert_eq!("42", format!("{literal_expr}"));
 
         let literal_array = literal_expr.evaluate(&batch)?.into_array(batch.num_rows());
         let literal_array = as_int32_array(&literal_array)?;
@@ -150,7 +149,8 @@ mod tests {
         let context = AnalysisContext::new(&schema, vec![]);
 
         let literal_expr = lit(42i32);
-        let boundaries = literal_expr.boundaries(&context).unwrap();
+        let result_ctx = literal_expr.analyze(context);
+        let boundaries = result_ctx.boundaries.unwrap();
         assert_eq!(boundaries.min_value, ScalarValue::Int32(Some(42)));
         assert_eq!(boundaries.max_value, ScalarValue::Int32(Some(42)));
         assert_eq!(boundaries.distinct_count, Some(1));

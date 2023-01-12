@@ -29,29 +29,16 @@ use arrow::{
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
 };
 use datafusion_common::{
-    cast::{as_int64_array, as_primitive_array, as_string_array},
+    cast::{
+        as_generic_string_array, as_int64_array, as_primitive_array, as_string_array,
+    },
     ScalarValue,
 };
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
-use std::any::type_name;
 use std::iter;
 use std::sync::Arc;
 use uuid::Uuid;
-
-macro_rules! downcast_string_arg {
-    ($ARG:expr, $NAME:expr, $T:ident) => {{
-        $ARG.as_any()
-            .downcast_ref::<GenericStringArray<T>>()
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "could not cast {} to {}",
-                    $NAME,
-                    type_name::<GenericStringArray<T>>()
-                ))
-            })?
-    }};
-}
 
 /// applies a unary expression to `args[0]` that is expected to be downcastable to
 /// a `GenericStringArray` and returns a `GenericStringArray` (which may have a different offset)
@@ -78,7 +65,7 @@ where
         )));
     }
 
-    let string_array = downcast_string_arg!(args[0], "string", T);
+    let string_array = as_generic_string_array::<T>(args[0])?;
 
     // first map is the iterator, second is for the `Option<_>`
     Ok(string_array.iter().map(|string| string.map(&op)).collect())
@@ -112,8 +99,7 @@ where
                 )?)))
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, name,
+                "Unsupported data type {other:?} for function {name}",
             ))),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
@@ -126,8 +112,7 @@ where
                 Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, name,
+                "Unsupported data type {other:?} for function {name}",
             ))),
         },
     }
@@ -136,7 +121,7 @@ where
 /// Returns the numeric code of the first character of the argument.
 /// ascii('x') = 120
 pub fn ascii<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = downcast_string_arg!(args[0], "string", T);
+    let string_array = as_generic_string_array::<T>(&args[0])?;
 
     let result = string_array
         .iter()
@@ -156,7 +141,7 @@ pub fn ascii<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         1 => {
-            let string_array = downcast_string_arg!(args[0], "string", T);
+            let string_array = as_generic_string_array::<T>(&args[0])?;
 
             let result = string_array
                 .iter()
@@ -170,8 +155,8 @@ pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         2 => {
-            let string_array = downcast_string_arg!(args[0], "string", T);
-            let characters_array = downcast_string_arg!(args[1], "characters", T);
+            let string_array = as_generic_string_array::<T>(&args[0])?;
+            let characters_array = as_generic_string_array::<T>(&args[1])?;
 
             let result = string_array
                 .iter()
@@ -193,8 +178,7 @@ pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => Err(DataFusionError::Internal(format!(
-            "btrim was called with {} arguments. It requires at least 1 and at most 2.",
-            other
+            "btrim was called with {other} arguments. It requires at least 1 and at most 2."
         ))),
     }
 }
@@ -335,7 +319,7 @@ pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Converts the first letter of each word to upper case and the rest to lower case. Words are sequences of alphanumeric characters separated by non-alphanumeric characters.
 /// initcap('hi THOMAS') = 'Hi Thomas'
 pub fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = downcast_string_arg!(args[0], "string", T);
+    let string_array = as_generic_string_array::<T>(&args[0])?;
 
     // first map is the iterator, second is for the `Option<_>`
     let result = string_array
@@ -350,9 +334,9 @@ pub fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     } else {
                         char_vector.push(c.to_ascii_uppercase());
                     }
-                    previous_character_letter_or_number = ('A'..='Z').contains(&c)
-                        || ('a'..='z').contains(&c)
-                        || ('0'..='9').contains(&c);
+                    previous_character_letter_or_number = c.is_ascii_uppercase()
+                        || c.is_ascii_lowercase()
+                        || c.is_ascii_digit();
                 }
                 char_vector.iter().collect::<String>()
             })
@@ -373,7 +357,7 @@ pub fn lower(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         1 => {
-            let string_array = downcast_string_arg!(args[0], "string", T);
+            let string_array = as_generic_string_array::<T>(&args[0])?;
 
             let result = string_array
                 .iter()
@@ -383,8 +367,8 @@ pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         2 => {
-            let string_array = downcast_string_arg!(args[0], "string", T);
-            let characters_array = downcast_string_arg!(args[1], "characters", T);
+            let string_array = as_generic_string_array::<T>(&args[0])?;
+            let characters_array = as_generic_string_array::<T>(&args[1])?;
 
             let result = string_array
                 .iter()
@@ -401,8 +385,7 @@ pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => Err(DataFusionError::Internal(format!(
-            "ltrim was called with {} arguments. It requires at least 1 and at most 2.",
-            other
+            "ltrim was called with {other} arguments. It requires at least 1 and at most 2."
         ))),
     }
 }
@@ -410,7 +393,7 @@ pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Repeats string the specified number of times.
 /// repeat('Pg', 4) = 'PgPgPgPg'
 pub fn repeat<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = downcast_string_arg!(args[0], "string", T);
+    let string_array = as_generic_string_array::<T>(&args[0])?;
     let number_array = as_int64_array(&args[1])?;
 
     let result = string_array
@@ -428,9 +411,9 @@ pub fn repeat<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Replaces all occurrences in string of substring from with substring to.
 /// replace('abcdefabcdef', 'cd', 'XX') = 'abXXefabXXef'
 pub fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = downcast_string_arg!(args[0], "string", T);
-    let from_array = downcast_string_arg!(args[1], "from", T);
-    let to_array = downcast_string_arg!(args[2], "to", T);
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let from_array = as_generic_string_array::<T>(&args[1])?;
+    let to_array = as_generic_string_array::<T>(&args[2])?;
 
     let result = string_array
         .iter()
@@ -450,7 +433,7 @@ pub fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         1 => {
-            let string_array = downcast_string_arg!(args[0], "string", T);
+            let string_array = as_generic_string_array::<T>(&args[0])?;
 
             let result = string_array
                 .iter()
@@ -460,8 +443,8 @@ pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         2 => {
-            let string_array = downcast_string_arg!(args[0], "string", T);
-            let characters_array = downcast_string_arg!(args[1], "characters", T);
+            let string_array = as_generic_string_array::<T>(&args[0])?;
+            let characters_array = as_generic_string_array::<T>(&args[1])?;
 
             let result = string_array
                 .iter()
@@ -478,8 +461,7 @@ pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         other => Err(DataFusionError::Internal(format!(
-            "rtrim was called with {} arguments. It requires at least 1 and at most 2.",
-            other
+            "rtrim was called with {other} arguments. It requires at least 1 and at most 2."
         ))),
     }
 }
@@ -487,8 +469,8 @@ pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Splits string at occurrences of delimiter and returns the n'th field (counting from one).
 /// split_part('abc~@~def~@~ghi', '~@~', 2) = 'def'
 pub fn split_part<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = downcast_string_arg!(args[0], "string", T);
-    let delimiter_array = downcast_string_arg!(args[1], "delimiter", T);
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let delimiter_array = as_generic_string_array::<T>(&args[1])?;
     let n_array = as_int64_array(&args[2])?;
     let result = string_array
         .iter()
@@ -518,8 +500,8 @@ pub fn split_part<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'
 pub fn starts_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let string_array = downcast_string_arg!(args[0], "string", T);
-    let prefix_array = downcast_string_arg!(args[1], "prefix", T);
+    let string_array = as_generic_string_array::<T>(&args[0])?;
+    let prefix_array = as_generic_string_array::<T>(&args[1])?;
 
     let result = string_array
         .iter()
@@ -544,9 +526,21 @@ where
     let result = integer_array
         .iter()
         .map(|integer| {
-            integer.map(|integer| format!("{:x}", integer.to_usize().unwrap()))
+            if let Some(value) = integer {
+                if let Some(value_usize) = value.to_usize() {
+                    Ok(Some(format!("{value_usize:x}")))
+                } else if let Some(value_isize) = value.to_isize() {
+                    Ok(Some(format!("{value_isize:x}")))
+                } else {
+                    Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {integer:?} for function to_hex",
+                    )))
+                }
+            } else {
+                Ok(None)
+            }
         })
-        .collect::<GenericStringArray<i32>>();
+        .collect::<Result<GenericStringArray<i32>>>()?;
 
     Ok(Arc::new(result) as ArrayRef)
 }
@@ -572,4 +566,52 @@ pub fn uuid(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let values = iter::repeat_with(|| Uuid::new_v4().to_string()).take(len);
     let array = GenericStringArray::<i32>::from_iter_values(values);
     Ok(ColumnarValue::Array(Arc::new(array)))
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::string_expressions;
+    use arrow::{array::Int32Array, datatypes::Int32Type};
+
+    use super::*;
+
+    #[test]
+    // Test to_hex function for zero
+    fn to_hex_zero() -> Result<()> {
+        let array = vec![0].into_iter().collect::<Int32Array>();
+        let array_ref = Arc::new(array);
+        let hex_value_arc = string_expressions::to_hex::<Int32Type>(&[array_ref])?;
+        let hex_value = as_string_array(&hex_value_arc)?;
+        let expected = StringArray::from(vec![Some("0")]);
+        assert_eq!(&expected, hex_value);
+
+        Ok(())
+    }
+
+    #[test]
+    // Test to_hex function for positive number
+    fn to_hex_positive_number() -> Result<()> {
+        let array = vec![100].into_iter().collect::<Int32Array>();
+        let array_ref = Arc::new(array);
+        let hex_value_arc = string_expressions::to_hex::<Int32Type>(&[array_ref])?;
+        let hex_value = as_string_array(&hex_value_arc)?;
+        let expected = StringArray::from(vec![Some("64")]);
+        assert_eq!(&expected, hex_value);
+
+        Ok(())
+    }
+
+    #[test]
+    // Test to_hex function for negative number
+    fn to_hex_negative_number() -> Result<()> {
+        let array = vec![-1].into_iter().collect::<Int32Array>();
+        let array_ref = Arc::new(array);
+        let hex_value_arc = string_expressions::to_hex::<Int32Type>(&[array_ref])?;
+        let hex_value = as_string_array(&hex_value_arc)?;
+        let expected = StringArray::from(vec![Some("ffffffffffffffff")]);
+        assert_eq!(&expected, hex_value);
+
+        Ok(())
+    }
 }

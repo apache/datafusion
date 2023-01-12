@@ -31,91 +31,6 @@ use rstest::rstest;
 use super::*;
 
 #[tokio::test]
-async fn information_schema_tables_not_exist_by_default() {
-    let ctx = SessionContext::new();
-
-    let err = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
-        .await
-        .unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        // Error propagates from SessionState::schema_for_ref
-        "Error during planning: failed to resolve schema: information_schema"
-    );
-}
-
-#[tokio::test]
-async fn information_schema_tables_no_tables() {
-    let ctx =
-        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
-
-    let result = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
-        .await
-        .unwrap();
-
-    let expected = vec![
-        "+---------------+--------------------+-------------+------------+",
-        "| table_catalog | table_schema       | table_name  | table_type |",
-        "+---------------+--------------------+-------------+------------+",
-        "| datafusion    | information_schema | columns     | VIEW       |",
-        "| datafusion    | information_schema | df_settings | VIEW       |",
-        "| datafusion    | information_schema | tables      | VIEW       |",
-        "| datafusion    | information_schema | views       | VIEW       |",
-        "+---------------+--------------------+-------------+------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
-}
-
-#[tokio::test]
-async fn information_schema_tables_tables_default_catalog() {
-    let ctx =
-        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
-
-    // Now, register an empty table
-    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
-        .unwrap();
-
-    let result = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
-        .await
-        .unwrap();
-
-    let expected = vec![
-        "+---------------+--------------------+-------------+------------+",
-        "| table_catalog | table_schema       | table_name  | table_type |",
-        "+---------------+--------------------+-------------+------------+",
-        "| datafusion    | information_schema | columns     | VIEW       |",
-        "| datafusion    | information_schema | df_settings | VIEW       |",
-        "| datafusion    | information_schema | tables      | VIEW       |",
-        "| datafusion    | information_schema | views       | VIEW       |",
-        "| datafusion    | public             | t           | BASE TABLE |",
-        "+---------------+--------------------+-------------+------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
-
-    // Newly added tables should appear
-    ctx.register_table("t2", table_with_sequence(1, 1).unwrap())
-        .unwrap();
-
-    let result = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
-        .await
-        .unwrap();
-
-    let expected = vec![
-        "+---------------+--------------------+-------------+------------+",
-        "| table_catalog | table_schema       | table_name  | table_type |",
-        "+---------------+--------------------+-------------+------------+",
-        "| datafusion    | information_schema | columns     | VIEW       |",
-        "| datafusion    | information_schema | df_settings | VIEW       |",
-        "| datafusion    | information_schema | tables      | VIEW       |",
-        "| datafusion    | information_schema | views       | VIEW       |",
-        "| datafusion    | public             | t           | BASE TABLE |",
-        "| datafusion    | public             | t2          | BASE TABLE |",
-        "+---------------+--------------------+-------------+------------+",
-    ];
-    assert_batches_sorted_eq!(expected, &result);
-}
-
-#[tokio::test]
 async fn information_schema_tables_tables_with_multiple_catalogs() {
     let ctx =
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));
@@ -190,8 +105,8 @@ async fn information_schema_tables_table_types() {
 
         async fn scan(
             &self,
-            _ctx: &SessionState,
-            _: &Option<Vec<usize>>,
+            _state: &SessionState,
+            _: Option<&Vec<usize>>,
             _: &[Expr],
             _: Option<usize>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -496,8 +411,7 @@ async fn information_schema_columns_not_exist_by_default() {
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        // Error propagates from SessionState::schema_for_ref
-        "Error during planning: failed to resolve schema: information_schema"
+        "Error during planning: table 'datafusion.information_schema.columns' not found"
     );
 }
 
@@ -668,96 +582,4 @@ async fn show_external_create_table() {
 /// Execute SQL and return results
 async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
-}
-
-#[tokio::test]
-async fn show_variable_in_config_options() {
-    let ctx =
-        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
-    let sql = "SHOW datafusion.execution.batch_size";
-    let results = plan_and_collect(&ctx, sql).await.unwrap();
-
-    let expected = vec![
-        "+---------------------------------+---------+",
-        "| name                            | setting |",
-        "+---------------------------------+---------+",
-        "| datafusion.execution.batch_size | 8192    |",
-        "+---------------------------------+---------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-}
-
-#[tokio::test]
-async fn show_all() {
-    let ctx =
-        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
-    let sql = "SHOW ALL";
-
-    let results = plan_and_collect(&ctx, sql).await.unwrap();
-
-    // Has all the default values, should be in order by name
-    let expected = vec![
-        "+-----------------------------------------------------------+---------+",
-        "| name                                                      | setting |",
-        "+-----------------------------------------------------------+---------+",
-        "| datafusion.catalog.location                               | NULL    |",
-        "| datafusion.catalog.type                                   | NULL    |",
-        "| datafusion.execution.batch_size                           | 8192    |",
-        "| datafusion.execution.coalesce_batches                     | true    |",
-        "| datafusion.execution.coalesce_target_batch_size           | 4096    |",
-        "| datafusion.execution.parquet.enable_page_index            | false   |",
-        "| datafusion.execution.parquet.pushdown_filters             | false   |",
-        "| datafusion.execution.parquet.reorder_filters              | false   |",
-        "| datafusion.execution.time_zone                            | +00:00  |",
-        "| datafusion.explain.logical_plan_only                      | false   |",
-        "| datafusion.explain.physical_plan_only                     | false   |",
-        "| datafusion.optimizer.filter_null_join_keys                | false   |",
-        "| datafusion.optimizer.hash_join_single_partition_threshold | 1048576 |",
-        "| datafusion.optimizer.max_passes                           | 3       |",
-        "| datafusion.optimizer.prefer_hash_join                     | true    |",
-        "| datafusion.optimizer.skip_failed_rules                    | true    |",
-        "| datafusion.optimizer.top_down_join_key_reordering         | true    |",
-        "+-----------------------------------------------------------+---------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-}
-
-#[tokio::test]
-async fn show_time_zone_default_utc() {
-    // https://github.com/apache/arrow-datafusion/issues/3255
-    let ctx =
-        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
-    let sql = "SHOW TIME ZONE";
-    let results = plan_and_collect(&ctx, sql).await.unwrap();
-
-    let expected = vec![
-        "+--------------------------------+---------+",
-        "| name                           | setting |",
-        "+--------------------------------+---------+",
-        "| datafusion.execution.time_zone | +00:00  |",
-        "+--------------------------------+---------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
-}
-
-#[tokio::test]
-async fn show_timezone_default_utc() {
-    // https://github.com/apache/arrow-datafusion/issues/3255
-    let ctx =
-        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
-    let sql = "SHOW TIMEZONE";
-    let results = plan_and_collect(&ctx, sql).await.unwrap();
-
-    let expected = vec![
-        "+--------------------------------+---------+",
-        "| name                           | setting |",
-        "+--------------------------------+---------+",
-        "| datafusion.execution.time_zone | +00:00  |",
-        "+--------------------------------+---------+",
-    ];
-
-    assert_batches_eq!(expected, &results);
 }

@@ -17,7 +17,7 @@
 
 //! Functions for creating logical expressions
 
-use crate::expr::{BinaryExpr, Cast, GroupingSet};
+use crate::expr::{AggregateFunction, BinaryExpr, Cast, GroupingSet, TryCast};
 use crate::{
     aggregate_function, built_in_function, conditional_expressions::CaseBuilder,
     logical_plan::Subquery, AccumulatorFunctionImplementation, AggregateUDF,
@@ -25,15 +25,21 @@ use crate::{
     ScalarFunctionImplementation, ScalarUDF, Signature, StateTypeFunction, Volatility,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::Result;
+use datafusion_common::{Column, Result};
 use std::sync::Arc;
 
 /// Create a column expression based on a qualified or unqualified column name
-pub fn col(ident: &str) -> Expr {
+///
+/// example:
+/// ```
+/// # use datafusion_expr::col;
+/// let c = col("my_column");
+/// ```
+pub fn col(ident: impl Into<Column>) -> Expr {
     Expr::Column(ident.into())
 }
 
-/// Return a new expression left <op> right
+/// Return a new expression `left <op> right`
 pub fn binary_expr(left: Expr, op: Operator, right: Expr) -> Expr {
     Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
 }
@@ -58,62 +64,62 @@ pub fn or(left: Expr, right: Expr) -> Expr {
 
 /// Create an expression to represent the min() aggregate function
 pub fn min(expr: Expr) -> Expr {
-    Expr::AggregateFunction {
-        fun: aggregate_function::AggregateFunction::Min,
-        distinct: false,
-        args: vec![expr],
-        filter: None,
-    }
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Min,
+        vec![expr],
+        false,
+        None,
+    ))
 }
 
 /// Create an expression to represent the max() aggregate function
 pub fn max(expr: Expr) -> Expr {
-    Expr::AggregateFunction {
-        fun: aggregate_function::AggregateFunction::Max,
-        distinct: false,
-        args: vec![expr],
-        filter: None,
-    }
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Max,
+        vec![expr],
+        false,
+        None,
+    ))
 }
 
 /// Create an expression to represent the sum() aggregate function
 pub fn sum(expr: Expr) -> Expr {
-    Expr::AggregateFunction {
-        fun: aggregate_function::AggregateFunction::Sum,
-        distinct: false,
-        args: vec![expr],
-        filter: None,
-    }
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Sum,
+        vec![expr],
+        false,
+        None,
+    ))
 }
 
 /// Create an expression to represent the avg() aggregate function
 pub fn avg(expr: Expr) -> Expr {
-    Expr::AggregateFunction {
-        fun: aggregate_function::AggregateFunction::Avg,
-        distinct: false,
-        args: vec![expr],
-        filter: None,
-    }
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Avg,
+        vec![expr],
+        false,
+        None,
+    ))
 }
 
 /// Create an expression to represent the count() aggregate function
 pub fn count(expr: Expr) -> Expr {
-    Expr::AggregateFunction {
-        fun: aggregate_function::AggregateFunction::Count,
-        distinct: false,
-        args: vec![expr],
-        filter: None,
-    }
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Count,
+        vec![expr],
+        false,
+        None,
+    ))
 }
 
 /// Create an expression to represent the count(distinct) aggregate function
 pub fn count_distinct(expr: Expr) -> Expr {
-    Expr::AggregateFunction {
-        fun: aggregate_function::AggregateFunction::Count,
-        distinct: true,
-        args: vec![expr],
-        filter: None,
-    }
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::Count,
+        vec![expr],
+        true,
+        None,
+    ))
 }
 
 /// Create an in_list expression
@@ -161,32 +167,32 @@ pub fn random() -> Expr {
 /// error distribution over all possible sets.
 /// It does not guarantee an upper bound on the error for any specific input set.
 pub fn approx_distinct(expr: Expr) -> Expr {
-    Expr::AggregateFunction {
-        fun: aggregate_function::AggregateFunction::ApproxDistinct,
-        distinct: false,
-        args: vec![expr],
-        filter: None,
-    }
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::ApproxDistinct,
+        vec![expr],
+        false,
+        None,
+    ))
 }
 
 /// Calculate an approximation of the median for `expr`.
 pub fn approx_median(expr: Expr) -> Expr {
-    Expr::AggregateFunction {
-        fun: aggregate_function::AggregateFunction::ApproxMedian,
-        distinct: false,
-        args: vec![expr],
-        filter: None,
-    }
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::ApproxMedian,
+        vec![expr],
+        false,
+        None,
+    ))
 }
 
 /// Calculate an approximation of the specified `percentile` for `expr`.
 pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
-    Expr::AggregateFunction {
-        fun: aggregate_function::AggregateFunction::ApproxPercentileCont,
-        distinct: false,
-        args: vec![expr, percentile],
-        filter: None,
-    }
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::ApproxPercentileCont,
+        vec![expr, percentile],
+        false,
+        None,
+    ))
 }
 
 /// Calculate an approximation of the specified `percentile` for `expr` and `weight_expr`.
@@ -195,12 +201,12 @@ pub fn approx_percentile_cont_with_weight(
     weight_expr: Expr,
     percentile: Expr,
 ) -> Expr {
-    Expr::AggregateFunction {
-        fun: aggregate_function::AggregateFunction::ApproxPercentileContWithWeight,
-        distinct: false,
-        args: vec![expr, weight_expr, percentile],
-        filter: None,
-    }
+    Expr::AggregateFunction(AggregateFunction::new(
+        aggregate_function::AggregateFunction::ApproxPercentileContWithWeight,
+        vec![expr, weight_expr, percentile],
+        false,
+        None,
+    ))
 }
 
 /// Create an EXISTS subquery expression
@@ -264,10 +270,7 @@ pub fn cast(expr: Expr, data_type: DataType) -> Expr {
 
 /// Create a try cast expression
 pub fn try_cast(expr: Expr, data_type: DataType) -> Expr {
-    Expr::TryCast {
-        expr: Box::new(expr),
-        data_type,
-    }
+    Expr::TryCast(TryCast::new(Box::new(expr), data_type))
 }
 
 /// Create is null expression

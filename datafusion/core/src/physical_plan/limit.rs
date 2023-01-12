@@ -30,7 +30,6 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, EquivalenceProperties, ExecutionPlan, Partitioning,
 };
 use arrow::array::ArrayRef;
-use arrow::compute::limit;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -106,10 +105,6 @@ impl ExecutionPlan for GlobalLimitExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        self.input.output_ordering().is_some()
-    }
-
     fn maintains_input_order(&self) -> bool {
         true
     }
@@ -149,8 +144,7 @@ impl ExecutionPlan for GlobalLimitExec {
         // GlobalLimitExec has a single output partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "GlobalLimitExec invalid partition {}",
-                partition
+                "GlobalLimitExec invalid partition {partition}"
             )));
         }
 
@@ -276,10 +270,6 @@ impl ExecutionPlan for LocalLimitExec {
         self.input.output_partitioning()
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        self.input.output_ordering().is_some()
-    }
-
     fn benefits_from_input_partitioning(&self) -> bool {
         false
     }
@@ -287,6 +277,10 @@ impl ExecutionPlan for LocalLimitExec {
     // Local limit will not change the input plan's ordering
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.input.output_ordering()
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        true
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -448,7 +442,7 @@ impl LimitStream {
             let limited_columns: Vec<ArrayRef> = batch
                 .columns()
                 .iter()
-                .map(|col| limit(col, batch_rows))
+                .map(|col| col.slice(0, col.len().min(batch_rows)))
                 .collect();
             Some(RecordBatch::try_new(batch.schema(), limited_columns).unwrap())
         }

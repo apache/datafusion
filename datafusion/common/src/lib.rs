@@ -18,6 +18,7 @@
 pub mod bisect;
 pub mod cast;
 mod column;
+pub mod config;
 pub mod delta;
 mod dfschema;
 mod error;
@@ -30,13 +31,14 @@ pub mod stats;
 mod table_reference;
 pub mod test_util;
 
+use arrow::compute::SortOptions;
 pub use column::Column;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
 pub use error::{field_not_found, DataFusionError, Result, SchemaError};
 pub use parsers::parse_interval;
 pub use scalar::{ScalarType, ScalarValue};
 pub use stats::{ColumnStatistics, Statistics};
-pub use table_reference::{ResolvedTableReference, TableReference};
+pub use table_reference::{OwnedTableReference, ResolvedTableReference, TableReference};
 
 /// Downcast an Arrow Array to a concrete type, return an `DataFusionError::Internal` if the cast is
 /// not possible. In normal usage of DataFusion the downcast should always succeed.
@@ -62,4 +64,13 @@ macro_rules! downcast_value {
             ))
         })?
     }};
+}
+
+/// Computes the "reverse" of given `SortOptions`.
+// TODO: If/when arrow supports `!` for `SortOptions`, we can remove this.
+pub fn reverse_sort_options(options: SortOptions) -> SortOptions {
+    SortOptions {
+        descending: !options.descending,
+        nulls_first: !options.nulls_first,
+    }
 }

@@ -18,20 +18,19 @@
 //! Crypto expressions
 
 use arrow::{
-    array::{
-        Array, ArrayRef, BinaryArray, GenericStringArray, OffsetSizeTrait, StringArray,
-    },
+    array::{Array, ArrayRef, BinaryArray, OffsetSizeTrait, StringArray},
     datatypes::DataType,
 };
 use blake2::{Blake2b512, Blake2s256, Digest};
 use blake3::Hasher as Blake3;
-use datafusion_common::cast::as_generic_binary_array;
+use datafusion_common::cast::{
+    as_binary_array, as_generic_binary_array, as_generic_string_array,
+};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use md5::Md5;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
-use std::any::type_name;
 use std::fmt::Write;
 use std::sync::Arc;
 use std::{fmt, str::FromStr};
@@ -67,18 +66,18 @@ fn digest_process(
                 digest_algorithm.digest_binary_array::<i64>(a.as_ref())
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, digest_algorithm,
+                "Unsupported data type {other:?} for function {digest_algorithm}",
             ))),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => Ok(digest_algorithm
-                .digest_scalar(&a.as_ref().map(|s: &String| s.as_bytes()))),
+            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => {
+                Ok(digest_algorithm
+                    .digest_scalar(a.as_ref().map(|s: &String| s.as_bytes())))
+            }
             ScalarValue::Binary(a) | ScalarValue::LargeBinary(a) => Ok(digest_algorithm
-                .digest_scalar(&a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
+                .digest_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))),
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function {}",
-                other, digest_algorithm,
+                "Unsupported data type {other:?} for function {digest_algorithm}",
             ))),
         },
     }
@@ -112,7 +111,7 @@ macro_rules! digest_to_scalar {
 
 impl DigestAlgorithm {
     /// digest an optional string to its hash value, null values are returned as is
-    fn digest_scalar(self, value: &Option<&[u8]>) -> ColumnarValue {
+    fn digest_scalar(self, value: Option<&[u8]>) -> ColumnarValue {
         ColumnarValue::Scalar(match self {
             Self::Md5 => digest_to_scalar!(Md5, value),
             Self::Sha224 => digest_to_scalar!(Sha224, value),
@@ -124,7 +123,7 @@ impl DigestAlgorithm {
             Self::Blake3 => ScalarValue::Binary(value.map(|v| {
                 let mut digest = Blake3::default();
                 digest.update(v);
-                digest.finalize().as_bytes().to_vec()
+                Blake3::finalize(&digest).as_bytes().to_vec()
             })),
         })
     }
@@ -150,7 +149,7 @@ impl DigestAlgorithm {
                         opt.map(|x| {
                             let mut digest = Blake3::default();
                             digest.update(x);
-                            digest.finalize().as_bytes().to_vec()
+                            Blake3::finalize(&digest).as_bytes().to_vec()
                         })
                     })
                     .collect();
@@ -165,15 +164,7 @@ impl DigestAlgorithm {
     where
         T: OffsetSizeTrait,
     {
-        let input_value = value
-            .as_any()
-            .downcast_ref::<GenericStringArray<T>>()
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "could not cast value to {}",
-                    type_name::<GenericStringArray<T>>()
-                ))
-            })?;
+        let input_value = as_generic_string_array::<T>(value)?;
         let array: ArrayRef = match self {
             Self::Md5 => digest_to_array!(Md5, input_value),
             Self::Sha224 => digest_to_array!(Sha224, input_value),
@@ -189,7 +180,7 @@ impl DigestAlgorithm {
                         opt.map(|x| {
                             let mut digest = Blake3::default();
                             digest.update(x.as_bytes());
-                            digest.finalize().as_bytes().to_vec()
+                            Blake3::finalize(&digest).as_bytes().to_vec()
                         })
                     })
                     .collect();
@@ -202,7 +193,7 @@ impl DigestAlgorithm {
 
 impl fmt::Display for DigestAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", format!("{:?}", self).to_lowercase())
+        write!(f, "{}", format!("{self:?}").to_lowercase())
     }
 }
 
@@ -234,9 +225,7 @@ impl FromStr for DigestAlgorithm {
                 .collect::<Vec<_>>()
                 .join(", ");
                 return Err(DataFusionError::Plan(format!(
-                    "There is no built-in digest algorithm named '{}', currently supported algorithms are: {}",
-                    name,
-                    options,
+                    "There is no built-in digest algorithm named '{name}', currently supported algorithms are: {options}",
                 )));
             }
         })
@@ -266,7 +255,7 @@ fn hex_encode<T: AsRef<[u8]>>(data: T) -> String {
     let mut s = String::with_capacity(data.as_ref().len() * 2);
     for b in data.as_ref() {
         // Writing to a string never errors, so we can unwrap here.
-        write!(&mut s, "{:02x}", b).unwrap();
+        write!(&mut s, "{b:02x}").unwrap();
     }
     s
 }
@@ -284,15 +273,7 @@ pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     // md5 requires special handling because of its unique utf8 return type
     Ok(match value {
         ColumnarValue::Array(array) => {
-            let binary_array = array
-                .as_ref()
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "Impossibly got non-binary array data from digest".into(),
-                    )
-                })?;
+            let binary_array = as_binary_array(&array)?;
             let string_array: StringArray = binary_array
                 .iter()
                 .map(|opt| opt.map(hex_encode::<_>))
@@ -362,8 +343,7 @@ pub fn digest(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 method.parse::<DigestAlgorithm>()
             }
             other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for function digest",
-                other,
+                "Unsupported data type {other:?} for function digest",
             ))),
         },
         ColumnarValue::Array(_) => Err(DataFusionError::Internal(

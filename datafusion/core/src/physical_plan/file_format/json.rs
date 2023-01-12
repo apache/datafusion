@@ -87,6 +87,10 @@ impl ExecutionPlan for NdJsonExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
+    fn unbounded_output(&self, _: &[bool]) -> Result<bool> {
+        Ok(self.base_config.infinite_source)
+    }
+
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         get_output_ordering(&self.base_config)
     }
@@ -119,19 +123,18 @@ impl ExecutionPlan for NdJsonExec {
             options
         };
 
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.base_config.object_store_url)?;
         let opener = JsonOpener {
             file_schema,
             options,
             file_compression_type: self.file_compression_type.to_owned(),
+            object_store,
         };
 
-        let stream = FileStream::new(
-            &self.base_config,
-            partition,
-            context,
-            opener,
-            self.metrics.clone(),
-        )?;
+        let stream =
+            FileStream::new(&self.base_config, partition, opener, self.metrics.clone())?;
 
         Ok(Box::pin(stream) as SendableRecordBatchStream)
     }
@@ -162,16 +165,14 @@ struct JsonOpener {
     options: DecoderOptions,
     file_schema: SchemaRef,
     file_compression_type: FileCompressionType,
+    object_store: Arc<dyn ObjectStore>,
 }
 
 impl FileOpener for JsonOpener {
-    fn open(
-        &self,
-        store: Arc<dyn ObjectStore>,
-        file_meta: FileMeta,
-    ) -> Result<FileOpenFuture> {
+    fn open(&self, file_meta: FileMeta) -> Result<FileOpenFuture> {
         let options = self.options.clone();
         let schema = self.file_schema.clone();
+        let store = self.object_store.clone();
         let file_compression_type = self.file_compression_type.to_owned();
         Ok(Box::pin(async move {
             match store.get(file_meta.location()).await? {
@@ -214,7 +215,7 @@ pub async fn plan_to_json(
             let mut tasks = vec![];
             for i in 0..plan.output_partitioning().partition_count() {
                 let plan = plan.clone();
-                let filename = format!("part-{}.json", i);
+                let filename = format!("part-{i}.json");
                 let path = fs_path.join(filename);
                 let file = fs::File::create(path)?;
                 let mut writer = json::LineDelimitedWriter::new(file);
@@ -233,13 +234,12 @@ pub async fn plan_to_json(
                 .await
                 .into_iter()
                 .try_for_each(|result| {
-                    result.map_err(|e| DataFusionError::Execution(format!("{}", e)))?
+                    result.map_err(|e| DataFusionError::Execution(format!("{e}")))?
                 })?;
             Ok(())
         }
         Err(e) => Err(DataFusionError::Execution(format!(
-            "Could not create directory {}: {:?}",
-            path, e
+            "Could not create directory {path}: {e:?}"
         ))),
     }
 }
@@ -252,7 +252,6 @@ mod tests {
     use object_store::local::LocalFileSystem;
 
     use crate::assert_batches_eq;
-    use crate::config::ConfigOptions;
     use crate::datasource::file_format::file_type::FileType;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::datasource::listing::PartitionedFile;
@@ -261,6 +260,7 @@ mod tests {
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
     use crate::test::partitioned_file_groups;
+    use datafusion_common::cast::{as_int32_array, as_int64_array};
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
@@ -270,11 +270,11 @@ mod tests {
     const TEST_DATA_BASE: &str = "tests/jsons";
 
     async fn prepare_store(
-        ctx: &SessionContext,
+        state: &SessionState,
         file_compression_type: FileCompressionType,
     ) -> (ObjectStoreUrl, Vec<Vec<PartitionedFile>>, SchemaRef) {
         let store_url = ObjectStoreUrl::local_filesystem();
-        let store = ctx.runtime_env().object_store(&store_url).unwrap();
+        let store = state.runtime_env().object_store(&store_url).unwrap();
 
         let filename = "1.json";
         let file_groups = partitioned_file_groups(
@@ -294,11 +294,66 @@ mod tests {
             .object_meta;
         let schema = JsonFormat::default()
             .with_file_compression_type(file_compression_type.to_owned())
-            .infer_schema(&store, &[meta.clone()])
+            .infer_schema(state, &store, &[meta.clone()])
             .await
             .unwrap();
 
         (store_url, file_groups, schema)
+    }
+
+    async fn test_additional_stores(
+        file_compression_type: FileCompressionType,
+        store: Arc<dyn ObjectStore>,
+    ) {
+        let ctx = SessionContext::new();
+        ctx.runtime_env()
+            .register_object_store("file", "", store.clone());
+        let filename = "1.json";
+        let file_groups = partitioned_file_groups(
+            TEST_DATA_BASE,
+            filename,
+            1,
+            FileType::JSON,
+            file_compression_type.to_owned(),
+        )
+        .unwrap();
+        let path = file_groups
+            .get(0)
+            .unwrap()
+            .get(0)
+            .unwrap()
+            .object_meta
+            .location
+            .as_ref();
+
+        let store_url = ObjectStoreUrl::local_filesystem();
+        let url: &Url = store_url.as_ref();
+        let path_buf = Path::new(url.path()).join(path);
+        let path = path_buf.to_str().unwrap();
+
+        let ext = FileType::JSON
+            .get_ext_with_compression(file_compression_type.to_owned())
+            .unwrap();
+
+        let read_options = NdJsonReadOptions::default()
+            .file_extension(ext.as_str())
+            .file_compression_type(file_compression_type.to_owned());
+        let frame = ctx.read_json(path, read_options).await.unwrap();
+        let results = frame.collect().await.unwrap();
+
+        assert_batches_eq!(
+            &[
+                "+-----+----------------+---------------+------+",
+                "| a   | b              | c             | d    |",
+                "+-----+----------------+---------------+------+",
+                "| 1   | [2, 1.3, -6.1] | [false, true] | 4    |",
+                "| -10 | [2, 1.3, -6.1] | [true, true]  | 4    |",
+                "| 2   | [2, , -6.1]    | [false, ]     | text |",
+                "|     |                |               |      |",
+                "+-----+----------------+---------------+------+",
+            ],
+            &results
+        );
     }
 
     #[rstest(
@@ -313,11 +368,12 @@ mod tests {
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
 
         let (object_store_url, file_groups, file_schema) =
-            prepare_store(&session_ctx, file_compression_type.to_owned()).await;
+            prepare_store(&state, file_compression_type.to_owned()).await;
 
         let exec = NdJsonExec::new(
             FileScanConfig {
@@ -328,8 +384,8 @@ mod tests {
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
+                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );
@@ -362,11 +418,7 @@ mod tests {
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 3);
-        let values = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
-            .unwrap();
+        let values = as_int64_array(batch.column(0))?;
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), -10);
         assert_eq!(values.value(2), 2);
@@ -386,10 +438,11 @@ mod tests {
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
         let (object_store_url, file_groups, actual_schema) =
-            prepare_store(&session_ctx, file_compression_type.to_owned()).await;
+            prepare_store(&state, file_compression_type.to_owned()).await;
 
         let mut fields = actual_schema.fields().clone();
         fields.push(Field::new("missing_col", DataType::Int32, true));
@@ -406,8 +459,8 @@ mod tests {
                 projection: None,
                 limit: Some(3),
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
+                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );
@@ -416,11 +469,7 @@ mod tests {
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 3);
-        let values = batch
-            .column(missing_field_idx)
-            .as_any()
-            .downcast_ref::<arrow::array::Int32Array>()
-            .unwrap();
+        let values = as_int32_array(batch.column(missing_field_idx))?;
         assert_eq!(values.len(), 3);
         assert!(values.is_null(0));
         assert!(values.is_null(1));
@@ -441,9 +490,10 @@ mod tests {
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
         let task_ctx = session_ctx.task_ctx();
         let (object_store_url, file_groups, file_schema) =
-            prepare_store(&session_ctx, file_compression_type.to_owned()).await;
+            prepare_store(&state, file_compression_type.to_owned()).await;
 
         let exec = NdJsonExec::new(
             FileScanConfig {
@@ -454,8 +504,8 @@ mod tests {
                 projection: Some(vec![0, 2]),
                 limit: None,
                 table_partition_cols: vec![],
-                config_options: ConfigOptions::new().into_shareable(),
                 output_ordering: None,
+                infinite_source: false,
             },
             file_compression_type.to_owned(),
         );
@@ -471,11 +521,7 @@ mod tests {
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 4);
-        let values = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
-            .unwrap();
+        let values = as_int64_array(batch.column(0))?;
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), -10);
         assert_eq!(values.value(2), 2);
@@ -489,7 +535,7 @@ mod tests {
         let ctx =
             SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
 
-        let path = format!("{}/1.json", TEST_DATA_BASE);
+        let path = format!("{TEST_DATA_BASE}/1.json");
 
         // register json file with the execution context
         ctx.register_json("test", path.as_str(), NdJsonReadOptions::default())
@@ -507,7 +553,7 @@ mod tests {
         let json_read_option = NdJsonReadOptions::default();
         ctx.register_json(
             "part0",
-            &format!("{}/part-0.json", out_dir),
+            &format!("{out_dir}/part-0.json"),
             json_read_option.clone(),
         )
         .await?;
@@ -538,66 +584,18 @@ mod tests {
         case(FileCompressionType::XZ)
     )]
     #[tokio::test]
-    async fn test_chunked(file_compression_type: FileCompressionType) {
-        let mut ctx = SessionContext::new();
-
-        for chunk_size in [10, 20, 30, 40] {
-            ctx.runtime_env().register_object_store(
-                "file",
-                "",
-                Arc::new(ChunkedStore::new(
-                    Arc::new(LocalFileSystem::new()),
-                    chunk_size,
-                )),
-            );
-
-            let filename = "1.json";
-            let file_groups = partitioned_file_groups(
-                TEST_DATA_BASE,
-                filename,
-                1,
-                FileType::JSON,
-                file_compression_type.to_owned(),
-            )
-            .unwrap();
-            let path = file_groups
-                .get(0)
-                .unwrap()
-                .get(0)
-                .unwrap()
-                .object_meta
-                .location
-                .as_ref();
-
-            let store_url = ObjectStoreUrl::local_filesystem();
-            let url: &Url = store_url.as_ref();
-            let path_buf = Path::new(url.path()).join(path);
-            let path = path_buf.to_str().unwrap();
-
-            let ext = FileType::JSON
-                .get_ext_with_compression(file_compression_type.to_owned())
-                .unwrap();
-
-            let read_options = NdJsonReadOptions::default()
-                .file_extension(ext.as_str())
-                .file_compression_type(file_compression_type.to_owned());
-            let frame = ctx.read_json(path, read_options).await.unwrap();
-            let results = frame.collect().await.unwrap();
-
-            assert_batches_eq!(
-                &[
-                    "+-----+----------------+---------------+------+",
-                    "| a   | b              | c             | d    |",
-                    "+-----+----------------+---------------+------+",
-                    "| 1   | [2, 1.3, -6.1] | [false, true] | 4    |",
-                    "| -10 | [2, 1.3, -6.1] | [true, true]  | 4    |",
-                    "| 2   | [2, , -6.1]    | [false, ]     | text |",
-                    "|     |                |               |      |",
-                    "+-----+----------------+---------------+------+",
-                ],
-                &results
-            );
-        }
+    async fn test_chunked_json(
+        file_compression_type: FileCompressionType,
+        #[values(10, 20, 30, 40)] chunk_size: usize,
+    ) {
+        test_additional_stores(
+            file_compression_type,
+            Arc::new(ChunkedStore::new(
+                Arc::new(LocalFileSystem::new()),
+                chunk_size,
+            )),
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -613,7 +611,7 @@ mod tests {
             .write_json(&out_dir)
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{}", e));
+        assert_eq!("Arrow error: Parser error: Error while parsing value d for column 0 at line 4", format!("{e}"));
         Ok(())
     }
 }

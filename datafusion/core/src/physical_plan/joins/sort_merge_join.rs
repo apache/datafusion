@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::array::*;
-use arrow::compute::{take, SortOptions};
+use arrow::compute::{concat_batches, take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
@@ -40,7 +40,6 @@ use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::logical_expr::JoinType;
-use crate::physical_plan::common::combine_batches;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::joins::utils::{
@@ -114,33 +113,21 @@ impl SortMergeJoinExec {
             )));
         }
 
-        let (left_expr, right_expr): (Vec<_>, Vec<_>) = on
+        let (left_sort_exprs, right_sort_exprs): (Vec<_>, Vec<_>) = on
             .iter()
-            .map(|(l, r)| {
-                (
-                    Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
-                    Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
-                )
+            .zip(sort_options.iter())
+            .map(|((l, r), sort_op)| {
+                let left = PhysicalSortExpr {
+                    expr: Arc::new(l.clone()) as Arc<dyn PhysicalExpr>,
+                    options: *sort_op,
+                };
+                let right = PhysicalSortExpr {
+                    expr: Arc::new(r.clone()) as Arc<dyn PhysicalExpr>,
+                    options: *sort_op,
+                };
+                (left, right)
             })
             .unzip();
-
-        let left_sort_exprs = left_expr
-            .into_iter()
-            .zip(sort_options.iter())
-            .map(|(k, sort_op)| PhysicalSortExpr {
-                expr: k,
-                options: *sort_op,
-            })
-            .collect::<Vec<_>>();
-
-        let right_sort_exprs = right_expr
-            .into_iter()
-            .zip(sort_options.iter())
-            .map(|(k, sort_op)| PhysicalSortExpr {
-                expr: k,
-                options: *sort_op,
-            })
-            .collect::<Vec<_>>();
 
         let output_ordering = match join_type {
             JoinType::Inner
@@ -1085,8 +1072,7 @@ impl SMJStream {
     }
 
     fn output_record_batch_and_reset(&mut self) -> ArrowResult<RecordBatch> {
-        let record_batch =
-            combine_batches(&self.output_record_batches, self.schema.clone())?.unwrap();
+        let record_batch = concat_batches(&self.schema, &self.output_record_batches)?;
         self.join_metrics.output_batches.add(1);
         self.join_metrics.output_rows.add(record_batch.num_rows());
         self.output_size -= record_batch.num_rows();

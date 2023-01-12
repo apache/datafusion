@@ -26,6 +26,7 @@ use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use std::cmp::min;
 use std::collections::VecDeque;
 use std::fmt::Debug;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// This object stores the window frame state for use in incremental calculations.
@@ -43,26 +44,21 @@ pub enum WindowFrameContext<'a> {
         window_frame: &'a Arc<WindowFrame>,
         state: WindowFrameStateGroups,
     },
-    Default,
 }
 
 impl<'a> WindowFrameContext<'a> {
     /// Create a new default state for the given window frame.
-    pub fn new(window_frame: &'a Option<Arc<WindowFrame>>) -> Self {
-        if let Some(window_frame) = window_frame {
-            match window_frame.units {
-                WindowFrameUnits::Rows => WindowFrameContext::Rows(window_frame),
-                WindowFrameUnits::Range => WindowFrameContext::Range {
-                    window_frame,
-                    state: WindowFrameStateRange::default(),
-                },
-                WindowFrameUnits::Groups => WindowFrameContext::Groups {
-                    window_frame,
-                    state: WindowFrameStateGroups::default(),
-                },
-            }
-        } else {
-            WindowFrameContext::Default
+    pub fn new(window_frame: &'a Arc<WindowFrame>) -> Self {
+        match window_frame.units {
+            WindowFrameUnits::Rows => WindowFrameContext::Rows(window_frame),
+            WindowFrameUnits::Range => WindowFrameContext::Range {
+                window_frame,
+                state: WindowFrameStateRange::default(),
+            },
+            WindowFrameUnits::Groups => WindowFrameContext::Groups {
+                window_frame,
+                state: WindowFrameStateGroups::default(),
+            },
         }
     }
 
@@ -73,7 +69,7 @@ impl<'a> WindowFrameContext<'a> {
         sort_options: &[SortOptions],
         length: usize,
         idx: usize,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<Range<usize>> {
         match *self {
             WindowFrameContext::Rows(window_frame) => {
                 Self::calculate_range_rows(window_frame, length, idx)
@@ -96,7 +92,6 @@ impl<'a> WindowFrameContext<'a> {
                 window_frame,
                 ref mut state,
             } => state.calculate_range(window_frame, range_columns, length, idx),
-            WindowFrameContext::Default => Ok((0, length)),
         }
     }
 
@@ -105,7 +100,7 @@ impl<'a> WindowFrameContext<'a> {
         window_frame: &Arc<WindowFrame>,
         length: usize,
         idx: usize,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<Range<usize>> {
         let start = match window_frame.start_bound {
             // UNBOUNDED PRECEDING
             WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => 0,
@@ -120,8 +115,7 @@ impl<'a> WindowFrameContext<'a> {
             // UNBOUNDED FOLLOWING
             WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
                 return Err(DataFusionError::Internal(format!(
-                    "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
-                    window_frame
+                    "Frame start cannot be UNBOUNDED FOLLOWING '{window_frame:?}'"
                 )))
             }
             WindowFrameBound::Following(ScalarValue::UInt64(Some(n))) => {
@@ -136,8 +130,7 @@ impl<'a> WindowFrameContext<'a> {
             // UNBOUNDED PRECEDING
             WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
                 return Err(DataFusionError::Internal(format!(
-                    "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
-                    window_frame
+                    "Frame end cannot be UNBOUNDED PRECEDING '{window_frame:?}'"
                 )))
             }
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => {
@@ -158,7 +151,7 @@ impl<'a> WindowFrameContext<'a> {
                 return Err(DataFusionError::Internal("Rows should be Uint".to_string()))
             }
         };
-        Ok((start, end))
+        Ok(Range { start, end })
     }
 }
 
@@ -177,7 +170,7 @@ impl WindowFrameStateRange {
         sort_options: &[SortOptions],
         length: usize,
         idx: usize,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<Range<usize>> {
         let start = match window_frame.start_bound {
             WindowFrameBound::Preceding(ref n) => {
                 if n.is_null() {
@@ -246,7 +239,7 @@ impl WindowFrameStateRange {
                 }
             }
         };
-        Ok((start, end))
+        Ok(Range { start, end })
     }
 
     /// This function does the heavy lifting when finding range boundaries. It is meant to be
@@ -339,7 +332,7 @@ impl WindowFrameStateGroups {
         range_columns: &[ArrayRef],
         length: usize,
         idx: usize,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<Range<usize>> {
         if range_columns.is_empty() {
             return Err(DataFusionError::Execution(
                 "GROUPS mode requires an ORDER BY clause".to_string(),
@@ -361,8 +354,7 @@ impl WindowFrameStateGroups {
             // UNBOUNDED FOLLOWING
             WindowFrameBound::Following(ScalarValue::UInt64(None)) => {
                 return Err(DataFusionError::Internal(format!(
-                    "Frame start cannot be UNBOUNDED FOLLOWING '{:?}'",
-                    window_frame
+                    "Frame start cannot be UNBOUNDED FOLLOWING '{window_frame:?}'"
                 )))
             }
             // ERRONEOUS FRAMES
@@ -376,8 +368,7 @@ impl WindowFrameStateGroups {
             // UNBOUNDED PRECEDING
             WindowFrameBound::Preceding(ScalarValue::UInt64(None)) => {
                 return Err(DataFusionError::Internal(format!(
-                    "Frame end cannot be UNBOUNDED PRECEDING '{:?}'",
-                    window_frame
+                    "Frame end cannot be UNBOUNDED PRECEDING '{window_frame:?}'"
                 )))
             }
             WindowFrameBound::Preceding(ScalarValue::UInt64(Some(n))) => self
@@ -405,7 +396,7 @@ impl WindowFrameStateGroups {
                 ))
             }
         };
-        Ok((start, end))
+        Ok(Range { start, end })
     }
 
     /// This function does the heavy lifting when finding group boundaries. It is meant to be

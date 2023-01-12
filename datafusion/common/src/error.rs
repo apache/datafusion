@@ -21,6 +21,7 @@ use std::error;
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::result;
+use std::sync::Arc;
 
 use crate::{Column, DFSchema};
 #[cfg(feature = "avro")]
@@ -181,22 +182,20 @@ impl Display for SchemaError {
             Self::DuplicateQualifiedField { qualifier, name } => {
                 write!(
                     f,
-                    "Schema contains duplicate qualified field name '{}'.'{}'",
-                    qualifier, name
+                    "Schema contains duplicate qualified field name '{qualifier}'.'{name}'"
                 )
             }
             Self::DuplicateUnqualifiedField { name } => {
                 write!(
                     f,
-                    "Schema contains duplicate unqualified field name '{}'",
-                    name
+                    "Schema contains duplicate unqualified field name '{name}'"
                 )
             }
             Self::AmbiguousReference { qualifier, name } => {
                 if let Some(q) = qualifier {
-                    write!(f, "Schema contains qualified field name '{}'.'{}' and unqualified field name '{}' which would be ambiguous", q, name, name)
+                    write!(f, "Schema contains qualified field name '{q}'.'{name}' and unqualified field name '{name}' which would be ambiguous")
                 } else {
-                    write!(f, "Ambiguous reference to unqualified field '{}'", name)
+                    write!(f, "Ambiguous reference to unqualified field '{name}'")
                 }
             }
         }
@@ -275,48 +274,48 @@ impl From<GenericError> for DataFusionError {
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match *self {
-            DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {}", desc),
+            DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {desc}"),
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(ref desc) => {
-                write!(f, "Parquet error: {}", desc)
+                write!(f, "Parquet error: {desc}")
             }
             #[cfg(feature = "avro")]
             DataFusionError::AvroError(ref desc) => {
                 write!(f, "Avro error: {}", desc)
             }
-            DataFusionError::IoError(ref desc) => write!(f, "IO error: {}", desc),
+            DataFusionError::IoError(ref desc) => write!(f, "IO error: {desc}"),
             DataFusionError::SQL(ref desc) => {
-                write!(f, "SQL error: {:?}", desc)
+                write!(f, "SQL error: {desc:?}")
             }
             DataFusionError::NotImplemented(ref desc) => {
-                write!(f, "This feature is not implemented: {}", desc)
+                write!(f, "This feature is not implemented: {desc}")
             }
             DataFusionError::Internal(ref desc) => {
-                write!(f, "Internal error: {}. This was likely caused by a bug in DataFusion's \
-                    code and we would welcome that you file an bug report in our issue tracker", desc)
+                write!(f, "Internal error: {desc}. This was likely caused by a bug in DataFusion's \
+                    code and we would welcome that you file an bug report in our issue tracker")
             }
             DataFusionError::Plan(ref desc) => {
-                write!(f, "Error during planning: {}", desc)
+                write!(f, "Error during planning: {desc}")
             }
             DataFusionError::SchemaError(ref desc) => {
-                write!(f, "Schema error: {}", desc)
+                write!(f, "Schema error: {desc}")
             }
             DataFusionError::Execution(ref desc) => {
-                write!(f, "Execution error: {}", desc)
+                write!(f, "Execution error: {desc}")
             }
             DataFusionError::ResourcesExhausted(ref desc) => {
-                write!(f, "Resources exhausted: {}", desc)
+                write!(f, "Resources exhausted: {desc}")
             }
             DataFusionError::External(ref desc) => {
-                write!(f, "External error: {}", desc)
+                write!(f, "External error: {desc}")
             }
             #[cfg(feature = "jit")]
             DataFusionError::JITError(ref desc) => {
-                write!(f, "JIT error: {}", desc)
+                write!(f, "JIT error: {desc}")
             }
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(ref desc) => {
-                write!(f, "Object Store error: {}", desc)
+                write!(f, "Object Store error: {desc}")
             }
             DataFusionError::Context(ref desc, ref err) => {
                 write!(f, "{}\ncaused by\n{}", desc, *err)
@@ -333,8 +332,113 @@ impl From<DataFusionError> for io::Error {
     }
 }
 
+/// Helper for [`DataFusionError::find_root`].
+enum OtherErr<'a> {
+    Arrow(&'a ArrowError),
+    Dyn(&'a (dyn std::error::Error + Send + Sync + 'static)),
+}
+
+impl DataFusionError {
+    /// Get deepest underlying [`DataFusionError`]
+    ///
+    /// [`DataFusionError`]s sometimes form a chain, such as `DataFusionError::ArrowError()` in order to conform
+    /// to the correct error signature. Thus sometimes there is a chain several layers deep that can obscure the
+    /// original error. This function finds the lowest level DataFusionError possible.
+    ///
+    /// For example,  `find_root` will return`DataFusionError::ResourceExhausted` given the input
+    /// ```text
+    /// DataFusionError::ArrowError
+    ///   ArrowError::External
+    ///    Box(DataFusionError::Context)
+    ///      DataFusionError::ResourceExhausted
+    /// ```
+    ///
+    /// This may be the same as `self`.
+    pub fn find_root(&self) -> &Self {
+        // Note: This is a non-recursive algorithm so we do not run out of stack space, even for long error chains. The
+        //       algorithm will always terminate because all steps access the next error through "converging" ownership,
+        //       i.e. there can be a fan-in by multiple parents (e.g. via `Arc`), but never a fan-out by multiple
+        //       children (e.g. via `Weak` or interior mutability via `Mutex`).
+
+        // last error in the chain that was a DataFusionError
+        let mut checkpoint: &Self = self;
+
+        // current non-DataFusion error
+        let mut other_e: Option<OtherErr<'_>> = None;
+
+        loop {
+            // do we have another error type to explore?
+            if let Some(inner) = other_e {
+                // `other_e` is now bound to `inner`, so we can clear this path
+                other_e = None;
+
+                match inner {
+                    OtherErr::Arrow(inner) => {
+                        if let ArrowError::ExternalError(inner) = inner {
+                            other_e = Some(OtherErr::Dyn(inner.as_ref()));
+                            continue;
+                        }
+                    }
+                    OtherErr::Dyn(inner) => {
+                        if let Some(inner) = inner.downcast_ref::<Self>() {
+                            checkpoint = inner;
+                            continue;
+                        }
+
+                        if let Some(inner) = inner.downcast_ref::<ArrowError>() {
+                            other_e = Some(OtherErr::Arrow(inner));
+                            continue;
+                        }
+
+                        // some errors are wrapped into `Arc`s to share them with multiple receivers
+                        if let Some(inner) = inner.downcast_ref::<Arc<Self>>() {
+                            checkpoint = inner.as_ref();
+                            continue;
+                        }
+
+                        if let Some(inner) = inner.downcast_ref::<Arc<ArrowError>>() {
+                            other_e = Some(OtherErr::Arrow(inner.as_ref()));
+                            continue;
+                        }
+                    }
+                }
+
+                // dead end?
+                break;
+            }
+
+            // traverse context chain
+            if let Self::Context(_msg, inner) = checkpoint {
+                checkpoint = inner;
+                continue;
+            }
+
+            // The Arrow error may itself contain a datafusion error again
+            // See https://github.com/apache/arrow-datafusion/issues/4172
+            if let Self::ArrowError(inner) = checkpoint {
+                other_e = Some(OtherErr::Arrow(inner));
+                continue;
+            }
+
+            // also try to introspect direct external errors
+            if let Self::External(inner) = checkpoint {
+                other_e = Some(OtherErr::Dyn(inner.as_ref()));
+                continue;
+            }
+
+            // no more traversal
+            break;
+        }
+
+        // return last checkpoint (which may be the original error)
+        checkpoint
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use crate::error::DataFusionError;
     use arrow::error::ArrowError;
 
@@ -353,6 +457,61 @@ mod test {
         assert_eq!(res.to_string(), "Arrow error: Schema error: bar");
     }
 
+    #[test]
+    fn test_find_root_error() {
+        do_root_test(
+            DataFusionError::Context(
+                "it happened!".to_string(),
+                Box::new(DataFusionError::ResourcesExhausted("foo".to_string())),
+            ),
+            DataFusionError::ResourcesExhausted("foo".to_string()),
+        );
+
+        do_root_test(
+            DataFusionError::ArrowError(ArrowError::ExternalError(Box::new(
+                DataFusionError::ResourcesExhausted("foo".to_string()),
+            ))),
+            DataFusionError::ResourcesExhausted("foo".to_string()),
+        );
+
+        do_root_test(
+            DataFusionError::External(Box::new(DataFusionError::ResourcesExhausted(
+                "foo".to_string(),
+            ))),
+            DataFusionError::ResourcesExhausted("foo".to_string()),
+        );
+
+        do_root_test(
+            DataFusionError::External(Box::new(ArrowError::ExternalError(Box::new(
+                DataFusionError::ResourcesExhausted("foo".to_string()),
+            )))),
+            DataFusionError::ResourcesExhausted("foo".to_string()),
+        );
+
+        do_root_test(
+            DataFusionError::ArrowError(ArrowError::ExternalError(Box::new(
+                ArrowError::ExternalError(Box::new(DataFusionError::ResourcesExhausted(
+                    "foo".to_string(),
+                ))),
+            ))),
+            DataFusionError::ResourcesExhausted("foo".to_string()),
+        );
+
+        do_root_test(
+            DataFusionError::External(Box::new(Arc::new(
+                DataFusionError::ResourcesExhausted("foo".to_string()),
+            ))),
+            DataFusionError::ResourcesExhausted("foo".to_string()),
+        );
+
+        do_root_test(
+            DataFusionError::External(Box::new(Arc::new(ArrowError::ExternalError(
+                Box::new(DataFusionError::ResourcesExhausted("foo".to_string())),
+            )))),
+            DataFusionError::ResourcesExhausted("foo".to_string()),
+        );
+    }
+
     /// Model what happens when implementing SendableRecrordBatchStream:
     /// DataFusion code needs to return an ArrowError
     #[allow(clippy::try_err)]
@@ -369,6 +528,14 @@ mod test {
         // Expect the '?' to work
         Err(ArrowError::SchemaError("bar".to_string()))?;
         Ok(())
+    }
+
+    fn do_root_test(e: DataFusionError, exp: DataFusionError) {
+        let e = e.find_root();
+
+        // DataFusionError does not implement Eq, so we use a string comparison + some cheap "same variant" test instead
+        assert_eq!(e.to_string(), exp.to_string(),);
+        assert_eq!(std::mem::discriminant(e), std::mem::discriminant(&exp),)
     }
 }
 

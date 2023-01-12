@@ -26,7 +26,7 @@ use arrow::compute::concat;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
-use arrow::ipc::writer::FileWriter;
+use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
 use futures::{Future, Stream, StreamExt, TryStreamExt};
 use log::debug;
@@ -52,7 +52,7 @@ impl SizedRecordBatchStream {
     pub fn new(
         schema: SchemaRef,
         batches: Vec<Arc<RecordBatch>>,
-        metrics: MemTrackingMetrics,
+        mut metrics: MemTrackingMetrics,
     ) -> Self {
         let size = batches.iter().map(|b| batch_byte_size(b)).sum::<usize>();
         metrics.init_mem_used(size);
@@ -96,30 +96,45 @@ pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatc
         .map_err(DataFusionError::from)
 }
 
-/// Combine a slice of record batches into one, or returns None if the slice itself
-/// is empty; all the record batches inside the slice must be of the same schema.
-pub(crate) fn combine_batches(
-    batches: &[RecordBatch],
+/// Merge two record batch references into a single record batch.
+/// All the record batches inside the slice must have the same schema.
+pub fn merge_batches(
+    first: &RecordBatch,
+    second: &RecordBatch,
+    schema: SchemaRef,
+) -> ArrowResult<RecordBatch> {
+    let columns = (0..schema.fields.len())
+        .map(|index| {
+            let first_column = first.column(index).as_ref();
+            let second_column = second.column(index).as_ref();
+            concat(&[first_column, second_column])
+        })
+        .collect::<ArrowResult<Vec<_>>>()?;
+    RecordBatch::try_new(schema, columns)
+}
+
+/// Merge a slice of record batch references into a single record batch, or
+/// return None if the slice itself is empty. All the record batches inside the
+/// slice must have the same schema.
+pub fn merge_multiple_batches(
+    batches: &[&RecordBatch],
     schema: SchemaRef,
 ) -> ArrowResult<Option<RecordBatch>> {
-    if batches.is_empty() {
-        Ok(None)
+    Ok(if batches.is_empty() {
+        None
     } else {
-        let columns = schema
-            .fields()
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
+        let columns = (0..schema.fields.len())
+            .map(|index| {
                 concat(
                     &batches
                         .iter()
-                        .map(|batch| batch.column(i).as_ref())
+                        .map(|batch| batch.column(index).as_ref())
                         .collect::<Vec<_>>(),
                 )
             })
             .collect::<ArrowResult<Vec<_>>>()?;
-        Ok(Some(RecordBatch::try_new(schema.clone(), columns)?))
-    }
+        Some(RecordBatch::try_new(schema, columns)?)
+    })
 }
 
 /// Recursively builds a list of files in a directory with a given extension
@@ -128,9 +143,7 @@ pub fn build_checked_file_list(dir: &str, ext: &str) -> Result<Vec<String>> {
     build_file_list_recurse(dir, &mut filenames, ext)?;
     if filenames.is_empty() {
         return Err(DataFusionError::Plan(format!(
-            "No files found at {path} with file extension {file_extension}",
-            path = dir,
-            file_extension = ext
+            "No files found at {dir} with file extension {ext}"
         )));
     }
     Ok(filenames)
@@ -293,6 +306,22 @@ impl<T> Drop for AbortOnDropMany<T> {
     }
 }
 
+/// Transposes the given vector of vectors.
+pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
+    match original.as_slice() {
+        [] => vec![],
+        [first, ..] => {
+            let mut result = (0..first.len()).map(|_| vec![]).collect::<Vec<_>>();
+            for row in original {
+                for (item, transposed_row) in row.into_iter().zip(&mut result) {
+                    transposed_row.push(item);
+                }
+            }
+            result
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,46 +331,6 @@ mod tests {
         datatypes::{DataType, Field, Schema},
         record_batch::RecordBatch,
     };
-
-    #[test]
-    fn test_combine_batches_empty() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("f32", DataType::Float32, false),
-            Field::new("f64", DataType::Float64, false),
-        ]));
-        let result = combine_batches(&[], schema)?;
-        assert!(result.is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn test_combine_batches() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("f32", DataType::Float32, false),
-            Field::new("f64", DataType::Float64, false),
-        ]));
-
-        let batch_count = 1000;
-        let batch_size = 10;
-        let batches = (0..batch_count)
-            .map(|i| {
-                RecordBatch::try_new(
-                    Arc::clone(&schema),
-                    vec![
-                        Arc::new(Float32Array::from_slice(vec![i as f32; batch_size])),
-                        Arc::new(Float64Array::from_slice(vec![i as f64; batch_size])),
-                    ],
-                )
-                .unwrap()
-            })
-            .collect::<Vec<_>>();
-
-        let result = combine_batches(&batches, schema)?;
-        assert!(result.is_some());
-        let result = result.unwrap();
-        assert_eq!(batch_count * batch_size, result.num_rows());
-        Ok(())
-    }
 
     #[test]
     fn test_compute_record_batch_statistics_empty() -> Result<()> {
@@ -399,6 +388,15 @@ mod tests {
         assert_eq!(actual, expected);
         Ok(())
     }
+
+    #[test]
+    fn test_transpose() -> Result<()> {
+        let in_data = vec![vec![1, 2, 3], vec![4, 5, 6]];
+        let transposed = transpose(in_data);
+        let expected = vec![vec![1, 4], vec![2, 5], vec![3, 6]];
+        assert_eq!(expected, transposed);
+        Ok(())
+    }
 }
 
 /// Write in Arrow IPC format.
@@ -420,8 +418,7 @@ impl IPCWriter {
     pub fn new(path: &Path, schema: &Schema) -> Result<Self> {
         let file = File::create(path).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed to create partition file at {:?}: {:?}",
-                path, e
+                "Failed to create partition file at {path:?}: {e:?}"
             ))
         })?;
         Ok(Self {
@@ -433,6 +430,25 @@ impl IPCWriter {
         })
     }
 
+    /// Create new writer with IPC write options
+    pub fn new_with_options(
+        path: &Path,
+        schema: &Schema,
+        write_options: IpcWriteOptions,
+    ) -> Result<Self> {
+        let file = File::create(path).map_err(|e| {
+            DataFusionError::Execution(format!(
+                "Failed to create partition file at {path:?}: {e:?}"
+            ))
+        })?;
+        Ok(Self {
+            num_batches: 0,
+            num_rows: 0,
+            num_bytes: 0,
+            path: path.into(),
+            writer: FileWriter::try_new_with_options(file, schema, write_options)?,
+        })
+    }
     /// Write one single batch
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         self.writer.write(batch)?;

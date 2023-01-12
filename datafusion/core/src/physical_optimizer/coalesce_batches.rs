@@ -18,12 +18,13 @@
 //! CoalesceBatches optimizer that groups batches together rows
 //! in bigger batches to avoid overhead with small batches
 
+use crate::config::ConfigOptions;
 use crate::{
     error::Result,
     physical_optimizer::PhysicalOptimizerRule,
     physical_plan::{
         coalesce_batches::CoalesceBatchesExec, filter::FilterExec, joins::HashJoinExec,
-        repartition::RepartitionExec, rewrite::TreeNodeRewritable,
+        repartition::RepartitionExec, rewrite::TreeNodeRewritable, Partitioning,
     },
 };
 use std::sync::Arc;
@@ -31,24 +32,25 @@ use std::sync::Arc;
 /// Optimizer rule that introduces CoalesceBatchesExec to avoid overhead with small batches that
 /// are produced by highly selective filters
 #[derive(Default)]
-pub struct CoalesceBatches {
-    /// Target batch size
-    target_batch_size: usize,
-}
+pub struct CoalesceBatches {}
 
 impl CoalesceBatches {
     #[allow(missing_docs)]
-    pub fn new(target_batch_size: usize) -> Self {
-        Self { target_batch_size }
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 impl PhysicalOptimizerRule for CoalesceBatches {
     fn optimize(
         &self,
         plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
-        _config: &crate::execution::context::SessionConfig,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
-        let target_batch_size = self.target_batch_size;
+        if !config.execution.coalesce_batches {
+            return Ok(plan);
+        }
+
+        let target_batch_size = config.execution.batch_size;
         plan.transform_up(&|plan| {
             let plan_any = plan.as_any();
             // The goal here is to detect operators that could produce small batches and only
@@ -57,7 +59,16 @@ impl PhysicalOptimizerRule for CoalesceBatches {
             // See https://github.com/apache/arrow-datafusion/issues/139
             let wrap_in_coalesce = plan_any.downcast_ref::<FilterExec>().is_some()
                 || plan_any.downcast_ref::<HashJoinExec>().is_some()
-                || plan_any.downcast_ref::<RepartitionExec>().is_some();
+                // Don't need to add CoalesceBatchesExec after a round robin RepartitionExec
+                || plan_any
+                    .downcast_ref::<RepartitionExec>()
+                    .map(|repart_exec| {
+                        !matches!(
+                            repart_exec.partitioning().clone(),
+                            Partitioning::RoundRobinBatch(_)
+                        )
+                    })
+                    .unwrap_or(false);
             if wrap_in_coalesce {
                 Ok(Some(Arc::new(CoalesceBatchesExec::new(
                     plan.clone(),

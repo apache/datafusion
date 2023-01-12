@@ -1,0 +1,421 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## DDL Tests
+##########
+
+statement ok
+CREATE TABLE users AS VALUES(1,2),(2,3);
+
+query II rowsort
+select * from users;
+----
+1 2
+2 3
+
+statement ok
+insert into users values(2, 4);
+
+query II rowsort
+select * from users;
+----
+1 2
+2 3
+2 4
+
+statement ok
+insert into users values(1 + 10, 20);
+
+query II rowsort
+select * from users;
+----
+1 2
+11 20
+2 3
+2 4
+
+
+# Dropping table
+statement ok
+DROP TABLE users;
+
+# Table is gone
+statement error Error during planning: table 'datafusion.public.users' not found
+select * from users;
+
+# Can not drop it again
+statement error Table 'user' doesn't exist.
+DROP TABLE user;
+
+# Can not insert into a undefined table
+statement error No table named 'user'
+insert into user values(1, 20);
+
+##########
+# Multipart identifier test (CREATE/DROP TABLE)
+##########
+
+# Verify that creating tables with periods in their name works
+# (note "foo.bar" is the table name, NOT table "bar" in schema "foo")
+statement ok
+CREATE TABLE "foo.bar" AS VALUES(1,2),(2,3);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo.bar";
+----
+1 2
+2 3
+
+# Can not select from non existent foo.bar table
+statement error DataFusion error: Error during planning: table 'datafusion.foo.bar' not found
+select * from foo.bar;
+
+# Error if wrong capitalization to select
+statement error table 'datafusion.public.Foo.bar' not found
+select * from "Foo.bar";
+
+# Should be able to drop the table
+statement ok
+drop table "foo.bar";
+
+# Verify that creating tables with three periods also works
+statement ok
+CREATE TABLE "foo.bar.baz" AS VALUES(8,9);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo.bar.baz";
+----
+8 9
+
+# And drop
+statement ok
+drop table "foo.bar.baz"
+
+##########
+# Multipart identifier test (CREATE/DROP VIEW)
+##########
+
+# Verify that creating views with periods in their name works
+# (note "foo.bar" is the table name, NOT table "bar" in schema "foo")
+statement ok
+CREATE VIEW "foo.bar" AS VALUES(1,2),(2,3);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo.bar";
+----
+1 2
+2 3
+
+# Can not select from non existent foo.bar view
+statement error DataFusion error: Error during planning: table 'datafusion.foo.bar' not found
+select * from foo.bar;
+
+# Error if wrong capitalization to select
+statement error table 'datafusion.public.Foo.bar' not found
+select * from "Foo.bar";
+
+# Should be able to drop the view
+statement ok
+drop view "foo.bar";
+
+# Verify that creating views with three periods also works
+statement ok
+CREATE VIEW "foo.bar.baz" AS VALUES(8,9);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo.bar.baz";
+----
+8 9
+
+# And drop
+statement ok
+drop view "foo.bar.baz"
+
+
+##########
+# Drop view error tests
+##########
+
+statement ok
+CREATE VIEW foo AS VALUES(1,2),(2,3);
+
+statement ok
+CREATE VIEW bar AS VALUES(3,4),(4,5);
+
+# Should be able to select from it as well
+query II rowsort
+select * from "foo";
+----
+1 2
+2 3
+
+query II rowsort
+select * from "bar";
+----
+3 4
+4 5
+
+# multiple drops not supported
+statement error Multiple objects not supported
+DROP VIEW foo, bar;
+
+# multiple drops not supported
+statement ok
+DROP VIEW foo;
+
+# Ok to drop
+statement ok
+DROP VIEW bar;
+
+# not ok to drop after already dropped
+statement error View 'bar' doesn't exist.
+DROP VIEW bar;
+
+# ok to drop with IF EXISTS after already dropped
+statement ok
+DROP VIEW IF EXISTS bar;
+
+# can't drop non existent view
+statement error View 'non_existent_view' doesn't exist.
+DROP VIEW non_existent_view
+
+##########
+# Create / drop views agaist tables
+##########
+
+statement ok
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv';
+
+# create_table_as
+statement ok
+CREATE TABLE my_table AS SELECT * FROM aggregate_simple
+
+query II rowsort
+SELECT * FROM my_table order by c1 LIMIT 1
+----
+0.00001 0.000000000001 true
+
+statement ok
+DROP TABLE my_table;
+
+# not ok to drop after already dropped
+statement error Table 'my_table' doesn't exist.
+DROP TABLE my_table;
+
+# ok to drop after already dropped with IF EXISTS
+statement ok
+DROP TABLE IF EXISTS my_table;
+
+# Can't drop non existent table
+statement error Table 'non_existent_table' doesn't exist.
+DROP TABLE non_existent_table;
+
+
+# create_table_with_schema_as_select
+statement ok
+CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT *,c3 as c4_tmp FROM aggregate_simple;
+
+query II rowsort
+SELECT * FROM my_table order by c1 LIMIT 1
+----
+0.00001 0.000000000001 true 1
+
+statement ok
+DROP TABLE my_table;
+
+statement ok
+DROP TABLE aggregate_simple
+
+# create_table_with_schema_as_select_mismatch
+statement error table 'datafusion.public.aggregate_simple' not found
+CREATE TABLE my_table(c1 float, c2 double, c3 boolean, c4 varchar) AS SELECT * FROM aggregate_simple;
+
+
+# create_table_with_schema_as_values
+statement ok
+CREATE TABLE my_table(c1 int, c2 float, c3 varchar) AS VALUES(1, 2, 'hello')
+
+query II rowsort
+SELECT * FROM my_table;
+----
+1 2 hello
+
+statement ok
+DROP TABLE my_table;
+
+
+# TODO enable information schema
+
+statement ok
+CREATE TABLE y AS VALUES (1,2),(3,4);
+
+statement ok
+CREATE OR REPLACE TABLE y AS VALUES (5,6);
+
+query II
+SELECT * FROM y
+----
+5 6
+
+# 'IF NOT EXISTS' cannot coexist with 'REPLACE'
+statement error Execution error: 'IF NOT EXISTS' cannot coexist with 'REPLACE'
+CREATE OR REPLACE TABLE if not exists y AS VALUES (7,8);
+
+statement ok
+DROP TABLE y
+
+
+# drop_view_cant_drop_table
+statement ok
+CREATE TABLE t AS SELECT 1
+
+statement error View 't' doesn't exist.
+DROP VIEW t
+
+statement ok
+DROP TABLE t
+
+# drop_table_cant_drop_view
+statement ok
+CREATE VIEW v AS SELECT 1;
+
+statement error Table 'v' doesn't exist.
+DROP TABLE v;
+
+statement ok
+DROP VIEW v;
+
+
+# csv_query_create_external_table
+statement ok
+CREATE EXTERNAL TABLE aggregate_test_100 (
+        c1  VARCHAR NOT NULL,
+        c2  TINYINT NOT NULL,
+        c3  SMALLINT NOT NULL,
+        c4  SMALLINT NOT NULL,
+        c5  INTEGER NOT NULL,
+        c6  BIGINT NOT NULL,
+        c7  SMALLINT NOT NULL,
+        c8  INT NOT NULL,
+        c9  INT UNSIGNED NOT NULL,
+        c10 BIGINT UNSIGNED NOT NULL,
+        c11 FLOAT NOT NULL,
+        c12 DOUBLE NOT NULL,
+        c13 VARCHAR NOT NULL
+    )
+STORED AS CSV
+WITH HEADER ROW
+LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+
+query IIIIIIIIIIIII
+SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, 10, c11, c12, c13 FROM aggregate_test_100 LIMIT 1;
+----
+c 2 1 18109 2033001162 -6513304855495910254 25 43062 1491205016 10 0.110830784 0.9294097332465232 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW
+
+
+
+# create_external_table_with_timestamps
+statement ok
+CREATE EXTERNAL TABLE csv_with_timestamps (
+name VARCHAR,
+ts TIMESTAMP
+) STORED AS CSV LOCATION 'tests/data/timestamps.csv';
+
+query CC
+SELECT * from csv_with_timestamps
+----
+Jorge 2018-12-13T12:12:10.011
+Andrew 2018-11-13T17:11:10.011
+
+statement ok
+DROP TABLE csv_with_timestamps
+
+# create_partitioned_external_table
+#
+# this test covers creating a partitioned file. The input files are in this structure:
+#
+# tests/data/partitioned_table/c_date=2018-12-13/timestamps.csv
+# tests/data/partitioned_table/c_date=2018-11-13/timestamps.csv
+
+statement ok
+CREATE EXTERNAL TABLE csv_with_timestamps (
+  name VARCHAR,
+  ts TIMESTAMP,
+  c_date DATE,
+)
+STORED AS CSV
+PARTITIONED BY (c_date)
+LOCATION 'tests/data/partitioned_table';
+
+query CCC
+SELECT * from csv_with_timestamps where c_date='2018-11-13'
+----
+Jorge 2018-12-13T12:12:10.011 2018-11-13
+Andrew 2018-11-13T17:11:10.011 2018-11-13
+
+statement ok
+DROP TABLE csv_with_timestamps
+
+
+# sql_create_duplicate_table
+# Can not recreate the same table
+statement ok
+CREATE TABLE y AS VALUES (1,2,3);
+
+statement error Table 'y' already exists
+CREATE TABLE y AS VALUES (1,2,3);
+
+statement ok
+DROP TABLE y;
+
+
+# Can not recreate the same view
+statement ok
+CREATE VIEW y AS VALUES (1,2,3);
+
+statement error Table 'y' already exists
+CREATE VIEW y AS VALUES (1,2,3);
+
+statement ok
+DROP VIEW y;
+
+
+
+# create_pipe_delimited_csv_table()
+
+statement ok
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION 'tests/data/aggregate_simple_pipe.csv';
+
+
+query CCC
+SELECT * FROM aggregate_simple order by c1 LIMIT 1;
+----
+0.00001 0.000000000001 true
+
+query CCC
+SELECT * FROM aggregate_simple order by c1 DESC LIMIT 1;
+----
+0.00005 0.000000000005 true
+
+
+statement ok
+DROP TABLE aggregate_simple

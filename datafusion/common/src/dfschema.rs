@@ -174,9 +174,8 @@ impl DFSchema {
                     Some(qualifier) => {
                         if (qualifier.to_owned() + "." + self.fields[i].name()) == name {
                             return Err(DataFusionError::Plan(format!(
-                                "Fully qualified field name '{}' was supplied to `index_of` \
-                                which is deprecated. Please use `index_of_column_by_name` instead",
-                                name
+                                "Fully qualified field name '{name}' was supplied to `index_of` \
+                                which is deprecated. Please use `index_of_column_by_name` instead"
                             )));
                         }
                     }
@@ -206,7 +205,7 @@ impl DFSchema {
                 (Some(qq), None) => {
                     // the original field may now be aliased with a name that matches the
                     // original qualified name
-                    let table_ref: TableReference = field.name().as_str().into();
+                    let table_ref = TableReference::parse_str(field.name().as_str());
                     match table_ref {
                         TableReference::Partial { schema, table } => {
                             schema == qq && table == name
@@ -351,9 +350,45 @@ impl DFSchema {
         let other_fields = other.fields().iter();
         self_fields.zip(other_fields).all(|(f1, f2)| {
             f1.qualifier() == f2.qualifier()
-                && f1.data_type() == f2.data_type()
                 && f1.name() == f2.name()
+                && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
         })
+    }
+
+    /// Returns true of two [`DataType`]s are semantically equal (same
+    /// name and type), ignoring both metadata and nullability.
+    ///
+    /// request to upstream: <https://github.com/apache/arrow-rs/issues/3199>
+    fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
+        // check nested fields
+        match (dt1, dt2) {
+            (DataType::Dictionary(k1, v1), DataType::Dictionary(k2, v2)) => {
+                Self::datatype_is_semantically_equal(k1.as_ref(), k2.as_ref())
+                    && Self::datatype_is_semantically_equal(v1.as_ref(), v2.as_ref())
+            }
+            (DataType::List(f1), DataType::List(f2))
+            | (DataType::LargeList(f1), DataType::LargeList(f2))
+            | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _))
+            | (DataType::Map(f1, _), DataType::Map(f2, _)) => {
+                Self::field_is_semantically_equal(f1, f2)
+            }
+            (DataType::Struct(fields1), DataType::Struct(fields2))
+            | (DataType::Union(fields1, _, _), DataType::Union(fields2, _, _)) => {
+                let iter1 = fields1.iter();
+                let iter2 = fields2.iter();
+                fields1.len() == fields2.len() &&
+                        // all fields have to be the same
+                    iter1
+                    .zip(iter2)
+                        .all(|(f1, f2)| Self::field_is_semantically_equal(f1, f2))
+            }
+            _ => dt1 == dt2,
+        }
+    }
+
+    fn field_is_semantically_equal(f1: &Field, f2: &Field) -> bool {
+        f1.name() == f2.name()
+            && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
     }
 
     /// Strip all field qualifier in schema
@@ -625,7 +660,6 @@ impl DFField {
 mod tests {
     use super::*;
     use arrow::datatypes::DataType;
-    use std::collections::BTreeMap;
 
     #[test]
     fn qualifier_in_name() -> Result<()> {
@@ -634,7 +668,7 @@ mod tests {
         let err = schema.index_of_column_by_name(None, "t1.c0").err().unwrap();
         assert_eq!(
             "Schema error: No field named 't1.c0'. Valid fields are 't1'.'c0', 't1'.'c1'.",
-            &format!("{}", err)
+            &format!("{err}")
         );
         Ok(())
     }
@@ -673,8 +707,8 @@ mod tests {
     fn from_qualified_schema_into_arrow_schema() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let arrow_schema: Schema = schema.into();
-        let expected = "Field { name: \"c0\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }, \
-        Field { name: \"c1\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }";
+        let expected = "Field { name: \"c0\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
+        Field { name: \"c1\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }";
         assert_eq!(expected, arrow_schema.to_string());
         Ok(())
     }
@@ -798,7 +832,7 @@ mod tests {
             field1_i16_t
                 .field()
                 .clone()
-                .with_metadata(Some(test_bmetadata_n(2))),
+                .with_metadata(test_metadata_n(2)),
         );
         let field1_i16_t_qualified =
             DFField::from_qualified("foo", field1_i16_t.field().clone());
@@ -806,6 +840,51 @@ mod tests {
         let field1_i32_t = DFField::from(Field::new("f1", DataType::Int32, true));
         let field2_i16_t = DFField::from(Field::new("f2", DataType::Int16, true));
         let field3_i16_t = DFField::from(Field::new("f3", DataType::Int16, true));
+
+        let dict =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let field_dict_t = DFField::from(Field::new("f_dict", dict.clone(), true));
+        let field_dict_f = DFField::from(Field::new("f_dict", dict, false));
+
+        let list_t = DFField::from(Field::new(
+            "f_list",
+            DataType::List(Box::new(field1_i16_t.field().clone())),
+            true,
+        ));
+        let list_f = DFField::from(Field::new(
+            "f_list",
+            DataType::List(Box::new(field1_i16_f.field().clone())),
+            false,
+        ));
+
+        let list_f_name = DFField::from(Field::new(
+            "f_list",
+            DataType::List(Box::new(field2_i16_t.field().clone())),
+            false,
+        ));
+
+        let struct_t = DFField::from(Field::new(
+            "f_struct",
+            DataType::Struct(vec![field1_i16_t.field().clone()]),
+            true,
+        ));
+        let struct_f = DFField::from(Field::new(
+            "f_struct",
+            DataType::Struct(vec![field1_i16_f.field().clone()]),
+            false,
+        ));
+
+        let struct_f_meta = DFField::from(Field::new(
+            "f_struct",
+            DataType::Struct(vec![field1_i16_t_meta.field().clone()]),
+            false,
+        ));
+
+        let struct_f_type = DFField::from(Field::new(
+            "f_struct",
+            DataType::Struct(vec![field1_i32_t.field().clone()]),
+            false,
+        ));
 
         // same
         TestCase {
@@ -871,6 +950,70 @@ mod tests {
         }
         .run();
 
+        // dictionary
+        TestCase {
+            fields1: vec![&field_dict_t],
+            fields2: vec![&field_dict_t],
+            expected: true,
+        }
+        .run();
+
+        // dictionary (different nullable)
+        TestCase {
+            fields1: vec![&field_dict_t],
+            fields2: vec![&field_dict_f],
+            expected: true,
+        }
+        .run();
+
+        // dictionary (wrong type)
+        TestCase {
+            fields1: vec![&field_dict_t],
+            fields2: vec![&field1_i16_t],
+            expected: false,
+        }
+        .run();
+
+        // list (different embedded nullability)
+        TestCase {
+            fields1: vec![&list_t],
+            fields2: vec![&list_f],
+            expected: true,
+        }
+        .run();
+
+        // list (different sub field names)
+        TestCase {
+            fields1: vec![&list_t],
+            fields2: vec![&list_f_name],
+            expected: false,
+        }
+        .run();
+
+        // struct
+        TestCase {
+            fields1: vec![&struct_t],
+            fields2: vec![&struct_f],
+            expected: true,
+        }
+        .run();
+
+        // struct (different embedded meta)
+        TestCase {
+            fields1: vec![&struct_t],
+            fields2: vec![&struct_f_meta],
+            expected: true,
+        }
+        .run();
+
+        // struct (different field type)
+        TestCase {
+            fields1: vec![&struct_t],
+            fields2: vec![&struct_f_type],
+            expected: false,
+        }
+        .run();
+
         #[derive(Debug)]
         struct TestCase<'a> {
             fields1: Vec<&'a DFField>,
@@ -880,13 +1023,15 @@ mod tests {
 
         impl<'a> TestCase<'a> {
             fn run(self) {
-                println!("Running {:#?}", self);
+                println!("Running {self:#?}");
                 let schema1 = to_df_schema(self.fields1);
                 let schema2 = to_df_schema(self.fields2);
                 assert_eq!(
                     schema1.equivalent_names_and_types(&schema2),
                     self.expected,
-                    "schema1:\n\n{:#?}\n\nschema2:\n\n{:#?}",
+                    "Comparison did not match expected: {}\n\n\
+                     schema1:\n\n{:#?}\n\nschema2:\n\n{:#?}",
+                    self.expected,
                     schema1,
                     schema2
                 );
@@ -947,12 +1092,12 @@ mod tests {
     fn test_dfschema_to_schema_convertion() {
         let mut a: DFField = DFField::new(Some("table1"), "a", DataType::Int64, false);
         let mut b: DFField = DFField::new(Some("table1"), "b", DataType::Int64, false);
-        let mut a_metadata = BTreeMap::new();
+        let mut a_metadata = HashMap::new();
         a_metadata.insert("key".to_string(), "value".to_string());
-        a.field.set_metadata(Some(a_metadata));
-        let mut b_metadata = BTreeMap::new();
+        a.field.set_metadata(a_metadata);
+        let mut b_metadata = HashMap::new();
         b_metadata.insert("key".to_string(), "value".to_string());
-        b.field.set_metadata(Some(b_metadata));
+        b.field.set_metadata(b_metadata);
 
         let df_schema = Arc::new(
             DFSchema::new_with_metadata([a, b].to_vec(), HashMap::new()).unwrap(),
@@ -977,14 +1122,7 @@ mod tests {
     fn test_metadata_n(n: usize) -> HashMap<String, String> {
         (0..n)
             .into_iter()
-            .map(|i| (format!("k{}", i), format!("v{}", i)))
-            .collect()
-    }
-
-    fn test_bmetadata_n(n: usize) -> BTreeMap<String, String> {
-        (0..n)
-            .into_iter()
-            .map(|i| (format!("k{}", i), format!("v{}", i)))
+            .map(|i| (format!("k{i}"), format!("v{i}")))
             .collect()
     }
 }

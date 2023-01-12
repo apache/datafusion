@@ -64,6 +64,7 @@ jobs:
       - name: Check Cargo.lock for datafusion-cli
         run: |
           # If this test fails, try running `cargo update` in the `datafusion-cli` directory
+          # and check in the updated Cargo.lock file.
           cargo check --manifest-path datafusion-cli/Cargo.toml --locked
 
   # test the crate
@@ -296,7 +297,7 @@ jobs:
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
     needs: [linux-build-lib]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     container:
       image: amd64/rust
       env:
@@ -329,8 +330,8 @@ jobs:
           cd datafusion
           cargo test --features=pyarrow
 
-  lint:
-    name: Lint
+  check-fmt:
+    name: Check cargo fmt
     runs-on: ubuntu-latest
     container:
       image: amd64/rust

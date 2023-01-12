@@ -73,8 +73,7 @@ impl ValuesExec {
                             }
                             Ok(ColumnarValue::Array(a)) => {
                                 Err(DataFusionError::Plan(format!(
-                                    "Cannot have array values {:?} in a values list",
-                                    a
+                                    "Cannot have array values {a:?} in a values list"
                                 )))
                             }
                             Err(err) => Err(err),
@@ -135,8 +134,7 @@ impl ExecutionPlan for ValuesExec {
         // GlobalLimitExec has a single output partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "ValuesExec invalid partition {} (expected 0)",
-                partition
+                "ValuesExec invalid partition {partition} (expected 0)"
             )));
         }
 

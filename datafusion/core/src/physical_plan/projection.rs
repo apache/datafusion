@@ -21,7 +21,7 @@
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
 use std::any::Any;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -79,7 +79,9 @@ impl ProjectionExec {
                     e.data_type(&input_schema)?,
                     e.nullable(&input_schema)?,
                 );
-                field.set_metadata(get_field_metadata(e, &input_schema));
+                field.set_metadata(
+                    get_field_metadata(e, &input_schema).unwrap_or_default(),
+                );
 
                 Ok(field)
             })
@@ -155,6 +157,13 @@ impl ExecutionPlan for ProjectionExec {
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        Ok(children[0])
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -239,7 +248,7 @@ impl ExecutionPlan for ProjectionExec {
                     .map(|(e, alias)| {
                         let e = e.to_string();
                         if &e != alias {
-                            format!("{} as {}", e, alias)
+                            format!("{e} as {alias}")
                         } else {
                             e
                         }
@@ -268,7 +277,7 @@ impl ExecutionPlan for ProjectionExec {
 fn get_field_metadata(
     e: &Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
-) -> Option<BTreeMap<String, String>> {
+) -> Option<HashMap<String, String>> {
     let name = if let Some(column) = e.as_any().downcast_ref::<Column>() {
         column.name()
     } else {
@@ -278,7 +287,7 @@ fn get_field_metadata(
     input_schema
         .field_with_name(name)
         .ok()
-        .and_then(|f| f.metadata().cloned())
+        .map(|f| f.metadata().clone())
 }
 
 fn stats_projection(
@@ -384,7 +393,7 @@ mod tests {
             ProjectionExec::try_new(vec![(col("c1", &schema)?, "c1".to_string())], csv)?;
 
         let col_field = projection.schema.field(0);
-        let col_metadata = col_field.metadata().unwrap().clone();
+        let col_metadata = col_field.metadata();
         let data: &str = &col_metadata["testing"];
         assert_eq!(data, "test");
 

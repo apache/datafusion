@@ -31,7 +31,7 @@
 //!
 //! ```sql
 //! CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT)
-//!   STORED AS CSV location 'tests/customer.csv';
+//!   STORED AS CSV location 'tests/data/customer.csv';
 //!
 //! SELECT customer_id, revenue FROM sales ORDER BY revenue DESC limit 3;
 //! ```
@@ -104,7 +104,7 @@ async fn exec_sql(ctx: &mut SessionContext, sql: &str) -> Result<String> {
 
 /// Create a test table.
 async fn setup_table(mut ctx: SessionContext) -> Result<SessionContext> {
-    let sql = "CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT) STORED AS CSV location 'tests/customer.csv'";
+    let sql = "CREATE EXTERNAL TABLE sales(customer_id VARCHAR, revenue BIGINT) STORED AS CSV location 'tests/data/customer.csv'";
 
     let expected = vec!["++", "++"];
 
@@ -116,7 +116,8 @@ async fn setup_table(mut ctx: SessionContext) -> Result<SessionContext> {
 }
 
 async fn setup_table_without_schemas(mut ctx: SessionContext) -> Result<SessionContext> {
-    let sql = "CREATE EXTERNAL TABLE sales STORED AS CSV location 'tests/customer.csv'";
+    let sql =
+        "CREATE EXTERNAL TABLE sales STORED AS CSV location 'tests/data/customer.csv'";
 
     let expected = vec!["++", "++"];
 
@@ -222,7 +223,7 @@ async fn topk_plan() -> Result<()> {
         "|                                                       |     TableScan: sales projection=[customer_id,revenue]                                  |",
     ].join("\n");
 
-    let explain_query = format!("EXPLAIN VERBOSE {}", QUERY);
+    let explain_query = format!("EXPLAIN VERBOSE {QUERY}");
     let actual_output = exec_sql(&mut ctx, &explain_query).await?;
 
     // normalize newlines (output on windows uses \r\n)
@@ -235,12 +236,10 @@ async fn topk_plan() -> Result<()> {
         "Expected output not present in actual output\
         \nExpected:\
         \n---------\
-        \n{}\
+        \n{expected}\
         \nActual:\
         \n--------\
-        \n{}",
-        expected,
-        actual_output
+        \n{actual_output}"
     );
     Ok(())
 }
@@ -282,11 +281,11 @@ impl QueryPlanner for TopKQueryPlanner {
 struct TopKOptimizerRule {}
 impl OptimizerRule for TopKOptimizerRule {
     // Example rewrite pass to insert a user defined LogicalPlanNode
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+        config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many
         // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
@@ -304,20 +303,22 @@ impl OptimizerRule for TopKOptimizerRule {
             {
                 if expr.len() == 1 {
                     // we found a sort with a single sort expr, replace with a a TopK
-                    return Ok(LogicalPlan::Extension(Extension {
+                    return Ok(Some(LogicalPlan::Extension(Extension {
                         node: Arc::new(TopKPlanNode {
                             k: *fetch,
-                            input: self.optimize(input.as_ref(), optimizer_config)?,
+                            input: self
+                                .try_optimize(input.as_ref(), config)?
+                                .unwrap_or_else(|| input.as_ref().clone()),
                             expr: expr[0].clone(),
                         }),
-                    }));
+                    })));
                 }
             }
         }
 
         // If we didn't find the Limit/Sort combination, recurse as
         // normal and build the result.
-        optimize_children(self, plan, optimizer_config)
+        Ok(Some(optimize_children(self, plan, config)?))
     }
 
     fn name(&self) -> &str {
@@ -468,8 +469,7 @@ impl ExecutionPlan for TopKExec {
     ) -> Result<SendableRecordBatchStream> {
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
-                "TopKExec invalid partition {}",
-                partition
+                "TopKExec invalid partition {partition}"
             )));
         }
 

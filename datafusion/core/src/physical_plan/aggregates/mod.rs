@@ -30,7 +30,7 @@ use crate::physical_plan::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
@@ -52,7 +52,6 @@ use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 use datafusion_physical_expr::equivalence::project_equivalence_properties;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_physical_expr::normalize_out_expr_with_alias_schema;
-use datafusion_row::{row_supported, RowType};
 
 /// Hash aggregate modes
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -273,9 +272,7 @@ impl AggregateExec {
     }
 
     fn row_aggregate_supported(&self) -> bool {
-        let group_schema = group_schema(&self.schema, self.group_by.expr.len());
-        row_supported(&group_schema, RowType::Compact)
-            && accumulator_v2_supported(&self.aggr_expr)
+        accumulator_v2_supported(&self.aggr_expr)
     }
 
     fn execute_typed(
@@ -295,6 +292,8 @@ impl AggregateExec {
                 self.aggr_expr.clone(),
                 input,
                 baseline_metrics,
+                context,
+                partition,
             )?))
         } else if self.row_aggregate_supported() {
             Ok(StreamType::GroupedHashAggregateStreamV2(
@@ -362,6 +361,19 @@ impl ExecutionPlan for AggregateExec {
             }
             // Final Aggregation's output partitioning is the same as its real input
             _ => self.input.output_partitioning(),
+        }
+    }
+
+    /// Specifies whether this plan generates an infinite stream of records.
+    /// If the plan does not support pipelining, but it its input(s) are
+    /// infinite, returns an error to indicate this.    
+    fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
+        if children[0] {
+            Err(DataFusionError::Plan(
+                "Aggregate Error: `GROUP BY` clause (including the more general GROUPING SET) is not supported for unbounded inputs.".to_string(),
+            ))
+        } else {
+            Ok(false)
         }
     }
 
@@ -434,7 +446,7 @@ impl ExecutionPlan for AggregateExec {
                         .map(|(e, alias)| {
                             let e = e.to_string();
                             if &e != alias {
-                                format!("{} as {}", e, alias)
+                                format!("{e} as {alias}")
                             } else {
                                 e
                             }
@@ -453,7 +465,7 @@ impl ExecutionPlan for AggregateExec {
                                         let (e, alias) = &self.group_by.null_expr[idx];
                                         let e = e.to_string();
                                         if &e != alias {
-                                            format!("{} as {}", e, alias)
+                                            format!("{e} as {alias}")
                                         } else {
                                             e
                                         }
@@ -461,7 +473,7 @@ impl ExecutionPlan for AggregateExec {
                                         let (e, alias) = &self.group_by.expr[idx];
                                         let e = e.to_string();
                                         if &e != alias {
-                                            format!("{} as {}", e, alias)
+                                            format!("{e} as {alias}")
                                         } else {
                                             e
                                         }
@@ -469,7 +481,7 @@ impl ExecutionPlan for AggregateExec {
                                 })
                                 .collect::<Vec<String>>()
                                 .join(", ");
-                            format!("({})", terms)
+                            format!("({terms})")
                         })
                         .collect()
                 };
@@ -734,10 +746,10 @@ mod tests {
     use crate::{assert_batches_sorted_eq, physical_plan::common};
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use arrow::error::{ArrowError, Result as ArrowResult};
+    use arrow::error::Result as ArrowResult;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::{DataFusionError, Result, ScalarValue};
-    use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count};
+    use datafusion_physical_expr::expressions::{lit, ApproxDistinct, Count, Median};
     use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
     use futures::{FutureExt, Stream};
     use std::any::Any;
@@ -1017,8 +1029,7 @@ mod tests {
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Err(DataFusionError::Internal(format!(
-                "Children cannot be replaced in {:?}",
-                self
+                "Children cannot be replaced in {self:?}"
             )))
         }
 
@@ -1131,11 +1142,19 @@ mod tests {
         );
         let task_ctx = session_ctx.task_ctx();
 
-        let groups = PhysicalGroupBy {
+        let groups_none = PhysicalGroupBy::default();
+        let groups_some = PhysicalGroupBy {
             expr: vec![(col("a", &input_schema)?, "a".to_string())],
             null_expr: vec![],
             groups: vec![vec![false]],
         };
+
+        // something that allocates within the aggregator
+        let aggregates_v0: Vec<Arc<dyn AggregateExpr>> = vec![Arc::new(Median::new(
+            col("a", &input_schema)?,
+            "MEDIAN(a)".to_string(),
+            DataType::UInt32,
+        ))];
 
         // use slow-path in `hash.rs`
         let aggregates_v1: Vec<Arc<dyn AggregateExpr>> =
@@ -1152,10 +1171,14 @@ mod tests {
             DataType::Float64,
         ))];
 
-        for (version, aggregates) in [(1, aggregates_v1), (2, aggregates_v2)] {
+        for (version, groups, aggregates) in [
+            (0, groups_none, aggregates_v0),
+            (1, groups_some.clone(), aggregates_v1),
+            (2, groups_some, aggregates_v2),
+        ] {
             let partial_aggregate = Arc::new(AggregateExec::try_new(
                 AggregateMode::Partial,
-                groups.clone(),
+                groups,
                 aggregates,
                 input.clone(),
                 input_schema.clone(),
@@ -1165,6 +1188,9 @@ mod tests {
 
             // ensure that we really got the version we wanted
             match version {
+                0 => {
+                    assert!(matches!(stream, StreamType::AggregateStream(_)));
+                }
                 1 => {
                     assert!(matches!(stream, StreamType::GroupedHashAggregateStream(_)));
                 }
@@ -1181,19 +1207,11 @@ mod tests {
             let err = common::collect(stream).await.unwrap_err();
 
             // error root cause traversal is a bit complicated, see #4172.
-            if let DataFusionError::ArrowError(ArrowError::ExternalError(err)) = err {
-                if let Some(err) = err.downcast_ref::<DataFusionError>() {
-                    assert!(
-                        matches!(err, DataFusionError::ResourcesExhausted(_)),
-                        "Wrong inner error type: {}",
-                        err,
-                    );
-                } else {
-                    panic!("Wrong arrow error type: {err}")
-                }
-            } else {
-                panic!("Wrong outer error type: {err}")
-            }
+            let err = err.find_root();
+            assert!(
+                matches!(err, DataFusionError::ResourcesExhausted(_)),
+                "Wrong error type: {err}",
+            );
         }
 
         Ok(())

@@ -28,6 +28,7 @@ mod parquet;
 
 pub(crate) use self::csv::plan_to_csv;
 pub use self::csv::CsvExec;
+pub(crate) use self::delimited_stream::newline_delimited_stream;
 pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
 use arrow::{
@@ -42,10 +43,11 @@ use datafusion_physical_expr::PhysicalSortExpr;
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream};
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
-use parking_lot::RwLock;
 
-use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
-use crate::{config::ConfigOptions, datasource::listing::FileRange};
+use crate::datasource::{
+    listing::{FileRange, PartitionedFile},
+    object_store::ObjectStoreUrl,
+};
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -102,8 +104,8 @@ pub struct FileScanConfig {
     pub table_partition_cols: Vec<(String, DataType)>,
     /// The order in which the data is sorted, if known.
     pub output_ordering: Option<Vec<PhysicalSortExpr>>,
-    /// Configuration options passed to the physical plans
-    pub config_options: Arc<RwLock<ConfigOptions>>,
+    /// Indicates whether this plan may produce an infinite stream of records.
+    pub infinite_source: bool,
 }
 
 impl FileScanConfig {
@@ -178,22 +180,39 @@ impl FileScanConfig {
 }
 
 /// A wrapper to customize partitioned file display
+///
+/// Prints in the format:
+/// ```text
+/// {NUM_GROUPS groups: [[file1, file2,...], [fileN, fileM, ...], ...]}
+/// ```
 #[derive(Debug)]
 struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
 
 impl<'a> Display for FileGroupsDisplay<'a> {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
-        let parts: Vec<_> = self
-            .0
-            .iter()
-            .map(|pp| {
-                pp.iter()
-                    .map(|pf| pf.object_meta.location.as_ref())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .collect();
-        write!(f, "[{}]", parts.join(", "))
+        let mut first_group = true;
+        let groups = if self.0.len() == 1 { "group" } else { "groups" };
+        write!(f, "{{{} {}: [", self.0.len(), groups)?;
+        for group in self.0 {
+            if !first_group {
+                write!(f, ", ")?;
+            }
+            first_group = false;
+            write!(f, "[")?;
+
+            let mut first_file = true;
+            for pf in group {
+                if !first_file {
+                    write!(f, ", ")?;
+                }
+                first_file = false;
+
+                write!(f, "{}", pf.object_meta.location.as_ref())?;
+            }
+            write!(f, "]")?;
+        }
+        write!(f, "]}}")?;
+        Ok(())
     }
 }
 
@@ -506,21 +525,20 @@ impl From<ObjectMeta> for FileMeta {
 pub(crate) fn get_output_ordering(
     base_config: &FileScanConfig,
 ) -> Option<&[PhysicalSortExpr]> {
-    if let Some(output_ordering) = base_config.output_ordering.as_ref() {
-        if base_config.file_groups.iter().any(|group| group.len() > 1) {
+    base_config.output_ordering.as_ref()
+        .map(|output_ordering| if base_config.file_groups.iter().any(|group| group.len() > 1) {
             debug!("Skipping specified output ordering {:?}. Some file group had more than one file: {:?}",
                    output_ordering, base_config.file_groups);
             None
         } else {
-            Some(output_ordering)
-        }
-    } else {
-        None
-    }
+            Some(output_ordering.as_slice())
+        }).unwrap_or_else(|| None)
 }
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+
     use crate::{
         test::{build_table_i32, columns},
         test_util::aggr_test_schema,
@@ -792,8 +810,50 @@ mod tests {
             projection,
             statistics,
             table_partition_cols,
-            config_options: ConfigOptions::new().into_shareable(),
             output_ordering: None,
+            infinite_source: false,
+        }
+    }
+
+    #[test]
+    fn file_groups_display_empty() {
+        let expected = "{0 groups: []}";
+        assert_eq!(&FileGroupsDisplay(&[]).to_string(), expected);
+    }
+
+    #[test]
+    fn file_groups_display_one() {
+        let files = [vec![partitioned_file("foo"), partitioned_file("bar")]];
+
+        let expected = "{1 group: [[foo, bar]]}";
+        assert_eq!(&FileGroupsDisplay(&files).to_string(), expected);
+    }
+
+    #[test]
+    fn file_groups_display_many() {
+        let files = [
+            vec![partitioned_file("foo"), partitioned_file("bar")],
+            vec![partitioned_file("baz")],
+            vec![],
+        ];
+
+        let expected = "{3 groups: [[foo, bar], [baz], []]}";
+        assert_eq!(&FileGroupsDisplay(&files).to_string(), expected);
+    }
+
+    /// create a PartitionedFile for testing
+    fn partitioned_file(path: &str) -> PartitionedFile {
+        let object_meta = ObjectMeta {
+            location: object_store::path::Path::parse(path).unwrap(),
+            last_modified: Utc::now(),
+            size: 42,
+        };
+
+        PartitionedFile {
+            object_meta,
+            partition_values: vec![],
+            range: None,
+            extensions: None,
         }
     }
 }

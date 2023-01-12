@@ -36,6 +36,7 @@ use super::FileScanConfig;
 use crate::datasource::file_format::file_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::error::Result;
+use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::file_format::NdJsonExec;
 use crate::physical_plan::ExecutionPlan;
@@ -86,6 +87,7 @@ impl FileFormat for JsonFormat {
 
     async fn infer_schema(
         &self,
+        _state: &SessionState,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -129,6 +131,7 @@ impl FileFormat for JsonFormat {
 
     async fn infer_stats(
         &self,
+        _state: &SessionState,
         _store: &Arc<dyn ObjectStore>,
         _table_schema: SchemaRef,
         _object: &ObjectMeta,
@@ -138,6 +141,7 @@ impl FileFormat for JsonFormat {
 
     async fn create_physical_plan(
         &self,
+        _state: &SessionState,
         conf: FileScanConfig,
         _filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -161,10 +165,11 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let config = SessionConfig::new().with_batch_size(2);
-        let ctx = SessionContext::with_config(config);
+        let session_ctx = SessionContext::with_config(config);
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = None;
-        let exec = get_exec(projection, None).await?;
-        let task_ctx = ctx.task_ctx();
+        let exec = get_exec(&state, projection, None).await?;
         let stream = exec.execute(0, task_ctx)?;
 
         let tt_batches: i32 = stream
@@ -188,9 +193,10 @@ mod tests {
     #[tokio::test]
     async fn read_limit() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = None;
-        let exec = get_exec(projection, Some(1)).await?;
+        let exec = get_exec(&state, projection, Some(1)).await?;
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(4, batches[0].num_columns());
@@ -202,7 +208,9 @@ mod tests {
     #[tokio::test]
     async fn infer_schema() -> Result<()> {
         let projection = None;
-        let exec = get_exec(projection, None).await?;
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+        let exec = get_exec(&state, projection, None).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -218,9 +226,10 @@ mod tests {
     #[tokio::test]
     async fn read_int_column() -> Result<()> {
         let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
+        let state = session_ctx.state();
+        let task_ctx = state.task_ctx();
         let projection = Some(vec![0]);
-        let exec = get_exec(projection, None).await?;
+        let exec = get_exec(&state, projection, None).await?;
 
         let batches = collect(exec, task_ctx).await.expect("Collect batches");
 
@@ -243,22 +252,25 @@ mod tests {
     }
 
     async fn get_exec(
+        state: &SessionState,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let filename = "tests/jsons/2.json";
         let format = JsonFormat::default();
-        scan_format(&format, ".", filename, projection, limit).await
+        scan_format(state, &format, ".", filename, projection, limit).await
     }
 
     #[tokio::test]
     async fn infer_schema_with_limit() {
+        let session = SessionContext::new();
+        let ctx = session.state();
         let store = Arc::new(LocalFileSystem::new()) as _;
         let filename = "tests/jsons/schema_infer_limit.json";
         let format = JsonFormat::default().with_schema_infer_max_rec(Some(3));
 
         let file_schema = format
-            .infer_schema(&store, &[local_unpartitioned_file(filename)])
+            .infer_schema(&ctx, &store, &[local_unpartitioned_file(filename)])
             .await
             .expect("Schema inference");
 

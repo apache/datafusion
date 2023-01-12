@@ -26,7 +26,7 @@ use arrow::{
 
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 
 use std::{any::Any, sync::Arc};
 
@@ -114,7 +114,7 @@ impl ApproxPercentileWithWeightAccumulator {
 }
 
 impl Accumulator for ApproxPercentileWithWeightAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         self.approx_percentile_cont_accumulator.state()
     }
 

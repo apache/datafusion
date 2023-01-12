@@ -99,10 +99,14 @@ impl ListingTableUrl {
         };
 
         let path = std::path::Path::new(prefix).canonicalize()?;
-        let url = match path.is_file() {
-            true => Url::from_file_path(path).unwrap(),
-            false => Url::from_directory_path(path).unwrap(),
-        };
+        let url = if path.is_dir() {
+            Url::from_directory_path(path)
+        } else {
+            Url::from_file_path(path)
+        }
+        .map_err(|_| DataFusionError::Internal(format!("Can not open path: {s}")))?;
+        // TODO: Currently we do not have an IO-related error variant that accepts ()
+        //       or a string. Once we have such a variant, change the error type above.
 
         Ok(Self::new(url, glob))
     }
@@ -279,8 +283,7 @@ mod tests {
             assert_eq!(
                 split_glob_expression(input),
                 expected,
-                "testing split_glob_expression with {}",
-                input
+                "testing split_glob_expression with {input}"
             );
         }
 

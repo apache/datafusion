@@ -62,12 +62,12 @@ impl Default for JIT {
         flag_builder.set("use_colocated_libcalls", "false").unwrap();
         flag_builder.set("is_pic", "false").unwrap();
         let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
-            panic!("host machine is not supported: {}", msg);
+            panic!("host machine is not supported: {msg}");
         });
         let isa = isa_builder
             .finish(settings::Flags::new(flag_builder))
             .unwrap_or_else(|msg| {
-                panic!("host machine is not supported: {}", msg);
+                panic!("host machine is not supported: {msg}");
             });
         let builder =
             JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
@@ -99,7 +99,7 @@ impl JIT {
         flag_builder.set("opt_level", "speed").unwrap();
         flag_builder.set("enable_simd", "true").unwrap();
         let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
-            panic!("host machine is not supported: {}", msg);
+            panic!("host machine is not supported: {msg}");
         });
         let isa = isa_builder
             .finish(settings::Flags::new(flag_builder))
@@ -205,8 +205,13 @@ impl JIT {
         builder.seal_block(entry_block);
 
         // Walk the AST and declare all variables.
-        let variables =
-            declare_variables(&mut builder, &params, &the_return, &stmts, entry_block);
+        let variables = declare_variables(
+            &mut builder,
+            &params,
+            the_return.as_ref(),
+            &stmts,
+            entry_block,
+        );
 
         // Now translate the statements of the function body.
         let mut trans = FunctionTranslator {
@@ -652,7 +657,7 @@ fn typed_zero(typ: JITType, builder: &mut FunctionBuilder) -> Value {
 fn declare_variables(
     builder: &mut FunctionBuilder,
     params: &[(String, JITType)],
-    the_return: &Option<(String, JITType)>,
+    the_return: Option<&(String, JITType)>,
     stmts: &[Stmt],
     entry_block: Block,
 ) -> HashMap<String, Variable> {

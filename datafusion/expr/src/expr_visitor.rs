@@ -17,9 +17,9 @@
 
 //! Expression visitor
 
-use crate::expr::Cast;
+use crate::expr::{AggregateFunction, Cast, Sort, WindowFunction};
 use crate::{
-    expr::{BinaryExpr, GroupingSet},
+    expr::{BinaryExpr, GroupingSet, TryCast},
     Between, Expr, GetIndexedField, Like,
 };
 use datafusion_common::Result;
@@ -110,8 +110,8 @@ impl ExprVisitable for Expr {
             | Expr::IsNull(expr)
             | Expr::Negative(expr)
             | Expr::Cast(Cast { expr, .. })
-            | Expr::TryCast { expr, .. }
-            | Expr::Sort { expr, .. }
+            | Expr::TryCast(TryCast { expr, .. })
+            | Expr::Sort(Sort { expr, .. })
             | Expr::InSubquery { expr, .. } => expr.accept(visitor),
             Expr::GetIndexedField(GetIndexedField { expr, .. }) => expr.accept(visitor),
             Expr::GroupingSet(GroupingSet::Rollup(exprs)) => exprs
@@ -133,7 +133,8 @@ impl ExprVisitable for Expr {
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. } => Ok(visitor),
+            | Expr::QualifiedWildcard { .. }
+            | Expr::Placeholder { .. } => Ok(visitor),
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 let visitor = left.accept(visitor)?;
                 right.accept(visitor)
@@ -179,7 +180,7 @@ impl ExprVisitable for Expr {
             Expr::ScalarFunction { args, .. } | Expr::ScalarUDF { args, .. } => args
                 .iter()
                 .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
-            Expr::AggregateFunction { args, filter, .. }
+            Expr::AggregateFunction(AggregateFunction { args, filter, .. })
             | Expr::AggregateUDF { args, filter, .. } => {
                 if let Some(f) = filter {
                     let mut aggr_exprs = args.clone();
@@ -192,12 +193,12 @@ impl ExprVisitable for Expr {
                         .try_fold(visitor, |visitor, arg| arg.accept(visitor))
                 }
             }
-            Expr::WindowFunction {
+            Expr::WindowFunction(WindowFunction {
                 args,
                 partition_by,
                 order_by,
                 ..
-            } => {
+            }) => {
                 let visitor = args
                     .iter()
                     .try_fold(visitor, |visitor, arg| arg.accept(visitor))?;

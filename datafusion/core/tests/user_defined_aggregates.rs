@@ -28,7 +28,6 @@ use datafusion::{
     },
     assert_batches_eq,
     error::Result,
-    logical_expr::AggregateState,
     logical_expr::{
         AccumulatorFunctionImplementation, AggregateUDF, ReturnTypeFunction, Signature,
         StateTypeFunction, TypeSignature, Volatility,
@@ -128,10 +127,7 @@ fn register_aggregate(ctx: &mut SessionContext) {
     );
 
     // register the selector as "first"
-    ctx.state
-        .write()
-        .aggregate_functions
-        .insert(name.to_string(), Arc::new(first));
+    ctx.register_udaf(first)
 }
 
 /// This structureg models a specialized timeseries aggregate function
@@ -210,12 +206,8 @@ impl FirstSelector {
 }
 
 impl Accumulator for FirstSelector {
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        let state = self
-            .to_state()
-            .into_iter()
-            .map(AggregateState::Scalar)
-            .collect::<Vec<_>>();
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        let state = self.to_state().into_iter().collect::<Vec<_>>();
 
         Ok(state)
     }

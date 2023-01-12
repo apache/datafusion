@@ -26,7 +26,7 @@ use datafusion_common::{DataFusionError, Result};
 /// each argument must be coerced to match `signature`.
 ///
 /// For more details on coercion in general, please see the
-/// [`type_coercion`](datafusion_expr::type_coercion) module.
+/// [`type_coercion`](crate::type_coercion) module.
 pub fn data_types(
     current_types: &[DataType],
     signature: &Signature,
@@ -131,6 +131,10 @@ fn maybe_data_types(
 /// See the module level documentation for more detail on coercion.
 pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
     use self::DataType::*;
+
+    if type_into == type_from {
+        return true;
+    }
     // Null can convert to most of types
     match type_into {
         Int8 => matches!(type_from, Null | Int8),

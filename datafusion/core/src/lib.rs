@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 #![warn(missing_docs, clippy::needless_borrow)]
-// TODO: Temporary workaround for https://github.com/apache/arrow-rs/issues/2372 (#3081)
-#![allow(where_clauses_object_safety)]
 
 //! [DataFusion](https://github.com/apache/arrow-datafusion)
 //! is an extensible query execution framework that uses
@@ -39,7 +37,7 @@
 //! let ctx = SessionContext::new();
 //!
 //! // create the dataframe
-//! let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+//! let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
 //!
 //! // create a plan
 //! let df = df.filter(col("a").lt_eq(col("b")))?
@@ -77,7 +75,7 @@
 //! # async fn main() -> Result<()> {
 //! let ctx = SessionContext::new();
 //!
-//! ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await?;
+//! ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
 //!
 //! // create a plan
 //! let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
@@ -212,11 +210,11 @@
 /// DataFusion crate version
 pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+extern crate core;
 extern crate sqlparser;
 
 pub mod avro_to_arrow;
 pub mod catalog;
-pub mod config;
 pub mod dataframe;
 pub mod datasource;
 pub mod error;
@@ -235,6 +233,7 @@ pub use parquet;
 
 // re-export DataFusion crates
 pub use datafusion_common as common;
+pub use datafusion_common::config;
 pub use datafusion_expr as logical_expr;
 pub use datafusion_optimizer as optimizer;
 pub use datafusion_physical_expr as physical_expr;

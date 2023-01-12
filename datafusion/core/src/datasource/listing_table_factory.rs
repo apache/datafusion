@@ -59,15 +59,7 @@ impl TableProviderFactory for ListingTableFactory {
         state: &SessionState,
         cmd: &CreateExternalTable,
     ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
-        let file_compression_type = FileCompressionType::from_str(
-            cmd.file_compression_type.as_str(),
-        )
-        .map_err(|_| {
-            DataFusionError::Execution(format!(
-                "Unknown FileCompressionType {}",
-                cmd.file_compression_type.as_str()
-            ))
-        })?;
+        let file_compression_type = FileCompressionType::from(cmd.file_compression_type);
         let file_type = FileType::from_str(cmd.file_type.as_str()).map_err(|_| {
             DataFusionError::Execution(format!("Unknown FileType {}", cmd.file_type))
         })?;
@@ -103,9 +95,9 @@ impl TableProviderFactory for ListingTableFactory {
                 .table_partition_cols
                 .iter()
                 .map(|col| {
-                    schema.field_with_name(col).map_err(|arrow_err| {
-                        DataFusionError::Execution(arrow_err.to_string())
-                    })
+                    schema
+                        .field_with_name(col)
+                        .map_err(DataFusionError::ArrowError)
                 })
                 .collect::<datafusion_common::Result<Vec<_>>>()?
                 .into_iter()
@@ -125,9 +117,9 @@ impl TableProviderFactory for ListingTableFactory {
         };
 
         let options = ListingOptions::new(file_format)
-            .with_collect_stat(state.config.collect_statistics)
+            .with_collect_stat(state.config().collect_statistics())
             .with_file_extension(file_extension)
-            .with_target_partitions(state.config.target_partitions)
+            .with_target_partitions(state.config().target_partitions())
             .with_table_partition_cols(table_partition_cols)
             .with_file_sort_order(None);
 

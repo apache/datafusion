@@ -41,7 +41,27 @@ use tempfile::TempDir;
 use test_utils::AccessLogGenerator;
 
 /// how many rows of generated data to write to our parquet file (arbitrary)
-const NUM_ROWS: usize = 53819;
+const NUM_ROWS: usize = 4096;
+
+fn generate_file(tempdir: &TempDir, props: WriterProperties) -> TestParquetFile {
+    // Tune down the generator for smaller files
+    let generator = AccessLogGenerator::new()
+        .with_row_limit(NUM_ROWS)
+        .with_pods_per_host(1..4)
+        .with_containers_per_pod(1..2)
+        .with_entries_per_container(128..256);
+
+    let file = tempdir.path().join("data.parquet");
+
+    let start = Instant::now();
+    println!("Writing test data to {file:?}");
+    let test_parquet_file = TestParquetFile::try_new(file, props, generator).unwrap();
+    println!(
+        "Completed generating test data in {:?}",
+        Instant::now() - start
+    );
+    test_parquet_file
+}
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -56,40 +76,29 @@ async fn single_file() {
     // Only create the parquet file once as it is fairly large
 
     let tempdir = TempDir::new().unwrap();
+    // Set row group size smaller so can test with fewer rows
+    let props = WriterProperties::builder()
+        .set_max_row_group_size(1024)
+        .build();
+    let test_parquet_file = generate_file(&tempdir, props);
 
-    let generator = AccessLogGenerator::new().with_row_limit(Some(NUM_ROWS));
-
-    // default properties
-    let props = WriterProperties::builder().build();
-    let file = tempdir.path().join("data.parquet");
-
-    let start = Instant::now();
-    println!("Writing test data to {:?}", file);
-    let test_parquet_file = TestParquetFile::try_new(file, props, generator).unwrap();
-    println!(
-        "Completed generating test data in {:?}",
-        Instant::now() - start
-    );
-
-    TestCase::new(&test_parquet_file)
+    let case = TestCase::new(&test_parquet_file)
         .with_name("selective")
         // request_method = 'GET'
         .with_filter(col("request_method").eq(lit("GET")))
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(8886)
-        .run()
-        .await;
+        .with_expected_rows(688);
+    case.run().await;
 
-    TestCase::new(&test_parquet_file)
+    let case = TestCase::new(&test_parquet_file)
         .with_name("non_selective")
         // request_method != 'GET'
         .with_filter(col("request_method").not_eq(lit("GET")))
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(44933)
-        .run()
-        .await;
+        .with_expected_rows(3408);
+    case.run().await;
 
-    TestCase::new(&test_parquet_file)
+    let case = TestCase::new(&test_parquet_file)
         .with_name("basic_conjunction")
         // request_method = 'POST' AND
         //   response_status = 503
@@ -101,118 +110,108 @@ async fn single_file() {
             .unwrap(),
         )
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(1729)
-        .run()
-        .await;
+        .with_expected_rows(135);
+    case.run().await;
 
-    TestCase::new(&test_parquet_file)
+    let case = TestCase::new(&test_parquet_file)
         .with_name("everything")
         // filter filters everything (no row has this status)
         // response_status = 429
         .with_filter(col("response_status").eq(lit(429_u16)))
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(0)
-        .run()
-        .await;
+        .with_expected_rows(0);
+    case.run().await;
 
-    TestCase::new(&test_parquet_file)
+    let case = TestCase::new(&test_parquet_file)
         .with_name("nothing")
         // No rows are filtered out -- all are returned
         // response_status > 0
         .with_filter(col("response_status").gt(lit(0_u16)))
         .with_pushdown_expected(PushdownExpected::None)
-        .with_expected_rows(NUM_ROWS)
-        .run()
-        .await;
+        .with_expected_rows(NUM_ROWS);
+    case.run().await;
 
-    TestCase::new(&test_parquet_file)
+    let case = TestCase::new(&test_parquet_file)
         .with_name("dict_selective")
         // container = 'backend_container_0'
         .with_filter(col("container").eq(lit("backend_container_0")))
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(37856)
-        .run()
-        .await;
+        .with_expected_rows(802);
+    case.run().await;
 
-    TestCase::new(&test_parquet_file)
+    let case = TestCase::new(&test_parquet_file)
         .with_name("not eq")
         // container != 'backend_container_0'
         .with_filter(col("container").not_eq(lit("backend_container_0")))
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(15963)
-        .run()
-        .await;
+        .with_expected_rows(3294);
+    case.run().await;
 
-    TestCase::new(&test_parquet_file)
+    let case = TestCase::new(&test_parquet_file)
         .with_name("dict_conjunction")
         // container == 'backend_container_0' AND
-        //   pod = 'aqcathnxqsphdhgjtgvxsfyiwbmhlmg'
+        //   pod = 'cvcjfhwtjttxhiugepoojxrplihywu'
         .with_filter(
             conjunction([
                 col("container").eq(lit("backend_container_0")),
-                col("pod").eq(lit("aqcathnxqsphdhgjtgvxsfyiwbmhlmg")),
+                col("pod").eq(lit("cvcjfhwtjttxhiugepoojxrplihywu")),
             ])
             .unwrap(),
         )
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(3052)
-        .run()
-        .await;
+        .with_expected_rows(134);
+    case.run().await;
 
-    TestCase::new(&test_parquet_file)
+    let case = TestCase::new(&test_parquet_file)
         .with_name("dict_very_selective")
         // request_bytes > 2B AND
         //   container == 'backend_container_0' AND
-        //   pod = 'aqcathnxqsphdhgjtgvxsfyiwbmhlmg'
+        //   pod = 'cvcjfhwtjttxhiugepoojxrplihywu'
         .with_filter(
             conjunction([
                 col("request_bytes").gt(lit(2000000000)),
                 col("container").eq(lit("backend_container_0")),
-                col("pod").eq(lit("aqcathnxqsphdhgjtgvxsfyiwbmhlmg")),
+                col("pod").eq(lit("cvcjfhwtjttxhiugepoojxrplihywu")),
             ])
             .unwrap(),
         )
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(88)
-        .run()
-        .await;
+        .with_expected_rows(2);
+    case.run().await;
 
-    TestCase::new(&test_parquet_file)
+    let case = TestCase::new(&test_parquet_file)
         .with_name("dict_very_selective2")
-        // picks only 2 rows
         // client_addr = '204.47.29.82' AND
         //   container == 'backend_container_0' AND
-        //   pod = 'aqcathnxqsphdhgjtgvxsfyiwbmhlmg'
+        //   pod = 'cvcjfhwtjttxhiugepoojxrplihywu'
         .with_filter(
             conjunction(vec![
-                col("request_bytes").gt(lit(2000000000)),
+                col("client_addr").eq(lit("58.242.143.99")),
                 col("container").eq(lit("backend_container_0")),
-                col("pod").eq(lit("aqcathnxqsphdhgjtgvxsfyiwbmhlmg")),
+                col("pod").eq(lit("cvcjfhwtjttxhiugepoojxrplihywu")),
             ])
             .unwrap(),
         )
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(88)
-        .run()
-        .await;
+        .with_expected_rows(1);
+    case.run().await;
 
-    TestCase::new(&test_parquet_file)
+    let case = TestCase::new(&test_parquet_file)
         .with_name("dict_disjunction")
         // container = 'backend_container_0' OR
-        //   pod = 'aqcathnxqsphdhgjtgvxsfyiwbmhlmg'
+        //   pod = 'cvcjfhwtjttxhiugepoojxrplihywu'
         .with_filter(
             disjunction([
                 col("container").eq(lit("backend_container_0")),
-                col("pod").eq(lit("aqcathnxqsphdhgjtgvxsfyiwbmhlmg")),
+                col("pod").eq(lit("cvcjfhwtjttxhiugepoojxrplihywu")),
             ])
             .unwrap(),
         )
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(39982)
-        .run()
-        .await;
+        .with_expected_rows(802);
+    case.run().await;
 
-    TestCase::new(&test_parquet_file)
+    let case = TestCase::new(&test_parquet_file)
         .with_name("dict_disjunction3")
         // request_method != 'GET' OR
         //   response_status = 400 OR
@@ -225,10 +224,9 @@ async fn single_file() {
             ])
             .unwrap(),
         )
-        .with_pushdown_expected(PushdownExpected::None)
-        .with_expected_rows(NUM_ROWS)
-        .run()
-        .await;
+        .with_pushdown_expected(PushdownExpected::Some)
+        .with_expected_rows(3672);
+    case.run().await;
 }
 
 #[cfg(not(target_family = "windows"))]
@@ -236,92 +234,113 @@ async fn single_file() {
 async fn single_file_small_data_pages() {
     let tempdir = TempDir::new().unwrap();
 
-    let generator = AccessLogGenerator::new().with_row_limit(Some(NUM_ROWS));
-
-    // set the max page rows with arbitrary sizes 8311 to increase
-    // effectiveness of page filtering
+    // Set low row count limit to improve page filtering
     let props = WriterProperties::builder()
-        .set_data_page_row_count_limit(8311)
+        .set_max_row_group_size(2048)
+        .set_data_page_row_count_limit(512)
+        .set_write_batch_size(512)
         .build();
-    let file = tempdir.path().join("data_8311.parquet");
-
-    let start = Instant::now();
-    println!("Writing test data to {:?}", file);
-    let test_parquet_file = TestParquetFile::try_new(file, props, generator).unwrap();
-    println!(
-        "Completed generating test data in {:?}",
-        Instant::now() - start
-    );
+    let test_parquet_file = generate_file(&tempdir, props);
 
     // The statistics on the 'pod' column are as follows:
     //
-    // parquet-tools dump -d ~/Downloads/data_8311.parquet
+    // docker run -v /tmp:/tmp nathanhowell/parquet-tools dump -d -c pod -n /tmp/.tmppkTohR/data.parquet
     //
-    // ...
-    // pod TV=53819 RL=0 DL=0 DS:                 8 DE:PLAIN
-    // ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    // page 0:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: aqcathnxqsphdhgjtgvxsfyiwbmhlmg, max: bvjjmytpfzdfsvlzfhbunasihjgxpesbmxv, num_nulls not defined] CRC:[none] SZ:7 VC:9216
-    // page 1:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: bvjjmytpfzdfsvlzfhbunasihjgxpesbmxv, max: bxyubzxbbmhroqhrdzttngxcpwwgkpaoizvgzd, num_nulls not defined] CRC:[none] SZ:7 VC:9216
-    // page 2:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: bxyubzxbbmhroqhrdzttngxcpwwgkpaoizvgzd, max: djzdyiecnumrsrcbizwlqzdhnpoiqdh, num_nulls not defined] CRC:[none] SZ:10 VC:9216
-    // page 3:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: djzdyiecnumrsrcbizwlqzdhnpoiqdh, max: fktdcgtmzvoedpwhfevcvvrtaurzgex, num_nulls not defined] CRC:[none] SZ:7 VC:9216
-    // page 4:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: fktdcgtmzvoedpwhfevcvvrtaurzgex, max: fwtdpgtxwqkkgtgvthhwycrvjiizdifyp, num_nulls not defined] CRC:[none] SZ:7 VC:9216
-    // page 5:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: fwtdpgtxwqkkgtgvthhwycrvjiizdifyp, max: iadnalqpdzthpifrvewossmpqibgtsuin, num_nulls not defined] CRC:[none] SZ:7 VC:7739
+    // ```
+    // row group 0
+    //     --------------------------------------------------------------------------------
+    //     pod:  BINARY UNCOMPRESSED DO:782 FPO:1215 SZ:744/744/1.00 VC:2048 ENC:RLE,RLE_DICTIONARY,PLAIN ST:[min: azvagebjesrqboyqxmgaskvpwddebuptqyy, max: zamirxzhihhfqdvhuxeziuukkqyutmczbhfgx, num_nulls not defined]
+    //
+    // pod TV=2048 RL=0 DL=0 DS: 11 DE:PLAIN
+    //     ----------------------------------------------------------------------------
+    //     page 0:                    DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: azvagebjesrqboyqxmgaskvpwddebuptqyy, max: ksjzzqfxvawhmlkopjsbponfdwsurxff, num_nulls not defined] CRC:[none] SZ:10 VC:512
+    //     page 1:                    DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: azvagebjesrqboyqxmgaskvpwddebuptqyy, max: wlftgepiwhnmzqrsyijhqbauhjplru, num_nulls not defined] CRC:[none] SZ:18 VC:1013
+    //     page 2:                    DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: ewzlijvnljqeqhqhftfalqbqfsyidw, max: zamirxzhihhfqdvhuxeziuukkqyutmczbhfgx, num_nulls not defined] CRC:[none] SZ:12 VC:523
+    //
+    // row group 1
+    //     --------------------------------------------------------------------------------
+    //     pod:  BINARY UNCOMPRESSED DO:249244 FPO:249724 SZ:901/901/1.00 VC:2048 ENC:RLE,RLE_DICTIONARY,PLAIN ST:[min: csvnvrdcuzoftoidzmczrtqnrzgfpj, max: zamirxzhihhfqdvhuxeziuukkqyutmczbhfgx, num_nulls not defined]
+    //
+    // pod TV=2048 RL=0 DL=0 DS: 12 DE:PLAIN
+    //     ----------------------------------------------------------------------------
+    //     page 0:                    DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: dhhqgbsjutqdvqpikmnwqdnrhkqnjyieoviujkj, max: zamirxzhihhfqdvhuxeziuukkqyutmczbhfgx, num_nulls not defined] CRC:[none] SZ:12 VC:512
+    //     page 1:                    DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: dlowgwtqjiifqajbobiuqoflbmsbobwsqtrc, max: uipgzhbptpinjcwbdwhkfdjzdfzrlffrifzh, num_nulls not defined] CRC:[none] SZ:12 VC:671
+    //     page 2:                    DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: csvnvrdcuzoftoidzmczrtqnrzgfpj, max: xacatvakpxztzuucoxhjiofxykryoxc, num_nulls not defined] CRC:[none] SZ:16 VC:781
+    //     page 3:                    DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: nxihlfujkdzymexwpqurhawwchvkdrntixjs, max: xacatvakpxztzuucoxhjiofxykryoxc, num_nulls not defined] CRC:[none] SZ:9 VC:84
+    // ```
 
     TestCase::new(&test_parquet_file)
         .with_name("selective")
-        // predicate is chosen carefully to prune pages 0, 1, 2, 3, 4
-        // pod = 'iadnalqpdzthpifrvewossmpqibgtsuin'
-        .with_filter(col("pod").eq(lit("iadnalqpdzthpifrvewossmpqibgtsuin")))
+        // predicate is chosen carefully to prune all bar 0-2 and 1-0
+        // pod = 'zamirxzhihhfqdvhuxeziuukkqyutmczbhfgx'
+        .with_filter(col("pod").eq(lit("zamirxzhihhfqdvhuxeziuukkqyutmczbhfgx")))
         .with_pushdown_expected(PushdownExpected::Some)
         .with_page_index_filtering_expected(PageIndexFilteringExpected::Some)
-        .with_expected_rows(2574)
+        .with_expected_rows(174)
         .run()
         .await;
 
-    // time TV=53819 RL=0 DL=0 DS:                7092 DE:PLAIN
-    // --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    // page 0:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.004133888, num_nulls not defined] CRC:[none] SZ:13844 VC:9216
-    // page 1:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.006397952, num_nulls not defined] CRC:[none] SZ:14996 VC:9216
-    // page 2:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.005650432, num_nulls not defined] CRC:[none] SZ:14996 VC:9216
-    // page 3:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.004269056, num_nulls not defined] CRC:[none] SZ:14996 VC:9216
-    // page 4:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.007261184, num_nulls not defined] CRC:[none] SZ:14996 VC:9216
-    // page 5:                                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.005330944, num_nulls not defined] CRC:[none] SZ:12601 VC:7739
+    // row group 0
+    //     --------------------------------------------------------------------------------
+    //     time:  INT64 UNCOMPRESSED DO:3317 FPO:5334 SZ:4209/4209/1.00 VC:2048 ENC:RLE,RLE_DICTIONARY,PLAIN ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.000254976, num_nulls not defined]
+    //
+    // time TV=2048 RL=0 DL=0 DS: 250 DE:PLAIN
+    //     ----------------------------------------------------------------------------
+    //     page 0:                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.000203776, num_nulls not defined] CRC:[none] SZ:515 VC:512
+    //     page 1:                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.000254976, num_nulls not defined] CRC:[none] SZ:1020 VC:1013
+    //     page 2:                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.000216064, num_nulls not defined] CRC:[none] SZ:531 VC:523
+    //
+    // row group 1
+    //     --------------------------------------------------------------------------------
+    //     time:  INT64 UNCOMPRESSED DO:252201 FPO:254186 SZ:4220/4220/1.00 VC:2048 ENC:RLE,RLE_DICTIONARY,PLAIN ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.000250880, num_nulls not defined]
+    //
+    // time TV=2048 RL=0 DL=0 DS: 246 DE:PLAIN
+    //     ----------------------------------------------------------------------------
+    //     page 0:                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.000231424, num_nulls not defined] CRC:[none] SZ:515 VC:512
+    //     page 1:                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.000250880, num_nulls not defined] CRC:[none] SZ:675 VC:671
+    //     page 2:                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.000211968, num_nulls not defined] CRC:[none] SZ:787 VC:781
+    //     page 3:                     DLE:RLE RLE:RLE VLE:RLE_DICTIONARY ST:[min: 1970-01-01T00:00:00.000000000, max: 1970-01-01T00:00:00.000177152, num_nulls not defined] CRC:[none] SZ:90 VC:84
+
     TestCase::new(&test_parquet_file)
         .with_name("selective")
-        // predicate is chosen carefully to prune pages 1, 2, 4, and 5
-        // time > 1970-01-01T00:00:00.004300000
-        .with_filter(col("time").gt(lit_timestamp_nano(4300000)))
+        // predicate is chosen carefully to prune all bar 0-1, 1-0, 1-1
+        // time > 1970-01-01T00:00:00.000216064
+        .with_filter(col("time").gt(lit_timestamp_nano(216064)))
         .with_pushdown_expected(PushdownExpected::Some)
         .with_page_index_filtering_expected(PageIndexFilteringExpected::Some)
-        .with_expected_rows(9745)
+        .with_expected_rows(178)
         .run()
         .await;
 
-    // decimal_price TV=53819 RL=0 DL=0
-    // ----------------------------------------------------------------------------
-    // row group 0:
-    //     column index for column decimal_price:
-    //     Boudary order: UNORDERED
-    //                       null count  min                                       max
-    // page-0                         0  1                                         9216
-    // page-1                         0  9217                                      18432
-    // page-2                         0  18433                                     27648
-    // page-3                         0  27649                                     36864
-    // page-4                         0  36865                                     46080
-    // page-5                         0  46081                                     53819
+    // row group 0
+    //     --------------------------------------------------------------------------------
+    //     decimal_price:  FIXED_LEN_BYTE_ARRAY UNCOMPRESSED DO:0 FPO:215263 SZ:32948/32948/1.00 VC:2048 ENC:RLE,PLAIN ST:[min: 1, max: 1013, num_nulls not defined]
     //
-    // offset index for column decimal_price:
-    //                            offset   compressed size       first row index
-    // page-0                   5581636            147517                     0
-    // page-1                   5729153            147517                  9216
+    // decimal_price TV=2048 RL=0 DL=0
+    //     ----------------------------------------------------------------------------
+    //     page 0:  DLE:RLE RLE:RLE VLE:PLAIN ST:[min: 1, max: 512, num_nulls not defined] CRC:[none] SZ:8192 VC:512
+    //     page 1:  DLE:RLE RLE:RLE VLE:PLAIN ST:[min: 1, max: 1013, num_nulls not defined] CRC:[none] SZ:16208 VC:1013
+    //     page 2:  DLE:RLE RLE:RLE VLE:PLAIN ST:[min: 1, max: 919, num_nulls not defined] CRC:[none] SZ:8368 VC:523
+    //
+    // row group 1
+    //     --------------------------------------------------------------------------------
+    //     decimal_price:  FIXED_LEN_BYTE_ARRAY UNCOMPRESSED DO:0 FPO:461433 SZ:33006/33006/1.00 VC:2048 ENC:RLE,PLAIN ST:[min: 1, max: 787, num_nulls not defined]
+    //
+    // decimal_price TV=2048 RL=0 DL=0
+    //     ----------------------------------------------------------------------------
+    //     page 0:  DLE:RLE RLE:RLE VLE:PLAIN ST:[min: 117, max: 628, num_nulls not defined] CRC:[none] SZ:8192 VC:512
+    //     page 1:  DLE:RLE RLE:RLE VLE:PLAIN ST:[min: 1, max: 787, num_nulls not defined] CRC:[none] SZ:10736 VC:671
+    //     page 2:  DLE:RLE RLE:RLE VLE:PLAIN ST:[min: 1, max: 781, num_nulls not defined] CRC:[none] SZ:12496 VC:781
+    //     page 3:  DLE:RLE RLE:RLE VLE:PLAIN ST:[min: 1, max: 515, num_nulls not defined] CRC:[none] SZ:1344 VC:84
+
     TestCase::new(&test_parquet_file)
         .with_name("selective_on_decimal")
-        // predicate is chosen carefully to prune pages 1, 2, 3, 4, and 5
+        // predicate is chosen carefully to prune all bar 0-1
         // decimal_price < 9200
-        .with_filter(col("decimal_price").lt_eq(lit(9200)))
+        .with_filter(col("decimal_price").gt(lit(919)))
         .with_pushdown_expected(PushdownExpected::Some)
         .with_page_index_filtering_expected(PageIndexFilteringExpected::Some)
-        .with_expected_rows(9200)
+        .with_expected_rows(94)
         .run()
         .await;
 }
@@ -494,11 +513,11 @@ impl<'a> TestCase<'a> {
         filter: &Expr,
     ) -> RecordBatch {
         println!("  scan options: {scan_options:?}");
-        println!("  reading with filter {:?}", filter);
-        let ctx = SessionContext::new();
+        println!("  reading with filter {filter:?}");
+        let ctx = SessionContext::with_config(scan_options.config());
         let exec = self
             .test_parquet_file
-            .create_scan(filter.clone(), scan_options)
+            .create_scan(filter.clone())
             .await
             .unwrap();
         let result = collect(exec.clone(), ctx.task_ctx()).await.unwrap();
@@ -529,22 +548,23 @@ impl<'a> TestCase<'a> {
         };
 
         let pushdown_rows_filtered = get_value(&metrics, "pushdown_rows_filtered");
-        println!("  pushdown_rows_filtered: {}", pushdown_rows_filtered);
+        println!("  pushdown_rows_filtered: {pushdown_rows_filtered}");
 
         match pushdown_expected {
             PushdownExpected::None => {
-                assert_eq!(pushdown_rows_filtered, 0);
+                assert_eq!(pushdown_rows_filtered, 0, "{}", self.name);
             }
             PushdownExpected::Some => {
                 assert!(
                     pushdown_rows_filtered > 0,
-                    "Expected to filter rows via pushdown, but none were"
+                    "{}: Expected to filter rows via pushdown, but none were",
+                    self.name
                 );
             }
         };
 
         let page_index_rows_filtered = get_value(&metrics, "page_index_rows_filtered");
-        println!(" page_index_rows_filtered: {}", page_index_rows_filtered);
+        println!(" page_index_rows_filtered: {page_index_rows_filtered}");
 
         let page_index_filtering_expected = if scan_options.enable_page_index {
             self.page_index_filtering_expected
@@ -575,8 +595,7 @@ fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
         Some(v) => v.as_usize(),
         _ => {
             panic!(
-                "Expected metric not found. Looking for '{}' in\n\n{:#?}",
-                metric_name, metrics
+                "Expected metric not found. Looking for '{metric_name}' in\n\n{metrics:#?}"
             );
         }
     }

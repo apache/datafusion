@@ -27,6 +27,7 @@ mod get_indexed_field;
 mod in_list;
 mod is_not_null;
 mod is_null;
+mod like;
 mod literal;
 mod negative;
 mod no_op;
@@ -62,9 +63,13 @@ pub use crate::aggregate::sum_distinct::DistinctSum;
 pub use crate::aggregate::variance::{Variance, VariancePop};
 
 pub use crate::window::cume_dist::cume_dist;
+pub use crate::window::cume_dist::CumeDist;
+pub use crate::window::lead_lag::WindowShift;
 pub use crate::window::lead_lag::{lag, lead};
-pub use crate::window::nth_value::NthValue;
+pub use crate::window::nth_value::{NthValue, NthValueKind};
+pub use crate::window::ntile::Ntile;
 pub use crate::window::rank::{dense_rank, percent_rank, rank};
+pub use crate::window::rank::{Rank, RankType};
 pub use crate::window::row_number::RowNumber;
 
 pub use binary::{binary, BinaryExpr};
@@ -78,6 +83,7 @@ pub use get_indexed_field::GetIndexedFieldExpr;
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
+pub use like::{like, LikeExpr};
 pub use literal::{lit, Literal};
 pub use negative::{negative, NegativeExpr};
 pub use no_op::NoOp;
@@ -87,7 +93,7 @@ pub use try_cast::{try_cast, TryCastExpr};
 
 /// returns the name of the state
 pub fn format_state_name(name: &str, state_name: &str) -> String {
-    format!("{}[{}]", name, state_name)
+    format!("{name}[{state_name}]")
 }
 pub use crate::PhysicalSortExpr;
 

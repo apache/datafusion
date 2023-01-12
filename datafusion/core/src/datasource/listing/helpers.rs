@@ -21,10 +21,7 @@ use std::sync::Arc;
 
 use arrow::array::new_empty_array;
 use arrow::{
-    array::{
-        Array, ArrayBuilder, ArrayRef, Date64Array, Date64Builder, StringBuilder,
-        UInt64Builder,
-    },
+    array::{ArrayBuilder, ArrayRef, Date64Builder, StringBuilder, UInt64Builder},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
@@ -40,7 +37,7 @@ use crate::{
 use super::PartitionedFile;
 use crate::datasource::listing::ListingTableUrl;
 use datafusion_common::{
-    cast::{as_string_array, as_uint64_array},
+    cast::{as_date64_array, as_string_array, as_uint64_array},
     Column, DataFusionError,
 };
 use datafusion_expr::{
@@ -124,7 +121,8 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
             | Expr::Sort { .. }
             | Expr::WindowFunction { .. }
             | Expr::Wildcard
-            | Expr::QualifiedWildcard { .. } => {
+            | Expr::QualifiedWildcard { .. }
+            | Expr::Placeholder { .. } => {
                 *self.is_applicable = false;
                 Recursion::Stop(self)
             }
@@ -341,11 +339,7 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Result<Vec<PartitionedFile>> {
         .flat_map(|batch| {
             let key_array = as_string_array(batch.column(0)).unwrap();
             let length_array = as_uint64_array(batch.column(1)).unwrap();
-            let modified_array = batch
-                .column(2)
-                .as_any()
-                .downcast_ref::<Date64Array>()
-                .unwrap();
+            let modified_array = as_date64_array(batch.column(2)).unwrap();
 
             (0..batch.num_rows()).map(move |row| {
                 Ok(PartitionedFile {
@@ -371,13 +365,11 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Result<Vec<PartitionedFile>> {
 fn to_timestamp_millis(v: i64) -> Result<chrono::DateTime<Utc>> {
     match Utc.timestamp_millis_opt(v) {
         chrono::LocalResult::None => Err(DataFusionError::Execution(format!(
-            "Can not convert {} to UTC millisecond timestamp",
-            v
+            "Can not convert {v} to UTC millisecond timestamp"
         ))),
         chrono::LocalResult::Single(v) => Ok(v),
         chrono::LocalResult::Ambiguous(_, _) => Err(DataFusionError::Execution(format!(
-            "Ambiguous timestamp when converting {} to UTC millisecond timestamp",
-            v
+            "Ambiguous timestamp when converting {v} to UTC millisecond timestamp"
         ))),
     }
 }

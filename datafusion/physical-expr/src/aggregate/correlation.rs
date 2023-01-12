@@ -22,10 +22,14 @@ use crate::aggregate::stats::StatsType;
 use crate::aggregate::stddev::StddevAccumulator;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
-use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
+use arrow::{
+    array::ArrayRef,
+    compute::{and, filter, is_not_null},
+    datatypes::{DataType, Field},
+};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -72,32 +76,32 @@ impl AggregateExpr for Correlation {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
-                &format_state_name(&self.name, "count"),
+                format_state_name(&self.name, "count"),
                 DataType::UInt64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "mean1"),
+                format_state_name(&self.name, "mean1"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "m2_1"),
+                format_state_name(&self.name, "m2_1"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "mean2"),
+                format_state_name(&self.name, "mean2"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "m2_2"),
+                format_state_name(&self.name, "m2_2"),
                 DataType::Float64,
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "algo_const"),
+                format_state_name(&self.name, "algo_const"),
                 DataType::Float64,
                 true,
             ),
@@ -133,26 +137,51 @@ impl CorrelationAccumulator {
 }
 
 impl Accumulator for CorrelationAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
-            AggregateState::Scalar(ScalarValue::from(self.covar.get_count())),
-            AggregateState::Scalar(ScalarValue::from(self.covar.get_mean1())),
-            AggregateState::Scalar(ScalarValue::from(self.stddev1.get_m2())),
-            AggregateState::Scalar(ScalarValue::from(self.covar.get_mean2())),
-            AggregateState::Scalar(ScalarValue::from(self.stddev2.get_m2())),
-            AggregateState::Scalar(ScalarValue::from(self.covar.get_algo_const())),
+            ScalarValue::from(self.covar.get_count()),
+            ScalarValue::from(self.covar.get_mean1()),
+            ScalarValue::from(self.stddev1.get_m2()),
+            ScalarValue::from(self.covar.get_mean2()),
+            ScalarValue::from(self.stddev2.get_m2()),
+            ScalarValue::from(self.covar.get_algo_const()),
         ])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.covar.update_batch(values)?;
+        // TODO: null input skipping logic duplicated across Correlation
+        // and its children accumulators.
+        // This could be simplified by splitting up input filtering and
+        // calculation logic in children accumulators, and calling only
+        // calculation part from Correlation
+        let values = if values[0].null_count() != 0 || values[1].null_count() != 0 {
+            let mask = and(&is_not_null(&values[0])?, &is_not_null(&values[1])?)?;
+            let values1 = filter(&values[0], &mask)?;
+            let values2 = filter(&values[1], &mask)?;
+
+            vec![values1, values2]
+        } else {
+            values.to_vec()
+        };
+
+        self.covar.update_batch(&values)?;
         self.stddev1.update_batch(&values[0..1])?;
         self.stddev2.update_batch(&values[1..2])?;
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.covar.retract_batch(values)?;
+        let values = if values[0].null_count() != 0 || values[1].null_count() != 0 {
+            let mask = and(&is_not_null(&values[0])?, &is_not_null(&values[1])?)?;
+            let values1 = filter(&values[0], &mask)?;
+            let values2 = filter(&values[1], &mask)?;
+
+            vec![values1, values2]
+        } else {
+            values.to_vec()
+        };
+
+        self.covar.retract_batch(&values)?;
         self.stddev1.retract_batch(&values[0..1])?;
         self.stddev2.retract_batch(&values[1..2])?;
         Ok(())
@@ -341,25 +370,29 @@ mod tests {
 
     #[test]
     fn correlation_i32_with_nulls_2() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
-        let b: ArrayRef = Arc::new(Int32Array::from(vec![Some(4), Some(5), Some(6)]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            Some(9),
+            Some(3),
+        ]));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(4),
+            Some(5),
+            Some(5),
+            None,
+            Some(6),
+        ]));
 
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Int32, true),
-        ]);
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a, b])?;
-
-        let agg = Arc::new(Correlation::new(
-            col("a", &schema)?,
-            col("b", &schema)?,
-            "bla".to_string(),
-            DataType::Float64,
-        ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
-
-        Ok(())
+        generic_test_op2!(
+            a,
+            b,
+            DataType::Int32,
+            DataType::Int32,
+            Correlation,
+            ScalarValue::from(1_f64)
+        )
     }
 
     #[test]
@@ -367,22 +400,14 @@ mod tests {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
         let b: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
 
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Int32, true),
-        ]);
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a, b])?;
-
-        let agg = Arc::new(Correlation::new(
-            col("a", &schema)?,
-            col("b", &schema)?,
-            "bla".to_string(),
-            DataType::Float64,
-        ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
-
-        Ok(())
+        generic_test_op2!(
+            a,
+            b,
+            DataType::Int32,
+            DataType::Int32,
+            Correlation,
+            ScalarValue::Float64(None)
+        )
     }
 
     #[test]

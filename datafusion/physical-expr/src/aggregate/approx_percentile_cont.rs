@@ -29,7 +29,7 @@ use arrow::{
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::{downcast_value, ScalarValue};
-use datafusion_expr::{Accumulator, AggregateState};
+use datafusion_expr::Accumulator;
 use std::{any::Any, iter, sync::Arc};
 
 /// APPROX_PERCENTILE_CONT aggregate expression
@@ -106,8 +106,7 @@ impl ApproxPercentileCont {
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Support for 'APPROX_PERCENTILE_CONT' for data type {} is not implemented",
-                    other
+                    "Support for 'APPROX_PERCENTILE_CONT' for data type {other} is not implemented"
                 )))
             }
         };
@@ -138,8 +137,7 @@ fn validate_input_percentile_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<f64> {
     // Ensure the percentile is between 0 and 1.
     if !(0.0..=1.0).contains(&percentile) {
         return Err(DataFusionError::Plan(format!(
-            "Percentile value must be between 0.0 and 1.0 inclusive, {} is invalid",
-            percentile
+            "Percentile value must be between 0.0 and 1.0 inclusive, {percentile} is invalid"
         )));
     }
     Ok(percentile)
@@ -188,32 +186,32 @@ impl AggregateExpr for ApproxPercentileCont {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![
             Field::new(
-                &format_state_name(&self.name, "max_size"),
+                format_state_name(&self.name, "max_size"),
                 DataType::UInt64,
                 false,
             ),
             Field::new(
-                &format_state_name(&self.name, "sum"),
+                format_state_name(&self.name, "sum"),
                 DataType::Float64,
                 false,
             ),
             Field::new(
-                &format_state_name(&self.name, "count"),
+                format_state_name(&self.name, "count"),
                 DataType::Float64,
                 false,
             ),
             Field::new(
-                &format_state_name(&self.name, "max"),
+                format_state_name(&self.name, "max"),
                 DataType::Float64,
                 false,
             ),
             Field::new(
-                &format_state_name(&self.name, "min"),
+                format_state_name(&self.name, "min"),
                 DataType::Float64,
                 false,
             ),
             Field::new(
-                &format_state_name(&self.name, "centroids"),
+                format_state_name(&self.name, "centroids"),
                 DataType::List(Box::new(Field::new("item", DataType::Float64, true))),
                 false,
             ),
@@ -349,21 +347,15 @@ impl ApproxPercentileAccumulator {
                     .collect::<Result<Vec<_>>>()?)
             }
             e => Err(DataFusionError::Internal(format!(
-                "APPROX_PERCENTILE_CONT is not expected to receive the type {:?}",
-                e
+                "APPROX_PERCENTILE_CONT is not expected to receive the type {e:?}"
             ))),
         }
     }
 }
 
 impl Accumulator for ApproxPercentileAccumulator {
-    fn state(&self) -> Result<Vec<AggregateState>> {
-        Ok(self
-            .digest
-            .to_scalar_state()
-            .into_iter()
-            .map(AggregateState::Scalar)
-            .collect())
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(self.digest.to_scalar_state().into_iter().collect())
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -416,7 +408,9 @@ impl Accumulator for ApproxPercentileAccumulator {
     }
 
     fn size(&self) -> usize {
-        // TODO(crepererum): `DataType` is NOT fixed size, add `DataType::size` method to arrow (https://github.com/apache/arrow-rs/issues/3147)
         std::mem::size_of_val(self) + self.digest.size()
+            - std::mem::size_of_val(&self.digest)
+            + self.return_type.size()
+            - std::mem::size_of_val(&self.return_type)
     }
 }

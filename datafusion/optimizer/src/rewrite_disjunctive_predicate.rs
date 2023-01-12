@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{utils, OptimizerConfig, OptimizerRule};
+use crate::optimizer::ApplyOrder;
+use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_expr::expr::BinaryExpr;
 use datafusion_expr::logical_plan::Filter;
 use datafusion_expr::{Expr, LogicalPlan, Operator};
-use std::sync::Arc;
 
 /// Optimizer pass that rewrites predicates of the form
 ///
@@ -124,27 +124,31 @@ impl RewriteDisjunctivePredicate {
 }
 
 impl OptimizerRule for RewriteDisjunctivePredicate {
-    fn optimize(
+    fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _optimizer_config: &mut OptimizerConfig,
-    ) -> Result<LogicalPlan> {
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(filter) => {
-                let predicate = predicate(filter.predicate())?;
+                let predicate = predicate(&filter.predicate)?;
                 let rewritten_predicate = rewrite_predicate(predicate);
                 let rewritten_expr = normalize_predicate(rewritten_predicate);
-                Ok(LogicalPlan::Filter(Filter::try_new(
+                Ok(Some(LogicalPlan::Filter(Filter::try_new(
                     rewritten_expr,
-                    Arc::new(Self::optimize(self, filter.input(), _optimizer_config)?),
-                )?))
+                    filter.input.clone(),
+                )?)))
             }
-            _ => utils::optimize_children(self, plan, _optimizer_config),
+            _ => Ok(None),
         }
     }
 
     fn name(&self) -> &str {
         "rewrite_disjunctive_predicate"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
     }
 }
 

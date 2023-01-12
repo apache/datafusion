@@ -22,7 +22,9 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util::{round_upto_power_of_2, set_bit_raw, unset_bit_raw};
-use datafusion_common::cast::{as_date32_array, as_string_array};
+use datafusion_common::cast::{
+    as_binary_array, as_date32_array, as_date64_array, as_string_array,
+};
 use datafusion_common::Result;
 use std::cmp::max;
 use std::sync::Arc;
@@ -339,7 +341,7 @@ pub(crate) fn write_field_date64(
     col_idx: usize,
     row_idx: usize,
 ) {
-    let from = from.as_any().downcast_ref::<Date64Array>().unwrap();
+    let from = as_date64_array(from).unwrap();
     to.set_date64(col_idx, from.value(row_idx));
 }
 
@@ -364,7 +366,7 @@ pub(crate) fn write_field_binary(
     col_idx: usize,
     row_idx: usize,
 ) {
-    let from = from.as_any().downcast_ref::<BinaryArray>().unwrap();
+    let from = as_binary_array(from).unwrap();
     let s = from.value(row_idx);
     let new_width = to.current_width() + s.len();
     if new_width > to.data.len() {
