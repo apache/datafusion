@@ -61,6 +61,10 @@ docker run -it --rm \
     githubchangeloggenerator/github-changelog-generator \
     --user apache \
     --project arrow-datafusion \
+    --cache-file=.githubchangeloggenerator.cache \
+    --cache-log=.githubchangeloggenerator.cache.log \
+    --http-cache \
+    --max-issues=300 \
     --since-tag "${SINCE_TAG}" \
     --base "${OUTPUT_PATH}" \
     --output "${OUTPUT_PATH}" \
