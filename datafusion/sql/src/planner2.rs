@@ -24,7 +24,9 @@ impl Binder {
             StatementContextAll::StatementDefaultContext(c) => {
                 self.bind_LogicalPlan_from_statementDefault(c)
             }
-            _ => Err(DataFusionError::NotImplemented(String::from(""))),
+            _ => Err(DataFusionError::NotImplemented(String::from(
+                "not implemented bind_LogicalPlan_from_statement",
+            ))),
         }
     }
 
@@ -40,7 +42,9 @@ impl Binder {
         ctx: Rc<QueryContextAll<'input>>,
     ) -> Result<LogicalPlan> {
         if ctx.with().is_some() {
-            return Err(DataFusionError::NotImplemented(String::from("")));
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented bind_LogicalPlan_from_query",
+            )));
         }
         self.bind_LogicalPlan_from_queryNoWith(ctx.queryNoWith().unwrap())
     }
@@ -50,16 +54,24 @@ impl Binder {
         ctx: Rc<QueryNoWithContextAll<'input>>,
     ) -> Result<LogicalPlan> {
         if ctx.sortItem_all().len() > 0 {
-            return Err(DataFusionError::NotImplemented(String::from("")));
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented sortItem",
+            )));
         }
         if ctx.offset.is_some() {
-            return Err(DataFusionError::NotImplemented(String::from("")));
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented offset",
+            )));
         }
         if ctx.limit.is_some() {
-            return Err(DataFusionError::NotImplemented(String::from("")));
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented limit",
+            )));
         }
         if ctx.FETCH().is_some() {
-            return Err(DataFusionError::NotImplemented(String::from("")));
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented FETCH",
+            )));
         }
         self.bind_LogicalPlan_from_queryTerm(ctx.queryTerm().unwrap())
     }
@@ -72,7 +84,9 @@ impl Binder {
             QueryTermContextAll::QueryTermDefaultContext(c) => {
                 self.bind_LogicalPlan_from_queryTermDefault(c)
             }
-            _ => Err(DataFusionError::NotImplemented(String::from(""))),
+            _ => Err(DataFusionError::NotImplemented(String::from(
+                "not implemented bind_LogicalPlan_from_queryTerm",
+            ))),
         }
     }
 
@@ -91,7 +105,9 @@ impl Binder {
             QueryPrimaryContextAll::QueryPrimaryDefaultContext(c) => {
                 self.bind_LogicalPlan_from_queryPrimaryDefault(c)
             }
-            _ => Err(DataFusionError::NotImplemented(String::from(""))),
+            _ => Err(DataFusionError::NotImplemented(String::from(
+                "not implemented bind_LogicalPlan_from_queryPrimary",
+            ))),
         }
     }
 
@@ -107,37 +123,49 @@ impl Binder {
         ctx: Rc<QuerySpecificationContextAll<'input>>,
     ) -> Result<LogicalPlan> {
         if ctx.setQuantifier().is_some() {
-            return Err(DataFusionError::NotImplemented(String::from("")));
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented setQuantifier",
+            )));
         }
         if ctx.where_.is_some() {
-            return Err(DataFusionError::NotImplemented(String::from("")));
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented where",
+            )));
         }
         if ctx.groupBy().is_some() {
-            return Err(DataFusionError::NotImplemented(String::from("")));
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented groupby",
+            )));
         }
         if ctx.having.is_some() {
-            return Err(DataFusionError::NotImplemented(String::from("")));
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented having",
+            )));
         }
         if ctx.windowDefinition_all().len() > 0 {
-            return Err(DataFusionError::NotImplemented(String::from("")));
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented windowDefinition",
+            )));
         }
-        if ctx.relation_all().len() > 0 {
-            return Err(DataFusionError::NotImplemented(String::from("")));
+        if ctx.relation_all().len() > 1 {
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented relation",
+            )));
         }
         let parent = if ctx.relation_all().len() > 0 {
-            EmptyRelation {
+            LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: true,
                 schema: DFSchemaRef::new(DFSchema::empty()),
-            }
+            })
         } else {
-            self.bind_LogicalPlan_from_relation(ctx.relation(0))
+            self.bind_LogicalPlan_from_relation(ctx.relation(0).unwrap())?
         };
 
         // TODO
         Ok(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: true,
             schema: DFSchemaRef::new(DFSchema::empty()),
-        }))        
+        }))
     }
 
     fn bind_LogicalPlan_from_relation<'input>(
@@ -148,10 +176,12 @@ impl Binder {
             RelationContextAll::RelationDefaultContext(c) => {
                 self.bind_LogicalPlan_from_relationDefault(c)
             }
-            _ => Err(DataFusionError::NotImplemented(String::from(""))),
+            _ => Err(DataFusionError::NotImplemented(String::from(
+                "not implemented bind_LogicalPlan_from_relation",
+            ))),
         }
     }
-    
+
     fn bind_LogicalPlan_from_relationDefault<'input>(
         &self,
         ctx: &RelationDefaultContext<'input>,
@@ -161,16 +191,69 @@ impl Binder {
 
     fn bind_LogicalPlan_from_sampledRelation<'input>(
         &self,
-        ctx: Rc<RelationContextAll<'input>>,
+        ctx: Rc<SampledRelationContextAll<'input>>,
     ) -> Result<LogicalPlan> {
-        // TODO
+        if ctx.sampleType().is_some() {
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented sampleType",
+            )));
+        }
+        self.bind_LogicalPlan_from_patternRecognition(ctx.patternRecognition().unwrap())
+    }
+
+    fn bind_LogicalPlan_from_patternRecognition<'input>(
+        &self,
+        ctx: Rc<PatternRecognitionContextAll<'input>>,
+    ) -> Result<LogicalPlan> {
+        if ctx.MATCH_RECOGNIZE().is_some() {
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented MATCH_RECOGNIZE",
+            )));
+        }
+        self.bind_LogicalPlan_from_aliasedRelation(ctx.aliasedRelation().unwrap())
+    }
+
+    fn bind_LogicalPlan_from_aliasedRelation<'input>(
+        &self,
+        ctx: Rc<AliasedRelationContextAll<'input>>,
+    ) -> Result<LogicalPlan> {
+        if ctx.identifier().is_some() {
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented identifier in aliasedRelation",
+            )));
+        }
+        self.bind_LogicalPlan_from_relationPrimary(ctx.relationPrimary().unwrap())
+    }
+
+    fn bind_LogicalPlan_from_relationPrimary<'input>(
+        &self,
+        ctx: Rc<RelationPrimaryContextAll<'input>>,
+    ) -> Result<LogicalPlan> {
+        match &*ctx {
+            RelationPrimaryContextAll::TableNameContext(c) => {
+                self.bind_LogicalPlan_from_tableName(c)
+            }
+            _ => Err(DataFusionError::NotImplemented(String::from(
+                "not implemented bind_LogicalPlan_from_relationPrimary",
+            ))),
+        }
+    }
+
+    fn bind_LogicalPlan_from_tableName<'input>(
+        &self,
+        ctx: &TableNameContext<'input>,
+    ) -> Result<LogicalPlan> {
+        if ctx.queryPeriod().is_some() {
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented queryPeriod",
+            )));
+        }
+        
         Ok(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: true,
             schema: DFSchemaRef::new(DFSchema::empty()),
-        }))        
+        }))
     }
-
-    
 }
 
 pub fn bind<'input>(root: Rc<SingleStatementContextAll<'input>>) -> Result<LogicalPlan> {
