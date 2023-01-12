@@ -16,9 +16,11 @@
 // under the License.
 
 use crate::window::partition_evaluator::PartitionEvaluator;
+use crate::window::window_frame_state::WindowFrameContext;
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::compute::kernels::partition::lexicographical_partition_ranges;
 use arrow::compute::kernels::sort::SortColumn;
+use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use arrow_schema::DataType;
@@ -137,6 +139,136 @@ pub trait WindowExpr: Send + Sync + Debug {
 
     /// Get the reverse expression of this [WindowExpr].
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
+}
+
+pub trait AggregateWindowExpr: WindowExpr {
+    fn get_accumulator(&self) -> Result<Box<dyn Accumulator>>;
+
+    fn aggregate_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
+        let mut accumulator = self.get_accumulator()?;
+
+        let mut window_frame_ctx = WindowFrameContext::new(self.get_window_frame());
+        let mut last_range = Range { start: 0, end: 0 };
+        let mut idx = 0;
+        self.get_result_column(
+            &mut accumulator,
+            batch,
+            &mut window_frame_ctx,
+            &mut last_range,
+            &mut idx,
+            true,
+        )
+    }
+
+    fn aggregate_evaluate_stateful(
+        &self,
+        partition_batches: &PartitionBatches,
+        window_agg_state: &mut PartitionWindowAggStates,
+    ) -> Result<()> {
+        let field = self.field()?;
+        let out_type = field.data_type();
+        for (partition_row, partition_batch_state) in partition_batches.iter() {
+            if !window_agg_state.contains_key(partition_row) {
+                let accumulator = self.get_accumulator()?;
+                window_agg_state.insert(
+                    partition_row.clone(),
+                    WindowState {
+                        state: WindowAggState::new(
+                            out_type,
+                            WindowFunctionState::AggregateState(vec![]),
+                        )?,
+                        window_fn: WindowFn::Aggregate(accumulator),
+                    },
+                );
+            };
+            let window_state =
+                window_agg_state.get_mut(partition_row).ok_or_else(|| {
+                    DataFusionError::Execution("Cannot find state".to_string())
+                })?;
+            let accumulator = match &mut window_state.window_fn {
+                WindowFn::Aggregate(accumulator) => accumulator,
+                _ => unreachable!(),
+            };
+            let mut state = &mut window_state.state;
+            state.is_end = partition_batch_state.is_end;
+
+            let mut idx = state.last_calculated_index;
+            let mut last_range = state.window_frame_range.clone();
+            let mut window_frame_ctx = WindowFrameContext::new(self.get_window_frame());
+            let out_col = self.get_result_column(
+                accumulator,
+                &partition_batch_state.record_batch,
+                &mut window_frame_ctx,
+                &mut last_range,
+                &mut idx,
+                state.is_end,
+            )?;
+            state.last_calculated_index = idx;
+            state.window_frame_range = last_range.clone();
+
+            state.out_col = concat(&[&state.out_col, &out_col])?;
+            let num_rows = partition_batch_state.record_batch.num_rows();
+            state.n_row_result_missing = num_rows - state.last_calculated_index;
+
+            state.window_function_state =
+                WindowFunctionState::AggregateState(accumulator.state()?);
+        }
+        Ok(())
+    }
+
+    fn get_aggregate_result_inside_range(
+        &self,
+        last_range: &Range<usize>,
+        cur_range: &Range<usize>,
+        value_slice: &[ArrayRef],
+        accumulator: &mut Box<dyn Accumulator>,
+    ) -> Result<ScalarValue>;
+
+    fn get_result_column(
+        &self,
+        accumulator: &mut Box<dyn Accumulator>,
+        record_batch: &RecordBatch,
+        window_frame_ctx: &mut WindowFrameContext,
+        last_range: &mut Range<usize>,
+        idx: &mut usize,
+        is_end: bool,
+    ) -> Result<ArrayRef> {
+        let (values, order_bys) = self.get_values_orderbys(record_batch)?;
+        // We iterate on each row to perform a running calculation.
+        let length = values[0].len();
+        let sort_options: Vec<SortOptions> =
+            self.order_by().iter().map(|o| o.options).collect();
+        let mut row_wise_results: Vec<ScalarValue> = vec![];
+        let field = self.field()?;
+        let out_type = field.data_type();
+        while *idx < length {
+            let cur_range = window_frame_ctx.calculate_range(
+                &order_bys,
+                &sort_options,
+                length,
+                *idx,
+            )?;
+            // Exit if range end index is length, need kind of flag to stop
+            if cur_range.end == length && !is_end {
+                break;
+            }
+            let value = self.get_aggregate_result_inside_range(
+                last_range,
+                &cur_range,
+                &values,
+                accumulator,
+            )?;
+            row_wise_results.push(value);
+            last_range.start = cur_range.start;
+            last_range.end = cur_range.end;
+            *idx += 1;
+        }
+        Ok(if row_wise_results.is_empty() {
+            ScalarValue::try_from(out_type)?.to_array_of_size(0)
+        } else {
+            ScalarValue::iter_to_array(row_wise_results.into_iter())?
+        })
+    }
 }
 
 /// Reverses the ORDER BY expression, which is useful during equivalent window

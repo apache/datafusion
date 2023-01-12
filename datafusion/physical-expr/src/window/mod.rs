@@ -29,7 +29,7 @@ mod sliding_aggregate;
 mod window_expr;
 mod window_frame_state;
 
-pub use aggregate::AggregateWindowExpr;
+pub use aggregate::NonSlidingAggregateWindowExpr;
 pub use built_in::BuiltInWindowExpr;
 pub use built_in_window_function_expr::BuiltInWindowFunctionExpr;
 pub use sliding_aggregate::SlidingAggregateWindowExpr;
