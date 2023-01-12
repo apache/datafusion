@@ -187,6 +187,9 @@ impl PartitionEvaluator for NthValueEvaluator {
         // FIRST_VALUE, LAST_VALUE, NTH_VALUE window functions take single column, values will have size 1
         let arr = &values[0];
         let n_range = range.end - range.start;
+        if n_range == 0 {
+            return ScalarValue::try_from(arr.data_type());
+        }
         match self.kind {
             NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
             NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
