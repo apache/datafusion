@@ -33,7 +33,7 @@ mod tests {
         let sql = "SELECT a, b FROM data";
         // Test reference
         let df_ref = ctx.sql(sql).await?;
-        let plan_ref = df_ref.to_logical_plan()?;
+        let plan_ref = df_ref.into_optimized_plan()?;
         // Test
         // Write substrait plan to file
         serializer::serialize(sql, &ctx, &path).await?;
@@ -41,7 +41,7 @@ mod tests {
         let proto = serializer::deserialize(path).await?;
         // Check plan equality
         let df = from_substrait_plan(&mut ctx, &proto).await?;
-        let plan = df.to_logical_plan()?;
+        let plan = df.into_optimized_plan()?;
         let plan_str_ref = format!("{:?}", plan_ref);
         let plan_str = format!("{:?}", plan);
         assert_eq!(plan_str_ref, plan_str);
