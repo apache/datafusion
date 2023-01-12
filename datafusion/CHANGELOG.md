@@ -51,6 +51,8 @@
 **Closed issues:**
 
 - Remove tests from `sql_integration` that were ported to `sqllogictest` [\#4498](https://github.com/apache/arrow-datafusion/issues/4498)
+- How to register a http url to the `object_store` [\#4491](https://github.com/apache/arrow-datafusion/issues/4491)
+- optimizer: support `unsigned <-> decimal` for unwrap\_cast\_in\_comparion rule [\#4287](https://github.com/apache/arrow-datafusion/issues/4287)
 
 **Merged pull requests:**
 
@@ -94,6 +96,7 @@
 - Remove ObjectStore from FileStream \(\#4533\) [\#4601](https://github.com/apache/arrow-datafusion/pull/4601) ([tustvold](https://github.com/tustvold))
 - Remove `AggregateState` wrapper [\#4582](https://github.com/apache/arrow-datafusion/pull/4582) ([alamb](https://github.com/alamb))
 - Fix querying and defining  table / view names with period [\#4530](https://github.com/apache/arrow-datafusion/pull/4530) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([alamb](https://github.com/alamb))
+- refactor code about `subquery_alias` and `expr-alias`. [\#4451](https://github.com/apache/arrow-datafusion/pull/4451) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([jackwener](https://github.com/jackwener))
 
 **Implemented enhancements:**
 
@@ -133,6 +136,28 @@
 - Enrich filter statistics predictions with estimated column boundaries [\#4518](https://github.com/apache/arrow-datafusion/issues/4518)
 - Show window frame info in physical plan [\#4509](https://github.com/apache/arrow-datafusion/issues/4509)
 - Add sqllogictest auto labeler [\#4507](https://github.com/apache/arrow-datafusion/issues/4507)
+- Optimize `is_distinct_from` / `is_not_distinct_from` [\#4482](https://github.com/apache/arrow-datafusion/issues/4482)
+- Add window func related logic plan to proto ability. [\#4480](https://github.com/apache/arrow-datafusion/issues/4480)
+- Make window function related struct public.  [\#4479](https://github.com/apache/arrow-datafusion/issues/4479)
+- Improve partition file explain plan display to show groupings [\#4466](https://github.com/apache/arrow-datafusion/issues/4466)
+- Add support for non-column key for equijoin when eliminating cross join to inner join   [\#4442](https://github.com/apache/arrow-datafusion/issues/4442)
+- Remove the schema checking from `CrossJoinExec::try_new` [\#4431](https://github.com/apache/arrow-datafusion/issues/4431)
+- Initial support for prepared statement [\#4426](https://github.com/apache/arrow-datafusion/issues/4426)
+- Add support for NTILE built-in Window Function [\#4403](https://github.com/apache/arrow-datafusion/issues/4403)
+- Add Support for MIN, MAX Aggregate Functions when run with custom window frames [\#4402](https://github.com/apache/arrow-datafusion/issues/4402)
+- Support `INSERT INTO` statement [\#4397](https://github.com/apache/arrow-datafusion/issues/4397)
+- Enhancement: split the SQL `planner` into smaller modules [\#4392](https://github.com/apache/arrow-datafusion/issues/4392)
+- Proposal: Improve the join keys of logical plan [\#4389](https://github.com/apache/arrow-datafusion/issues/4389)
+- Add `MergeSubqueryAlias` rule [\#4383](https://github.com/apache/arrow-datafusion/issues/4383)
+- Optimizer rule support `subqueryAlias` [\#4381](https://github.com/apache/arrow-datafusion/issues/4381)
+- Rewrite simple regex expressions [\#4370](https://github.com/apache/arrow-datafusion/issues/4370)
+- Revisit get\_statistics\_with\_limit\(\) method in datasource mod [\#4323](https://github.com/apache/arrow-datafusion/issues/4323)
+- Support for type coercion for a \(Timestamp, Utf8\) pair [\#4311](https://github.com/apache/arrow-datafusion/issues/4311)
+- replace the operation about decimal to the arrow-rs kernel [\#4289](https://github.com/apache/arrow-datafusion/issues/4289)
+- change` date_part` return types to f64 [\#3997](https://github.com/apache/arrow-datafusion/issues/3997)
+- Better api for setting `ConfigOptions` from SessionContext [\#3908](https://github.com/apache/arrow-datafusion/issues/3908)
+- Make `ConfigOptions` easier to work with [\#3886](https://github.com/apache/arrow-datafusion/issues/3886)
+- An asynchronous version of `CatalogList`/`CatalogProvider`/`SchemaProvider` [\#3777](https://github.com/apache/arrow-datafusion/issues/3777)
 
 **Fixed bugs:**
 
@@ -162,6 +187,25 @@
 - Extract from timestamp doesn't support nanosecond [\#4528](https://github.com/apache/arrow-datafusion/issues/4528)
 - `prepare_select_exprs` don't need `outer_query_schema` [\#4526](https://github.com/apache/arrow-datafusion/issues/4526)
 - Table names with periods are not handled correctly [\#4513](https://github.com/apache/arrow-datafusion/issues/4513)
+- `Push_down_projection` push redundant column. [\#4486](https://github.com/apache/arrow-datafusion/issues/4486)
+- Planner don't generate `SubqueryAlias` [\#4483](https://github.com/apache/arrow-datafusion/issues/4483)
+- Planner generate replicated `Projection` | `SubqueryAlias` [\#4481](https://github.com/apache/arrow-datafusion/issues/4481)
+- `apply_table_alias` will ignore alias\_name when columns is empty. [\#4454](https://github.com/apache/arrow-datafusion/issues/4454)
+- Fix output\_ordering of WindowAggExec [\#4438](https://github.com/apache/arrow-datafusion/issues/4438)
+- Incorrect error for plus/minus operations over timestamps and dates  [\#4420](https://github.com/apache/arrow-datafusion/issues/4420)
+- Optimization rule `filter_push_down` causes `FieldNotFound` error [\#4401](https://github.com/apache/arrow-datafusion/issues/4401)
+- Should not convert a normal non-inner join to Cross Join when there are non-equal Join conditions  [\#4363](https://github.com/apache/arrow-datafusion/issues/4363)
+- MemoryConsumer::try\_grow Underflow  [\#4328](https://github.com/apache/arrow-datafusion/issues/4328)
+- Potential MemoryManager Deadlock [\#4325](https://github.com/apache/arrow-datafusion/issues/4325)
+- `create external table` should fail to parse if syntax is incorrect [\#4262](https://github.com/apache/arrow-datafusion/issues/4262)
+- Nullif func states support for Boolean type, but fails if this is attempted [\#4205](https://github.com/apache/arrow-datafusion/issues/4205)
+- `ProjectionPushDown` rule don't consider the alias in projection. [\#4174](https://github.com/apache/arrow-datafusion/issues/4174)
+- Stack overflow planning complex query [\#4065](https://github.com/apache/arrow-datafusion/issues/4065)
+- Can not use `extract <part>` on the value of `now()` [\#3980](https://github.com/apache/arrow-datafusion/issues/3980)
+- Bug with intervals and logical and/or [\#3944](https://github.com/apache/arrow-datafusion/issues/3944)
+- CoalesceBatches doesn't provide correct elapsed\_compute info in metrics [\#3894](https://github.com/apache/arrow-datafusion/issues/3894)
+- Paniced at to\_timestamp\_micros function when the timestamp is too large. [\#3832](https://github.com/apache/arrow-datafusion/issues/3832)
+- Optimizer casts decimals to different values on different platforms [\#3791](https://github.com/apache/arrow-datafusion/issues/3791)
 
 **Documentation updates:**
 
@@ -324,6 +368,23 @@
 - Support `insert into` statement in sqllogictest [\#4496](https://github.com/apache/arrow-datafusion/pull/4496) ([xudong963](https://github.com/xudong963))
 - Improve error handling for array downcasting [\#4493](https://github.com/apache/arrow-datafusion/pull/4493) ([retikulum](https://github.com/retikulum))
 - Unify most of `SessionConfig` settings into `ConfigOptions` [\#4492](https://github.com/apache/arrow-datafusion/pull/4492) ([alamb](https://github.com/alamb))
+- feat: support prepare statement [\#4490](https://github.com/apache/arrow-datafusion/pull/4490) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([NGA-TRAN](https://github.com/NGA-TRAN))
+- Minor: Update docstrings and comments to aggregate code [\#4489](https://github.com/apache/arrow-datafusion/pull/4489) ([alamb](https://github.com/alamb))
+- Fix panic in median "AggregateState is not a scalar aggregate" [\#4488](https://github.com/apache/arrow-datafusion/pull/4488) ([alamb](https://github.com/alamb))
+- fix `push_down_projection` push redundant columns. [\#4487](https://github.com/apache/arrow-datafusion/pull/4487) ([jackwener](https://github.com/jackwener))
+- Add window func related logic plan to proto ability. [\#4485](https://github.com/apache/arrow-datafusion/pull/4485) ([Ted-Jiang](https://github.com/Ted-Jiang))
+- fix `Planner` don't generate `SubqueryAlias` and generate duplicated `SubqueryAlias` [\#4484](https://github.com/apache/arrow-datafusion/pull/4484) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([jackwener](https://github.com/jackwener))
+- Improve parquet partition\_file output display [\#4467](https://github.com/apache/arrow-datafusion/pull/4467) ([alamb](https://github.com/alamb))
+- minor: remove redundant `unwrap()` [\#4463](https://github.com/apache/arrow-datafusion/pull/4463) ([jackwener](https://github.com/jackwener))
+- Fix `Cte` in `from` clause with duplicated cte name [\#4461](https://github.com/apache/arrow-datafusion/pull/4461) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([xudong963](https://github.com/xudong963))
+- Replace `&Option<T>` with `Option<&T>` part 2 [\#4458](https://github.com/apache/arrow-datafusion/pull/4458) ([askoa](https://github.com/askoa))
+- Fix output\_partitioning\(\), output\_ordering\(\), equivalence\_properties\(\) in WindowAggExec, shift the Column indexes [\#4455](https://github.com/apache/arrow-datafusion/pull/4455) ([mingmwang](https://github.com/mingmwang))
+- fix `push_down_filter` for pushing filters on grouping columns rather than aggregate columns [\#4447](https://github.com/apache/arrow-datafusion/pull/4447) ([jackwener](https://github.com/jackwener))
+- Add support for non-column key for equijoin when eliminating cross join to inner join [\#4443](https://github.com/apache/arrow-datafusion/pull/4443) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([ygf11](https://github.com/ygf11))
+- Remove the schema checking when creating `CrossJoinExec` [\#4432](https://github.com/apache/arrow-datafusion/pull/4432) ([HaoYang670](https://github.com/HaoYang670))
+- `date_part` support fractions of second [\#4385](https://github.com/apache/arrow-datafusion/pull/4385) ([comphead](https://github.com/comphead))
+- Minor: use upstream RowSelection code from arrow `intersect_row_selection` [\#4340](https://github.com/apache/arrow-datafusion/pull/4340) ([alamb](https://github.com/alamb))
+- Support type coercion for timestamp and utf8 [\#4312](https://github.com/apache/arrow-datafusion/pull/4312) ([andre-cc-natzka](https://github.com/andre-cc-natzka))
 
 
 ## [15.0.0](https://github.com/apache/arrow-datafusion/tree/15.0.0) (2022-12-01)
