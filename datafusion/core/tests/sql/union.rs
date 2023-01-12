@@ -158,24 +158,6 @@ async fn union_with_except_input() -> Result<()> {
     let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.into_optimized_plan()?;
-
-    let expected = vec![
-        "Explain [plan_type:Utf8, plan:Utf8]",
-        "  Union [name:UInt8;N]",
-        "    LeftAnti Join: t1.name = t2.name [name:UInt8;N]",
-        "      Distinct: [name:UInt8;N]",
-        "        Projection: t1.name [name:UInt8;N]",
-        "          TableScan: t1 projection=[name] [name:UInt8;N]",
-        "      Projection: t2.name [name:UInt8;N]",
-        "        TableScan: t2 projection=[name] [name:UInt8;N]",
-        "    LeftAnti Join: t2.name = t1.name [name:UInt8;N]",
-        "      Distinct: [name:UInt8;N]",
-        "        Projection: t2.name [name:UInt8;N]",
-        "          TableScan: t2 projection=[name] [name:UInt8;N]",
-        "      Projection: t1.name [name:UInt8;N]",
-        "        TableScan: t1 projection=[name] [name:UInt8;N]",
-    ];
-
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Union [name:UInt8;N]",
@@ -217,7 +199,6 @@ async fn union_with_type_coercion() -> Result<()> {
     let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.into_optimized_plan()?;
-
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Union [id:Int32;N, name:UInt8;N]",
