@@ -43,6 +43,7 @@
 - `JOIN ... USING (columns)` works incorrectly with multiple columns \(joined-over columns are missing in the output\) [\#4674](https://github.com/apache/arrow-datafusion/issues/4674)
 - ROW\_NUMBER window function inconsistent across partitions in multi-threaded runtime [\#4673](https://github.com/apache/arrow-datafusion/issues/4673)
 - `SELECT ... FROM (tbl1 UNION tbl2)` wrongly works like `SELECT DISTINCT ... FROM (tbl1 UNION tbl2)` [\#4667](https://github.com/apache/arrow-datafusion/issues/4667)
+- DataFrame TableProvider Circular Reference [\#2659](https://github.com/apache/arrow-datafusion/issues/2659)
 
 **Documentation updates:**
 
@@ -53,6 +54,8 @@
 - Remove tests from `sql_integration` that were ported to `sqllogictest` [\#4498](https://github.com/apache/arrow-datafusion/issues/4498)
 - How to register a http url to the `object_store` [\#4491](https://github.com/apache/arrow-datafusion/issues/4491)
 - optimizer: support `unsigned <-> decimal` for unwrap\_cast\_in\_comparion rule [\#4287](https://github.com/apache/arrow-datafusion/issues/4287)
+-   Add SQL support for NATURAL JOIN [\#117](https://github.com/apache/arrow-datafusion/issues/117)
+- \[Datafusion\] Datafusion queries involving a column name that begins with a number produces unexpected results [\#108](https://github.com/apache/arrow-datafusion/issues/108)
 
 **Merged pull requests:**
 
@@ -158,6 +161,18 @@
 - Better api for setting `ConfigOptions` from SessionContext [\#3908](https://github.com/apache/arrow-datafusion/issues/3908)
 - Make `ConfigOptions` easier to work with [\#3886](https://github.com/apache/arrow-datafusion/issues/3886)
 - An asynchronous version of `CatalogList`/`CatalogProvider`/`SchemaProvider` [\#3777](https://github.com/apache/arrow-datafusion/issues/3777)
+- Allow configs to be set with string values [\#3500](https://github.com/apache/arrow-datafusion/issues/3500)
+- support scientific notation for SQL literals [\#3448](https://github.com/apache/arrow-datafusion/issues/3448)
+- Adopt physical plan serde from arrow-ballista [\#3257](https://github.com/apache/arrow-datafusion/issues/3257)
+- Improve codebase readability and error messages by and consistently handle downcasting [\#3152](https://github.com/apache/arrow-datafusion/issues/3152)
+- Re-enable where\_clauses\_object\_safety [\#3081](https://github.com/apache/arrow-datafusion/issues/3081)
+- optimize/simplify the literal data type and remove unnecessary cast、try\_cast [\#3031](https://github.com/apache/arrow-datafusion/issues/3031)
+- Move `datafusion-substrait` crate into `arrow-datafusion` repo [\#2646](https://github.com/apache/arrow-datafusion/issues/2646)
+- \[enhancement\] rules don't need to recursion inside themselves [\#2620](https://github.com/apache/arrow-datafusion/issues/2620)
+- Add support for `GROUPING SETS` syntax in SQL planner [\#2469](https://github.com/apache/arrow-datafusion/issues/2469)
+- Optimize EXISTS subquery expressions by rewriting as semi-join [\#2351](https://github.com/apache/arrow-datafusion/issues/2351)
+- Add Delta Lake TableProvider [\#525](https://github.com/apache/arrow-datafusion/issues/525)
+- Support window functions with window frame [\#361](https://github.com/apache/arrow-datafusion/issues/361)
 
 **Fixed bugs:**
 
@@ -206,6 +221,15 @@
 - CoalesceBatches doesn't provide correct elapsed\_compute info in metrics [\#3894](https://github.com/apache/arrow-datafusion/issues/3894)
 - Paniced at to\_timestamp\_micros function when the timestamp is too large. [\#3832](https://github.com/apache/arrow-datafusion/issues/3832)
 - Optimizer casts decimals to different values on different platforms [\#3791](https://github.com/apache/arrow-datafusion/issues/3791)
+- CSV inference reads in the whole file to memory, regardless of row limit [\#3658](https://github.com/apache/arrow-datafusion/issues/3658)
+- after type coercion `CommonSubexprEliminate` will produce invalid projection [\#3635](https://github.com/apache/arrow-datafusion/issues/3635)
+- panic at `attempt to multiply with overflow` when doing math on Decimal128 columns [\#3437](https://github.com/apache/arrow-datafusion/issues/3437)
+- Precedence bug with date comparison to date plus interval [\#3408](https://github.com/apache/arrow-datafusion/issues/3408)
+- Median aggregation using DataFrame panics: "AggregateState is not a scalar aggregate" [\#3105](https://github.com/apache/arrow-datafusion/issues/3105)
+- `date_part` does't work for `now()` [\#3096](https://github.com/apache/arrow-datafusion/issues/3096)
+- hash\_join panics when join keys have different data types [\#2877](https://github.com/apache/arrow-datafusion/issues/2877)
+- Memory manager triggers unnecessary spills [\#2829](https://github.com/apache/arrow-datafusion/issues/2829)
+- Address performance/execution plan of TPCH query 9 [\#77](https://github.com/apache/arrow-datafusion/issues/77)
 
 **Documentation updates:**
 
@@ -217,6 +241,8 @@
 - Make it easier to update sqltestlogic test expected output \("test script completion mode"\) [\#4570](https://github.com/apache/arrow-datafusion/issues/4570)
 - Make ConfigOption names into an Enum  [\#4517](https://github.com/apache/arrow-datafusion/issues/4517)
 - Implement null / empty string handling for sqllogictest [\#4500](https://github.com/apache/arrow-datafusion/issues/4500)
+- Write a blog about parquet predicate pushdown [\#3464](https://github.com/apache/arrow-datafusion/issues/3464)
+- Ensure column names are equivalent with or without optimization [\#1123](https://github.com/apache/arrow-datafusion/issues/1123)
 
 **Merged pull requests:**
 

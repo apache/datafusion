@@ -64,7 +64,6 @@ docker run -it --rm \
     --cache-file=.githubchangeloggenerator.cache \
     --cache-log=.githubchangeloggenerator.cache.log \
     --http-cache \
-    --max-issues=1000 \
     --since-tag "${SINCE_TAG}" \
     --base "${OUTPUT_PATH}" \
     --output "${OUTPUT_PATH}" \
