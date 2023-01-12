@@ -104,7 +104,6 @@ pub mod union;
 pub mod wildcard;
 pub mod window;
 
-pub mod arrow_typeof;
 pub mod decimal;
 pub mod explain;
 pub mod idenfifers;
