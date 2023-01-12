@@ -528,7 +528,8 @@ pub fn coerce_plan_expr_for_schema(
     match plan {
         // special case Projection to avoid adding multiple projections
         LogicalPlan::Projection(Projection { expr, input, .. }) => {
-            let new_exprs = coerce_exprs_for_schema(expr, input.schema(), schema)?;
+            let new_exprs =
+                coerce_exprs_for_schema(expr.clone(), input.schema(), schema)?;
             let projection = Projection::try_new(new_exprs, input.clone())?;
             Ok(LogicalPlan::Projection(projection))
         }
@@ -540,7 +541,7 @@ pub fn coerce_plan_expr_for_schema(
                 .map(|field| Expr::Column(field.qualified_column()))
                 .collect();
 
-            let new_exprs = coerce_exprs_for_schema(&exprs, plan.schema(), schema)?;
+            let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
             let add_project = new_exprs.iter().any(|expr| expr.try_into_col().is_err());
             if add_project {
                 let projection = Projection::try_new(new_exprs, Arc::new(plan.clone()))?;
@@ -553,22 +554,21 @@ pub fn coerce_plan_expr_for_schema(
 }
 
 fn coerce_exprs_for_schema(
-    exprs: &[Expr],
+    exprs: Vec<Expr>,
     src_schema: &DFSchema,
     dst_schema: &DFSchema,
 ) -> Result<Vec<Expr>> {
     exprs
-        .iter()
+        .into_iter()
         .enumerate()
         .map(|(idx, expr)| {
             let new_type = dst_schema.field(idx).data_type();
             if new_type != &expr.get_type(src_schema)? {
                 match expr {
                     Expr::Alias(e, alias) => {
-                        let new_expr = e.clone().cast_to(new_type, src_schema)?;
-                        Ok(Expr::Alias(Box::new(new_expr), alias.clone()))
+                        Ok(e.cast_to(new_type, src_schema)?.alias(alias))
                     }
-                    _ => expr.clone().cast_to(new_type, src_schema),
+                    _ => expr.cast_to(new_type, src_schema),
                 }
             } else {
                 Ok(expr.clone())
