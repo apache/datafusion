@@ -38,14 +38,14 @@ use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use arrow::compute::cast;
-use arrow::datatypes::Schema;
-use arrow::{array::ArrayRef, compute};
 use arrow::{
-    array::{Array, UInt32Builder},
+    array::{new_null_array, Array, ArrayRef, UInt32Builder},
+    compute,
+    compute::cast,
+    datatypes::{DataType, Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
+    record_batch::RecordBatch,
 };
-use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::hash_utils::create_hashes;
@@ -76,11 +76,11 @@ pub(crate) struct GroupedHashAggregateStream {
     schema: SchemaRef,
 }
 
-/// Actual implementation of [`GroupedHashAggregateStreamV2`].
+/// Actual implementation of [`GroupedHashAggregateStream`].
 ///
 /// This is wrapped into yet another struct because we need to interact with the async memory management subsystem
 /// during poll. To have as little code "weirdness" as possible, we chose to just use [`BoxStream`] together with
-/// [`futures::stream::unfold`]. The latter requires a state object, which is [`GroupedHashAggregateStreamV2Inner`].
+/// [`futures::stream::unfold`]. The latter requires a state object, which is [`GroupedHashAggregateStreamInner`].
 struct GroupedHashAggregateStreamInner {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
@@ -103,7 +103,7 @@ struct GroupedHashAggregateStreamInner {
     /// if the result is chunked into batches,
     /// last offset is preserved for continuation.
     row_group_skip_position: usize,
-    indices: Vec<Vec<(usize, (usize, usize))>>,
+    indices: [Vec<(usize, usize, usize)>; 2],
 }
 
 fn aggr_state_schema(aggr_expr: &[Arc<dyn AggregateExpr>]) -> Result<SchemaRef> {
@@ -114,12 +114,12 @@ fn aggr_state_schema(aggr_expr: &[Arc<dyn AggregateExpr>]) -> Result<SchemaRef> 
     Ok(Arc::new(Schema::new(fields)))
 }
 
-fn is_supported(elem: &Arc<dyn AggregateExpr>, group_schema: &Schema) -> bool {
-    elem.row_accumulator_supported() && row_supported(group_schema, RowType::Compact)
+fn is_supported(expr: &Arc<dyn AggregateExpr>, group_schema: &Schema) -> bool {
+    expr.row_accumulator_supported() && row_supported(group_schema, RowType::Compact)
 }
 
 impl GroupedHashAggregateStream {
-    /// Create a new GroupedRowHashAggregateStream
+    /// Create a new GroupedHashAggregateStream
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         mode: AggregateMode,
@@ -135,45 +135,37 @@ impl GroupedHashAggregateStream {
         let timer = baseline_metrics.elapsed_compute().timer();
 
         let group_schema = group_schema(&schema, group_by.expr.len());
-        let mut row_agg_indices = vec![];
-        let mut normal_agg_indices = vec![];
         let mut start_idx = group_by.expr.len();
-        for (idx, expr) in aggr_expr.iter().enumerate() {
-            let n_field = match mode {
-                AggregateMode::Partial => expr.state_fields()?.len(),
-                _ => 1,
-            };
-            if is_supported(expr, &group_schema) {
-                row_agg_indices.push((idx, (start_idx, start_idx + n_field)));
-            } else {
-                normal_agg_indices.push((idx, (start_idx, start_idx + n_field)));
-            }
-            start_idx += n_field;
-        }
-        let indices = vec![normal_agg_indices, row_agg_indices];
-
-        let row_aggr_expr = aggr_expr
-            .clone()
-            .into_iter()
-            .filter(|elem| is_supported(elem, &group_schema))
-            .collect::<Vec<_>>();
-        let normal_aggr_expr = aggr_expr
-            .clone()
-            .into_iter()
-            .filter(|elem| !is_supported(elem, &group_schema))
-            .collect::<Vec<_>>();
+        let mut row_aggr_expr = vec![];
+        let mut row_agg_indices = vec![];
+        let mut row_aggregate_expressions = vec![];
+        let mut normal_aggr_expr = vec![];
+        let mut normal_agg_indices = vec![];
+        let mut normal_aggregate_expressions = vec![];
         // The expressions to evaluate the batch, one vec of expressions per aggregation.
         // Assume create_schema() always put group columns in front of aggr columns, we set
         // col_idx_base to group expression count.
         let all_aggregate_expressions =
-            aggregates::aggregate_expressions(&aggr_expr, &mode, group_by.expr.len())?;
-        let mut normal_aggregate_expressions = vec![];
-        for (idx, _) in &indices[0] {
-            normal_aggregate_expressions.push(all_aggregate_expressions[*idx].clone())
-        }
-        let mut row_aggregate_expressions = vec![];
-        for (idx, _) in &indices[1] {
-            row_aggregate_expressions.push(all_aggregate_expressions[*idx].clone())
+            aggregates::aggregate_expressions(&aggr_expr, &mode, start_idx)?;
+        for (idx, (expr, others)) in aggr_expr
+            .iter()
+            .zip(all_aggregate_expressions.into_iter())
+            .enumerate()
+        {
+            let n_fields = match mode {
+                AggregateMode::Partial => expr.state_fields()?.len(),
+                _ => 1,
+            };
+            if is_supported(expr, &group_schema) {
+                row_aggregate_expressions.push(others);
+                row_agg_indices.push((idx, start_idx, start_idx + n_fields));
+                row_aggr_expr.push(expr.clone());
+            } else {
+                normal_aggregate_expressions.push(others);
+                normal_agg_indices.push((idx, start_idx, start_idx + n_fields));
+                normal_aggr_expr.push(expr.clone());
+            }
+            start_idx += n_fields;
         }
 
         let row_accumulators = aggregates::create_row_accumulators(&row_aggr_expr)?;
@@ -182,12 +174,10 @@ impl GroupedHashAggregateStream {
 
         let row_aggr_layout =
             Arc::new(RowLayout::new(&row_aggr_schema, RowType::WordAligned));
-        let row_reservation =
-            MemoryConsumer::new(format!("GroupedHashAggregateStream[{}]", partition))
-                .register(context.memory_pool());
 
+        let name = format!("GroupedHashAggregateStream[{}]", partition);
         let row_aggr_state = RowAggregationState {
-            reservation: row_reservation,
+            reservation: MemoryConsumer::new(name).register(context.memory_pool()),
             map: RawTable::with_capacity(0),
             group_states: Vec::with_capacity(0),
         };
@@ -210,7 +200,7 @@ impl GroupedHashAggregateStream {
             random_state: Default::default(),
             batch_size,
             row_group_skip_position: 0,
-            indices,
+            indices: [normal_agg_indices, row_agg_indices],
         };
 
         let stream = futures::stream::unfold(inner, |mut this| async move {
@@ -310,7 +300,7 @@ impl RecordBatchStream for GroupedHashAggregateStream {
 ///
 /// If successfull, this returns the additional number of bytes that were allocated during this process.
 ///
-/// TODO: Make this a member function of [`GroupedHashAggregateStreamV2`]
+/// TODO: Make this a member function of [`GroupedHashAggregateStream`]
 #[allow(clippy::too_many_arguments)]
 fn group_aggregate_batch(
     mode: &AggregateMode,
@@ -617,38 +607,24 @@ fn create_batch_from_map(
     row_aggr_state: &mut RowAggregationState,
     row_accumulators: &mut [AccumulatorItemV2],
     output_schema: &Schema,
-    indices: &[Vec<(usize, (usize, usize))>],
+    indices: &[Vec<(usize, usize, usize)>],
     num_group_expr: usize,
 ) -> ArrowResult<Option<RecordBatch>> {
     if skip_items > row_aggr_state.group_states.len() {
         return Ok(None);
     }
     if row_aggr_state.group_states.is_empty() {
-        return Ok(Some(RecordBatch::new_empty(Arc::new(
-            output_schema.to_owned(),
-        ))));
+        let schema = Arc::new(output_schema.to_owned());
+        return Ok(Some(RecordBatch::new_empty(schema)));
     }
 
     let end_idx = min(skip_items + batch_size, row_aggr_state.group_states.len());
     let group_state_chunk = &row_aggr_state.group_states[skip_items..end_idx];
-    let group_buffers = group_state_chunk
-        .iter()
-        .map(|gs| (gs.group_by_values.clone()))
-        .collect::<Vec<_>>();
 
-    let n_row = group_buffers.len();
-    if n_row == 0 {
-        return Ok(Some(RecordBatch::new_empty(Arc::new(
-            output_schema.to_owned(),
-        ))));
+    if group_state_chunk.is_empty() {
+        let schema = Arc::new(output_schema.to_owned());
+        return Ok(Some(RecordBatch::new_empty(schema)));
     }
-    // First, output all group by exprs
-    let group_by_columns = (0..num_group_expr)
-        .map(|idx| {
-            ScalarValue::iter_to_array(group_buffers.iter().map(|x| x[idx].clone()))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut row_columns = vec![];
 
     let mut state_accessor = RowAccessor::new(aggr_schema, RowType::WordAligned);
     let mut state_buffers = group_state_chunk
@@ -656,136 +632,119 @@ fn create_batch_from_map(
         .map(|gs| gs.aggregation_buffer.clone())
         .collect::<Vec<_>>();
 
-    match mode {
-        AggregateMode::Partial => row_columns.extend(read_as_batch(
-            &state_buffers,
-            aggr_schema,
-            RowType::WordAligned,
-        )),
+    let output_fields = output_schema.fields();
+    let mut row_columns = match mode {
+        AggregateMode::Partial => {
+            read_as_batch(&state_buffers, aggr_schema, RowType::WordAligned)
+        }
         AggregateMode::Final | AggregateMode::FinalPartitioned => {
             let mut results: Vec<Vec<ScalarValue>> = vec![vec![]; row_accumulators.len()];
             for buffer in state_buffers.iter_mut() {
                 state_accessor.point_to(0, buffer);
                 for (i, acc) in row_accumulators.iter().enumerate() {
-                    results[i].push(acc.evaluate(&state_accessor).unwrap());
+                    results[i].push(acc.evaluate(&state_accessor)?);
                 }
             }
             // We skip over the first `columns.len()` elements.
             //
             // This shouldn't panic if the `output_schema` has enough fields.
-            let remaining_field_iterator =
-                output_schema.fields()[group_by_columns.len()..].iter();
-
-            for (scalars, field) in results.into_iter().zip(remaining_field_iterator) {
-                if !scalars.is_empty() {
-                    row_columns.push(ScalarValue::iter_to_array(scalars)?);
-                } else {
-                    row_columns.push(arrow::array::new_empty_array(field.data_type()))
-                }
-            }
+            let remaining_fields = output_fields[num_group_expr..].iter();
+            results
+                .into_iter()
+                .zip(remaining_fields)
+                .map(|(scalars, field)| {
+                    if scalars.is_empty() {
+                        Ok(arrow::array::new_empty_array(field.data_type()))
+                    } else {
+                        ScalarValue::iter_to_array(scalars)
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?
         }
-    }
+    };
 
     // cast output if needed (e.g. for types like Dictionary where
     // the intermediate GroupByScalar type was not the same as the
     // output
-    let row_column_indices = indices[1].clone();
     let mut start_idx = 0;
-    let mut new_row_columns = vec![];
-    for (_row_column_idx, range) in row_column_indices.iter() {
-        for idx in range.0..range.1 {
-            let desired_datatype = output_schema.fields()[idx].data_type();
-            new_row_columns.push(cast(&row_columns[start_idx], desired_datatype)?);
+    for (_, begin, end) in indices[1].iter() {
+        for field in &output_fields[*begin..*end] {
+            row_columns[start_idx] = cast(&row_columns[start_idx], field.data_type())?;
             start_idx += 1;
         }
     }
 
-    let row_columns = new_row_columns;
-    // RecordBatch::try_new(Arc::new(output_schema.to_owned()), row_columns).map(Some)
-
-    let mut columns = vec![];
-    let accs = &row_aggr_state.group_states[0].accumulator_set;
-    let mut acc_data_types: Vec<usize> = vec![];
-
     // Calculate number/shape of state arrays
-    match mode {
-        AggregateMode::Partial => {
-            for acc in accs.iter() {
-                let state = acc.state()?;
-                acc_data_types.push(state.len());
-            }
-        }
+    let accs = &row_aggr_state.group_states[0].accumulator_set;
+    let acc_data_types = match mode {
+        AggregateMode::Partial => accs
+            .iter()
+            .map(|a| a.state().map(|s| s.len()))
+            .collect::<Result<Vec<_>>>()?,
         AggregateMode::Final | AggregateMode::FinalPartitioned => {
-            acc_data_types = vec![1; accs.len()];
+            vec![1; accs.len()]
         }
-    }
+    };
 
     // next, output aggregates: either intermediate state or final output
+    let mut columns = vec![];
     for (x, &state_len) in acc_data_types.iter().enumerate() {
         for y in 0..state_len {
-            match mode {
-                AggregateMode::Partial => {
-                    let res = ScalarValue::iter_to_array(group_state_chunk.iter().map(
-                        |row_group_state| {
-                            row_group_state.accumulator_set[x]
-                                .state()
-                                .map(|x| x[y].clone())
-                                .expect("unexpected accumulator state in hash aggregate")
-                        },
-                    ))?;
-
-                    columns.push(res);
-                }
+            columns.push(match mode {
+                AggregateMode::Partial => ScalarValue::iter_to_array(
+                    group_state_chunk.iter().map(|row_group_state| {
+                        row_group_state.accumulator_set[x]
+                            .state()
+                            .map(|x| x[y].clone())
+                            .expect("unexpected accumulator state in hash aggregate")
+                    }),
+                ),
                 AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                    let res = ScalarValue::iter_to_array(group_state_chunk.iter().map(
+                    ScalarValue::iter_to_array(group_state_chunk.iter().map(
                         |row_group_state| {
                             row_group_state.accumulator_set[x]
                                 .evaluate()
                                 .expect("unexpected accumulator state in hash aggregate")
                         },
-                    ))?;
-                    columns.push(res);
+                    ))
                 }
-            }
+            }?);
         }
     }
     // cast output if needed (e.g. for types like Dictionary where
     // the intermediate GroupByScalar type was not the same as the
     // output
 
-    let column_indices = indices[0].clone();
     let mut start_idx = 0;
-    let mut new_columns = vec![];
-    for (_column_idx, range) in column_indices.iter() {
-        for idx in range.0..range.1 {
-            let desired_datatype = output_schema.fields()[idx].data_type();
-            new_columns.push(cast(&columns[start_idx], desired_datatype)?);
+    for (_, begin, end) in indices[0].iter() {
+        for field in &output_fields[*begin..*end] {
+            columns[start_idx] = cast(&columns[start_idx], field.data_type())?;
             start_idx += 1;
         }
     }
-    let columns = new_columns;
 
-    let empty_arr = ScalarValue::iter_to_array(vec![ScalarValue::Null])?;
-    let n_res = indices[0]
+    let mut res = (0..num_group_expr)
+        .map(|idx| {
+            ScalarValue::iter_to_array(
+                group_state_chunk
+                    .iter()
+                    .map(|gs| gs.group_by_values[idx].clone()),
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let extra: usize = indices
         .iter()
-        .map(|(_, range)| range.1 - range.0)
-        .sum::<usize>()
-        + indices[1]
-            .iter()
-            .map(|(_, range)| range.1 - range.0)
-            .sum::<usize>()
-        + group_by_columns.len();
-    let mut res = vec![empty_arr; n_res];
-    for (idx, column) in group_by_columns.into_iter().enumerate() {
-        res[idx] = column;
-    }
+        .flatten()
+        .map(|(_, begin, end)| end - begin)
+        .sum();
+    let empty_arr = new_null_array(&DataType::Null, 1);
+    res.extend(std::iter::repeat(empty_arr).take(extra));
 
     let results = vec![columns, row_columns];
     for (outer, cur_res) in results.into_iter().enumerate() {
         let mut start_idx = 0;
-        let cur_indices = &indices[outer];
-        for (_idx, range) in cur_indices.iter() {
-            for elem in res.iter_mut().take(range.1).skip(range.0) {
+        for (_, begin, end) in indices[outer].iter() {
+            for elem in res.iter_mut().take(*end).skip(*begin) {
                 *elem = cur_res[start_idx].clone();
                 start_idx += 1;
             }
