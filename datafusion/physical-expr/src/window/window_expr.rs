@@ -141,9 +141,15 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
 }
 
+/// Trait for different `AggregateWindowExpr`s (`NonSlidingAggregateWindowExpr`, `SlidingAggregateWindowExpr`)
 pub trait AggregateWindowExpr: WindowExpr {
+    /// Get accumulator for the window expression
+    /// different window expressions may return different accumulator
+    // For example sliding expressions will return sliding accumulators
+    // non-sliding expressions will return normal accumulators
     fn get_accumulator(&self) -> Result<Box<dyn Accumulator>>;
 
+    /// evaluate the window function values against the batch
     fn aggregate_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let mut accumulator = self.get_accumulator()?;
 
@@ -160,6 +166,7 @@ pub trait AggregateWindowExpr: WindowExpr {
         )
     }
 
+    /// evaluate the window function values against the batch (can work on chunk by chunk data)
     fn aggregate_evaluate_stateful(
         &self,
         partition_batches: &PartitionBatches,
@@ -216,6 +223,8 @@ pub trait AggregateWindowExpr: WindowExpr {
         Ok(())
     }
 
+    /// Given current range and last range calculate accumulator result
+    /// for the range of interest
     fn get_aggregate_result_inside_range(
         &self,
         last_range: &Range<usize>,
@@ -224,6 +233,8 @@ pub trait AggregateWindowExpr: WindowExpr {
         accumulator: &mut Box<dyn Accumulator>,
     ) -> Result<ScalarValue>;
 
+    /// For a record batch calculate window expression result
+    // Assumes that record_batch belongs to single partition
     fn get_result_column(
         &self,
         accumulator: &mut Box<dyn Accumulator>,

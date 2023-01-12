@@ -98,16 +98,18 @@ impl WindowExpr for NonSlidingAggregateWindowExpr {
         window_agg_state: &mut PartitionWindowAggStates,
     ) -> Result<()> {
         self.aggregate_evaluate_stateful(partition_batches, window_agg_state)?;
+
+        // Update `window_frame_range.start` point for each partition. We are sure that
+        // `NonSlidingAggregateWindowExpr` never calls `retract_batch`. Hence `window_frame_range.start`
+        // can be increased (as long as it is small )
+        // Also we are sure that we will never call retract. They can be removed
+        // from state safely. (Enables us to run queries involving UNBOUNDED PRECEDING with bounded memory)
         for partition_row in partition_batches.keys() {
             let window_state =
                 window_agg_state.get_mut(partition_row).ok_or_else(|| {
                     DataFusionError::Execution("Cannot find state".to_string())
                 })?;
             let mut state = &mut window_state.state;
-            // We can progress static start bounds, Since they are already calculated.
-            // Also we are sure that we will never call retract. They can be removed
-            // from state safely. (Enables us to run queries involving UNBOUNDED PRECEDING) to
-            // run with bounded memory
             if self.window_frame.start_bound.is_unbounded() {
                 state.window_frame_range.start = if state.window_frame_range.end >= 1 {
                     state.window_frame_range.end - 1
@@ -180,6 +182,9 @@ impl AggregateWindowExpr for NonSlidingAggregateWindowExpr {
         } else {
             // Accumulate any new rows that have entered the window:
             let update_bound = cur_range.end - last_range.end;
+            // NonSlidingAggregateWindowExpr only needs to update forward direction
+            // since its starting is always same point (the beginning of the table)
+            // Hence no call to the retract_batch.
             if update_bound > 0 {
                 let update: Vec<ArrayRef> = value_slice
                     .iter()
