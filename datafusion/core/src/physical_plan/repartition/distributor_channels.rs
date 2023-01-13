@@ -512,7 +512,7 @@ mod tests {
         let (txs, mut rxs) = channels(2);
 
         let rx0 = rxs.remove(0);
-        let _rx1 = rxs.remove(0);
+        let mut rx1 = rxs.remove(0);
 
         // fill both channels
         poll_ready(&mut txs[0].send("0_a")).unwrap();
@@ -529,7 +529,12 @@ mod tests {
         assert!(waker0.woken());
         assert!(!waker1.woken());
         assert_eq!(poll_ready(&mut send_fut0), Err(SendError("0_b")),);
+
+        // gate closed, so cannot send on channel 1
         poll_pending(&mut send_fut1);
+
+        // channel 1 can still receive data
+        assert_eq!(poll_ready(&mut rx1.recv()), Some("1_a"),);
     }
 
     #[test]
