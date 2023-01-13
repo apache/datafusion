@@ -218,7 +218,7 @@ mod tests {
         let plan_with_alias = from_substrait_plan(&mut ctx, &proto_a).await?;
 
         let df = ctx.sql(sql_no_alias).await?;
-        let proto = to_substrait_plan(&df.logical_plan())?;
+        let proto = to_substrait_plan(&df.into_optimized_plan()?)?;
         let plan = from_substrait_plan(&mut ctx, &proto).await?;
 
         println!("{:#?}", plan_with_alias);
