@@ -24,6 +24,8 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use ahash::RandomState;
+use arrow::row::{OwnedRow, RowConverter, SortField};
+use datafusion_physical_expr::hash_utils::create_hashes;
 use futures::stream::BoxStream;
 use futures::stream::{Stream, StreamExt};
 
@@ -39,21 +41,21 @@ use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
 use crate::execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use arrow::array::new_null_array;
+use arrow::compute::cast;
+use arrow::datatypes::{DataType, Schema};
+use arrow::{array::ArrayRef, compute};
 use arrow::{
-    array::{new_null_array, Array, ArrayRef, UInt32Builder},
-    compute,
-    compute::cast,
-    datatypes::{DataType, Schema, SchemaRef},
+    array::{Array, UInt32Builder},
     error::{ArrowError, Result as ArrowResult},
-    record_batch::RecordBatch,
 };
+use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::Accumulator;
-use datafusion_physical_expr::hash_utils::create_hashes;
 use datafusion_row::accessor::RowAccessor;
 use datafusion_row::layout::RowLayout;
 use datafusion_row::reader::{read_row, RowReader};
-use datafusion_row::{row_supported, MutableRecordBatch, RowType};
+use datafusion_row::{MutableRecordBatch, RowType};
 use hashbrown::raw::RawTable;
 
 /// Grouping aggregate with row-format aggregation states inside.
@@ -94,6 +96,7 @@ struct GroupedHashAggregateStreamInner {
     group_by: PhysicalGroupBy,
     row_accumulators: Vec<RowAccumulatorItem>,
 
+    row_converter: RowConverter,
     row_aggr_schema: SchemaRef,
     row_aggr_layout: Arc<RowLayout>,
 
@@ -115,10 +118,6 @@ fn aggr_state_schema(aggr_expr: &[Arc<dyn AggregateExpr>]) -> Result<SchemaRef> 
     Ok(Arc::new(Schema::new(fields)))
 }
 
-fn is_supported(expr: &Arc<dyn AggregateExpr>, group_schema: &Schema) -> bool {
-    expr.row_accumulator_supported() && row_supported(group_schema, RowType::Compact)
-}
-
 impl GroupedHashAggregateStream {
     /// Create a new GroupedHashAggregateStream
     #[allow(clippy::too_many_arguments)]
@@ -135,7 +134,6 @@ impl GroupedHashAggregateStream {
     ) -> Result<Self> {
         let timer = baseline_metrics.elapsed_compute().timer();
 
-        let group_schema = group_schema(&schema, group_by.expr.len());
         let mut start_idx = group_by.expr.len();
         let mut row_aggr_expr = vec![];
         let mut row_agg_indices = vec![];
@@ -157,7 +155,7 @@ impl GroupedHashAggregateStream {
                 AggregateMode::Partial => expr.state_fields()?.len(),
                 _ => 1,
             };
-            if is_supported(expr, &group_schema) {
+            if expr.row_accumulator_supported() {
                 row_aggregate_expressions.push(others);
                 row_agg_indices.push((idx, start_idx, start_idx + n_fields));
                 row_aggr_expr.push(expr.clone());
@@ -172,6 +170,15 @@ impl GroupedHashAggregateStream {
         let row_accumulators = aggregates::create_row_accumulators(&row_aggr_expr)?;
 
         let row_aggr_schema = aggr_state_schema(&row_aggr_expr)?;
+
+        let group_schema = group_schema(&schema, group_by.expr.len());
+        let row_converter = RowConverter::new(
+            group_schema
+                .fields()
+                .iter()
+                .map(|f| SortField::new(f.data_type().clone()))
+                .collect(),
+        )?;
 
         let row_aggr_layout =
             Arc::new(RowLayout::new(&row_aggr_schema, RowType::WordAligned));
@@ -192,6 +199,7 @@ impl GroupedHashAggregateStream {
             group_by,
             normal_aggr_expr,
             row_accumulators,
+            row_converter,
             row_aggr_schema,
             row_aggr_layout,
             baseline_metrics,
@@ -218,6 +226,7 @@ impl GroupedHashAggregateStream {
                                 &this.group_by,
                                 &this.normal_aggr_expr,
                                 &mut this.row_accumulators,
+                                &mut this.row_converter,
                                 this.row_aggr_layout.clone(),
                                 batch,
                                 &mut this.row_aggr_state,
@@ -242,6 +251,7 @@ impl GroupedHashAggregateStream {
                             let timer = this.baseline_metrics.elapsed_compute().timer();
                             let result = create_batch_from_map(
                                 &this.mode,
+                                &this.row_converter,
                                 &this.row_aggr_schema,
                                 this.batch_size,
                                 this.row_group_skip_position,
@@ -249,7 +259,6 @@ impl GroupedHashAggregateStream {
                                 &mut this.row_accumulators,
                                 &this.schema,
                                 &this.indices,
-                                this.group_by.expr.len(),
                             );
 
                             timer.done();
@@ -309,6 +318,7 @@ fn group_aggregate_batch(
     grouping_set: &PhysicalGroupBy,
     normal_aggr_expr: &[Arc<dyn AggregateExpr>],
     row_accumulators: &mut [RowAccumulatorItem],
+    row_converter: &mut RowConverter,
     state_layout: Arc<RowLayout>,
     batch: RecordBatch,
     aggr_state: &mut RowAggregationState,
@@ -332,7 +342,10 @@ fn group_aggregate_batch(
     let row_aggr_input_values = evaluate_many(row_aggregate_expressions, &batch)?;
     let normal_aggr_input_values = evaluate_many(normal_aggregate_expressions, &batch)?;
 
+    let row_converter_size_pre = row_converter.size();
     for group_values in &group_by_values {
+        let group_rows = row_converter.convert_columns(group_values)?;
+
         // 1.1 construct the key from the group values
         // 1.2 construct the mapping key if it does not exist
         // 1.3 add the row' index to `indices`
@@ -350,11 +363,7 @@ fn group_aggregate_batch(
                 // actually the same key value as the group in
                 // existing_idx  (aka group_values @ row)
                 let group_state = &row_group_states[*group_idx];
-                let group_by_values = get_at_row(group_values, row).unwrap();
-                group_by_values
-                    .iter()
-                    .zip(group_state.group_by_values.iter())
-                    .all(|(lhs, rhs)| lhs.eq(rhs))
+                group_rows.row(row) == group_state.group_by_values.row()
             });
 
             match entry {
@@ -373,12 +382,11 @@ fn group_aggregate_batch(
                 }
                 //  1.2 Need to create new entry
                 None => {
-                    let group_by_values = get_at_row(group_values, row).unwrap();
                     let accumulator_set =
                         aggregates::create_accumulators(normal_aggr_expr)?;
                     // Add new entry to group_states and save newly created index
                     let group_state = RowGroupState {
-                        group_by_values: group_by_values.into_boxed_slice(),
+                        group_by_values: group_rows.row(row).owned(),
                         aggregation_buffer: vec![0; state_layout.fixed_part_width()],
                         accumulator_set,
                         indices: vec![row as u32], // 1.3
@@ -387,11 +395,8 @@ fn group_aggregate_batch(
 
                     // NOTE: do NOT include the `RowGroupState` struct size in here because this is captured by
                     // `group_states` (see allocation down below)
-                    row_allocated += group_state
-                        .group_by_values
-                        .iter()
-                        .map(|sv| sv.size())
-                        .sum::<usize>()
+                    row_allocated += (std::mem::size_of::<u8>()
+                        * group_state.group_by_values.as_ref().len())
                         + (std::mem::size_of::<u8>()
                             * group_state.aggregation_buffer.capacity())
                         + (std::mem::size_of::<u32>() * group_state.indices.capacity());
@@ -549,7 +554,7 @@ fn group_aggregate_batch(
                 Ok::<(), DataFusionError>(())
             })?;
     }
-
+    row_allocated += row_converter.size().saturating_sub(row_converter_size_pre);
     Ok(row_allocated + normal_allocated)
 }
 
@@ -557,7 +562,7 @@ fn group_aggregate_batch(
 #[derive(Debug)]
 pub struct RowGroupState {
     /// The actual group by values, stored sequentially
-    pub group_by_values: Box<[ScalarValue]>,
+    group_by_values: OwnedRow,
 
     // Accumulator state, stored sequentially
     pub aggregation_buffer: Vec<u8>,
@@ -602,6 +607,7 @@ impl std::fmt::Debug for RowAggregationState {
 #[allow(clippy::too_many_arguments)]
 fn create_batch_from_map(
     mode: &AggregateMode,
+    converter: &RowConverter,
     aggr_schema: &Schema,
     batch_size: usize,
     skip_items: usize,
@@ -609,7 +615,6 @@ fn create_batch_from_map(
     row_accumulators: &mut [RowAccumulatorItem],
     output_schema: &Schema,
     indices: &[Vec<(usize, usize, usize)>],
-    num_group_expr: usize,
 ) -> ArrowResult<Option<RecordBatch>> {
     if skip_items > row_aggr_state.group_states.len() {
         return Ok(None);
@@ -730,15 +735,12 @@ fn create_batch_from_map(
         }
     }
 
-    let mut res = (0..num_group_expr)
-        .map(|idx| {
-            ScalarValue::iter_to_array(
-                group_state_chunk
-                    .iter()
-                    .map(|gs| gs.group_by_values[idx].clone()),
-            )
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let group_buffers = group_state_chunk
+        .iter()
+        .map(|gs| gs.group_by_values.row())
+        .collect::<Vec<_>>();
+    let mut res: Vec<ArrayRef> = converter.convert_rows(group_buffers)?;
+
     let extra: usize = indices
         .iter()
         .flatten()
@@ -763,11 +765,7 @@ fn create_batch_from_map(
     )?))
 }
 
-pub fn read_as_batch(
-    rows: &[Vec<u8>],
-    schema: &Schema,
-    row_type: RowType,
-) -> Vec<ArrayRef> {
+fn read_as_batch(rows: &[Vec<u8>], schema: &Schema, row_type: RowType) -> Vec<ArrayRef> {
     let row_num = rows.len();
     let mut output = MutableRecordBatch::new(row_num, Arc::new(schema.clone()));
     let mut row = RowReader::new(schema, row_type);
@@ -778,12 +776,4 @@ pub fn read_as_batch(
     }
 
     output.output_as_columns()
-}
-
-fn get_at_row(grouping_set_values: &[ArrayRef], row: usize) -> Result<Vec<ScalarValue>> {
-    // Copy group values out of arrays into `ScalarValue`s
-    grouping_set_values
-        .iter()
-        .map(|col| ScalarValue::try_from_array(col, row))
-        .collect::<Result<Vec<_>>>()
 }
