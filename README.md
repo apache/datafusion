@@ -31,7 +31,7 @@ DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchm
 
 ## Features
 
-- Feature rich [SQL support](TODO LINK) and [DataFrame API](TODO LINK)
+- Feature rich [SQL support](https://arrow.apache.org/datafusion/user-guide/sql/index.html) and [DataFrame API](https://arrow.apache.org/datafusion/user-guide/dataframe.html)
 - Blazingly fast, vectorized, multi-threaded, streaming execution engine.
 - Native support for Parquet, CSV, JSON, and Avro file formats. Support
   for custom file formats and non file datasources via the `TableProvider` trait.
@@ -56,11 +56,11 @@ engine or can be customized and used as a foundation for
 building new systems. Here are some examples of systems built using DataFusion:
 
 - Specialized Analytical Database systems such as [CeresDB] and more general spark like system such a [Ballista].
-- New query language engines e.g. [PRQL](TODO GET LINK ) and accelerators such as [VegaFusion]
-- Research platform Database Systems, e.g. [Flock] for testing new ideas
-- SQL support to another library (e.g. [dask sql]);
+- New query language engines such as [prql-query] and accelerators such as [VegaFusion]
+- Research platform for new Database Systems, such as [Flock]
+- SQL support to another library, such as [dask sql]
 - Streaming data platforms such as [Synnada]
-- Toos for reading / sorting / transcoding Parquet, CSV, AVRO, and JSON files such as [qv]
+- Tools for reading / sorting / transcoding Parquet, CSV, AVRO, and JSON files such as [qv]
 - A faster Spark runtime replacement (blaze-rs)
 
 By using DataFusion, the projects are freed to focus on their specific
@@ -90,7 +90,8 @@ when DataFusion might be be suitable and unsuitable for your needs:
   of writing. Like DataFusion, it is also written in Rust but unlike DataFusion
   it does not provide SQL nor many extension points.
 
-- [Facebook Velox](TODO LINK) is an execution engine. Like DataFusion, Velox aims to
+- [Facebook Velox](https://engineering.fb.com/2022/08/31/open-source/velox/)
+  is an execution engine. Like DataFusion, Velox aims to
   provide a reusable foundation for building database-like systems. Unlike DataFusion,
   it is written in C/C++ and does not include a SQL frontend or planning /optimization
   framework.
@@ -131,8 +132,8 @@ Here are some of the projects known to use DataFusion:
 - [InfluxDB IOx] Time Series Database
 - [Parseable] Log storage and observability platform
 - [qv] Quickly view your data
-- [PRQL] TODOO
-- [ROAPI]
+- [prql-query]: Query and transform data with PRQL
+- [ROAPI]: Automatic read-only APIs for static datasets
 - [Seafowl] CDN-friendly analytical database
 - [Synnada] Streaming-first framework for data products
 - [Tensorbase]
@@ -151,16 +152,13 @@ Here are some of the projects known to use DataFusion:
 [greptime db]: https://github.com/GreptimeTeam/greptimedb
 [influxdb iox]: https://github.com/influxdata/influxdb_iox
 [parseable]: https://github.com/parseablehq/parseable
+[prql-query]: https://github.com/prql/prql-query
 [qv]: https://github.com/timvw/qv
 [roapi]: https://github.com/roapi/roapi
 [seafowl]: https://github.com/splitgraph/seafowl
 [synnada]: https://synnada.ai/
 [tensorbase]: https://github.com/tensorbase/tensorbase
-[vegafusion]: https://vegafusion.io/
-
-[PRQL]: TODO GET LINK
-
-(if you know of another project, please submit a PR to add a link!)
+[vegafusion]: https://vegafusion.io/ "if you know of another project, please submit a PR to add a link!"
 
 ## Examples
 
