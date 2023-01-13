@@ -538,6 +538,34 @@ mod tests {
     }
 
     #[test]
+    fn test_drop_rx_three_channels() {
+        let (mut txs, mut rxs) = channels(3);
+
+        let tx0 = txs.remove(0);
+        let tx1 = txs.remove(0);
+        let tx2 = txs.remove(0);
+        let mut rx0 = rxs.remove(0);
+        let rx1 = rxs.remove(0);
+        let _rx2 = rxs.remove(0);
+
+        // fill channels
+        poll_ready(&mut tx0.send("0_a")).unwrap();
+        poll_ready(&mut tx1.send("1_a")).unwrap();
+        poll_ready(&mut tx2.send("2_a")).unwrap();
+
+        // drop / close one channel
+        drop(rx1);
+
+        // receive data
+        assert_eq!(poll_ready(&mut rx0.recv()), Some("0_a"),);
+
+        // use senders again
+        poll_ready(&mut tx0.send("0_b")).unwrap();
+        assert_eq!(poll_ready(&mut tx1.send("1_b")), Err(SendError("1_b")),);
+        poll_pending(&mut tx2.send("2_b"));
+    }
+
+    #[test]
     fn test_close_channel_by_dropping_rx_clears_data() {
         let (txs, rxs) = channels(1);
 
