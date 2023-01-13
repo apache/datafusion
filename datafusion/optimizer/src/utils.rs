@@ -37,6 +37,8 @@ use std::sync::Arc;
 /// type. Useful for optimizer rules which want to leave the type
 /// of plan unchanged but still apply to the children.
 /// This also handles the case when the `plan` is a [`LogicalPlan::Explain`].
+///
+/// Returning `Ok(None)` indicates that the plan can't be optimized by the `optimizer`.
 pub fn optimize_children(
     optimizer: &impl OptimizerRule,
     plan: &LogicalPlan,
