@@ -162,7 +162,7 @@ fn optimize_where_in(
     let mut subquery_cols: BTreeSet<Column> =
         join_filters
             .iter()
-            .try_fold(BTreeSet::<Column>::new(), |mut cols, expr| {
+            .try_fold(BTreeSet::new(), |mut cols, expr| {
                 let using_cols: Vec<Column> = expr
                     .to_columns()?
                     .into_iter()
