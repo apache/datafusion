@@ -26,7 +26,7 @@ in-memory format.
 DataFusion supports both an SQL and a DataFrame API for building
 logical query plans as well as a query optimizer and execution engine
 capable of parallel execution against partitioned data sources (CSV
-and Parquet) using threads.
+and Parquet) using
 
 ## Use Cases
 
