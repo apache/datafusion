@@ -622,17 +622,12 @@ fn create_batch_from_map(
                     results[i].push(acc.evaluate(&state_accessor)?);
                 }
             }
-            // We fill fields corresponding to row accumulators e.g indices[1]
-            let mut row_acc_fields = vec![];
-            for Range { start, end } in indices[1].iter() {
-                for field in &output_fields[*start..*end] {
-                    row_acc_fields.push(field);
-                }
-            }
             results
                 .into_iter()
-                .zip(row_acc_fields)
-                .map(|(scalars, field)| {
+                .enumerate()
+                .map(|(idx, scalars)| {
+                    // Get corresponding field for row accumulator
+                    let field = &output_fields[indices[1][idx].start];
                     if scalars.is_empty() {
                         Ok(arrow::array::new_empty_array(field.data_type()))
                     } else {
@@ -648,14 +643,10 @@ fn create_batch_from_map(
         }
     };
 
-    // We fill fields corresponding to accumulators e.g indices[0]
-    let mut acc_fields = vec![];
-    for Range { start, end } in indices[0].iter() {
-        acc_fields.push(&output_fields[*start..*end]);
-    }
     // next, output aggregates: either intermediate state or final output
     let mut columns = vec![];
-    for (idx, acc_field) in acc_fields.iter().enumerate() {
+    for (idx, Range { start, end }) in indices[0].iter().enumerate() {
+        let acc_field = &output_fields[*start..*end];
         for y in 0..acc_field.len() {
             let cur_col = match mode {
                 AggregateMode::Partial => ScalarValue::iter_to_array(
