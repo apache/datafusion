@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Special channel construction to distribute data from varios inputs into N outputs.
+//! Special channel construction to distribute data from various inputs into N outputs
+//! minimizing buffering but preventing deadlocks when repartitoning
 //!
 //! # Design
 //!
@@ -106,9 +107,10 @@ impl<T> std::error::Error for SendError<T> {}
 ///
 /// This handle can be cloned. All clones will write into the same channel. Dropping the last sender will close the
 /// channel. In this case, the [receiver](DistributionReceiver) will still be able to poll the remaining data, but will
-/// receiver `None` afterwards.
+/// receive `None` afterwards.
 #[derive(Debug)]
 pub struct DistributionSender<T> {
+    /// To prevent lock inversion / deadlock, channel lock is always acquired prior to gate lock
     channel: SharedChannel<T>,
     gate: SharedGate,
 }
@@ -185,6 +187,7 @@ impl<'a, T> Future for SendFuture<'a, T> {
         let mut guard_gate = this.gate.lock();
 
         // does ANY receiver need data?
+        // if so, allow sender to create another
         if guard_gate.empty_channels == 0 {
             guard_gate
                 .send_wakers

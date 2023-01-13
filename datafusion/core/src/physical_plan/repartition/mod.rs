@@ -365,6 +365,8 @@ impl ExecutionPlan for RepartitionExec {
         // if this is the first partition to be invoked then we need to set up initial state
         if state.channels.is_empty() {
             // create one channel per *output* partition
+            // note we use a custom channel that ensures there is always data for each receiver
+            // but limits the amount of buffering if required.
             let (txs, rxs) = channels(num_output_partitions);
             for (partition, (tx, rx)) in txs.into_iter().zip(rxs).enumerate() {
                 let reservation = Arc::new(Mutex::new(
