@@ -46,7 +46,7 @@ use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::execution::context::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::Stream;
-use futures::{Future, FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt};
 use hashbrown::HashMap;
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
@@ -222,14 +222,6 @@ impl BatchPartitioner {
 
         Ok(it)
     }
-}
-
-trait PartitiontFun {
-    type Fut<'a>: Future<Output = Result<()>>
-    where
-        Self: 'a;
-
-    fn c(&mut self, partition: usize, batch: RecordBatch) -> Self::Fut<'_>;
 }
 
 /// The repartition operator maps N input partitions to M output partitions based on a
