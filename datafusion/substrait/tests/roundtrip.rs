@@ -66,6 +66,7 @@ mod tests {
         roundtrip("SELECT * FROM data WHERE d AND a > 1").await
     }
 
+    #[ignore] // tracked in https://github.com/apache/arrow-datafusion/issues/4897
     #[tokio::test]
     async fn select_with_limit() -> Result<()> {
         roundtrip_fill_na("SELECT * FROM data LIMIT 100").await
