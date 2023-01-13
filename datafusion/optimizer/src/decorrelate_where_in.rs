@@ -129,13 +129,14 @@ impl OptimizerRule for DecorrelateWhereIn {
 ///
 /// The optimized plan will be:
 ///
-/// Projection: t1.a, t1.b                                                                                                                                                                                                                                                                                       |
-///   LeftSemi Join:  Filter: t1.a = __correlated_sq_1.a AND t1.b = __correlated_sq_1.b AND t1.c > __correlated_sq_1.c                                                                                                                                                                                           |
-///     TableScan: t1                                                                                                                                                                                                                                                                                            |
-///     SubqueryAlias: __correlated_sq_1                                                                                                                                                                                                                                                                         |
-///       Projection: t2.a AS a, t2.b, t2.c                                                                                                                                                                                                                                                                      |
-///         TableScan: t2                                                                                                                                                                                                                                                                                        |
-///
+/// ```text
+/// Projection: t1.a, t1.b
+///   LeftSemi Join:  Filter: t1.a = __correlated_sq_1.a AND t1.b = __correlated_sq_1.b AND t1.c > __correlated_sq_1.c
+///     TableScan: t1
+///     SubqueryAlias: __correlated_sq_1
+///       Projection: t2.a AS a, t2.b, t2.c
+///         TableScan: t2
+/// ```
 fn optimize_where_in(
     query_info: &SubqueryInfo,
     left: &LogicalPlan,
