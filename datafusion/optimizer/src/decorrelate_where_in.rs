@@ -270,7 +270,7 @@ fn remove_duplicated_filter(filters: Vec<Expr>, in_predicate: Expr) -> Vec<Expr>
         .collect::<Vec<_>>()
 }
 
-fn replace_qualify_name(
+fn replace_qualified_name(
     expr: Expr,
     cols: &BTreeSet<Column>,
     subquery_alias: &str,
