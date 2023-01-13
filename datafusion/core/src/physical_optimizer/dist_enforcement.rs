@@ -431,24 +431,22 @@ fn reorder_aggregate_keys(
                     None
                 };
                 if let Some(partial_agg) = new_partial_agg {
-                    // Build new group expressions that correspond to the schema of partial_agg
-                    let mut new_group_exprs = vec![];
-                    for (idx, position) in positions.into_iter().enumerate() {
-                        let (group_expr, name) = group_by.expr()[position].clone();
+                    // Build new group expressions that correspond to the output of partial_agg
+                    let new_final_group: Vec<Arc<dyn PhysicalExpr>> =
+                        partial_agg.output_group_expr();
+                    let new_group_by = PhysicalGroupBy::new_single(
+                        new_final_group
+                            .iter()
+                            .enumerate()
+                            .map(|(i, expr)| {
+                                (
+                                    expr.clone(),
+                                    partial_agg.group_expr().expr()[i].1.clone(),
+                                )
+                            })
+                            .collect(),
+                    );
 
-                        // Update the index of columns so that they correspond to the schema of partial_agg
-                        // rather than input_schema.
-                        let group_expr = if let Some(group_col) =
-                            group_expr.as_any().downcast_ref::<Column>()
-                        {
-                            Arc::new(Column::new(group_col.name(), idx))
-                                as Arc<dyn PhysicalExpr>
-                        } else {
-                            group_expr
-                        };
-                        new_group_exprs.push((group_expr, name));
-                    }
-                    let new_group_by = PhysicalGroupBy::new_single(new_group_exprs);
                     let new_final_agg = Arc::new(AggregateExec::try_new(
                         AggregateMode::FinalPartitioned,
                         new_group_by,
