@@ -27,19 +27,20 @@ use std::fs::OpenOptions;
 use std::io::{Read, Write};
 
 pub async fn serialize(sql: &str, ctx: &SessionContext, path: &str) -> Result<()> {
-    let protobuf_out = serialize_bytes(sql, ctx);
+    let protobuf_out = serialize_bytes(sql, ctx).await;
     let mut file = OpenOptions::new().create(true).write(true).open(path)?;
-    file.write_all(&protobuf_out)?;
+    file.write_all(&protobuf_out.unwrap())?;
     Ok(())
 }
 
-pub async fn serialize_bytes(sql: &str, ctx: &SessionContext) -> Vec::<u8> {
+pub async fn serialize_bytes(sql: &str, ctx: &SessionContext) -> Result<Vec::<u8>> {
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = producer::to_substrait_plan(&plan)?;
 
     let mut protobuf_out = Vec::<u8>::new();
-    let result = proto.encode(&mut protobuf_out).unwrap();
+    proto.encode(&mut protobuf_out).unwrap();
+    Ok(protobuf_out)
 }
 
 pub async fn deserialize(path: &str) -> Result<Box<Plan>> {
