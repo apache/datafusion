@@ -166,7 +166,7 @@ impl BatchPartitioner {
                     num_partitions: partitions,
                     hash_buffer,
                 } => {
-                    let mut timer = self.timer.timer();
+                    let timer = self.timer.timer();
 
                     let arrays = exprs
                         .iter()
@@ -210,8 +210,8 @@ impl BatchPartitioner {
                             let batch =
                                 RecordBatch::try_new(batch.schema(), columns).unwrap();
 
-                            timer.stop();
-                            timer.restart();
+                            // bind timer so it drops w/ this iterator
+                            let _ = &timer;
 
                             Ok((partition, batch))
                         });
