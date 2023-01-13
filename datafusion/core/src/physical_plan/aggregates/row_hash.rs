@@ -603,7 +603,6 @@ fn create_batch_from_map(
         return Ok(Some(RecordBatch::new_empty(schema)));
     }
 
-    let mut state_accessor = RowAccessor::new(aggr_schema, RowType::WordAligned);
     let mut state_buffers = group_state_chunk
         .iter()
         .map(|gs| gs.aggregation_buffer.clone())
@@ -615,31 +614,29 @@ fn create_batch_from_map(
             read_as_batch(&state_buffers, aggr_schema, RowType::WordAligned)
         }
         AggregateMode::Final | AggregateMode::FinalPartitioned => {
-            let mut results: Vec<Vec<ScalarValue>> = vec![vec![]; row_accumulators.len()];
-            for buffer in state_buffers.iter_mut() {
-                state_accessor.point_to(0, buffer);
-                for (i, acc) in row_accumulators.iter().enumerate() {
-                    results[i].push(acc.evaluate(&state_accessor)?);
+            let mut results = vec![];
+            for (idx, acc) in row_accumulators.iter().enumerate() {
+                let mut state_accessor =
+                    RowAccessor::new(aggr_schema, RowType::WordAligned);
+                let mut cur_col = vec![];
+                for buffer in state_buffers.iter_mut() {
+                    state_accessor.point_to(0, buffer);
+                    cur_col.push(acc.evaluate(&state_accessor)?);
                 }
+                // Get corresponding field for row accumulator
+                let field = &output_fields[indices[1][idx].start];
+                let casted = if cur_col.is_empty() {
+                    Ok(arrow::array::new_empty_array(field.data_type()))
+                } else {
+                    let elem = ScalarValue::iter_to_array(cur_col)?;
+                    // cast output if needed (e.g. for types like Dictionary where
+                    // the intermediate GroupByScalar type was not the same as the
+                    // output
+                    cast(&elem, field.data_type()).map_err(DataFusionError::ArrowError)
+                }?;
+                results.push(casted);
             }
             results
-                .into_iter()
-                .enumerate()
-                .map(|(idx, scalars)| {
-                    // Get corresponding field for row accumulator
-                    let field = &output_fields[indices[1][idx].start];
-                    if scalars.is_empty() {
-                        Ok(arrow::array::new_empty_array(field.data_type()))
-                    } else {
-                        let elem = ScalarValue::iter_to_array(scalars)?;
-                        // cast output if needed (e.g. for types like Dictionary where
-                        // the intermediate GroupByScalar type was not the same as the
-                        // output
-                        cast(&elem, field.data_type())
-                            .map_err(DataFusionError::ArrowError)
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?
         }
     };
 
