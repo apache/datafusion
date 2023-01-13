@@ -128,6 +128,7 @@ Here are some of the projects known to use DataFusion:
 - [datafusion-tui] Text UI for DataFusion
 - [delta-rs] Native Rust implementation of Delta Lake
 - [Flock] Cloud database research system
+- [Kamu] Planet-scale streaming data pipeline
 - [Greptime DB] Open Source & Cloud Native Distributed Time Series Database
 - [InfluxDB IOx] Time Series Database
 - [Parseable] Log storage and observability platform
@@ -149,6 +150,7 @@ Here are some of the projects known to use DataFusion:
 [datafusion-tui]: https://github.com/datafusion-contrib/datafusion-tui
 [delta-rs]: https://github.com/delta-io/delta-rs
 [flock]: https://github.com/flock-lab/flock
+[kamu]: https://github.com/kamu-data/kamu-cli
 [greptime db]: https://github.com/GreptimeTeam/greptimedb
 [influxdb iox]: https://github.com/influxdata/influxdb_iox
 [parseable]: https://github.com/parseablehq/parseable
