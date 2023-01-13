@@ -230,12 +230,14 @@ mod tests {
         Ok(())
     }
 
+    #[allow(deprecated)]
     async fn roundtrip(sql: &str) -> Result<()> {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
         let plan = df.into_optimized_plan()?;
         let proto = to_substrait_plan(&plan)?;
         let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+        let plan2 = ctx.optimize(&plan2)?;
 
         println!("{:#?}", plan);
         println!("{:#?}", plan2);
