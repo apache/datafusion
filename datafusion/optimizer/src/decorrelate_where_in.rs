@@ -173,7 +173,7 @@ fn optimize_where_in(
                 Result::Ok(cols)
             })?;
     let join_filter = conjunction(join_filters).map_or(Ok(None), |filter| {
-        replace_qualify_name(filter, &subquery_cols, &subquery_alias).map(Option::Some)
+        replace_qualified_name(filter, &subquery_cols, &subquery_alias).map(Option::Some)
     })?;
 
     // add projection
