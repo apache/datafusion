@@ -425,8 +425,13 @@ mod tests {
     fn test_gate() {
         let (txs, mut rxs) = channels(2);
 
+        // gate initially open
         poll_ready(&mut txs[0].send("0_a")).unwrap();
+
+        // gate still open because channel 1 is still empty
         poll_ready(&mut txs[0].send("0_b")).unwrap();
+
+        // gate still open because channel 1 is still empty prior to this call, so this call still goes through
         poll_ready(&mut txs[1].send("1_a")).unwrap();
 
         // both channels non-empty => gate closed
