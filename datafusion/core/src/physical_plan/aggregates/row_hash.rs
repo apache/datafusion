@@ -18,7 +18,6 @@
 //! Hash aggregation through row format
 
 use std::cmp::min;
-use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -146,8 +145,8 @@ impl GroupedHashAggregateStream {
         let mut normal_agg_indices = vec![];
         let mut normal_aggregate_expressions = vec![];
         // The expressions to evaluate the batch, one vec of expressions per aggregation.
-        // Assume create_schema() always put group columns in front of aggr columns, we set
-        // col_idx_base to group expression count.
+        // Assuming create_schema() always puts group columns in front of aggregation columns, we set
+        // col_idx_base to the group expression count.
         let all_aggregate_expressions =
             aggregates::aggregate_expressions(&aggr_expr, &mode, start_idx)?;
         for (expr, others) in aggr_expr.iter().zip(all_aggregate_expressions.into_iter())
@@ -272,16 +271,14 @@ impl GroupedHashAggregateStream {
                     };
 
                 this.row_group_skip_position += this.batch_size;
-                match result {
+                return match result {
                     Ok(Some(result)) => {
-                        return Some((
-                            Ok(result.record_output(&this.baseline_metrics)),
-                            this,
-                        ));
+                        let batch = result.record_output(&this.baseline_metrics);
+                        Some((Ok(batch), this))
                     }
-                    Ok(None) => return None,
-                    Err(error) => return Some((Err(error), this)),
-                }
+                    Ok(None) => None,
+                    Err(error) => Some((Err(error), this)),
+                };
             }
         });
 
@@ -618,23 +615,25 @@ fn create_batch_from_map(
             for (idx, acc) in row_accumulators.iter().enumerate() {
                 let mut state_accessor =
                     RowAccessor::new(aggr_schema, RowType::WordAligned);
-                let mut cur_col = vec![];
-                for buffer in state_buffers.iter_mut() {
-                    state_accessor.point_to(0, buffer);
-                    cur_col.push(acc.evaluate(&state_accessor)?);
-                }
+                let current = state_buffers
+                    .iter_mut()
+                    .map(|buffer| {
+                        state_accessor.point_to(0, buffer);
+                        acc.evaluate(&state_accessor)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 // Get corresponding field for row accumulator
                 let field = &output_fields[indices[1][idx].start];
-                let casted = if cur_col.is_empty() {
+                let result = if current.is_empty() {
                     Ok(arrow::array::new_empty_array(field.data_type()))
                 } else {
-                    let elem = ScalarValue::iter_to_array(cur_col)?;
+                    let item = ScalarValue::iter_to_array(current)?;
                     // cast output if needed (e.g. for types like Dictionary where
                     // the intermediate GroupByScalar type was not the same as the
                     // output
-                    cast(&elem, field.data_type()).map_err(DataFusionError::ArrowError)
+                    cast(&item, field.data_type()).map_err(DataFusionError::ArrowError)
                 }?;
-                results.push(casted);
+                results.push(result);
             }
             results
         }
@@ -642,33 +641,32 @@ fn create_batch_from_map(
 
     // next, output aggregates: either intermediate state or final output
     let mut columns = vec![];
-    for (idx, Range { start, end }) in indices[0].iter().enumerate() {
-        let acc_field = &output_fields[*start..*end];
-        for y in 0..acc_field.len() {
-            let cur_col = match mode {
+    for (idx, &Range { start, end }) in indices[0].iter().enumerate() {
+        for (field_idx, field) in output_fields[start..end].iter().enumerate() {
+            let current = match mode {
                 AggregateMode::Partial => ScalarValue::iter_to_array(
                     group_state_chunk.iter().map(|row_group_state| {
                         row_group_state.accumulator_set[idx]
                             .state()
-                            .map(|elem| elem[y].clone())
-                            .expect("unexpected accumulator state in hash aggregate")
+                            .map(|v| v[field_idx].clone())
+                            .expect("Unexpected accumulator state in hash aggregate")
                     }),
-                )?,
+                ),
                 AggregateMode::Final | AggregateMode::FinalPartitioned => {
                     ScalarValue::iter_to_array(group_state_chunk.iter().map(
                         |row_group_state| {
                             row_group_state.accumulator_set[idx]
                                 .evaluate()
-                                .expect("unexpected accumulator state in hash aggregate")
+                                .expect("Unexpected accumulator state in hash aggregate")
                         },
-                    ))?
+                    ))
                 }
-            };
+            }?;
             // cast output if needed (e.g. for types like Dictionary where
             // the intermediate GroupByScalar type was not the same as the
             // output
-            let casted_col = cast(&cur_col, acc_field[y].data_type())?;
-            columns.push(casted_col);
+            let result = cast(&current, field.data_type())?;
+            columns.push(result);
         }
     }
 
@@ -676,7 +674,7 @@ fn create_batch_from_map(
         .iter()
         .map(|gs| gs.group_by_values.row())
         .collect::<Vec<_>>();
-    let mut res: Vec<ArrayRef> = converter.convert_rows(group_buffers)?;
+    let mut output: Vec<ArrayRef> = converter.convert_rows(group_buffers)?;
 
     let extra: usize = indices
         .iter()
@@ -684,19 +682,19 @@ fn create_batch_from_map(
         .map(|Range { start, end }| end - start)
         .sum();
     let empty_arr = new_null_array(&DataType::Null, 1);
-    res.extend(std::iter::repeat(empty_arr).take(extra));
+    output.extend(std::iter::repeat(empty_arr).take(extra));
 
-    let results: Vec<VecDeque<ArrayRef>> = vec![columns.into(), row_columns.into()];
-    for (outer, mut cur_res) in results.into_iter().enumerate() {
-        for Range { start, end } in indices[outer].iter() {
-            for elem in res.iter_mut().take(*end).skip(*start) {
-                *elem = cur_res.pop_front().expect("columns cannot be empty");
+    let results = [columns.into_iter(), row_columns.into_iter()];
+    for (outer, mut current) in results.into_iter().enumerate() {
+        for &Range { start, end } in indices[outer].iter() {
+            for item in output.iter_mut().take(end).skip(start) {
+                *item = current.next().expect("Columns cannot be empty");
             }
         }
     }
     Ok(Some(RecordBatch::try_new(
         Arc::new(output_schema.to_owned()),
-        res,
+        output,
     )?))
 }
 

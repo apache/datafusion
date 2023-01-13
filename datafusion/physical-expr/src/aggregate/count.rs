@@ -202,10 +202,9 @@ impl RowAccumulator for CountRowAccumulator {
     }
 
     fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(match accessor.get_u64_opt(self.state_index()) {
-            Some(cnt) => ScalarValue::Int64(Some(cnt as i64)),
-            None => ScalarValue::Int64(Some(0)),
-        })
+        Ok(ScalarValue::Int64(Some(
+            accessor.get_u64_opt(self.state_index()).unwrap_or(0) as i64,
+        )))
     }
 
     #[inline(always)]
