@@ -16,7 +16,7 @@
 # under the License.
 
 [workspace]
-exclude = ["datafusion-cli"]
+exclude = ["datafusion-cli", "datafusion/substrait"]
 members = [
     "datafusion/common",
     "datafusion/core",

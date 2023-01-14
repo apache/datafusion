@@ -90,6 +90,7 @@ Here are some of the projects known to use DataFusion:
 - [Flock](https://github.com/flock-lab/flock)
 - [Greptime DB](https://github.com/GreptimeTeam/greptimedb) Open Source & Cloud Native Distributed Time Series Database
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
+- [Kamu](https://github.com/kamu-data/kamu-cli/) Planet-scale streaming data pipeline
 - [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
 - [qv](https://github.com/timvw/qv) Quickly view your data
 - [ROAPI](https://github.com/roapi/roapi)
