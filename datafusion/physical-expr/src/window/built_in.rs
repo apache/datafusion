@@ -21,12 +21,13 @@ use super::window_frame_state::WindowFrameContext;
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
 use crate::window::window_expr::{
-    reverse_order_bys, BuiltinWindowState, WindowFn, WindowFunctionState,
+    reverse_order_bys, BuiltinWindowState, NthValueKind, WindowFn, WindowFunctionState,
 };
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, WindowAggState, WindowState,
 };
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
+use arrow::array::Array;
 use arrow::compute::{concat, SortOptions};
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
@@ -217,6 +218,43 @@ impl WindowExpr for BuiltInWindowExpr {
 
             state.out_col = concat(&[&state.out_col, &out_col])?;
             state.n_row_result_missing = num_rows - state.last_calculated_index;
+            let mut evaluator_state = evaluator.state()?;
+            if let BuiltinWindowState::NthValue(nth_value_state) = &mut evaluator_state {
+                let is_prunable = match nth_value_state.kind {
+                    NthValueKind::First => {
+                        let n_range =
+                            nth_value_state.range.end - nth_value_state.range.start;
+                        n_range > 0
+                    }
+                    NthValueKind::Last => true,
+                    NthValueKind::Nth(n) => {
+                        let n_range =
+                            nth_value_state.range.end - nth_value_state.range.start;
+                        n_range >= (n as usize)
+                    }
+                };
+                if self.window_frame.start_bound.is_unbounded()
+                    && !out_col.is_empty()
+                    && is_prunable
+                {
+                    if matches!(
+                        nth_value_state.kind,
+                        NthValueKind::First | NthValueKind::Nth(_)
+                    ) {
+                        // get last value
+                        let res =
+                            ScalarValue::try_from_array(&out_col, out_col.len() - 1)?;
+                        nth_value_state.finalized_res = Some(res);
+                    }
+
+                    if state.window_frame_range.end > 0 {
+                        state.window_frame_range.start = state.window_frame_range.end - 1;
+                    }
+                    state.window_function_state =
+                        WindowFunctionState::BuiltinWindowState(evaluator_state);
+                    evaluator.update_state(state, &order_bys, &sort_partition_points)?;
+                }
+            }
             state.window_function_state =
                 WindowFunctionState::BuiltinWindowState(evaluator.state()?);
         }
@@ -242,8 +280,7 @@ impl WindowExpr for BuiltInWindowExpr {
         // NOTE: Currently, groups queries do not support the bounded memory variant.
         self.expr.supports_bounded_execution()
             && (!self.expr.uses_window_frame()
-                || !(self.window_frame.start_bound.is_unbounded()
-                    || self.window_frame.end_bound.is_unbounded()
+                || !(self.window_frame.end_bound.is_unbounded()
                     || matches!(self.window_frame.units, WindowFrameUnits::Groups)))
     }
 }

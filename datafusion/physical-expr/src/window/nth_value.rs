@@ -19,7 +19,9 @@
 //! that can evaluated at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::window_expr::{BuiltinWindowState, NthValueState};
+use crate::window::window_expr::{
+    BuiltinWindowState, NthValueKind, NthValueState, WindowFunctionState,
+};
 use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
@@ -29,14 +31,6 @@ use datafusion_common::{DataFusionError, Result};
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
-
-/// nth_value kind
-#[derive(Debug, Copy, Clone)]
-pub enum NthValueKind {
-    First,
-    Last,
-    Nth(u32),
-}
 
 /// nth_value expression
 #[derive(Debug)]
@@ -122,10 +116,12 @@ impl BuiltInWindowFunctionExpr for NthValue {
     }
 
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-        Ok(Box::new(NthValueEvaluator {
-            state: NthValueState::default(),
+        let state = NthValueState {
+            range: Default::default(),
+            finalized_res: None,
             kind: self.kind,
-        }))
+        };
+        Ok(Box::new(NthValueEvaluator { state }))
     }
 
     fn supports_bounded_execution(&self) -> bool {
@@ -155,7 +151,6 @@ impl BuiltInWindowFunctionExpr for NthValue {
 #[derive(Debug)]
 pub(crate) struct NthValueEvaluator {
     state: NthValueState,
-    kind: NthValueKind,
 }
 
 impl PartitionEvaluator for NthValueEvaluator {
@@ -172,10 +167,25 @@ impl PartitionEvaluator for NthValueEvaluator {
     ) -> Result<()> {
         // If we do not use state, update_state does nothing
         self.state.range = state.window_frame_range.clone();
+        if let WindowFunctionState::BuiltinWindowState(BuiltinWindowState::NthValue(
+            nth_value_state,
+        )) = &state.window_function_state
+        {
+            if let Some(res) = &nth_value_state.finalized_res {
+                // println!("cur res: {:?}", self.state.res);
+                // println!("res updated:{:?}", res);
+                self.state.finalized_res = Some(res.clone())
+            }
+        }
         Ok(())
     }
 
     fn evaluate_stateful(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
+        if let Some(res) = &self.state.finalized_res {
+            // println!("early return");
+            return Ok(res.clone());
+        }
+
         self.evaluate_inside_range(values, self.state.range.clone())
     }
 
@@ -190,7 +200,7 @@ impl PartitionEvaluator for NthValueEvaluator {
         if n_range == 0 {
             return ScalarValue::try_from(arr.data_type());
         }
-        match self.kind {
+        match self.state.kind {
             NthValueKind::First => ScalarValue::try_from_array(arr, range.start),
             NthValueKind::Last => ScalarValue::try_from_array(arr, range.end - 1),
             NthValueKind::Nth(n) => {

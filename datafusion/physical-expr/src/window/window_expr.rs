@@ -319,9 +319,24 @@ pub struct NumRowsState {
     pub n_rows: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+/// nth_value kind
+#[derive(Debug, Copy, Clone)]
+pub enum NthValueKind {
+    First,
+    Last,
+    Nth(u32),
+}
+
+#[derive(Debug, Clone)]
 pub struct NthValueState {
     pub range: Range<usize>,
+    // In certain cases we can finalize the result
+    // For instance, result of `FIRST_VALUE(inc_col) OVER(ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as first_value1`
+    // is the first entry in the table. We can store it then just use this result instead of recalculating
+    // This enable us to prune table.
+    pub finalized_res: Option<ScalarValue>,
+    // pub is_prunable: bool,
+    pub kind: NthValueKind,
 }
 
 #[derive(Debug, Clone, Default)]
