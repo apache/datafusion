@@ -2,25 +2,49 @@
 #![allow(dead_code)]
 
 use antlr_rust::tree::ParseTree;
-use datafusion_expr::{EmptyRelation, LogicalPlan, LogicalPlanBuilder, TableSource};
+use datafusion_expr::{
+    EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, TableSource,
+};
 
 use crate::antlr::presto::prestoparser::*;
 use datafusion_common::{
-    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, TableReference,
+    Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
+    TableReference,
 };
 use std::{
     cell::{Cell, RefCell},
-    iter,
+    clone, iter,
     rc::Rc,
     sync::Arc,
 };
 
 trait BindingContext {
-    fn resolve_table(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
-        Err(DataFusionError::Plan(format!(
-            "No table named: {} found",
-            name.table()
+    fn resolve_table(&self, _: TableReference) -> Result<Arc<dyn TableSource>> {
+        Err(DataFusionError::NotImplemented(String::from(
+            "Not implement resolve_table",
         )))
+    }
+
+    fn resolve_column(&self, _: String) -> Result<Expr> {
+        Err(DataFusionError::NotImplemented(String::from(
+            "Not implement resolve_column",
+        )))
+    }
+}
+
+struct ColumnBindingContext {
+    schema: DFSchemaRef,
+}
+
+impl BindingContext for ColumnBindingContext {
+    fn resolve_column(&self, name: String) -> Result<Expr> {
+        match self.schema.index_of_column_by_name(None, name.as_str()) {
+            Ok(_) => Ok(Expr::Column(Column {
+                relation: None,
+                name: name,
+            })),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -193,19 +217,39 @@ fn bind_LogicalPlan_from_querySpecification<'input>(
             "not implemented relation",
         )));
     }
-    let parent = if ctx.relation_all().len() > 0 {
+    let parent = if ctx.relation_all().len() == 0 {
         LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: true,
             schema: DFSchemaRef::new(DFSchema::empty()),
         })
     } else {
-        bind_LogicalPlan_from_relation(bc, ctx.relation(0).unwrap())?
+        bind_LogicalPlan_from_relation(bc.clone(), ctx.relation(0).unwrap())?
     };
 
-    // TODO
-    Ok(LogicalPlan::EmptyRelation(EmptyRelation {
-        produce_one_row: true,
-        schema: DFSchemaRef::new(DFSchema::empty()),
+    let column_binding_context = ColumnBindingContext {
+        schema: parent.schema().clone(),
+    };
+
+    let new_bc = bc.clone();
+    new_bc.push(Box::new(column_binding_context));
+    let items: Vec<_> = ctx
+        .querySelectItems()
+        .unwrap()
+        .selectItem_all()
+        .iter()
+        .map(|item| bind_Expr_from_selectItem(new_bc.clone(), item.clone()).unwrap())
+        .collect();
+
+    LogicalPlanBuilder::from(parent).project(items)?.build()
+}
+
+fn bind_Expr_from_selectItem<'input>(
+    bc: Rc<BindingContextStack>,
+    ctx: Rc<SelectItemContextAll<'input>>,
+) -> Result<Expr> {
+    Ok(Expr::Column(Column {
+        relation: None,
+        name: String::from("ID"),
     }))
 }
 
@@ -301,9 +345,12 @@ fn bind_LogicalPlan_from_tableName<'input>(
         .clone()
         .resolve_table(table_ref_result.unwrap().as_table_reference())
     {
-        Ok(table_source) => {
-            LogicalPlanBuilder::scan(&String::from("B"), table_source, None)?.build()
-        }
+        Ok(table_source) => LogicalPlanBuilder::scan(
+            String::from("PERSON"),
+            table_source,
+            None,
+        )?
+        .build(),
         Err(e) => Err(e),
     }
 }
@@ -400,8 +447,8 @@ mod tests {
     impl BindingContext for TableBindingContext {
         fn resolve_table(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
             let schema = match name.table() {
-                "person" => Ok(Schema::new(vec![
-                    Field::new("id", DataType::UInt32, false),
+                "PERSON" => Ok(Schema::new(vec![
+                    Field::new("ID", DataType::UInt32, false),
                     Field::new("first_name", DataType::Utf8, false),
                     Field::new("last_name", DataType::Utf8, false),
                     Field::new("age", DataType::Int32, false),
@@ -429,12 +476,12 @@ mod tests {
     #[test]
     fn it_works() {
         let tf = ArenaCommonFactory::default();
-        let root = parse("SELECT A FROM B", &tf).unwrap();
+        let root = parse("SELECT ID FROM PERSON", &tf).unwrap();
         let bc = Rc::new(BindingContextStack {
             stack: RefCell::new(vec![Box::new(TableBindingContext {})]),
         });
         let plan = bind_LogicalPlan_from_singleStatement(bc, root).unwrap();
-        let expected = "EmptyRelation";
+        let expected = "Projection: PERSON.ID\n  TableScan: PERSON";
         assert_eq!(expected, format!("{plan:?}"));
     }
 }
