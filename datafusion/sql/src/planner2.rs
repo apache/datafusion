@@ -11,7 +11,7 @@ use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     TableReference,
 };
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
 
 trait BindingContext {
     fn resolve_table(&self, _: TableReference) -> Result<Arc<dyn TableSource>> {
@@ -118,14 +118,14 @@ impl Binder {
 
     fn bind_LogicalPlan_from_singleStatement<'input>(
         &self,
-        ctx: Rc<SingleStatementContextAll<'input>>,
+        ctx: &SingleStatementContextAll<'input>,
     ) -> Result<LogicalPlan> {
-        self.bind_LogicalPlan_from_statement(ctx.statement().unwrap())
+        self.bind_LogicalPlan_from_statement(ctx.statement().unwrap().as_ref())
     }
 
     fn bind_LogicalPlan_from_statement<'input>(
         &self,
-        ctx: Rc<StatementContextAll<'input>>,
+        ctx: &StatementContextAll<'input>,
     ) -> Result<LogicalPlan> {
         match &*ctx {
             StatementContextAll::StatementDefaultContext(c) => {
@@ -142,24 +142,24 @@ impl Binder {
         &self,
         ctx: &StatementDefaultContext<'input>,
     ) -> Result<LogicalPlan> {
-        self.bind_LogicalPlan_from_query(ctx.query().unwrap())
+        self.bind_LogicalPlan_from_query(ctx.query().unwrap().as_ref())
     }
 
     fn bind_LogicalPlan_from_query<'input>(
         &self,
-        ctx: Rc<QueryContextAll<'input>>,
+        ctx: &QueryContextAll<'input>,
     ) -> Result<LogicalPlan> {
         if ctx.with().is_some() {
             return Err(DataFusionError::NotImplemented(String::from(
                 "not implemented bind_LogicalPlan_from_query",
             )));
         }
-        self.bind_LogicalPlan_from_queryNoWith(ctx.queryNoWith().unwrap())
+        self.bind_LogicalPlan_from_queryNoWith(ctx.queryNoWith().unwrap().as_ref())
     }
 
     fn bind_LogicalPlan_from_queryNoWith<'input>(
         &self,
-        ctx: Rc<QueryNoWithContextAll<'input>>,
+        ctx: &QueryNoWithContextAll<'input>,
     ) -> Result<LogicalPlan> {
         if ctx.sortItem_all().len() > 0 {
             return Err(DataFusionError::NotImplemented(String::from(
@@ -181,12 +181,12 @@ impl Binder {
                 "not implemented FETCH",
             )));
         }
-        self.bind_LogicalPlan_from_queryTerm(ctx.queryTerm().unwrap())
+        self.bind_LogicalPlan_from_queryTerm(ctx.queryTerm().unwrap().as_ref())
     }
 
     fn bind_LogicalPlan_from_queryTerm<'input>(
         &self,
-        ctx: Rc<QueryTermContextAll<'input>>,
+        ctx: &QueryTermContextAll<'input>,
     ) -> Result<LogicalPlan> {
         match &*ctx {
             QueryTermContextAll::QueryTermDefaultContext(c) => {
@@ -202,12 +202,12 @@ impl Binder {
         &self,
         ctx: &QueryTermDefaultContext<'input>,
     ) -> Result<LogicalPlan> {
-        self.bind_LogicalPlan_from_queryPrimary(ctx.queryPrimary().unwrap())
+        self.bind_LogicalPlan_from_queryPrimary(ctx.queryPrimary().unwrap().as_ref())
     }
 
     fn bind_LogicalPlan_from_queryPrimary<'input>(
         &self,
-        ctx: Rc<QueryPrimaryContextAll<'input>>,
+        ctx: &QueryPrimaryContextAll<'input>,
     ) -> Result<LogicalPlan> {
         match &*ctx {
             QueryPrimaryContextAll::QueryPrimaryDefaultContext(c) => {
@@ -223,12 +223,14 @@ impl Binder {
         &self,
         ctx: &QueryPrimaryDefaultContext<'input>,
     ) -> Result<LogicalPlan> {
-        self.bind_LogicalPlan_from_querySpecification(ctx.querySpecification().unwrap())
+        self.bind_LogicalPlan_from_querySpecification(
+            ctx.querySpecification().unwrap().as_ref(),
+        )
     }
 
     fn bind_LogicalPlan_from_querySpecification<'input>(
         &self,
-        ctx: Rc<QuerySpecificationContextAll<'input>>,
+        ctx: &QuerySpecificationContextAll<'input>,
     ) -> Result<LogicalPlan> {
         if ctx.setQuantifier().is_some() {
             return Err(DataFusionError::NotImplemented(String::from(
@@ -266,7 +268,7 @@ impl Binder {
                 schema: DFSchemaRef::new(DFSchema::empty()),
             })
         } else {
-            self.bind_LogicalPlan_from_relation(ctx.relation(0).unwrap())?
+            self.bind_LogicalPlan_from_relation(ctx.relation(0).unwrap().as_ref())?
         };
 
         let items: Vec<_> = self.with_push(
@@ -278,7 +280,7 @@ impl Binder {
                     .unwrap()
                     .selectItem_all()
                     .iter()
-                    .map(|item| binder.bind_Expr_from_selectItem(item.clone()).unwrap())
+                    .map(|item| binder.bind_Expr_from_selectItem(item).unwrap())
                     .collect()
             },
         );
@@ -288,7 +290,7 @@ impl Binder {
 
     fn bind_Expr_from_selectItem<'input>(
         &self,
-        ctx: Rc<SelectItemContextAll<'input>>,
+        ctx: &SelectItemContextAll<'input>,
     ) -> Result<Expr> {
         match &*ctx {
             SelectItemContextAll::SelectSingleContext(c) => {
@@ -309,19 +311,19 @@ impl Binder {
                 "not implemented identifer in selectSingle",
             )));
         }
-        self.bind_Expr_from_expression(ctx.expression().unwrap())
+        self.bind_Expr_from_expression(ctx.expression().unwrap().as_ref())
     }
 
     fn bind_Expr_from_expression<'input>(
         &self,
-        ctx: Rc<ExpressionContextAll<'input>>,
+        ctx: &ExpressionContextAll<'input>,
     ) -> Result<Expr> {
-        self.bind_Expr_from_booleanExpression(ctx.booleanExpression().unwrap())
+        self.bind_Expr_from_booleanExpression(ctx.booleanExpression().unwrap().as_ref())
     }
 
     fn bind_Expr_from_booleanExpression<'input>(
         &self,
-        ctx: Rc<BooleanExpressionContextAll<'input>>,
+        ctx: &BooleanExpressionContextAll<'input>,
     ) -> Result<Expr> {
         match &*ctx {
             BooleanExpressionContextAll::PredicatedContext(c) => {
@@ -342,12 +344,12 @@ impl Binder {
                 "not implemented predicate",
             )));
         }
-        self.bind_Expr_from_valueExpression(ctx.valueExpression().unwrap())
+        self.bind_Expr_from_valueExpression(ctx.valueExpression().unwrap().as_ref())
     }
 
     fn bind_Expr_from_valueExpression<'input>(
         &self,
-        ctx: Rc<ValueExpressionContextAll<'input>>,
+        ctx: &ValueExpressionContextAll<'input>,
     ) -> Result<Expr> {
         match &*ctx {
             ValueExpressionContextAll::ValueExpressionDefaultContext(c) => {
@@ -363,12 +365,12 @@ impl Binder {
         &self,
         ctx: &ValueExpressionDefaultContext<'input>,
     ) -> Result<Expr> {
-        self.bind_Expr_from_primaryExpression(ctx.primaryExpression().unwrap())
+        self.bind_Expr_from_primaryExpression(ctx.primaryExpression().unwrap().as_ref())
     }
 
     fn bind_Expr_from_primaryExpression<'input>(
         &self,
-        ctx: Rc<PrimaryExpressionContextAll<'input>>,
+        ctx: &PrimaryExpressionContextAll<'input>,
     ) -> Result<Expr> {
         match &*ctx {
             PrimaryExpressionContextAll::ColumnReferenceContext(c) => {
@@ -390,7 +392,7 @@ impl Binder {
 
     fn bind_LogicalPlan_from_relation<'input>(
         &self,
-        ctx: Rc<RelationContextAll<'input>>,
+        ctx: &RelationContextAll<'input>,
     ) -> Result<LogicalPlan> {
         match &*ctx {
             RelationContextAll::RelationDefaultContext(c) => {
@@ -406,48 +408,56 @@ impl Binder {
         &self,
         ctx: &RelationDefaultContext<'input>,
     ) -> Result<LogicalPlan> {
-        self.bind_LogicalPlan_from_sampledRelation(ctx.sampledRelation().unwrap())
+        self.bind_LogicalPlan_from_sampledRelation(
+            ctx.sampledRelation().unwrap().as_ref(),
+        )
     }
 
     fn bind_LogicalPlan_from_sampledRelation<'input>(
         &self,
-        ctx: Rc<SampledRelationContextAll<'input>>,
+        ctx: &SampledRelationContextAll<'input>,
     ) -> Result<LogicalPlan> {
         if ctx.sampleType().is_some() {
             return Err(DataFusionError::NotImplemented(String::from(
                 "not implemented sampleType",
             )));
         }
-        self.bind_LogicalPlan_from_patternRecognition(ctx.patternRecognition().unwrap())
+        self.bind_LogicalPlan_from_patternRecognition(
+            ctx.patternRecognition().unwrap().as_ref(),
+        )
     }
 
     fn bind_LogicalPlan_from_patternRecognition<'input>(
         &self,
-        ctx: Rc<PatternRecognitionContextAll<'input>>,
+        ctx: &PatternRecognitionContextAll<'input>,
     ) -> Result<LogicalPlan> {
         if ctx.MATCH_RECOGNIZE().is_some() {
             return Err(DataFusionError::NotImplemented(String::from(
                 "not implemented MATCH_RECOGNIZE",
             )));
         }
-        self.bind_LogicalPlan_from_aliasedRelation(ctx.aliasedRelation().unwrap())
+        self.bind_LogicalPlan_from_aliasedRelation(
+            ctx.aliasedRelation().unwrap().as_ref(),
+        )
     }
 
     fn bind_LogicalPlan_from_aliasedRelation<'input>(
         &self,
-        ctx: Rc<AliasedRelationContextAll<'input>>,
+        ctx: &AliasedRelationContextAll<'input>,
     ) -> Result<LogicalPlan> {
         if ctx.identifier().is_some() {
             return Err(DataFusionError::NotImplemented(String::from(
                 "not implemented identifier in aliasedRelation",
             )));
         }
-        self.bind_LogicalPlan_from_relationPrimary(ctx.relationPrimary().unwrap())
+        self.bind_LogicalPlan_from_relationPrimary(
+            ctx.relationPrimary().unwrap().as_ref(),
+        )
     }
 
     fn bind_LogicalPlan_from_relationPrimary<'input>(
         &self,
-        ctx: Rc<RelationPrimaryContextAll<'input>>,
+        ctx: &RelationPrimaryContextAll<'input>,
     ) -> Result<LogicalPlan> {
         match &*ctx {
             RelationPrimaryContextAll::TableNameContext(c) => {
@@ -469,8 +479,9 @@ impl Binder {
             )));
         }
 
-        let table_ref_result = self
-            .bind_OwnedTableReference_from_qualified_name(ctx.qualifiedName().unwrap());
+        let table_ref_result = self.bind_OwnedTableReference_from_qualified_name(
+            ctx.qualifiedName().unwrap().as_ref(),
+        );
         if table_ref_result.is_err() {
             return Err(table_ref_result.unwrap_err());
         }
@@ -488,7 +499,7 @@ impl Binder {
 
     fn bind_OwnedTableReference_from_qualified_name<'input>(
         &self,
-        ctx: Rc<QualifiedNameContextAll<'input>>,
+        ctx: &QualifiedNameContextAll<'input>,
     ) -> Result<OwnedTableReference> {
         let identifiers: Vec<_> = ctx
             .identifier_all()
@@ -513,7 +524,7 @@ impl Binder {
 
     fn bind_str_from_identifier<'input>(
         &self,
-        ctx: &Rc<IdentifierContextAll<'input>>,
+        ctx: &IdentifierContextAll<'input>,
     ) -> String {
         ctx.get_text()
     }
@@ -618,7 +629,7 @@ mod tests {
             TableBindingContext::new(),
         )]));
 
-        let plan = binder.bind_LogicalPlan_from_singleStatement(root).unwrap();
+        let plan = binder.bind_LogicalPlan_from_singleStatement(&root).unwrap();
         let expected = "Projection: PERSON.ID\n  TableScan: PERSON";
         assert_eq!(expected, format!("{plan:?}"));
     }
