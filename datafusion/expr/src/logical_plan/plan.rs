@@ -565,6 +565,9 @@ impl LogicalPlan {
 
     fn collect_subqueries(expr: &Expr, sub: &mut Vec<Arc<LogicalPlan>>) {
         match expr {
+            Expr::Alias(expr, ..) => {
+                Self::collect_subqueries(expr, sub);
+            }
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
                 Self::collect_subqueries(left, sub);
                 Self::collect_subqueries(right, sub);
@@ -1837,7 +1840,7 @@ pub trait ToStringifiedPlan {
 mod tests {
     use super::*;
     use crate::logical_plan::table_scan;
-    use crate::{col, in_subquery, lit};
+    use crate::{col, exists, in_subquery, lit};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::DFSchema;
     use datafusion_common::Result;
@@ -1888,6 +1891,26 @@ mod tests {
         \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";
 
         assert_eq!(expected, format!("{}", plan.display_indent_schema()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_display_subquery_alias() -> Result<()> {
+        let plan1 = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3]))?
+            .build()?;
+        let plan1 = Arc::new(plan1);
+
+        let plan =
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
+                .project(vec![col("id"), exists(plan1).alias("exists")])?
+                .build();
+
+        let expected = "Projection: employee_csv.id, EXISTS (<subquery>) AS exists\
+        \n  Subquery:\
+        \n    TableScan: employee_csv projection=[state]\
+        \n  TableScan: employee_csv projection=[id, state]";
+
+        assert_eq!(expected, format!("{}", plan?.display_indent()));
         Ok(())
     }
 
