@@ -750,7 +750,7 @@ impl OptimizerRule for PushDownFilter {
         };
 
         Ok(Some(
-            utils::optimize_children(self, &new_plan, config)?.unwrap_or(new_plan),
+            optimize_children(self, &new_plan, config)?.unwrap_or(new_plan),
         ))
     }
 }
