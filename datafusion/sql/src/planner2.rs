@@ -11,7 +11,7 @@ use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     TableReference,
 };
-use std::{cell::{RefCell, Cell}, rc::Rc, sync::Arc};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
 trait BindingContext {
     fn resolve_table(&self, _: TableReference) -> Result<Arc<dyn TableSource>> {
@@ -49,15 +49,15 @@ struct BindingContextStack {
 
 impl BindingContextStack {
     fn new(stack: Cell<Vec<Arc<dyn BindingContext>>>) -> Self {
-        BindingContextStack {
-            stack: stack,
-        }
+        BindingContextStack { stack: stack }
     }
 
     fn push(&self, bc: Arc<dyn BindingContext>) -> BindingContextStack {
         let mut new_stack = self.stack.take().clone();
         new_stack.push(bc);
-        BindingContextStack { stack: Cell::new(new_stack) }
+        BindingContextStack {
+            stack: Cell::new(new_stack),
+        }
     }
 }
 
@@ -77,14 +77,12 @@ impl BindingContext for BindingContextStack {
 }
 
 struct Binder {
-    context: RefCell<BindingContextStack>,
+    context: BindingContextStack,
 }
 
 impl Binder {
-    fn new(context: RefCell<BindingContextStack>) -> Self {
-        Binder {
-            context: context,
-        }
+    fn new(context: BindingContextStack) -> Self {
+        Binder { context: context }
     }
 
     fn bind_LogicalPlan_from_singleStatement<'input>(
@@ -244,8 +242,8 @@ impl Binder {
             schema: parent.schema().clone(),
         };
 
-        let new_context = self.context.borrow().push(Arc::new(column_binding_context));
-        let new_binder = Binder::new(RefCell::new(new_context));
+        let new_context = self.context.push(Arc::new(column_binding_context));
+        let new_binder = Binder::new(new_context);
         let items: Vec<_> = ctx
             .querySelectItems()
             .unwrap()
@@ -355,7 +353,6 @@ impl Binder {
         }
         match self
             .context
-            .borrow()
             .resolve_table(table_ref_result.unwrap().as_table_reference())
         {
             Ok(table_source) => {
@@ -401,7 +398,7 @@ impl Binder {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::{RefCell, Cell};
+    use std::cell::Cell;
     use std::rc::Rc;
     use std::result;
     use std::sync::Arc;
@@ -495,8 +492,10 @@ mod tests {
     fn it_works() {
         let tf = ArenaCommonFactory::default();
         let root = parse("SELECT ID FROM PERSON", &tf).unwrap();
-        let binder = Binder::new(RefCell::new(BindingContextStack::new(Cell::new(vec![Arc::new(TableBindingContext::new())]))));
-        
+        let binder = Binder::new(BindingContextStack::new(Cell::new(vec![Arc::new(
+            TableBindingContext::new(),
+        )])));
+
         let plan = binder.bind_LogicalPlan_from_singleStatement(root).unwrap();
         let expected = "Projection: PERSON.ID\n  TableScan: PERSON";
         assert_eq!(expected, format!("{plan:?}"));
