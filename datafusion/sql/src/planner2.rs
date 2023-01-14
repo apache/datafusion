@@ -283,11 +283,107 @@ impl Binder {
         &self,
         ctx: Rc<SelectItemContextAll<'input>>,
     ) -> Result<Expr> {
+        match &*ctx {
+            SelectItemContextAll::SelectSingleContext(c) => {
+                self.bind_Expr_from_selectSingle(c)
+            }
+            _ => Err(DataFusionError::NotImplemented(String::from(
+                "not implemented bind_Expr_from_selectItem",
+            ))),
+        }
+    }
+
+    fn bind_Expr_from_selectSingle<'input>(
+        &self,
+        ctx: &SelectSingleContext<'input>,
+    ) -> Result<Expr> {
+        if ctx.identifier().is_some() {
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented identifer in selectSingle",
+            )));
+        }
+        self.bind_Expr_from_expression(ctx.expression().unwrap())
+    }
+
+    fn bind_Expr_from_expression<'input>(
+        &self,
+        ctx: Rc<ExpressionContextAll<'input>>
+    ) -> Result<Expr> {
+        self.bind_Expr_from_booleanExpression(ctx.booleanExpression().unwrap())
+    }
+
+    fn bind_Expr_from_booleanExpression<'input>(
+        &self,
+        ctx: Rc<BooleanExpressionContextAll<'input>>
+    ) -> Result<Expr> {
+        match &*ctx {
+            BooleanExpressionContextAll::PredicatedContext(c) => {
+                self.bind_Expr_from_predicated(c)
+            }
+            _ => Err(DataFusionError::NotImplemented(String::from(
+                "not implemented bind_Expr_from_booleanExpression",
+            ))),
+        }
+    }
+
+    fn bind_Expr_from_predicated<'input>(
+        &self,
+        ctx: &PredicatedContext<'input>
+    ) -> Result<Expr> {
+        if ctx.predicate().is_some() {
+            return Err(DataFusionError::NotImplemented(String::from(
+                "not implemented predicate",
+            )));
+        }
+        self.bind_Expr_from_valueExpression(ctx.valueExpression().unwrap())
+    }
+
+    fn bind_Expr_from_valueExpression<'input>(
+        &self,
+        ctx: Rc<ValueExpressionContextAll<'input>>,
+    ) -> Result<Expr> {
+        match &*ctx {
+            ValueExpressionContextAll::ValueExpressionDefaultContext(c) => {
+                self.bind_Expr_from_valueExpressionDefault(c)
+            }
+            _ => Err(DataFusionError::NotImplemented(String::from(
+                "not implemented bind_LogicalPlan_from_relation",
+            ))),
+        }
+    }
+
+    fn bind_Expr_from_valueExpressionDefault<'input>(
+        &self,
+        ctx: &ValueExpressionDefaultContext<'input>,
+    ) -> Result<Expr> {
+        self.bind_Expr_from_primaryExpression(ctx.primaryExpression().unwrap())
+    }
+
+    fn bind_Expr_from_primaryExpression<'input>(
+        &self,
+        ctx: Rc<PrimaryExpressionContextAll<'input>>,
+    ) -> Result<Expr> {
+        match &*ctx {
+            PrimaryExpressionContextAll::ColumnReferenceContext(c) => {
+                self.bind_Expr_from_columnReference(c)
+            }
+            _ => Err(DataFusionError::NotImplemented(String::from(
+                "not implemented bind_Expr_from_primaryExpression",
+            ))),
+        }
+    }
+
+    fn bind_Expr_from_columnReference<'input>(
+        &self,
+        ctx: &ColumnReferenceContext<'input>,
+    ) -> Result<Expr> {
+        let name = self.bind_str_from_identifier(&ctx.identifier().unwrap());
         Ok(Expr::Column(Column {
             relation: None,
-            name: String::from("ID"),
-        }))
+            name: name,
+        }))        
     }
+
 
     fn bind_LogicalPlan_from_relation<'input>(
         &self,
