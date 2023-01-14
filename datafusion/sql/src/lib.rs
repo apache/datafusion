@@ -20,7 +20,9 @@
 
 mod expr;
 pub mod parser;
+pub mod parser2;
 pub mod planner;
+pub mod planner2;
 mod query;
 mod relation;
 mod select;
@@ -37,7 +39,6 @@ mod antlr
         pub mod prestoparser;
     }
 }
-pub mod planner2;
 
 pub use datafusion_common::{ResolvedTableReference, TableReference};
 pub use sqlparser;
