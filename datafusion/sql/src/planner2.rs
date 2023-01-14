@@ -8,7 +8,12 @@ use crate::antlr::presto::prestoparser::*;
 use datafusion_common::{
     DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, TableReference,
 };
-use std::{rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    iter,
+    rc::Rc,
+    sync::Arc,
+};
 
 trait BindingContext {
     fn resolve_table(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
@@ -20,12 +25,18 @@ trait BindingContext {
 }
 
 struct BindingContextStack {
-    stack: Vec<Box<dyn BindingContext>>,
+    stack: RefCell<Vec<Box<dyn BindingContext>>>,
+}
+
+impl BindingContextStack {
+    fn push(&self, bc: Box<dyn BindingContext>) {
+        self.stack.borrow_mut().push(bc);
+    }
 }
 
 impl BindingContext for BindingContextStack {
     fn resolve_table(&self, table_ref: TableReference) -> Result<Arc<dyn TableSource>> {
-        for bc in self.stack.iter().rev() {
+        for bc in self.stack.borrow().iter().rev() {
             let result = bc.resolve_table(table_ref);
             if result.is_ok() {
                 return result;
@@ -191,7 +202,6 @@ fn bind_LogicalPlan_from_querySpecification<'input>(
         bind_LogicalPlan_from_relation(bc, ctx.relation(0).unwrap())?
     };
 
-    
     // TODO
     Ok(LogicalPlan::EmptyRelation(EmptyRelation {
         produce_one_row: true,
@@ -332,6 +342,7 @@ fn bind_str_from_identifier<'input>(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::rc::Rc;
     use std::result;
     use std::sync::Arc;
@@ -346,7 +357,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use datafusion_common::Result;
     use datafusion_common::{DataFusionError, TableReference};
-    use datafusion_expr::{TableSource};
+    use datafusion_expr::TableSource;
 
     use super::BindingContext;
 
@@ -420,7 +431,7 @@ mod tests {
         let tf = ArenaCommonFactory::default();
         let root = parse("SELECT A FROM B", &tf).unwrap();
         let bc = Rc::new(BindingContextStack {
-            stack: vec![Box::new(TableBindingContext {})],
+            stack: RefCell::new(vec![Box::new(TableBindingContext {})]),
         });
         let plan = bind_LogicalPlan_from_singleStatement(bc, root).unwrap();
         let expected = "EmptyRelation";
