@@ -85,6 +85,22 @@ impl Binder {
         Binder { context: context }
     }
 
+    fn with<F, T>(&self, context: BindingContextStack, f: F) -> T
+    where
+        F: Fn(&Binder) -> T,
+    {
+        let binder = Binder::new(context);
+        f(&binder)
+    }
+
+    fn with_push<F, T>(&self, context: Arc<dyn BindingContext>, f: F) -> T
+    where
+        F: Fn(&Binder) -> T,
+    {
+        let new_context = self.context.push(context);
+        self.with(new_context, f)
+    }
+
     fn bind_LogicalPlan_from_singleStatement<'input>(
         &self,
         ctx: Rc<SingleStatementContextAll<'input>>,
@@ -238,19 +254,19 @@ impl Binder {
             self.bind_LogicalPlan_from_relation(ctx.relation(0).unwrap())?
         };
 
-        let column_binding_context = ColumnBindingContext {
-            schema: parent.schema().clone(),
-        };
-
-        let new_context = self.context.push(Arc::new(column_binding_context));
-        let new_binder = Binder::new(new_context);
-        let items: Vec<_> = ctx
-            .querySelectItems()
-            .unwrap()
-            .selectItem_all()
-            .iter()
-            .map(|item| new_binder.bind_Expr_from_selectItem(item.clone()).unwrap())
-            .collect();
+        let items: Vec<_> = self.with_push(
+            Arc::new(ColumnBindingContext {
+                schema: parent.schema().clone(),
+            }),
+            |binder| {
+                ctx.querySelectItems()
+                    .unwrap()
+                    .selectItem_all()
+                    .iter()
+                    .map(|item| binder.bind_Expr_from_selectItem(item.clone()).unwrap())
+                    .collect()
+            },
+        );
 
         LogicalPlanBuilder::from(parent).project(items)?.build()
     }
