@@ -11,7 +11,7 @@ use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     TableReference,
 };
-use std::{cell::Cell, rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 trait BindingContext {
     fn resolve_table(&self, _: TableReference) -> Result<Arc<dyn TableSource>> {
@@ -20,7 +20,7 @@ trait BindingContext {
         )))
     }
 
-    fn resolve_column(&self, _: String) -> Result<Expr> {
+    fn resolve_column(&self, _: &str) -> Result<Expr> {
         Err(DataFusionError::NotImplemented(String::from(
             "Not implement resolve_column",
         )))
@@ -32,11 +32,11 @@ struct ColumnBindingContext {
 }
 
 impl BindingContext for ColumnBindingContext {
-    fn resolve_column(&self, name: String) -> Result<Expr> {
-        match self.schema.index_of_column_by_name(None, name.as_str()) {
+    fn resolve_column(&self, name: &str) -> Result<Expr> {
+        match self.schema.index_of_column_by_name(None, name) {
             Ok(_) => Ok(Expr::Column(Column {
                 relation: None,
-                name: name,
+                name: name.to_string(),
             })),
             Err(e) => Err(e),
         }
@@ -44,25 +44,25 @@ impl BindingContext for ColumnBindingContext {
 }
 
 struct BindingContextStack {
-    stack: Cell<Vec<Arc<dyn BindingContext>>>,
+    stack: RefCell<Vec<Arc<dyn BindingContext>>>,
 }
 
 impl BindingContextStack {
-    fn new(stack: Cell<Vec<Arc<dyn BindingContext>>>) -> Self {
+    fn new(stack: RefCell<Vec<Arc<dyn BindingContext>>>) -> Self {
         BindingContextStack { stack: stack }
     }
 
     fn push(&self, bc: Arc<dyn BindingContext>) -> BindingContextStack {
-        let mut new_stack = self.stack.take().clone();
+        let mut new_stack = self.stack.borrow().clone();
         new_stack.push(bc);
-        BindingContextStack::new(Cell::new(new_stack))
+        BindingContextStack::new(RefCell::new(new_stack))
     }
 
     fn resolve<F, T>(&self, f: F) -> Result<T>
     where
         F: Fn(&Arc<dyn BindingContext>) -> Result<T>,
     {
-        for bc in self.stack.take().iter().rev() {
+        for bc in self.stack.borrow().iter().rev() {
             let result = f(bc);
             if result.is_ok() {
                 return result;
@@ -80,6 +80,13 @@ impl BindingContext for BindingContextStack {
                 "No table named: {} found",
                 table_ref.table()
             ))),
+        }
+    }
+
+    fn resolve_column(&self, name: &str) -> Result<Expr> {
+        match self.resolve(|bc| bc.resolve_column(name)) {
+            Ok(result) => Ok(result),
+            Err(_) => Err(DataFusionError::Plan(format!("No column: {} found", name))),
         }
     }
 }
@@ -307,14 +314,14 @@ impl Binder {
 
     fn bind_Expr_from_expression<'input>(
         &self,
-        ctx: Rc<ExpressionContextAll<'input>>
+        ctx: Rc<ExpressionContextAll<'input>>,
     ) -> Result<Expr> {
         self.bind_Expr_from_booleanExpression(ctx.booleanExpression().unwrap())
     }
 
     fn bind_Expr_from_booleanExpression<'input>(
         &self,
-        ctx: Rc<BooleanExpressionContextAll<'input>>
+        ctx: Rc<BooleanExpressionContextAll<'input>>,
     ) -> Result<Expr> {
         match &*ctx {
             BooleanExpressionContextAll::PredicatedContext(c) => {
@@ -328,7 +335,7 @@ impl Binder {
 
     fn bind_Expr_from_predicated<'input>(
         &self,
-        ctx: &PredicatedContext<'input>
+        ctx: &PredicatedContext<'input>,
     ) -> Result<Expr> {
         if ctx.predicate().is_some() {
             return Err(DataFusionError::NotImplemented(String::from(
@@ -378,12 +385,8 @@ impl Binder {
         ctx: &ColumnReferenceContext<'input>,
     ) -> Result<Expr> {
         let name = self.bind_str_from_identifier(&ctx.identifier().unwrap());
-        Ok(Expr::Column(Column {
-            relation: None,
-            name: name,
-        }))        
+        self.context.resolve_column(name.as_str())
     }
-
 
     fn bind_LogicalPlan_from_relation<'input>(
         &self,
@@ -518,7 +521,7 @@ impl Binder {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::RefCell;
     use std::rc::Rc;
     use std::result;
     use std::sync::Arc;
@@ -612,7 +615,7 @@ mod tests {
     fn it_works() {
         let tf = ArenaCommonFactory::default();
         let root = parse("SELECT ID FROM PERSON", &tf).unwrap();
-        let binder = Binder::new(BindingContextStack::new(Cell::new(vec![Arc::new(
+        let binder = Binder::new(BindingContextStack::new(RefCell::new(vec![Arc::new(
             TableBindingContext::new(),
         )])));
 
