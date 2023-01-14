@@ -398,7 +398,7 @@ impl LogicalPlan {
 
     pub fn with_new_inputs(
         &self,
-        inputs: &[LogicalPlan],
+        inputs: impl IntoIterator<Item = LogicalPlan>,
     ) -> Result<LogicalPlan, DataFusionError> {
         from_plan(self, &self.expressions(), inputs)
     }
@@ -612,7 +612,7 @@ impl LogicalPlan {
             new_inputs_with_values.push(input.replace_params_with_values(param_values)?);
         }
 
-        let new_plan = utils::from_plan(self, &new_exprs, &new_inputs_with_values)?;
+        let new_plan = utils::from_plan(self, &new_exprs, new_inputs_with_values)?;
         Ok(new_plan)
     }
 
