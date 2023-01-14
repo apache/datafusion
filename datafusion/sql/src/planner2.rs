@@ -44,18 +44,20 @@ impl BindingContext for ColumnBindingContext {
 }
 
 struct BindingContextStack {
-    stack: RefCell<Vec<Box<dyn BindingContext>>>,
+    stack: RefCell<Vec<Arc<dyn BindingContext>>>,
 }
 
 impl BindingContextStack {
-    fn new() -> Self {
+    fn new(stack: RefCell<Vec<Arc<dyn BindingContext>>>) -> Self {
         BindingContextStack {
-            stack: RefCell::new(vec![]),
+            stack: stack,
         }
     }
 
-    fn push(&self, bc: Box<dyn BindingContext>) {
-        self.stack.borrow_mut().push(bc);
+    fn push(&self, bc: Arc<dyn BindingContext>) -> BindingContextStack {
+        let mut new_stack = self.stack.borrow_mut().clone();
+        new_stack.push(bc);
+        BindingContextStack { stack: RefCell::new(new_stack) }
     }
 }
 
@@ -79,11 +81,12 @@ struct Binder {
 }
 
 impl Binder {
-    fn new() -> Self {
+    fn new(context: RefCell<BindingContextStack>) -> Self {
         Binder {
-            context: RefCell::new(BindingContextStack::new()),
+            context: context,
         }
     }
+
     fn bind_LogicalPlan_from_singleStatement<'input>(
         &self,
         ctx: Rc<SingleStatementContextAll<'input>>,
@@ -241,15 +244,14 @@ impl Binder {
             schema: parent.schema().clone(),
         };
 
-        self.context
-            .borrow_mut()
-            .push(Box::new(column_binding_context));
+        let new_context = self.context.borrow().push(Arc::new(column_binding_context));
+        let new_binder = Binder::new(RefCell::new(new_context));
         let items: Vec<_> = ctx
             .querySelectItems()
             .unwrap()
             .selectItem_all()
             .iter()
-            .map(|item| self.bind_Expr_from_selectItem(item.clone()).unwrap())
+            .map(|item| new_binder.bind_Expr_from_selectItem(item.clone()).unwrap())
             .collect();
 
         LogicalPlanBuilder::from(parent).project(items)?.build()
@@ -493,12 +495,8 @@ mod tests {
     fn it_works() {
         let tf = ArenaCommonFactory::default();
         let root = parse("SELECT ID FROM PERSON", &tf).unwrap();
-        let binder = Binder::new();
-        binder
-            .context
-            .borrow_mut()
-            .push(Box::new(TableBindingContext::new()));
-
+        let binder = Binder::new(RefCell::new(BindingContextStack::new(RefCell::new(vec![Arc::new(TableBindingContext::new())]))));
+        
         let plan = binder.bind_LogicalPlan_from_singleStatement(root).unwrap();
         let expected = "Projection: PERSON.ID\n  TableScan: PERSON";
         assert_eq!(expected, format!("{plan:?}"));
