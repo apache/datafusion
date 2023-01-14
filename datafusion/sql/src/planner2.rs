@@ -11,7 +11,7 @@ use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     TableReference,
 };
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{rc::Rc, sync::Arc};
 
 trait BindingContext {
     fn resolve_table(&self, _: TableReference) -> Result<Arc<dyn TableSource>> {
@@ -44,25 +44,25 @@ impl BindingContext for ColumnBindingContext {
 }
 
 struct BindingContextStack {
-    stack: RefCell<Vec<Arc<dyn BindingContext>>>,
+    stack: Vec<Arc<dyn BindingContext>>,
 }
 
 impl BindingContextStack {
-    fn new(stack: RefCell<Vec<Arc<dyn BindingContext>>>) -> Self {
+    fn new(stack: Vec<Arc<dyn BindingContext>>) -> Self {
         BindingContextStack { stack: stack }
     }
 
     fn push(&self, bc: Arc<dyn BindingContext>) -> BindingContextStack {
-        let mut new_stack = self.stack.borrow().clone();
+        let mut new_stack = self.stack.clone();
         new_stack.push(bc);
-        BindingContextStack::new(RefCell::new(new_stack))
+        BindingContextStack::new(new_stack)
     }
 
     fn resolve<F, T>(&self, f: F) -> Result<T>
     where
         F: Fn(&Arc<dyn BindingContext>) -> Result<T>,
     {
-        for bc in self.stack.borrow().iter().rev() {
+        for bc in self.stack.iter().rev() {
             let result = f(bc);
             if result.is_ok() {
                 return result;
@@ -521,7 +521,6 @@ impl Binder {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::rc::Rc;
     use std::result;
     use std::sync::Arc;
@@ -615,9 +614,9 @@ mod tests {
     fn it_works() {
         let tf = ArenaCommonFactory::default();
         let root = parse("SELECT ID FROM PERSON", &tf).unwrap();
-        let binder = Binder::new(BindingContextStack::new(RefCell::new(vec![Arc::new(
+        let binder = Binder::new(BindingContextStack::new(vec![Arc::new(
             TableBindingContext::new(),
-        )])));
+        )]));
 
         let plan = binder.bind_LogicalPlan_from_singleStatement(root).unwrap();
         let expected = "Projection: PERSON.ID\n  TableScan: PERSON";
