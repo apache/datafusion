@@ -55,24 +55,32 @@ impl BindingContextStack {
     fn push(&self, bc: Arc<dyn BindingContext>) -> BindingContextStack {
         let mut new_stack = self.stack.take().clone();
         new_stack.push(bc);
-        BindingContextStack {
-            stack: Cell::new(new_stack),
+        BindingContextStack::new(Cell::new(new_stack))
+    }
+
+    fn resolve<F, T>(&self, f: F) -> Result<T>
+    where
+        F: Fn(&Arc<dyn BindingContext>) -> Result<T>,
+    {
+        for bc in self.stack.take().iter().rev() {
+            let result = f(bc);
+            if result.is_ok() {
+                return result;
+            }
         }
+        Err(DataFusionError::Internal(String::from("not resolved")))
     }
 }
 
 impl BindingContext for BindingContextStack {
     fn resolve_table(&self, table_ref: TableReference) -> Result<Arc<dyn TableSource>> {
-        for bc in self.stack.take().iter().rev() {
-            let result = bc.resolve_table(table_ref);
-            if result.is_ok() {
-                return result;
-            }
+        match self.resolve(|bc| bc.resolve_table(table_ref)) {
+            Ok(result) => Ok(result),
+            Err(_) => Err(DataFusionError::Plan(format!(
+                "No table named: {} found",
+                table_ref.table()
+            ))),
         }
-        Err(DataFusionError::Plan(format!(
-            "No table named: {} found",
-            table_ref.table()
-        )))
     }
 }
 
