@@ -14,7 +14,7 @@ use datafusion_common::{
 use std::sync::Arc;
 
 trait BindingContext {
-    fn resolve_table(&self, _: TableReference) -> Result<Arc<dyn TableSource>> {
+    fn resolve_table(&self, _: &TableReference) -> Result<Arc<dyn TableSource>> {
         Err(DataFusionError::NotImplemented(String::from(
             "Not implement resolve_table",
         )))
@@ -73,7 +73,7 @@ impl BindingContextStack {
 }
 
 impl BindingContext for BindingContextStack {
-    fn resolve_table(&self, table_ref: TableReference) -> Result<Arc<dyn TableSource>> {
+    fn resolve_table(&self, table_ref: &TableReference) -> Result<Arc<dyn TableSource>> {
         match self.resolve(|bc| bc.resolve_table(table_ref)) {
             Ok(result) => Ok(result),
             Err(_) => Err(DataFusionError::Plan(format!(
@@ -485,13 +485,11 @@ impl Binder {
         if table_ref_result.is_err() {
             return Err(table_ref_result.unwrap_err());
         }
-        match self
-            .context
-            .resolve_table(table_ref_result.unwrap().as_table_reference())
-        {
+        let owned_table_ref = table_ref_result.unwrap();
+        let table_ref = owned_table_ref.as_table_reference();
+        match self.context.resolve_table(&table_ref) {
             Ok(table_source) => {
-                LogicalPlanBuilder::scan(String::from("person"), table_source, None)?
-                    .build()
+                LogicalPlanBuilder::scan(table_ref.table(), table_source, None)?.build()
             }
             Err(e) => Err(e),
         }
@@ -718,7 +716,7 @@ mod tests {
     }
 
     impl BindingContext for TableBindingContext {
-        fn resolve_table(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+        fn resolve_table(&self, name: &TableReference) -> Result<Arc<dyn TableSource>> {
             let schema = match name.table() {
                 "person" => Ok(Schema::new(vec![
                     Field::new("id", DataType::UInt32, false),
