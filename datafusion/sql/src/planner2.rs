@@ -1,19 +1,21 @@
 #![allow(non_snake_case)]
+#![allow(dead_code)]
 
-use datafusion_expr::{EmptyRelation, LogicalPlan, TableSource};
+use antlr_rust::tree::ParseTree;
+use datafusion_expr::{EmptyRelation, LogicalPlan, LogicalPlanBuilder, TableSource};
 
 use crate::antlr::presto::prestoparser::*;
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, TableReference};
-use std::{rc::Rc, result, sync::Arc};
-
-struct NotAbleToResolve;
+use datafusion_common::{
+    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, TableReference,
+};
+use std::{rc::Rc, sync::Arc};
 
 trait BindingContext {
-    fn resolve_table(
-        &self,
-        _: TableReference,
-    ) -> result::Result<Arc<dyn TableSource>, NotAbleToResolve> {
-        Err(NotAbleToResolve {})
+    fn resolve_table(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
+        Err(DataFusionError::Plan(format!(
+            "No table named: {} found",
+            name.table()
+        )))
     }
 }
 
@@ -21,15 +23,30 @@ struct BindingContextStack {
     stack: Vec<Box<dyn BindingContext>>,
 }
 
+impl BindingContext for BindingContextStack {
+    fn resolve_table(&self, table_ref: TableReference) -> Result<Arc<dyn TableSource>> {
+        for bc in self.stack.iter().rev() {
+            let result = bc.resolve_table(table_ref);
+            if result.is_ok() {
+                return result;
+            }
+        }
+        Err(DataFusionError::Plan(format!(
+            "No table named: {} found",
+            table_ref.table()
+        )))
+    }
+}
+
 fn bind_LogicalPlan_from_singleStatement<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: Rc<SingleStatementContextAll<'input>>,
 ) -> Result<LogicalPlan> {
     bind_LogicalPlan_from_statement(bc, ctx.statement().unwrap())
 }
 
 fn bind_LogicalPlan_from_statement<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: Rc<StatementContextAll<'input>>,
 ) -> Result<LogicalPlan> {
     match &*ctx {
@@ -44,14 +61,14 @@ fn bind_LogicalPlan_from_statement<'input>(
 }
 
 fn bind_LogicalPlan_from_statementDefault<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: &StatementDefaultContext<'input>,
 ) -> Result<LogicalPlan> {
     bind_LogicalPlan_from_query(bc, ctx.query().unwrap())
 }
 
 fn bind_LogicalPlan_from_query<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: Rc<QueryContextAll<'input>>,
 ) -> Result<LogicalPlan> {
     if ctx.with().is_some() {
@@ -63,7 +80,7 @@ fn bind_LogicalPlan_from_query<'input>(
 }
 
 fn bind_LogicalPlan_from_queryNoWith<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: Rc<QueryNoWithContextAll<'input>>,
 ) -> Result<LogicalPlan> {
     if ctx.sortItem_all().len() > 0 {
@@ -90,7 +107,7 @@ fn bind_LogicalPlan_from_queryNoWith<'input>(
 }
 
 fn bind_LogicalPlan_from_queryTerm<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: Rc<QueryTermContextAll<'input>>,
 ) -> Result<LogicalPlan> {
     match &*ctx {
@@ -104,14 +121,14 @@ fn bind_LogicalPlan_from_queryTerm<'input>(
 }
 
 fn bind_LogicalPlan_from_queryTermDefault<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: &QueryTermDefaultContext<'input>,
 ) -> Result<LogicalPlan> {
     bind_LogicalPlan_from_queryPrimary(bc, ctx.queryPrimary().unwrap())
 }
 
 fn bind_LogicalPlan_from_queryPrimary<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: Rc<QueryPrimaryContextAll<'input>>,
 ) -> Result<LogicalPlan> {
     match &*ctx {
@@ -125,14 +142,14 @@ fn bind_LogicalPlan_from_queryPrimary<'input>(
 }
 
 fn bind_LogicalPlan_from_queryPrimaryDefault<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: &QueryPrimaryDefaultContext<'input>,
 ) -> Result<LogicalPlan> {
     bind_LogicalPlan_from_querySpecification(bc, ctx.querySpecification().unwrap())
 }
 
 fn bind_LogicalPlan_from_querySpecification<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: Rc<QuerySpecificationContextAll<'input>>,
 ) -> Result<LogicalPlan> {
     if ctx.setQuantifier().is_some() {
@@ -174,6 +191,7 @@ fn bind_LogicalPlan_from_querySpecification<'input>(
         bind_LogicalPlan_from_relation(bc, ctx.relation(0).unwrap())?
     };
 
+    
     // TODO
     Ok(LogicalPlan::EmptyRelation(EmptyRelation {
         produce_one_row: true,
@@ -182,7 +200,7 @@ fn bind_LogicalPlan_from_querySpecification<'input>(
 }
 
 fn bind_LogicalPlan_from_relation<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: Rc<RelationContextAll<'input>>,
 ) -> Result<LogicalPlan> {
     match &*ctx {
@@ -196,14 +214,14 @@ fn bind_LogicalPlan_from_relation<'input>(
 }
 
 fn bind_LogicalPlan_from_relationDefault<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: &RelationDefaultContext<'input>,
 ) -> Result<LogicalPlan> {
     bind_LogicalPlan_from_sampledRelation(bc, ctx.sampledRelation().unwrap())
 }
 
 fn bind_LogicalPlan_from_sampledRelation<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: Rc<SampledRelationContextAll<'input>>,
 ) -> Result<LogicalPlan> {
     if ctx.sampleType().is_some() {
@@ -215,7 +233,7 @@ fn bind_LogicalPlan_from_sampledRelation<'input>(
 }
 
 fn bind_LogicalPlan_from_patternRecognition<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: Rc<PatternRecognitionContextAll<'input>>,
 ) -> Result<LogicalPlan> {
     if ctx.MATCH_RECOGNIZE().is_some() {
@@ -227,7 +245,7 @@ fn bind_LogicalPlan_from_patternRecognition<'input>(
 }
 
 fn bind_LogicalPlan_from_aliasedRelation<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: Rc<AliasedRelationContextAll<'input>>,
 ) -> Result<LogicalPlan> {
     if ctx.identifier().is_some() {
@@ -239,7 +257,7 @@ fn bind_LogicalPlan_from_aliasedRelation<'input>(
 }
 
 fn bind_LogicalPlan_from_relationPrimary<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: Rc<RelationPrimaryContextAll<'input>>,
 ) -> Result<LogicalPlan> {
     match &*ctx {
@@ -253,7 +271,7 @@ fn bind_LogicalPlan_from_relationPrimary<'input>(
 }
 
 fn bind_LogicalPlan_from_tableName<'input>(
-    bc: BindingContextStack,
+    bc: Rc<BindingContextStack>,
     ctx: &TableNameContext<'input>,
 ) -> Result<LogicalPlan> {
     if ctx.queryPeriod().is_some() {
@@ -262,10 +280,54 @@ fn bind_LogicalPlan_from_tableName<'input>(
         )));
     }
 
-    Ok(LogicalPlan::EmptyRelation(EmptyRelation {
-        produce_one_row: true,
-        schema: DFSchemaRef::new(DFSchema::empty()),
-    }))
+    let table_ref_result = bind_OwnedTableReference_from_qualified_name(
+        bc.clone(),
+        ctx.qualifiedName().unwrap(),
+    );
+    if table_ref_result.is_err() {
+        return Err(table_ref_result.unwrap_err());
+    }
+    match bc
+        .clone()
+        .resolve_table(table_ref_result.unwrap().as_table_reference())
+    {
+        Ok(table_source) => {
+            LogicalPlanBuilder::scan(&String::from("B"), table_source, None)?.build()
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn bind_OwnedTableReference_from_qualified_name<'input>(
+    bc: Rc<BindingContextStack>,
+    ctx: Rc<QualifiedNameContextAll<'input>>,
+) -> Result<OwnedTableReference> {
+    let identifiers: Vec<_> = ctx
+        .identifier_all()
+        .iter()
+        .map(|i| bind_str_from_identifier(bc.clone(), i))
+        .collect();
+    if identifiers.len() == 1 {
+        Ok(OwnedTableReference::Bare {
+            table: identifiers[0].clone(),
+        })
+    } else if identifiers.len() == 2 {
+        Ok(OwnedTableReference::Partial {
+            schema: identifiers[0].clone(),
+            table: identifiers[1].clone(),
+        })
+    } else {
+        Err(DataFusionError::Plan(
+            "Cannot bind TableReference".to_owned(),
+        ))
+    }
+}
+
+fn bind_str_from_identifier<'input>(
+    _: Rc<BindingContextStack>,
+    ctx: &Rc<IdentifierContextAll<'input>>,
+) -> String {
+    ctx.get_text()
 }
 
 #[cfg(test)]
@@ -282,15 +344,16 @@ mod tests {
     use antlr_rust::input_stream::InputStream;
     use antlr_rust::token_factory::ArenaCommonFactory;
     use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
-    use datafusion_common::TableReference;
-    use datafusion_expr::{LogicalPlan, TableSource};
+    use datafusion_common::Result;
+    use datafusion_common::{DataFusionError, TableReference};
+    use datafusion_expr::{TableSource};
 
-    use super::{BindingContext, NotAbleToResolve};
+    use super::BindingContext;
 
     fn parse<'input>(
         sql: &'input str,
         tf: &'input ArenaCommonFactory<'input>,
-    ) -> Result<Rc<SingleStatementContextAll<'input>>, ANTLRError> {
+    ) -> result::Result<Rc<SingleStatementContextAll<'input>>, ANTLRError> {
         println!("test started");
 
         let mut _lexer: PrestoLexer<'input, InputStream<&'input str>> =
@@ -324,10 +387,7 @@ mod tests {
     struct TableBindingContext;
 
     impl BindingContext for TableBindingContext {
-        fn resolve_table(
-            &self,
-            name: TableReference,
-        ) -> result::Result<Arc<dyn TableSource>, NotAbleToResolve> {
+        fn resolve_table(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
             let schema = match name.table() {
                 "person" => Ok(Schema::new(vec![
                     Field::new("id", DataType::UInt32, false),
@@ -343,7 +403,10 @@ mod tests {
                     ),
                     Field::new("😀", DataType::Int32, false),
                 ])),
-                _ => Err(NotAbleToResolve),
+                _ => Err(DataFusionError::Plan(format!(
+                    "No table named: {} found",
+                    name.table()
+                ))),
             };
 
             match schema {
@@ -356,9 +419,9 @@ mod tests {
     fn it_works() {
         let tf = ArenaCommonFactory::default();
         let root = parse("SELECT A FROM B", &tf).unwrap();
-        let bc = BindingContextStack {
+        let bc = Rc::new(BindingContextStack {
             stack: vec![Box::new(TableBindingContext {})],
-        };
+        });
         let plan = bind_LogicalPlan_from_singleStatement(bc, root).unwrap();
         let expected = "EmptyRelation";
         assert_eq!(expected, format!("{plan:?}"));
