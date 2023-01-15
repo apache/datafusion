@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::expr_rewriter::{ExprRewritable, ExprRewriter};
-use crate::expr_visitor::walk_expr_down;
+use crate::expr_visitor::inspect_expr_pre;
 ///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
@@ -573,7 +573,7 @@ impl LogicalPlan {
     {
         self.inspect_expressions(|expr| {
             // recursively look for subqueries
-            walk_expr_down(expr, |expr| {
+            inspect_expr_pre(expr, |expr| {
                 match expr {
                     Expr::Exists { subquery, .. }
                     | Expr::InSubquery { subquery, .. }
@@ -1209,7 +1209,8 @@ pub struct DropView {
     pub schema: DFSchemaRef,
 }
 
-/// Set a Variable's value -- value in [`ConfigOptions`]
+/// Set a Variable's value -- value in
+/// [`ConfigOptions`](datafusion_common::config::ConfigOptions)
 #[derive(Clone)]
 pub struct SetVariable {
     /// The variable name
