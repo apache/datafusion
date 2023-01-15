@@ -261,25 +261,90 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } => self.show_columns_to_plan(extended, full, table_name, filter),
 
             Statement::Insert {
+                or,
+                into,
                 table_name,
                 columns,
+                overwrite,
                 source,
-                ..
-            } => self.insert_to_plan(table_name, columns, source),
+                partitioned,
+                after_columns,
+                table,
+                on,
+                returning,
+            } => {
+                if or.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Inserts with or clauses not supported".to_owned(),
+                    ))?;
+                }
+                if overwrite {
+                    Err(DataFusionError::Plan(
+                        "Insert overwrite is not supported".to_owned(),
+                    ))?;
+                }
+                if partitioned.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Partitioned inserts not yet supported".to_owned(),
+                    ))?;
+                }
+                if !after_columns.is_empty() {
+                    Err(DataFusionError::Plan(
+                        "After-columns clause not supported".to_owned(),
+                    ))?;
+                }
+                if table {
+                    Err(DataFusionError::Plan(
+                        "Table clause not supported".to_owned(),
+                    ))?;
+                }
+                if on.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Insert-on clause not supported".to_owned(),
+                    ))?;
+                }
+                if returning.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Insert-returning clause not yet supported".to_owned(),
+                    ))?;
+                }
+                let _ = into; // optional keyword doesn't change behavior
+                self.insert_to_plan(table_name, columns, source)
+            }
 
             Statement::Update {
                 table,
                 assignments,
                 from,
                 selection,
-                ..
-            } => self.update_to_plan(table, assignments, from, selection),
+                returning,
+            } => {
+                if returning.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Update-returning clause not yet supported".to_owned(),
+                    ))?;
+                }
+                self.update_to_plan(table, assignments, from, selection)
+            }
 
             Statement::Delete {
                 table_name,
+                using,
                 selection,
-                ..
-            } => self.delete_to_plan(table_name, selection),
+                returning,
+            } => {
+                if using.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Using clause not supported".to_owned(),
+                    ))?;
+                }
+                if returning.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Delete-returning clause not yet supported".to_owned(),
+                    ))?;
+                }
+                self.delete_to_plan(table_name, selection)
+            }
 
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL statement: {sql:?}"
