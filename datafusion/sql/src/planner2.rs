@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)]
 
-use antlr_rust::tree::ParseTree;
+use antlr_rust::{parser_rule_context::ParserRuleContext, tree::ParseTree};
 use datafusion_expr::{
     EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, TableSource,
 };
@@ -11,16 +11,20 @@ use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     TableReference,
 };
-use std::sync::Arc;
+use std::{result, sync::Arc};
 
 trait BindingContext {
-    fn resolve_table(&self, _: &TableReference) -> Result<Arc<dyn TableSource>> {
+    fn resolve_table(
+        &self,
+        _: &CodeLocation,
+        _: &TableReference,
+    ) -> Result<Arc<dyn TableSource>> {
         Err(DataFusionError::NotImplemented(String::from(
             "Not implement resolve_table",
         )))
     }
 
-    fn resolve_column(&self, _: &str) -> Result<Expr> {
+    fn resolve_column(&self, _: &CodeLocation, _: &str) -> Result<Expr> {
         Err(DataFusionError::NotImplemented(String::from(
             "Not implement resolve_column",
         )))
@@ -32,7 +36,7 @@ struct ColumnBindingContext {
 }
 
 impl BindingContext for ColumnBindingContext {
-    fn resolve_column(&self, name: &str) -> Result<Expr> {
+    fn resolve_column(&self, _: &CodeLocation, name: &str) -> Result<Expr> {
         match self.schema.index_of_column_by_name(None, name) {
             Ok(_) => Ok(Expr::Column(Column {
                 relation: None,
@@ -73,21 +77,41 @@ impl BindingContextStack {
 }
 
 impl BindingContext for BindingContextStack {
-    fn resolve_table(&self, table_ref: &TableReference) -> Result<Arc<dyn TableSource>> {
-        match self.resolve(|bc| bc.resolve_table(table_ref)) {
+    fn resolve_table(
+        &self,
+        location: &CodeLocation,
+        table_ref: &TableReference,
+    ) -> Result<Arc<dyn TableSource>> {
+        match self.resolve(|bc| bc.resolve_table(location, table_ref)) {
             Ok(result) => Ok(result),
             Err(_) => Err(DataFusionError::Plan(format!(
-                "No table named: {} found",
+                "({},{}) No table named: {} found",
+                location.row,
+                location.col,
                 table_ref.table()
             ))),
         }
     }
 
-    fn resolve_column(&self, name: &str) -> Result<Expr> {
-        match self.resolve(|bc| bc.resolve_column(name)) {
+    fn resolve_column(&self, location: &CodeLocation, name: &str) -> Result<Expr> {
+        match self.resolve(|bc| bc.resolve_column(location, name)) {
             Ok(result) => Ok(result),
-            Err(_) => Err(DataFusionError::Plan(format!("No column: {} found", name))),
+            Err(_) => Err(DataFusionError::Plan(format!(
+                "({},{}) No column: {} found",
+                location.row, location.col, name
+            ))),
         }
+    }
+}
+
+struct CodeLocation {
+    row: isize,
+    col: isize,
+}
+
+impl CodeLocation {
+    fn new(row: isize, col: isize) -> Self {
+        CodeLocation { row: row, col: col }
     }
 }
 
@@ -271,7 +295,7 @@ impl Binder {
             self.bind_LogicalPlan_from_relation(ctx.relation(0).unwrap().as_ref())?
         };
 
-        let items: Vec<_> = self.with_push(
+        match self.with_push(
             Arc::new(ColumnBindingContext {
                 schema: parent.schema().clone(),
             }),
@@ -280,12 +304,13 @@ impl Binder {
                     .unwrap()
                     .selectItem_all()
                     .iter()
-                    .map(|item| binder.bind_Expr_from_selectItem(item).unwrap())
-                    .collect()
+                    .map(|item| binder.bind_Expr_from_selectItem(item))
+                    .collect::<result::Result<Vec<_>, _>>()
             },
-        );
-
-        LogicalPlanBuilder::from(parent).project(items)?.build()
+        ) {
+            Ok(items) => LogicalPlanBuilder::from(parent).project(items)?.build(),
+            Err(e) => Err(e),
+        }
     }
 
     fn bind_Expr_from_selectItem<'input>(
@@ -387,7 +412,10 @@ impl Binder {
         ctx: &ColumnReferenceContext<'input>,
     ) -> Result<Expr> {
         let name = self.bind_str_from_identifier(&ctx.identifier().unwrap());
-        self.context.resolve_column(name.as_str())
+        self.context.resolve_column(
+            &CodeLocation::new(ctx.start().line, ctx.start().column),
+            name.as_str(),
+        )
     }
 
     fn bind_LogicalPlan_from_relation<'input>(
@@ -487,7 +515,10 @@ impl Binder {
         }
         let owned_table_ref = table_ref_result.unwrap();
         let table_ref = owned_table_ref.as_table_reference();
-        match self.context.resolve_table(&table_ref) {
+        match self.context.resolve_table(
+            &CodeLocation::new(ctx.start().line, ctx.start().column),
+            &table_ref,
+        ) {
             Ok(table_source) => {
                 LogicalPlanBuilder::scan(table_ref.table(), table_source, None)?.build()
             }
@@ -540,7 +571,7 @@ mod tests {
     use datafusion_common::{DataFusionError, TableReference};
     use datafusion_expr::TableSource;
 
-    use super::BindingContext;
+    use super::{BindingContext, CodeLocation};
 
     struct EmptyTable {
         table_schema: SchemaRef,
@@ -571,7 +602,11 @@ mod tests {
     }
 
     impl BindingContext for TableBindingContext {
-        fn resolve_table(&self, name: &TableReference) -> Result<Arc<dyn TableSource>> {
+        fn resolve_table(
+            &self,
+            _: &CodeLocation,
+            name: &TableReference,
+        ) -> Result<Arc<dyn TableSource>> {
             let schema = match name.table() {
                 "person" => Ok(Schema::new(vec![
                     Field::new("id", DataType::UInt32, false),
@@ -587,10 +622,7 @@ mod tests {
                     ),
                     Field::new("😀", DataType::Int32, false),
                 ])),
-                _ => Err(DataFusionError::Plan(format!(
-                    "No table named: {} found",
-                    name.table()
-                ))),
+                _ => Err(DataFusionError::Internal(String::from("not resolved"))),
             };
 
             match schema {
@@ -600,7 +632,7 @@ mod tests {
         }
     }
     #[test]
-    fn it_works() {
+    fn simple_select() {
         let tf = ArenaCommonFactory::default();
         let root = parse("SELECT id FROM person", &tf).unwrap();
         let binder = Binder::new(BindingContextStack::new(vec![Arc::new(
@@ -610,5 +642,35 @@ mod tests {
         let plan = binder.bind_LogicalPlan_from_singleStatement(&root).unwrap();
         let expected = "Projection: person.id\n  TableScan: person";
         assert_eq!(expected, format!("{plan:?}"));
+    }
+
+    #[test]
+    fn bad_table_name() {
+        let tf = ArenaCommonFactory::default();
+        let root = parse("SELECT id FROM person1", &tf).unwrap();
+        let binder = Binder::new(BindingContextStack::new(vec![Arc::new(
+            TableBindingContext::new(),
+        )]));
+
+        let err = binder
+            .bind_LogicalPlan_from_singleStatement(&root)
+            .unwrap_err();
+        let expected = "Plan(\"(1,15) No table named: person1 found\")";
+        assert_eq!(expected, format!("{err:?}"));
+    }
+
+    #[test]
+    fn bad_column_name() {
+        let tf = ArenaCommonFactory::default();
+        let root = parse("SELECT id1 FROM person", &tf).unwrap();
+        let binder = Binder::new(BindingContextStack::new(vec![Arc::new(
+            TableBindingContext::new(),
+        )]));
+
+        let err = binder
+            .bind_LogicalPlan_from_singleStatement(&root)
+            .unwrap_err();
+        let expected = "Plan(\"(1,7) No column: id1 found\")";
+        assert_eq!(expected, format!("{err:?}"));
     }
 }
