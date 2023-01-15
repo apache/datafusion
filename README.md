@@ -70,7 +70,7 @@ execution plans, file format support, etc.
 
 ## Why DataFusion?
 
-- _High Performance_: Leveraging Rust and Arrow's memory model, DataFusion achieves very high performance
+- _High Performance_: Leveraging Rust and Arrow's memory model, DataFusion is very fast.
 - _Easy to Connect_: Being part of the Apache Arrow ecosystem (Arrow, Parquet and Flight), DataFusion works well with the rest of the big data ecosystem
 - _Easy to Embed_: Allowing extension at almost any point in its design, DataFusion can be tailored for your specific use case
 - _High Quality_: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can be used as the foundation for production systems.
