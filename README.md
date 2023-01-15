@@ -86,15 +86,21 @@ when DataFusion might be be suitable and unsuitable for your needs:
   is primarily used directly by users as a serverless database and query system rather
   than as a library for building such database systems.
 
-- [pola.rs](http://pola.rs): Polars is one of the fastest DataFrame libraries at the time
-  of writing. Like DataFusion, it is also written in Rust but unlike DataFusion
-  it does not provide SQL nor many extension points.
+- [pola.rs](http://pola.rs): Polars is one of the fastest DataFrame
+  libraries at the time of writing. Like DataFusion, it is also
+  written in Rust and uses the Apache Arrow memory model, but unlike
+  DataFusion it does not provide SQL nor as many extension points.
 
 - [Facebook Velox](https://engineering.fb.com/2022/08/31/open-source/velox/)
   is an execution engine. Like DataFusion, Velox aims to
   provide a reusable foundation for building database-like systems. Unlike DataFusion,
   it is written in C/C++ and does not include a SQL frontend or planning /optimization
   framework.
+
+- [DataBend](https://github.com/datafuselabs/databend) is a complete,
+  database system. Like DataFusion it is also written in Rust and
+  utilizes the Apache Arrow memory model, but unlike DataFusion it
+  targets end-users rather than developers of other database systems.
 
 ## DataFusion Community Extensions
 
