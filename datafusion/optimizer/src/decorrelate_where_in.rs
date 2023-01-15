@@ -97,6 +97,7 @@ impl OptimizerRule for DecorrelateWhereIn {
                 }
 
                 // iterate through all exists clauses in predicate, turning each into a join
+                // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = filter.input.as_ref().clone();
                 for subquery in subqueries {
                     cur_input = optimize_where_in(
@@ -212,6 +213,7 @@ fn optimize_where_in(
         (Vec::<Column>::new(), Vec::<Column>::new()),
         Some(join_filter),
     )?;
+
     if let Some(expr) = conjunction(outer_other_exprs.to_vec()) {
         new_plan = new_plan.filter(expr)? // if the main query had additional expressions, restore them
     }
@@ -1125,6 +1127,55 @@ mod tests {
         \n      Projection: sq.c * UInt32(2) AS c * UInt32(2), sq.a, sq.b [c * UInt32(2):UInt32, a:UInt32, b:UInt32]\
         \n        Filter: sq.a + UInt32(1) = sq.b [a:UInt32, b:UInt32, c:UInt32]\
         \n          TableScan: sq [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereIn::new()),
+            &plan,
+            expected,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn two_in_subquery_with_outer_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let subquery_scan1 = test_table_scan_with_name("sq1")?;
+        let subquery_scan2 = test_table_scan_with_name("sq2")?;
+
+        let subquery1 = LogicalPlanBuilder::from(subquery_scan1)
+            .filter(col("test.a").gt(col("sq1.a")))?
+            .project(vec![col("c") * lit(2u32)])?
+            .build()?;
+
+        let subquery2 = LogicalPlanBuilder::from(subquery_scan2)
+            .filter(col("test.a").gt(col("sq2.a")))?
+            .project(vec![col("c") * lit(2u32)])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(
+                in_subquery(col("c") + lit(1u32), Arc::new(subquery1)).and(
+                    in_subquery(col("c") * lit(2u32), Arc::new(subquery2))
+                        .and(col("test.c").gt(lit(1u32))),
+                ),
+            )?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        // Filter: test.c > UInt32(1) happen twice.
+        // issue: https://github.com/apache/arrow-datafusion/issues/4914
+        let expected = "Projection: test.b [b:UInt32]\
+        \n  Filter: test.c > UInt32(1) [a:UInt32, b:UInt32, c:UInt32]\
+        \n    LeftSemi Join:  Filter: test.c * UInt32(2) = __correlated_sq_2.c * UInt32(2) AND test.a > __correlated_sq_2.a [a:UInt32, b:UInt32, c:UInt32]\
+        \n      Filter: test.c > UInt32(1) [a:UInt32, b:UInt32, c:UInt32]\
+        \n        LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.c * UInt32(2) AND test.a > __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]\
+        \n          TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n          SubqueryAlias: __correlated_sq_1 [c * UInt32(2):UInt32, a:UInt32]\
+        \n            Projection: sq1.c * UInt32(2) AS c * UInt32(2), sq1.a [c * UInt32(2):UInt32, a:UInt32]\
+        \n              TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]\
+        \n      SubqueryAlias: __correlated_sq_2 [c * UInt32(2):UInt32, a:UInt32]\
+        \n        Projection: sq2.c * UInt32(2) AS c * UInt32(2), sq2.a [c * UInt32(2):UInt32, a:UInt32]\
+        \n          TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq_display_indent(
             Arc::new(DecorrelateWhereIn::new()),
