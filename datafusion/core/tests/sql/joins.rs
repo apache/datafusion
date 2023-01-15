@@ -3143,4 +3143,3 @@ async fn two_in_subquery_to_join_with_outer_filter() -> Result<()> {
 
     Ok(())
 }
-
