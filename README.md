@@ -21,17 +21,17 @@
 
 <img src="docs/source/_static/images/DataFusion-Logo-Background-White.svg" width="256" alt="logo"/>
 
-DataFusion is very fast, extensible query engine, for building high quality data centric systems in
+DataFusion is a very fast, extensible query engine for building high-quality data-centric systems in
 [Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org)
 in-memory format.
 
-DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built in support for CSV, Parquet Json, and Avro, extensive customization, and a great community.
+DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet JSON, and Avro, extensive customization, and a great community.
 
 [![Coverage Status](https://codecov.io/gh/apache/arrow-datafusion/rust/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/arrow-datafusion?branch=master)
 
 ## Features
 
-- Feature rich [SQL support](https://arrow.apache.org/datafusion/user-guide/sql/index.html) and [DataFrame API](https://arrow.apache.org/datafusion/user-guide/dataframe.html)
+- Feature-rich [SQL support](https://arrow.apache.org/datafusion/user-guide/sql/index.html) and [DataFrame API](https://arrow.apache.org/datafusion/user-guide/dataframe.html)
 - Blazingly fast, vectorized, multi-threaded, streaming execution engine.
 - Native support for Parquet, CSV, JSON, and Avro file formats. Support
   for custom file formats and non file datasources via the `TableProvider` trait.
@@ -46,7 +46,7 @@ DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchm
   automatic join reordering, expression coercion, and more.
 - Permissive Apache 2.0 License, Apache Software Foundation governance
 - Written in [Rust](https://www.rust-lang.org/), a modern system language with development
-  producticity similar to Java or golang, the performance of C++, and
+  productivity similar to Java or Golang, the performance of C++, and
   [loved by programmers everywhere](https://insights.stackoverflow.com/survey/2021#technology-most-loved-dreaded-and-wanted).
 
 ## Use Cases
