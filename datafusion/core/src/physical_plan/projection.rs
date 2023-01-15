@@ -328,7 +328,7 @@ impl ProjectionStream {
             .map(|r| r.map(|v| v.into_array(batch.num_rows())))
             .collect::<Result<Vec<_>>>()?;
 
-        if arrays.len() == 0 {
+        if arrays.is_empty() {
             let options =
                 RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
             RecordBatch::try_new_with_options(self.schema.clone(), arrays, &options)
