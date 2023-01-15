@@ -30,7 +30,7 @@ documentation:
 
 sql:
   - datafusion/sql/**/*
-  
+
 logical-expr:
   - datafusion/expr/**/*
 
@@ -43,6 +43,8 @@ optimizer:
 core:
   - datafusion/core/**/*
 
+substrait:
+  - datafusion/substrait/**/*
+
 sqllogictest:
   - datafusion/core/tests/sqllogictests/**/*
-
