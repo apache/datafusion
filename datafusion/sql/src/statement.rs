@@ -541,7 +541,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let table_name = match &table_factor {
             TableFactor::Table { name, .. } => name.clone(),
             _ => Err(DataFusionError::Plan(
-                "Unsupported table type for delete!".to_string(),
+                "Cannot delete from non-table relations!".to_string(),
             ))?,
         };
 
