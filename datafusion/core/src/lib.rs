@@ -37,7 +37,7 @@
 //! let ctx = SessionContext::new();
 //!
 //! // create the dataframe
-//! let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+//! let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
 //!
 //! // create a plan
 //! let df = df.filter(col("a").lt_eq(col("b")))?
@@ -75,7 +75,7 @@
 //! # async fn main() -> Result<()> {
 //! let ctx = SessionContext::new();
 //!
-//! ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await?;
+//! ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
 //!
 //! // create a plan
 //! let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;

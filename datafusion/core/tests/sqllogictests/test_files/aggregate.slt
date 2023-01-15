@@ -36,11 +36,93 @@ SELECT covar(c2, c12) FROM aggregate_test_100
 ----
 -0.07996901247859442
 
+# single_row_query_covar_1
+query R
+select covar_samp(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
+----
+NULL
+
+# single_row_query_covar_2
+query R
+select covar_pop(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
+----
+0
+
+# all_nulls_query_covar
+query R
+with data as (
+  select null::int as f, null::int as b
+  union all
+  select null::int as f, null::int as b
+)
+select covar_samp(f, b), covar_pop(f, b)
+from data
+----
+NULL NULL
+
+# covar_query_with_nulls
+query R
+with data as (
+  select 1 as f,       4 as b
+  union all
+  select null as f,   99 as b
+  union all
+  select 2 as f,       5 as b
+  union all
+  select 98 as f,   null as b
+  union all
+  select 3 as f,       6 as b
+  union all
+  select null as f, null as b
+)
+select covar_samp(f, b), covar_pop(f, b)
+from data
+----
+1 0.6666666666666666
+
 # csv_query_correlation
 query R
 SELECT corr(c2, c12) FROM aggregate_test_100
 ----
 -0.19064544190576607
+
+# single_row_query_correlation
+query R
+select corr(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
+----
+0
+
+# all_nulls_query_correlation
+query R
+with data as (
+  select null::int as f, null::int as b
+  union all
+  select null::int as f, null::int as b
+)
+select corr(f, b)
+from data
+----
+NULL
+
+# correlation_query_with_nulls
+query R
+with data as (
+  select 1 as f,       4 as b
+  union all
+  select null as f,   99 as b
+  union all
+  select 2 as f,       5 as b
+  union all
+  select 98 as f,   null as b
+  union all
+  select 3 as f,       6 as b
+  union all
+  select null as f, null as b
+)
+select corr(f, b)
+from data
+----
+1
 
 # csv_query_variance_1
 query R
@@ -846,26 +928,23 @@ SELECT count(1 + 1)
 ----
 1
 
-# FIX: "CSV Writer does not support List(Field { name: \"item\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }) data type")
 # csv_query_array_agg
-# query T
-# SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test
-# ----
-# [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm0keZ5G8BffGwgF2RwQD59TFzMStxCB]
+query T
+SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test
+----
+[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm, 0keZ5G8BffGwgF2RwQD59TFzMStxCB]
 
-# FIX: see above
 # csv_query_array_agg_empty
-# query I
-# SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
-# ----
-# []
+query I
+SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test
+----
+[]
 
-# FIX: see above
 # csv_query_array_agg_one
-# query I
-# SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test
-# ----
-# [0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm]
+query I
+SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test
+----
+[0VVIHzxWtNOFLtnhjHEKjXaJOSLJfm]
 
 # csv_query_array_agg_with_overflow
 query IIRIII
@@ -976,6 +1055,7 @@ select max(c1) from d_table
 ----
 110.009
 
+# FIX: doesn't check datatype
 # aggregate_decimal_sum
 query R
 select sum(c1) from d_table

@@ -28,6 +28,7 @@ use datafusion_expr::{
 use std::collections::{HashMap, HashSet};
 use std::iter::once;
 use std::sync::Arc;
+use utils::optimize_children;
 
 /// Push Down Filter optimizer rule pushes filter clauses down the plan
 /// # Introduction
@@ -524,15 +525,14 @@ impl OptimizerRule for PushDownFilter {
             LogicalPlan::Join(join) => {
                 let optimized_plan = push_down_join(plan, join, None)?;
                 return match optimized_plan {
-                    Some(optimized_plan) => Ok(Some(utils::optimize_children(
-                        self,
-                        &optimized_plan,
-                        config,
-                    )?)),
-                    None => Ok(Some(utils::optimize_children(self, plan, config)?)),
+                    Some(optimized_plan) => Ok(Some(
+                        optimize_children(self, &optimized_plan, config)?
+                            .unwrap_or(optimized_plan),
+                    )),
+                    None => optimize_children(self, plan, config),
                 };
             }
-            _ => return Ok(Some(utils::optimize_children(self, plan, config)?)),
+            _ => return optimize_children(self, plan, config),
         };
 
         let child_plan = filter.input.as_ref();
@@ -749,7 +749,9 @@ impl OptimizerRule for PushDownFilter {
             _ => plan.clone(),
         };
 
-        Ok(Some(utils::optimize_children(self, &new_plan, config)?))
+        Ok(Some(
+            optimize_children(self, &new_plan, config)?.unwrap_or(new_plan),
+        ))
     }
 }
 

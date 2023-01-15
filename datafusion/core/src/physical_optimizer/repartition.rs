@@ -140,9 +140,6 @@ impl Repartition {
 ///
 /// 2. Has a direct parent that `benefits_from_input_partitioning`
 ///
-/// 3. Does not have a parent that `relies_on_input_order` unless there
-/// is an intervening node that does not `maintain_input_order`
-///
 /// if `can_reorder` is false, means that the output of this node
 /// can not be reordered as as the final output is relying on that order
 ///
@@ -241,7 +238,8 @@ mod tests {
     use super::*;
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::physical_optimizer::enforcement::BasicEnforcement;
+    use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
+    use crate::physical_optimizer::sort_enforcement::EnforceSorting;
     use crate::physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
@@ -370,9 +368,12 @@ mod tests {
             // run optimizer
             let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Sync + Send>> = vec![
                 Arc::new(Repartition::new()),
-                // The `BasicEnforcement` is an essential rule to be applied.
+                // EnforceDistribution is an essential rule to be applied.
                 // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
-                Arc::new(BasicEnforcement::new()),
+                Arc::new(EnforceDistribution::new()),
+                // EnforceSorting is an essential rule to be applied.
+                // Otherwise, the correctness of the generated optimized plan cannot be guaranteed
+                Arc::new(EnforceSorting::new()),
             ];
             let optimized = optimizers.into_iter().fold($PLAN, |plan, optimizer| {
                 optimizer.optimize(plan, &config).unwrap()

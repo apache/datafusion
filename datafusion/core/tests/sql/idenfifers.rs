@@ -31,7 +31,7 @@ async fn normalized_column_identifiers() {
     // register csv file with the execution context
     ctx.register_csv(
         "case_insensitive_test",
-        "tests/example.csv",
+        "tests/data/example.csv",
         CsvReadOptions::new(),
     )
     .await

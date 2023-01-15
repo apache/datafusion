@@ -15,23 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains a query optimizer that operates against a physical plan and applies
-//! rules to a physical plan, such as "Repartition".
-
-pub mod aggregate_statistics;
-pub mod coalesce_batches;
-pub mod dist_enforcement;
-pub mod global_sort_selection;
-pub mod join_selection;
-pub mod optimizer;
-pub mod pipeline_checker;
-pub mod pruning;
-pub mod repartition;
-pub mod sort_enforcement;
-mod utils;
-
-pub mod pipeline_fixer;
-#[cfg(test)]
-pub mod test_utils;
-
-pub use optimizer::PhysicalOptimizerRule;
+pub mod consumer;
+pub mod producer;
+pub mod serializer;

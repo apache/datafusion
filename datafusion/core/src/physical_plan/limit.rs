@@ -105,10 +105,6 @@ impl ExecutionPlan for GlobalLimitExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        self.input.output_ordering().is_some()
-    }
-
     fn maintains_input_order(&self) -> bool {
         true
     }
@@ -274,10 +270,6 @@ impl ExecutionPlan for LocalLimitExec {
         self.input.output_partitioning()
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        self.input.output_ordering().is_some()
-    }
-
     fn benefits_from_input_partitioning(&self) -> bool {
         false
     }
@@ -285,6 +277,10 @@ impl ExecutionPlan for LocalLimitExec {
     // Local limit will not change the input plan's ordering
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.input.output_ordering()
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        true
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {

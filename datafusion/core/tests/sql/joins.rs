@@ -2812,6 +2812,64 @@ async fn type_coercion_join_with_filter_and_equi_expr() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_cross_join_to_groupby_with_different_key_ordering() -> Result<()> {
+    // Regression test for GH #4873
+    let col1 = Arc::new(StringArray::from(vec![
+        "A", "A", "A", "A", "A", "A", "A", "A", "BB", "BB", "BB", "BB",
+    ])) as ArrayRef;
+
+    let col2 =
+        Arc::new(UInt64Array::from(vec![1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6])) as ArrayRef;
+
+    let col3 =
+        Arc::new(UInt64Array::from(vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])) as ArrayRef;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("col1", DataType::Utf8, true),
+        Field::new("col2", DataType::UInt64, true),
+        Field::new("col3", DataType::UInt64, true),
+    ])) as SchemaRef;
+
+    let batch = RecordBatch::try_new(schema.clone(), vec![col1, col2, col3]).unwrap();
+    let mem_table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+
+    // Create context and register table
+    let ctx = SessionContext::new();
+    ctx.register_table("tbl", Arc::new(mem_table)).unwrap();
+
+    let sql = "select col1, col2, coalesce(sum_col3, 0) as sum_col3 \
+                     from (select distinct col2 from tbl) AS q1 \
+                     cross join (select distinct col1 from tbl) AS q2 \
+                     left outer join (SELECT col1, col2, sum(col3) as sum_col3 FROM tbl GROUP BY col1, col2) AS q3 \
+                     USING(col2, col1) \
+                     ORDER BY col1, col2";
+
+    let expected = vec![
+        "+------+------+----------+",
+        "| col1 | col2 | sum_col3 |",
+        "+------+------+----------+",
+        "| A    | 1    | 2        |",
+        "| A    | 2    | 2        |",
+        "| A    | 3    | 2        |",
+        "| A    | 4    | 2        |",
+        "| A    | 5    | 0        |",
+        "| A    | 6    | 0        |",
+        "| BB   | 1    | 0        |",
+        "| BB   | 2    | 0        |",
+        "| BB   | 3    | 0        |",
+        "| BB   | 4    | 0        |",
+        "| BB   | 5    | 2        |",
+        "| BB   | 6    | 2        |",
+        "+------+------+----------+",
+    ];
+
+    let results = execute_to_batches(&ctx, sql).await;
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn subquery_to_join_with_both_side_expr() -> Result<()> {
     let ctx = create_join_context("t1_id", "t2_id", false)?;
 
@@ -2944,3 +3002,5 @@ async fn three_projection_exprs_subquery_to_join() -> Result<()> {
 
     Ok(())
 }
+
+

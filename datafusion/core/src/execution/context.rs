@@ -68,7 +68,7 @@ use crate::physical_optimizer::repartition::Repartition;
 
 use crate::config::ConfigOptions;
 use crate::execution::{runtime_env::RuntimeEnv, FunctionRegistry};
-use crate::physical_optimizer::enforcement::BasicEnforcement;
+use crate::physical_optimizer::dist_enforcement::EnforceDistribution;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
@@ -91,9 +91,9 @@ use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::memory_pool::MemoryPool;
 use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
-use crate::physical_optimizer::optimize_sorts::OptimizeSorts;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
+use crate::physical_optimizer::sort_enforcement::EnforceSorting;
 use datafusion_optimizer::OptimizerConfig;
 use datafusion_sql::planner::object_name_to_table_reference;
 use uuid::Uuid;
@@ -120,7 +120,7 @@ use super::options::{
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let ctx = SessionContext::new();
-/// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+/// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
 ///            .limit(0, Some(100))?;
@@ -138,7 +138,7 @@ use super::options::{
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
 /// let mut ctx = SessionContext::new();
-/// ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await?;
+/// ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
 /// let results = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
 /// # Ok(())
 /// # }
@@ -1448,37 +1448,36 @@ impl SessionState {
             // output partitioning of some operators in the plan tree, which will influence
             // other rules. Therefore, it should run as soon as possible. It is optional because:
             // - It's not used for the distributed engine, Ballista.
-            // - It's conflicted with some parts of the BasicEnforcement, since it will
-            //   introduce additional repartitioning while the BasicEnforcement aims at
-            //   reducing unnecessary repartitioning.
+            // - It's conflicted with some parts of the EnforceDistribution, since it will
+            //   introduce additional repartitioning while EnforceDistribution aims to
+            //   reduce unnecessary repartitioning.
             Arc::new(Repartition::new()),
             // - Currently it will depend on the partition number to decide whether to change the
             // single node sort to parallel local sort and merge. Therefore, GlobalSortSelection
             // should run after the Repartition.
             // - Since it will change the output ordering of some operators, it should run
-            // before JoinSelection and BasicEnforcement, which may depend on that.
+            // before JoinSelection and EnforceSorting, which may depend on that.
             Arc::new(GlobalSortSelection::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
-            // like collect left, or hash join, or future sort merge join, which will
-            // influence the BasicEnforcement to decide whether to add additional repartition
-            // and local sort to meet the distribution and ordering requirements.
-            // Therefore, it should run before BasicEnforcement.
+            // like collect left, or hash join, or future sort merge join, which will influence the
+            // EnforceDistribution and EnforceSorting rules as they decide whether to add additional
+            // repartitioning and local sorting steps to meet distribution and ordering requirements.
+            // Therefore, it should run before EnforceDistribution and EnforceSorting.
             Arc::new(JoinSelection::new()),
             // If the query is processing infinite inputs, the PipelineFixer rule applies the
             // necessary transformations to make the query runnable (if it is not already runnable).
             // If the query can not be made runnable, the rule emits an error with a diagnostic message.
             // Since the transformations it applies may alter output partitioning properties of operators
-            // (e.g. by swapping hash join sides), this rule runs before BasicEnforcement.
+            // (e.g. by swapping hash join sides), this rule runs before EnforceDistribution.
             Arc::new(PipelineFixer::new()),
-            // BasicEnforcement is for adding essential repartition and local sorting operators
-            // to satisfy the required distribution and local sort requirements.
-            // Please make sure that the whole plan tree is determined.
-            Arc::new(BasicEnforcement::new()),
-            // The BasicEnforcement stage conservatively inserts sorts to satisfy ordering requirements.
-            // However, a deeper analysis may sometimes reveal that such a sort is actually unnecessary.
-            // These cases typically arise when we have reversible window expressions or deep subqueries.
-            // The rule below performs this analysis and removes unnecessary sorts.
-            Arc::new(OptimizeSorts::new()),
+            // The EnforceDistribution rule is for adding essential repartition to satisfy the required
+            // distribution. Please make sure that the whole plan tree is determined before this rule.
+            Arc::new(EnforceDistribution::new()),
+            // The EnforceSorting rule is for adding essential local sorting to satisfy the required
+            // ordering. Please make sure that the whole plan tree is determined before this rule.
+            // Note that one should always run this rule after running the EnforceDistribution rule
+            // as the latter may break local sorting requirements.
+            Arc::new(EnforceSorting::new()),
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),

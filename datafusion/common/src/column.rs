@@ -83,7 +83,25 @@ impl Column {
         }
     }
 
-    // Internal implementation of normalize
+    /// Qualify column if not done yet.
+    ///
+    /// If this column already has a [relation](Self::relation), it will be returned as is and the given parameters are
+    /// ignored. Otherwise this will search through the given schemas to find the column. This will use the first schema
+    /// that matches.
+    ///
+    /// A schema matches if there is a single column that -- when unqualified -- matches this column. There is an
+    /// exception for `USING` statements, see below.
+    ///
+    /// # Using columns
+    /// Take the following SQL statement:
+    ///
+    /// ```sql
+    /// SELECT id FROM t1 JOIN t2 USING(id)
+    /// ```
+    ///
+    /// In this case, both `t1.id` and `t2.id` will match unqualified column `id`. To express this possibility, use
+    /// `using_columns`. Each entry in this array is a set of columns that are bound together via a `USING` clause. So
+    /// in this example this would be `[{t1.id, t2.id}]`.
     pub fn normalize_with_schemas(
         self,
         schemas: &[&Arc<DFSchema>],
