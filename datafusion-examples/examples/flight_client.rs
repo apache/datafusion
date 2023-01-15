@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Call get_schema to get the schema of a Parquet file
     let request = tonic::Request::new(FlightDescriptor {
         r#type: flight_descriptor::DescriptorType::Path as i32,
-        cmd: vec![],
+        cmd: Default::default(),
         path: vec![format!("{testdata}/alltypes_plain.parquet")],
     });
 
