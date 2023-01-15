@@ -397,7 +397,7 @@ fn push_down_all_join(
             .chain(once(keep_condition.into_iter().reduce(Expr::and).unwrap()))
             .collect()
     } else {
-        plan.expressions()
+        expr
     };
     let plan = from_plan(plan, &expr, &[left, right])?;
 
