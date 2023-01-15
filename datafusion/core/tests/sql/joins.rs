@@ -3002,5 +3002,3 @@ async fn three_projection_exprs_subquery_to_join() -> Result<()> {
 
     Ok(())
 }
-
-
