@@ -16,29 +16,18 @@
 # under the License.
 
 [package]
-name = "datafusion-sql"
-description = "DataFusion SQL Query Planner"
+name = "datafusion-substrait"
 version = "16.0.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-readme = "README.md"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = ["datafusion", "sql", "parser", "planner"]
 edition = "2021"
 rust-version = "1.62"
 
-[lib]
-name = "datafusion_sql"
-path = "src/lib.rs"
-
-[features]
-default = ["unicode_expressions"]
-unicode_expressions = []
-
 [dependencies]
-arrow-schema = "30.0.1"
-datafusion-common = { path = "../common", version = "16.0.0" }
-datafusion-expr = { path = "../expr", version = "16.0.0" }
-log = "^0.4"
-sqlparser = "0.30"
+async-recursion = "1.0"
+datafusion = { version = "16.0.0", path = "../core" }
+prost = "0.9"
+prost-types = "0.9"
+substrait = "0.2"
+tokio = "1.17"
+
+[build-dependencies]
+prost-build = { version = "0.9" }

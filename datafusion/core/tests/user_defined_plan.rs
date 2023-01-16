@@ -318,7 +318,7 @@ impl OptimizerRule for TopKOptimizerRule {
 
         // If we didn't find the Limit/Sort combination, recurse as
         // normal and build the result.
-        Ok(Some(optimize_children(self, plan, config)?))
+        optimize_children(self, plan, config)
     }
 
     fn name(&self) -> &str {

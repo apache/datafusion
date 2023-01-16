@@ -140,9 +140,6 @@ impl Repartition {
 ///
 /// 2. Has a direct parent that `benefits_from_input_partitioning`
 ///
-/// 3. Does not have a parent that `relies_on_input_order` unless there
-/// is an intervening node that does not `maintain_input_order`
-///
 /// if `can_reorder` is false, means that the output of this node
 /// can not be reordered as as the final output is relying on that order
 ///

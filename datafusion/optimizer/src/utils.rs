@@ -37,18 +37,26 @@ use std::sync::Arc;
 /// type. Useful for optimizer rules which want to leave the type
 /// of plan unchanged but still apply to the children.
 /// This also handles the case when the `plan` is a [`LogicalPlan::Explain`].
+///
+/// Returning `Ok(None)` indicates that the plan can't be optimized by the `optimizer`.
 pub fn optimize_children(
     optimizer: &impl OptimizerRule,
     plan: &LogicalPlan,
     config: &dyn OptimizerConfig,
-) -> Result<LogicalPlan> {
+) -> Result<Option<LogicalPlan>> {
     let new_exprs = plan.expressions();
     let mut new_inputs = Vec::with_capacity(plan.inputs().len());
+    let mut plan_is_changed = false;
     for input in plan.inputs() {
         let new_input = optimizer.try_optimize(input, config)?;
+        plan_is_changed = plan_is_changed || new_input.is_some();
         new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
     }
-    from_plan(plan, &new_exprs, &new_inputs)
+    if plan_is_changed {
+        Ok(Some(from_plan(plan, &new_exprs, &new_inputs)?))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
