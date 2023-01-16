@@ -174,7 +174,7 @@ fn plan_update() {
     let sql = "update person set last_name='Kay' where id=1";
     let plan = r#"
 Write: op=[Update] table=[person]
-  Projection: Utf8("Kay") AS last_name, person.id AS id
+  Projection: person.age AS age, person.birth_date AS birth_date, person.first_name AS first_name, person.id AS id, Utf8("Kay") AS last_name, person.salary AS salary, person.state AS state, person.😀 AS 😀
     Filter: id = Int64(1)
       TableScan: person
       "#

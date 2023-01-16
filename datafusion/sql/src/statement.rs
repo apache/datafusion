@@ -45,7 +45,7 @@ use sqlparser::ast::{
     UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -662,24 +662,32 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // Do a table lookup to verify the table exists
-        let table_ref = object_name_to_table_reference(table_name)?;
+        let table_name = object_name_to_table_reference(table_name)?;
         let provider = self
             .schema_provider
-            .get_table_provider((&table_ref).into())?;
+            .get_table_provider((&table_name).into())?;
         let arrow_schema = (*provider.schema()).clone();
-        let df_schema = Arc::new(DFSchema::try_from(arrow_schema.clone())?);
+        let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
+        let mut values: BTreeMap<_, _> = table_schema
+            .fields()
+            .iter()
+            .map(|f| {
+                (
+                    f.name().clone(),
+                    ast::Expr::Identifier(ast::Ident::from(f.name().as_str())),
+                )
+            })
+            .collect();
 
-        // Build schema
+        // Overwrite with assignment expressions
         let mut planner_context = PlannerContext::new();
-        let mut values = vec![];
         for assign in assignments.iter() {
             let col_name: &Ident = assign
                 .id
                 .iter()
                 .last()
                 .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
-            let col_name = col_name.value.as_str();
-            values.push((col_name.to_string(), assign.value.clone()));
+            let _ = values.insert(col_name.value.clone(), assign.value.clone());
         }
 
         // Build scan
@@ -690,20 +698,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let source = match predicate_expr {
             None => scan,
             Some(predicate_expr) => {
-                let filter_expr =
-                    self.sql_to_expr(predicate_expr, &df_schema, &mut planner_context)?;
+                let filter_expr = self.sql_to_expr(
+                    predicate_expr,
+                    &table_schema,
+                    &mut planner_context,
+                )?;
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
-                for use_col in using_columns.iter() {
-                    let col_name = use_col.name.clone();
-                    values.push((
-                        col_name.clone(),
-                        ast::Expr::Identifier(ast::Ident::from(col_name.as_str())),
-                    ));
-                }
                 let filter_expr = normalize_col_with_schemas(
                     filter_expr,
-                    &[&df_schema],
+                    &[&table_schema],
                     &[using_columns],
                 )?;
                 LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
@@ -713,15 +717,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Projection
         let mut exprs = vec![];
         for (col_name, expr) in values.into_iter() {
-            let expr = self.sql_to_expr(expr, &df_schema, &mut planner_context)?;
+            let expr = self.sql_to_expr(expr, &table_schema, &mut planner_context)?;
             let expr = expr.alias(col_name);
             exprs.push(expr);
         }
         let source = project(source, exprs)?;
 
         let plan = LogicalPlan::Dml(DmlStatement {
-            table_name: table_ref,
-            table_schema: df_schema.into(),
+            table_name,
+            table_schema,
             op: WriteOp::Update,
             input: Arc::new(source),
         });
