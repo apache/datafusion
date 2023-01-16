@@ -25,7 +25,7 @@ use crate::planner::{
 use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    DFField, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
+    Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
     TableReference, ToDFSchema,
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
@@ -45,7 +45,7 @@ use sqlparser::ast::{
     UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -739,32 +739,34 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         source: Box<Query>,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
-        let table_ref = object_name_to_table_reference(table_name)?;
-        let table = self
+        let table_name = object_name_to_table_reference(table_name)?;
+        let provider = self
             .schema_provider
-            .get_table_provider((&table_ref).into())?;
+            .get_table_provider((&table_name).into())?;
+        let arrow_schema = (*provider.schema()).clone();
+        let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
 
-        // Build schema
-        let schema = table.schema();
-        let mut fields = vec![];
-        for col in columns.iter() {
-            let (_, field) =
-                schema
-                    .column_with_name(&col.value)
-                    .ok_or(DataFusionError::Plan(format!(
-                        "Column not found: {}",
-                        col.value
-                    )))?;
-            let field = DFField::from(field.clone());
-            fields.push(field);
-        }
-        let schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
-
+        // Projection
         let mut planner_context = PlannerContext::new();
         let source = self.query_to_plan(*source, &mut planner_context)?;
+        if columns.len() != source.schema().fields().len() {
+            Err(DataFusionError::Plan(
+                "Column count doesn't match insert query!".to_owned(),
+            ))?;
+        }
+        let exprs: Vec<_> = columns
+            .iter()
+            .zip(source.schema().fields().iter())
+            .map(|(c, f)| {
+                datafusion_expr::Expr::Column(Column::from(f.name().clone()))
+                    .alias(c.value.clone())
+            })
+            .collect();
+        let source = project(source, exprs)?;
+
         let plan = LogicalPlan::Dml(DmlStatement {
-            table_name: table_ref,
-            table_schema: Arc::new(schema),
+            table_name,
+            table_schema,
             op: WriteOp::Insert,
             input: Arc::new(source),
         });

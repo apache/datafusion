@@ -163,7 +163,8 @@ fn plan_insert() {
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
     let plan = r#"
 Write: op=[Insert] table=[person]
-  Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
+  Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+    Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
     "#
     .trim();
     quick_test(sql, plan);
