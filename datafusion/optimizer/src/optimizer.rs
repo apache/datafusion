@@ -44,6 +44,7 @@ use datafusion_expr::logical_plan::LogicalPlan;
 use log::{debug, trace, warn};
 use std::sync::Arc;
 use std::time::Instant;
+use crate::avoid_repartition::AvoidRepartition;
 
 /// `OptimizerRule` transforms one ['LogicalPlan'] into another which
 /// computes the same results, but in a potentially more efficient
@@ -233,6 +234,7 @@ impl Optimizer {
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(PushDownProjection::new()),
+            Arc::new(AvoidRepartition::default()),
         ];
 
         Self::with_rules(rules)
