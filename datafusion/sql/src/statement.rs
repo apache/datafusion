@@ -657,7 +657,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let table_name = match &table.relation {
             TableFactor::Table { name, .. } => name.clone(),
             _ => Err(DataFusionError::Plan(
-                "Unsupported table type for update!".to_string(),
+                "Cannot update non-table relation!".to_string(),
             ))?,
         };
 
@@ -666,11 +666,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let provider = self
             .schema_provider
             .get_table_provider((&table_ref).into())?;
+        let arrow_schema = (*provider.schema()).clone();
+        let df_schema = Arc::new(DFSchema::try_from(arrow_schema.clone())?);
 
         // Build schema
         let mut planner_context = PlannerContext::new();
-        let table_schema = provider.schema();
-        let mut fields = vec![];
         let mut values = vec![];
         for assign in assignments.iter() {
             let col_name: &Ident = assign
@@ -680,14 +680,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
             let col_name = col_name.value.as_str();
             values.push((col_name.to_string(), assign.value.clone()));
-            let (_, field) =
-                table_schema
-                    .column_with_name(col_name)
-                    .ok_or(DataFusionError::Plan(format!(
-                        "Column not found: {col_name}"
-                    )))?;
-            let field = DFField::from(field.clone());
-            fields.push(field);
         }
 
         // Build scan
@@ -698,19 +690,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let source = match predicate_expr {
             None => scan,
             Some(predicate_expr) => {
-                let plan_schema = scan.schema();
                 let filter_expr =
-                    self.sql_to_expr(predicate_expr, plan_schema, &mut planner_context)?;
-                let schema = Arc::new(plan_schema.clone());
+                    self.sql_to_expr(predicate_expr, &df_schema, &mut planner_context)?;
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 for use_col in using_columns.iter() {
                     let col_name = use_col.name.clone();
-                    let rel = use_col.relation.as_ref().cloned();
-                    let field = plan_schema
-                        .field_with_name(rel.as_deref(), use_col.name.as_str())?
-                        .clone();
-                    fields.push(field.clone());
                     values.push((
                         col_name.clone(),
                         ast::Expr::Identifier(ast::Ident::from(col_name.as_str())),
@@ -718,7 +703,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 let filter_expr = normalize_col_with_schemas(
                     filter_expr,
-                    &[&schema],
+                    &[&df_schema],
                     &[using_columns],
                 )?;
                 LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
@@ -726,10 +711,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         };
 
         // Projection
-        let proj_schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
         let mut exprs = vec![];
         for (col_name, expr) in values.into_iter() {
-            let expr = self.sql_to_expr(expr, &proj_schema, &mut planner_context)?;
+            let expr = self.sql_to_expr(expr, &df_schema, &mut planner_context)?;
             let expr = expr.alias(col_name);
             exprs.push(expr);
         }
@@ -737,7 +721,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let plan = LogicalPlan::Dml(DmlStatement {
             table_name: table_ref,
-            table_schema: proj_schema.into(),
+            table_schema: df_schema.into(),
             op: WriteOp::Update,
             input: Arc::new(source),
         });

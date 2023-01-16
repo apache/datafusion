@@ -175,7 +175,7 @@ fn plan_update() {
     let plan = r#"
 Write: op=[Update] table=[person]
   Projection: Utf8("Kay") AS last_name, person.id AS id
-    Filter: person.id = Int64(1)
+    Filter: id = Int64(1)
       TableScan: person
       "#
     .trim();
