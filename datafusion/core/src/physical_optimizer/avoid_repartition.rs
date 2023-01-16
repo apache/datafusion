@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Rule to push hash partitioning down and replace round-robin partitioning
+
 use crate::physical_optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan, Partitioning};
@@ -44,8 +46,7 @@ impl PhysicalOptimizerRule for AvoidRepartition {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let (new_plan, _) = remove_redundant_repartitioning(plan, None)?;
-        Ok(new_plan)
+        remove_redundant_repartitioning(plan, None)
     }
 
     fn schema_check(&self) -> bool {
@@ -56,27 +57,28 @@ impl PhysicalOptimizerRule for AvoidRepartition {
 fn remove_redundant_repartitioning(
     plan: Arc<dyn ExecutionPlan>,
     partitioning: Option<Partitioning>,
-) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
-    if let Some(x) = plan.as_any().downcast_ref::<RepartitionExec>() {
-        match x.partitioning() {
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if let Some(repart) = plan.as_any().downcast_ref::<RepartitionExec>() {
+        match repart.partitioning() {
             Partitioning::RoundRobinBatch(_) => {
                 if let Some(p) = partitioning {
                     // drop the round-robin repartition and replace with the hash partitioning
-                    let x =
-                        RepartitionExec::try_new(plan.children()[0].clone(), p.clone())?;
-                    Ok((Arc::new(x), true))
+                    Ok(Arc::new(RepartitionExec::try_new(
+                        plan.children()[0].clone(),
+                        p.clone(),
+                    )?))
                 } else {
-                    Ok((plan.clone(), false))
+                    Ok(plan.clone())
                 }
             }
             Partitioning::Hash(_, _) => {
-                let p = x.partitioning().clone();
-                let (new_plan, pushed_down) = optimize_children(plan, Some(p))?;
-                if pushed_down {
+                let p = repart.partitioning().clone();
+                let new_plan = optimize_children(plan, Some(p.clone()))?;
+                if new_plan.children()[0].output_partitioning() == p {
                     // drop this hash partitioning if we pushed it down
-                    Ok((new_plan.children()[0].clone(), false))
+                    Ok(new_plan.children()[0].clone())
                 } else {
-                    Ok((new_plan, false))
+                    Ok(new_plan)
                 }
             }
             _ => optimize_children(plan, partitioning),
@@ -86,26 +88,16 @@ fn remove_redundant_repartitioning(
     }
 }
 
-pub fn optimize_children(
+fn optimize_children(
     plan: Arc<dyn ExecutionPlan>,
     partitioning: Option<Partitioning>,
-) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
+) -> Result<Arc<dyn ExecutionPlan>> {
     let inputs = plan.children();
     let mut new_inputs = vec![];
-    let mut pushed_downs = vec![];
     for input in &inputs {
-        let (new_input, pushed_down) =
+        let new_input =
             remove_redundant_repartitioning(input.clone(), partitioning.clone())?;
         new_inputs.push(new_input);
-        pushed_downs.push(pushed_down);
     }
-    let pushed_down = if pushed_downs.len() == 1 {
-        pushed_downs[0]
-    } else {
-        false
-    };
-    Ok((
-        with_new_children_if_necessary(plan, new_inputs)?,
-        pushed_down,
-    ))
+    Ok(with_new_children_if_necessary(plan, new_inputs)?)
 }

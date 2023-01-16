@@ -1482,7 +1482,9 @@ impl SessionState {
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),
-            // TODO docs here
+            // We may have introduced round-robin partition to increases parallelism and also
+            // introduced hash partition for join inputs and there is no point in doing both, so
+            // we try and push the hash partitioning down
             Arc::new(AvoidRepartition::default()),
             // The PipelineChecker rule will reject non-runnable query plans that use
             // pipeline-breaking operators on infinite input(s). The rule generates a
