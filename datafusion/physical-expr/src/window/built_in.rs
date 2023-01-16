@@ -223,27 +223,28 @@ impl WindowExpr for BuiltInWindowExpr {
                 let is_prunable = match nth_value_state.kind {
                     NthValueKind::First => {
                         let n_range =
-                            nth_value_state.range.end - nth_value_state.range.start;
-                        n_range > 0
+                            state.window_frame_range.end - state.window_frame_range.start;
+                        n_range > 0 && state.out_col.len() > 0
                     }
                     NthValueKind::Last => true,
                     NthValueKind::Nth(n) => {
                         let n_range =
-                            nth_value_state.range.end - nth_value_state.range.start;
-                        n_range >= (n as usize)
+                            state.window_frame_range.end - state.window_frame_range.start;
+                        n_range >= (n as usize) && state.out_col.len() >= (n as usize)
                     }
                 };
-                if self.window_frame.start_bound.is_unbounded()
-                    && !out_col.is_empty()
-                    && is_prunable
-                {
-                    if matches!(
-                        nth_value_state.kind,
-                        NthValueKind::First | NthValueKind::Nth(_)
-                    ) {
+                if self.window_frame.start_bound.is_unbounded() && is_prunable {
+                    if nth_value_state.finalized_res.is_none()
+                        && matches!(
+                            nth_value_state.kind,
+                            NthValueKind::First | NthValueKind::Nth(_)
+                        )
+                    {
                         // get last value
-                        let res =
-                            ScalarValue::try_from_array(&out_col, out_col.len() - 1)?;
+                        let res = ScalarValue::try_from_array(
+                            &state.out_col,
+                            state.out_col.len() - 1,
+                        )?;
                         nth_value_state.finalized_res = Some(res);
                     }
 
