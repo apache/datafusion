@@ -17,7 +17,6 @@
 
 //! Query optimizer traits
 
-use crate::avoid_repartition::AvoidRepartition;
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_where_exists::DecorrelateWhereExists;
 use crate::decorrelate_where_in::DecorrelateWhereIn;
@@ -234,7 +233,6 @@ impl Optimizer {
             Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(PushDownProjection::new()),
-            // Arc::new(AvoidRepartition::default()),
         ];
 
         Self::with_rules(rules)

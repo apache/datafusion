@@ -16,7 +16,6 @@
 // under the License.
 
 pub mod alias;
-pub mod avoid_repartition;
 pub mod common_subexpr_eliminate;
 pub mod decorrelate_where_exists;
 pub mod decorrelate_where_in;

@@ -90,6 +90,7 @@ use crate::catalog::information_schema::{InformationSchemaProvider, INFORMATION_
 use crate::catalog::listing_schema::ListingSchemaProvider;
 use crate::datasource::object_store::ObjectStoreUrl;
 use crate::execution::memory_pool::MemoryPool;
+use crate::physical_optimizer::avoid_repartition::AvoidRepartition;
 use crate::physical_optimizer::global_sort_selection::GlobalSortSelection;
 use crate::physical_optimizer::pipeline_checker::PipelineChecker;
 use crate::physical_optimizer::pipeline_fixer::PipelineFixer;
@@ -1481,6 +1482,8 @@ impl SessionState {
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),
+            // TODO docs here
+            Arc::new(AvoidRepartition::default()),
             // The PipelineChecker rule will reject non-runnable query plans that use
             // pipeline-breaking operators on infinite input(s). The rule generates a
             // diagnostic error message when this happens. It makes no changes to the

@@ -393,7 +393,7 @@ async fn get_table(
                 (Arc::new(format), path, DEFAULT_CSV_EXTENSION)
             }
             "parquet" => {
-                let path = format!("{path}/{table}");
+                let path = format!("{path}/{table}.parquet");
                 let format = ParquetFormat::default().with_enable_pruning(Some(true));
 
                 (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
@@ -661,6 +661,10 @@ mod tests {
 
     fn create_context() -> Result<SessionContext> {
         let ctx = SessionContext::new();
+        println!(
+            "target_partitions = {}",
+            ctx.copied_config().target_partitions()
+        );
         for table in TPCH_TABLES {
             let table = table.to_string();
             let schema = get_tpch_table_schema(&table);

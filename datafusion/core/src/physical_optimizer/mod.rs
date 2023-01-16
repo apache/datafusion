@@ -19,6 +19,7 @@
 //! rules to a physical plan, such as "Repartition".
 
 pub mod aggregate_statistics;
+pub mod avoid_repartition;
 pub mod coalesce_batches;
 pub mod dist_enforcement;
 pub mod global_sort_selection;
