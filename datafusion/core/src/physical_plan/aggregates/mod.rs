@@ -515,7 +515,12 @@ impl ExecutionPlan for AggregateExec {
                     ..Default::default()
                 }
             }
-            _ => Statistics::default(),
+            _ => Statistics {
+                // the output row count is surely not larger than its input row count
+                num_rows: self.input.statistics().num_rows,
+                is_exact: false,
+                ..Default::default()
+            },
         }
     }
 }
