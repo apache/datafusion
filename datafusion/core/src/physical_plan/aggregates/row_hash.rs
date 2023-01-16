@@ -90,7 +90,9 @@ struct GroupedHashAggregateStreamInner {
     mode: AggregateMode,
     normal_aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     row_aggr_state: RowAggregationState,
+    /// Aggregate Expressions where row_accumulation is not supported
     normal_aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    /// Aggregate Expressions where row_accumulation is supported
     row_aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
     group_by: PhysicalGroupBy,
@@ -152,9 +154,11 @@ impl GroupedHashAggregateStream {
         for (expr, others) in aggr_expr.iter().zip(all_aggregate_expressions.into_iter())
         {
             let n_fields = match mode {
+                // In partial aggregation we keep additional fields to be able to successfully merge in aggregation results in the downstream
                 AggregateMode::Partial => expr.state_fields()?.len(),
                 _ => 1,
             };
+            // Stores range of each expression
             let aggr_range = Range {
                 start: start_idx,
                 end: start_idx + n_fields,
@@ -329,8 +333,10 @@ fn group_aggregate_batch(
 ) -> Result<usize> {
     // evaluate the grouping expressions
     let group_by_values = evaluate_group_by(grouping_set, &batch)?;
-    let mut row_allocated = 0usize;
     // track memory allocations
+    // memory allocated by row accumulators
+    let mut row_allocated = 0usize;
+    // memory allocated by normal accumulators
     let mut normal_allocated = 0usize;
     let RowAggregationState {
         map: row_map,
@@ -403,6 +409,7 @@ fn group_aggregate_batch(
                             * group_state.aggregation_buffer.capacity())
                         + (std::mem::size_of::<u32>() * group_state.indices.capacity());
 
+                    // Allocation done by normal accumulators
                     normal_allocated += (std::mem::size_of::<Box<dyn Accumulator>>()
                         * group_state.accumulator_set.capacity())
                         + group_state
@@ -535,7 +542,7 @@ pub struct RowGroupState {
     // Accumulator state, stored sequentially
     pub aggregation_buffer: Vec<u8>,
 
-    // Accumulator state, one for each aggregate
+    // Accumulator state, one for each aggregate that doesn't support row accumulation
     pub accumulator_set: Vec<AccumulatorItem>,
 
     /// scratch space used to collect indices for input rows in a
@@ -582,6 +589,7 @@ fn create_batch_from_map(
     row_aggr_state: &mut RowAggregationState,
     row_accumulators: &mut [RowAccumulatorItem],
     output_schema: &Schema,
+    // Stores the location of each accumulator in the output_schema
     indices: &[Vec<Range<usize>>],
 ) -> ArrowResult<Option<RecordBatch>> {
     if skip_items > row_aggr_state.group_states.len() {
@@ -600,12 +608,14 @@ fn create_batch_from_map(
         return Ok(Some(RecordBatch::new_empty(schema)));
     }
 
+    // Buffers for each distinct group (where row accumulator uses its memory)
     let mut state_buffers = group_state_chunk
         .iter()
         .map(|gs| gs.aggregation_buffer.clone())
         .collect::<Vec<_>>();
 
     let output_fields = output_schema.fields();
+    // Stores the result of row accumulators
     let row_columns = match mode {
         AggregateMode::Partial => {
             read_as_batch(&state_buffers, aggr_schema, RowType::WordAligned)
@@ -640,6 +650,7 @@ fn create_batch_from_map(
     };
 
     // next, output aggregates: either intermediate state or final output
+    // Stores the result of normal accumulators
     let mut columns = vec![];
     for (idx, &Range { start, end }) in indices[0].iter().enumerate() {
         for (field_idx, field) in output_fields[start..end].iter().enumerate() {
@@ -670,12 +681,14 @@ fn create_batch_from_map(
         }
     }
 
+    // Stores the group by fields
     let group_buffers = group_state_chunk
         .iter()
         .map(|gs| gs.group_by_values.row())
         .collect::<Vec<_>>();
     let mut output: Vec<ArrayRef> = converter.convert_rows(group_buffers)?;
 
+    // The size of the place occupied by row and normal accumulators
     let extra: usize = indices
         .iter()
         .flatten()
@@ -684,6 +697,8 @@ fn create_batch_from_map(
     let empty_arr = new_null_array(&DataType::Null, 1);
     output.extend(std::iter::repeat(empty_arr).take(extra));
 
+    // Write normal accumulators results and row accumulators results to the corresponding location in
+    // the output schema
     let results = [columns.into_iter(), row_columns.into_iter()];
     for (outer, mut current) in results.into_iter().enumerate() {
         for &Range { start, end } in indices[outer].iter() {
