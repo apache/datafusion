@@ -23,6 +23,7 @@ use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan, Partit
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use std::sync::Arc;
+use crate::physical_plan::aggregates::AggregateExec;
 
 /// This rule attempts to push hash repartitions (usually introduced to facilitate hash partitioned
 /// joins) down to the table scan and replace any round-robin partitioning that exists. It is
@@ -78,6 +79,10 @@ fn remove_redundant_repartitioning(
             }
             _ => optimize_children(plan, partitioning),
         }
+    } else if let Some(_) = plan.as_any().downcast_ref::<AggregateExec>() {
+        // we should be able to push the hash partitioning down through aggregates as well but
+        // this caused some tests to fail and will need additional research
+        Ok(plan.clone())
     } else {
         optimize_children(plan, partitioning)
     }

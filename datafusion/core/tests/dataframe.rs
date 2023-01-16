@@ -29,6 +29,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::JoinType;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
+use datafusion::physical_plan::displayable;
 use datafusion_expr::expr::{GroupingSet, Sort};
 use datafusion_expr::{avg, col, count, lit, sum, Expr, ExprSchemable};
 
