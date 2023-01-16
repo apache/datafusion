@@ -90,9 +90,9 @@ struct GroupedHashAggregateStreamInner {
     mode: AggregateMode,
     normal_aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     row_aggr_state: RowAggregationState,
-    /// Aggregate Expressions where row_accumulation is not supported
+    /// Aggregate expressions not supporting row accumulation
     normal_aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    /// Aggregate Expressions where row_accumulation is supported
+    /// Aggregate expressions supporting row accumulation
     row_aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
     group_by: PhysicalGroupBy,
@@ -154,11 +154,12 @@ impl GroupedHashAggregateStream {
         for (expr, others) in aggr_expr.iter().zip(all_aggregate_expressions.into_iter())
         {
             let n_fields = match mode {
-                // In partial aggregation we keep additional fields to be able to successfully merge in aggregation results in the downstream
+                // In partial aggregation, we keep additional fields in order to successfully
+                // merge aggregation results downstream.
                 AggregateMode::Partial => expr.state_fields()?.len(),
                 _ => 1,
             };
-            // Stores range of each expression
+            // Stores range of each expression:
             let aggr_range = Range {
                 start: start_idx,
                 end: start_idx + n_fields,
@@ -331,12 +332,11 @@ fn group_aggregate_batch(
     normal_aggregate_expressions: &[Vec<Arc<dyn PhysicalExpr>>],
     row_aggregate_expressions: &[Vec<Arc<dyn PhysicalExpr>>],
 ) -> Result<usize> {
-    // evaluate the grouping expressions
+    // Evaluate the grouping expressions:
     let group_by_values = evaluate_group_by(grouping_set, &batch)?;
-    // track memory allocations
-    // memory allocated by row accumulators
+    // Memory allocated by row accumulators:
     let mut row_allocated = 0usize;
-    // memory allocated by normal accumulators
+    // Memory allocated by normal accumulators:
     let mut normal_allocated = 0usize;
     let RowAggregationState {
         map: row_map,
@@ -344,7 +344,7 @@ fn group_aggregate_batch(
         ..
     } = aggr_state;
 
-    // evaluate the aggregation expressions.
+    // Evaluate the aggregation expressions.
     // We could evaluate them after the `take`, but since we need to evaluate all
     // of them anyways, it is more performant to do it while they are together.
     let row_aggr_input_values = evaluate_many(row_aggregate_expressions, &batch)?;
@@ -436,8 +436,8 @@ fn group_aggregate_batch(
         let mut batch_indices: UInt32Builder = UInt32Builder::with_capacity(0);
         let mut offsets = vec![0];
         let mut offset_so_far = 0;
-        for group_idx in groups_with_rows.iter() {
-            let indices = &row_group_states[*group_idx].indices;
+        for &group_idx in groups_with_rows.iter() {
+            let indices = &row_group_states[group_idx].indices;
             batch_indices.append_slice(indices);
             offset_so_far += indices.len();
             offsets.push(offset_so_far);
@@ -608,14 +608,14 @@ fn create_batch_from_map(
         return Ok(Some(RecordBatch::new_empty(schema)));
     }
 
-    // Buffers for each distinct group (where row accumulator uses its memory)
+    // Buffers for each distinct group (i.e. row accumulator memories)
     let mut state_buffers = group_state_chunk
         .iter()
         .map(|gs| gs.aggregation_buffer.clone())
         .collect::<Vec<_>>();
 
     let output_fields = output_schema.fields();
-    // Stores the result of row accumulators
+    // Store row accumulator results (either final output or intermediate state):
     let row_columns = match mode {
         AggregateMode::Partial => {
             read_as_batch(&state_buffers, aggr_schema, RowType::WordAligned)
@@ -649,8 +649,7 @@ fn create_batch_from_map(
         }
     };
 
-    // next, output aggregates: either intermediate state or final output
-    // Stores the result of normal accumulators
+    // Store normal accumulator results (either final output or intermediate state):
     let mut columns = vec![];
     for (idx, &Range { start, end }) in indices[0].iter().enumerate() {
         for (field_idx, field) in output_fields[start..end].iter().enumerate() {
@@ -673,7 +672,7 @@ fn create_batch_from_map(
                     ))
                 }
             }?;
-            // cast output if needed (e.g. for types like Dictionary where
+            // Cast output if needed (e.g. for types like Dictionary where
             // the intermediate GroupByScalar type was not the same as the
             // output
             let result = cast(&current, field.data_type())?;
@@ -697,8 +696,8 @@ fn create_batch_from_map(
     let empty_arr = new_null_array(&DataType::Null, 1);
     output.extend(std::iter::repeat(empty_arr).take(extra));
 
-    // Write normal accumulators results and row accumulators results to the corresponding location in
-    // the output schema
+    // Write results of both accumulator types to the corresponding location in
+    // the output schema:
     let results = [columns.into_iter(), row_columns.into_iter()];
     for (outer, mut current) in results.into_iter().enumerate() {
         for &Range { start, end } in indices[outer].iter() {
@@ -730,7 +729,7 @@ fn get_at_indices(
     input_values: &[Vec<Arc<dyn Array>>],
     batch_indices: &PrimitiveArray<UInt32Type>,
 ) -> Vec<Vec<Arc<dyn Array>>> {
-    let res: Vec<Vec<Arc<dyn Array>>> = input_values
+    input_values
         .iter()
         .map(|array| {
             array
@@ -746,6 +745,5 @@ fn get_at_indices(
                 .collect()
             // 2.3
         })
-        .collect();
-    res
+        .collect()
 }
