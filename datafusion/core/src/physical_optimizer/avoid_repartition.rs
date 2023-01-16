@@ -22,7 +22,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use std::sync::Arc;
 
-/// This rule attempts to push hash repartitions (usually introduced to faciliate hash partitioned
+/// This rule attempts to push hash repartitions (usually introduced to facilitate hash partitioned
 /// joins) down to the table scan and replace any round-robin partitioning that exists. It is
 /// wasteful to perform round-robin partition first only to repartition later for the join. It is
 /// more efficient to just partition by the join key(s) right away.
@@ -44,7 +44,6 @@ impl PhysicalOptimizerRule for AvoidRepartition {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        println!("AvoidRepartition try_optimize");
         let (new_plan, _) = remove_redundant_repartitioning(plan, None)?;
         Ok(new_plan)
     }
@@ -56,29 +55,25 @@ impl PhysicalOptimizerRule for AvoidRepartition {
 
 fn remove_redundant_repartitioning(
     plan: Arc<dyn ExecutionPlan>,
-    partitioning: Option<&Partitioning>,
+    partitioning: Option<Partitioning>,
 ) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
-    println!("AvoidRepartition optimize: {:?}", plan);
     if let Some(x) = plan.as_any().downcast_ref::<RepartitionExec>() {
         match x.partitioning() {
             Partitioning::RoundRobinBatch(_) => {
-                println!("Found RoundRobinBatch");
                 if let Some(p) = partitioning {
                     // drop the round-robin repartition and replace with the hash partitioning
                     let x =
                         RepartitionExec::try_new(plan.children()[0].clone(), p.clone())?;
-                    println!("Replacing RoundRobinBatch");
                     Ok((Arc::new(x), true))
                 } else {
-                    println!("Preserving RoundRobinBatch");
                     Ok((plan.clone(), false))
                 }
             }
             Partitioning::Hash(_, _) => {
-                let (new_plan, pushed_down) = optimize_children(plan, partitioning)?;
+                let p = x.partitioning().clone();
+                let (new_plan, pushed_down) = optimize_children(plan, Some(p))?;
                 if pushed_down {
                     // drop this hash partitioning if we pushed it down
-                    println!("Dropping Hash partitioning");
                     Ok((new_plan.children()[0].clone(), false))
                 } else {
                     Ok((new_plan, false))
@@ -93,7 +88,7 @@ fn remove_redundant_repartitioning(
 
 pub fn optimize_children(
     plan: Arc<dyn ExecutionPlan>,
-    partitioning: Option<&Partitioning>,
+    partitioning: Option<Partitioning>,
 ) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
     let inputs = plan.children();
     let mut new_inputs = vec![];
