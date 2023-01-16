@@ -27,8 +27,8 @@ use crate::logical_plan::{
     SubqueryAlias, Union, Values, Window,
 };
 use crate::{
-    BinaryExpr, Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator,
-    TableScan, TryCast, WriteRel,
+    BinaryExpr, Cast, DmlStatement, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
+    Operator, TableScan, TryCast,
 };
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
@@ -489,12 +489,12 @@ pub fn from_plan(
                 schema.clone(),
             )?))
         }
-        LogicalPlan::Write(WriteRel {
+        LogicalPlan::Dml(DmlStatement {
             table_name,
             table_schema,
             op,
             ..
-        }) => Ok(LogicalPlan::Write(WriteRel {
+        }) => Ok(LogicalPlan::Dml(DmlStatement {
             table_name: table_name.clone(),
             table_schema: table_schema.clone(),
             op: op.clone(),

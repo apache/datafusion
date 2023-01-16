@@ -35,8 +35,8 @@ use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DropTable, DropView, Explain, Filter, LogicalPlan, LogicalPlanBuilder, PlanType,
-    SetVariable, ToStringifiedPlan, WriteOp, WriteRel,
+    DmlStatement, DropTable, DropView, Explain, Filter, LogicalPlan, LogicalPlanBuilder,
+    PlanType, SetVariable, ToStringifiedPlan, WriteOp,
 };
 use sqlparser::ast;
 use sqlparser::ast::{
@@ -638,7 +638,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
         };
 
-        let plan = LogicalPlan::Write(WriteRel {
+        let plan = LogicalPlan::Dml(DmlStatement {
             table_name: table_ref,
             table_schema: schema.into(),
             op: WriteOp::Delete,
@@ -735,7 +735,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
         let source = project(source, exprs)?;
 
-        let plan = LogicalPlan::Write(WriteRel {
+        let plan = LogicalPlan::Dml(DmlStatement {
             table_name: table_ref,
             table_schema: proj_schema.into(),
             op: WriteOp::Update,
@@ -774,7 +774,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut planner_context = PlannerContext::new();
         let source = self.query_to_plan(*source, &mut planner_context)?;
-        let plan = LogicalPlan::Write(WriteRel {
+        let plan = LogicalPlan::Dml(DmlStatement {
             table_name: table_ref,
             table_schema: Arc::new(schema),
             op: WriteOp::Insert,

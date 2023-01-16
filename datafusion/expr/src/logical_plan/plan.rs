@@ -119,7 +119,7 @@ pub enum LogicalPlan {
     /// Prepare a statement
     Prepare(Prepare),
     /// Insert / Update / Delete
-    Write(WriteRel),
+    Dml(DmlStatement),
 }
 
 impl LogicalPlan {
@@ -160,7 +160,7 @@ impl LogicalPlan {
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
             LogicalPlan::DropView(DropView { schema, .. }) => schema,
             LogicalPlan::SetVariable(SetVariable { schema, .. }) => schema,
-            LogicalPlan::Write(WriteRel { table_schema, .. }) => table_schema,
+            LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
         }
     }
 
@@ -221,7 +221,7 @@ impl LogicalPlan {
             LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::SetVariable(_) => vec![],
-            LogicalPlan::Write(WriteRel { table_schema, .. }) => vec![table_schema],
+            LogicalPlan::Dml(DmlStatement { table_schema, .. }) => vec![table_schema],
         }
     }
 
@@ -320,7 +320,7 @@ impl LogicalPlan {
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Distinct(_)
-            | LogicalPlan::Write(_)
+            | LogicalPlan::Dml(_)
             | LogicalPlan::Prepare(_) => Ok(()),
         }
     }
@@ -347,7 +347,7 @@ impl LogicalPlan {
             LogicalPlan::Distinct(Distinct { input }) => vec![input],
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
-            LogicalPlan::Write(write) => vec![&write.input],
+            LogicalPlan::Dml(write) => vec![&write.input],
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Prepare(Prepare { input, .. }) => {
@@ -550,7 +550,7 @@ impl LogicalPlan {
             }
             LogicalPlan::Explain(explain) => explain.plan.accept(visitor)?,
             LogicalPlan::Analyze(analyze) => analyze.input.accept(visitor)?,
-            LogicalPlan::Write(write) => write.input.accept(visitor)?,
+            LogicalPlan::Dml(write) => write.input.accept(visitor)?,
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
@@ -936,7 +936,7 @@ impl LogicalPlan {
                         }
                         Ok(())
                     }
-                    LogicalPlan::Write(WriteRel { table_name, op, .. }) => {
+                    LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
                         write!(f, "Write: op=[{op}] table=[{table_name}]")
                     }
                     LogicalPlan::Filter(Filter {
@@ -1535,7 +1535,7 @@ impl Display for WriteOp {
 
 /// The operator that modifies the content of a database (adapted from substrait WriteRel)
 #[derive(Clone)]
-pub struct WriteRel {
+pub struct DmlStatement {
     /// The table name
     pub table_name: OwnedTableReference,
     /// The schema of the table (must align with Rel input)
