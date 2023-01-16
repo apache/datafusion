@@ -28,13 +28,8 @@ use std::sync::Arc;
 /// joins) down to the table scan and replace any round-robin partitioning that exists. It is
 /// wasteful to perform round-robin partition first only to repartition later for the join. It is
 /// more efficient to just partition by the join key(s) right away.
+#[derive(Default)]
 pub struct AvoidRepartition {}
-
-impl Default for AvoidRepartition {
-    fn default() -> Self {
-        Self {}
-    }
-}
 
 impl PhysicalOptimizerRule for AvoidRepartition {
     fn name(&self) -> &str {
@@ -65,7 +60,7 @@ fn remove_redundant_repartitioning(
                     // drop the round-robin repartition and replace with the hash partitioning
                     Ok(Arc::new(RepartitionExec::try_new(
                         plan.children()[0].clone(),
-                        p.clone(),
+                        p,
                     )?))
                 } else {
                     Ok(plan.clone())
@@ -93,11 +88,14 @@ fn optimize_children(
     partitioning: Option<Partitioning>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let inputs = plan.children();
+    if inputs.is_empty() {
+        return Ok(plan.clone());
+    }
     let mut new_inputs = vec![];
     for input in &inputs {
         let new_input =
             remove_redundant_repartitioning(input.clone(), partitioning.clone())?;
         new_inputs.push(new_input);
     }
-    Ok(with_new_children_if_necessary(plan, new_inputs)?)
+    with_new_children_if_necessary(plan, new_inputs)
 }
