@@ -272,7 +272,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    fn plan_from_tables(
+    pub(crate) fn plan_from_tables(
         &self,
         mut from: Vec<TableWithJoins>,
         planner_context: &mut PlannerContext,
