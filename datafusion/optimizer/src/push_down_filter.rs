@@ -2357,7 +2357,7 @@ mod tests {
             \n    TableScan: test2",
         );
 
-        // Each side filter will be pushed down.
+        // Both side will be pushed down.
         let expected = "\
         LeftSemi Join: test1.a = test2.a\
         \n  Filter: test1.b > UInt32(1)\
@@ -2400,7 +2400,7 @@ mod tests {
             \n    TableScan: test2",
         );
 
-        // Each side filter will be pushed down.
+        // Both side will be pushed down.
         let expected = "\
         RightSemi Join: test1.a = test2.a\
         \n  Filter: test1.b > UInt32(1)\
