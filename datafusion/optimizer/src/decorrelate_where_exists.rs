@@ -92,13 +92,19 @@ impl OptimizerRule for DecorrelateWhereExists {
                 // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = filter.input.as_ref().clone();
                 for subquery in subqueries {
-                    if let Some(x) = optimize_exists(&subquery, &cur_input, &other_exprs)?
-                    {
+                    if let Some(x) = optimize_exists(&subquery, &cur_input)? {
                         cur_input = x;
                     } else {
                         return Ok(None);
                     }
                 }
+
+                let expr = conjunction(other_exprs);
+                if let Some(expr) = expr {
+                    let new_filter = Filter::try_new(expr, Arc::new(cur_input))?;
+                    cur_input = LogicalPlan::Filter(new_filter);
+                }
+
                 Ok(Some(cur_input))
             }
             _ => Ok(None),
@@ -128,11 +134,9 @@ impl OptimizerRule for DecorrelateWhereExists {
 /// * subqry - The subquery portion of the `where exists` (select * from orders)
 /// * negated - True if the subquery is a `where not exists`
 /// * filter_input - The non-subquery portion (from customers)
-/// * outer_exprs - Any additional parts to the `where` expression (and c.x = y)
 fn optimize_exists(
     query_info: &SubqueryInfo,
     outer_input: &LogicalPlan,
-    outer_other_exprs: &[Expr],
 ) -> Result<Option<LogicalPlan>> {
     let subqry_filter = match query_info.query.subquery.as_ref() {
         LogicalPlan::Distinct(subqry_distinct) => match subqry_distinct.input.as_ref() {
@@ -180,18 +184,10 @@ fn optimize_exists(
         true => JoinType::LeftAnti,
         false => JoinType::LeftSemi,
     };
-    let mut new_plan = LogicalPlanBuilder::from(outer_input.clone()).join(
-        subqry_plan,
-        join_type,
-        join_keys,
-        join_filters,
-    )?;
-    if let Some(expr) = conjunction(outer_other_exprs.to_vec()) {
-        new_plan = new_plan.filter(expr)? // if the main query had additional expressions, restore them
-    }
-
-    let result = new_plan.build()?;
-    Ok(Some(result))
+    let new_plan = LogicalPlanBuilder::from(outer_input.clone())
+        .join(subqry_plan, join_type, join_keys, join_filters)?
+        .build()?;
+    Ok(Some(new_plan))
 }
 
 struct SubqueryInfo {
@@ -553,6 +549,46 @@ mod tests {
         let expected = "cannot optimize non-correlated subquery";
 
         assert_optimizer_err(Arc::new(DecorrelateWhereExists::new()), &plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn two_exists_subquery_with_outer_filter() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let subquery_scan1 = test_table_scan_with_name("sq1")?;
+        let subquery_scan2 = test_table_scan_with_name("sq2")?;
+
+        let subquery1 = LogicalPlanBuilder::from(subquery_scan1)
+            .filter(col("test.a").eq(col("sq1.a")))?
+            .project(vec![col("c")])?
+            .build()?;
+
+        let subquery2 = LogicalPlanBuilder::from(subquery_scan2)
+            .filter(col("test.a").eq(col("sq2.a")))?
+            .project(vec![col("c")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(
+                exists(Arc::new(subquery1))
+                    .and(exists(Arc::new(subquery2)).and(col("test.c").gt(lit(1u32)))),
+            )?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let expected = "Projection: test.b [b:UInt32]\
+        \n  Filter: test.c > UInt32(1) [a:UInt32, b:UInt32, c:UInt32]\
+        \n    LeftSemi Join: test.a = sq2.a [a:UInt32, b:UInt32, c:UInt32]\
+        \n      LeftSemi Join: test.a = sq1.a [a:UInt32, b:UInt32, c:UInt32]\
+        \n        TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n        TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]\
+        \n      TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq_display_indent(
+            Arc::new(DecorrelateWhereExists::new()),
+            &plan,
+            expected,
+        );
         Ok(())
     }
 }
