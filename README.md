@@ -86,7 +86,7 @@ when DataFusion might be be suitable and unsuitable for your needs:
   is primarily used directly by users as a serverless database and query system rather
   than as a library for building such database systems.
 
-- [pola.rs](http://pola.rs): Polars is one of the fastest DataFrame
+- [Polars](http://pola.rs): Polars is one of the fastest DataFrame
   libraries at the time of writing. Like DataFusion, it is also
   written in Rust and uses the Apache Arrow memory model, but unlike
   DataFusion it does not provide SQL nor as many extension points.
