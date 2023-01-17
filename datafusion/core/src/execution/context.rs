@@ -1585,6 +1585,12 @@ impl SessionState {
             })
     }
 
+    /// Replace the random session id.
+    pub fn with_session_id(mut self, session_id: String) -> Self {
+        self.session_id = session_id;
+        self
+    }
+
     /// Replace the default query planner
     pub fn with_query_planner(
         mut self,
