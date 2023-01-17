@@ -74,6 +74,55 @@ pub fn bisect<const SIDE: bool>(
     find_bisect_point(item_columns, target, compare_fn, low, high)
 }
 
+/// This function implements both bisect_left and bisect_right, having the same
+/// semantics with the Python Standard Library. To use bisect_left, supply true
+/// as the template argument. To use bisect_right, supply false as the template argument.
+pub fn linear_search<const SIDE: bool>(
+    item_columns: &[ArrayRef],
+    target: &[ScalarValue],
+    sort_options: &[SortOptions],
+) -> Result<usize> {
+    let low: usize = 0;
+    let high: usize = item_columns
+        .get(0)
+        .ok_or_else(|| {
+            DataFusionError::Internal("Column array shouldn't be empty".to_string())
+        })?
+        .len();
+    let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
+        let cmp = compare(current, target, sort_options)?;
+        Ok(if SIDE { cmp.is_lt() } else { cmp.is_le() })
+    };
+    find_linear_point(item_columns, target, compare_fn, low, high)
+}
+
+/// This function searches for a tuple of target values among the given rows using the bisection algorithm.
+/// The boolean-valued function `compare_fn` specifies whether we bisect on the left (with return value `false`),
+/// or on the right (with return value `true`) as we compare the target value with the current value as we iteratively
+/// bisect the input.
+pub fn find_linear_point<F>(
+    item_columns: &[ArrayRef],
+    target: &[ScalarValue],
+    compare_fn: F,
+    mut low: usize,
+    mut high: usize,
+) -> Result<usize>
+where
+    F: Fn(&[ScalarValue], &[ScalarValue]) -> Result<bool>,
+{
+    while low < high {
+        let val = item_columns
+            .iter()
+            .map(|arr| ScalarValue::try_from_array(arr, low))
+            .collect::<Result<Vec<ScalarValue>>>()?;
+        if !compare_fn(&val, target)? {
+            break;
+        }
+        low += 1;
+    }
+    Ok(low)
+}
+
 /// This function searches for a tuple of target values among the given rows using the bisection algorithm.
 /// The boolean-valued function `compare_fn` specifies whether we bisect on the left (with return value `false`),
 /// or on the right (with return value `true`) as we compare the target value with the current value as we iteratively

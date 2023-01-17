@@ -20,7 +20,7 @@
 
 use arrow::array::ArrayRef;
 use arrow::compute::kernels::sort::SortOptions;
-use datafusion_common::bisect::{bisect, find_bisect_point};
+use datafusion_common::bisect::{bisect, find_bisect_point, linear_search};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use std::cmp::min;
@@ -286,7 +286,13 @@ impl WindowFrameStateRange {
             current_row_values
         };
         // `BISECT_SIDE` true means bisect_left, false means bisect_right
-        bisect::<BISECT_SIDE>(range_columns, &end_range, sort_options)
+        let linear =
+            linear_search::<BISECT_SIDE>(range_columns, &end_range, sort_options)?;
+        // `BISECT_SIDE` true means bisect_left, false means bisect_right
+        // let res = bisect::<BISECT_SIDE>(range_columns, &end_range, sort_options)?;
+        // println!("linear: {:?}", linear);
+        // println!("bisect: {:?}", res);
+        Ok(linear)
     }
 }
 
