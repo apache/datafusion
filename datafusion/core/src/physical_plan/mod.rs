@@ -136,7 +136,12 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     }
 
     /// Specifies the ordering requirements for all of the children
-    /// For each child, it's the local ordering requirement within each partition rather than the global ordering
+    /// For each child, it's the local ordering requirement within
+    /// each partition rather than the global ordering
+    ///
+    /// NOTE that checking `!is_empty()` does **not** check for a
+    /// required input ordering. Instead, the correct check is that at
+    /// least one entry must be `Some`
     fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
         vec![None; self.children().len()]
     }
