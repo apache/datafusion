@@ -76,6 +76,34 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinOperator::Inner(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Inner, planner_context)
             }
+            JoinOperator::LeftSemi(constraint) => self.parse_join(
+                left,
+                right,
+                constraint,
+                JoinType::LeftSemi,
+                planner_context,
+            ),
+            JoinOperator::RightSemi(constraint) => self.parse_join(
+                left,
+                right,
+                constraint,
+                JoinType::RightSemi,
+                planner_context,
+            ),
+            JoinOperator::LeftAnti(constraint) => self.parse_join(
+                left,
+                right,
+                constraint,
+                JoinType::LeftAnti,
+                planner_context,
+            ),
+            JoinOperator::RightAnti(constraint) => self.parse_join(
+                left,
+                right,
+                constraint,
+                JoinType::RightAnti,
+                planner_context,
+            ),
             JoinOperator::FullOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Full, planner_context)
             }
