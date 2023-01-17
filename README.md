@@ -25,7 +25,7 @@ DataFusion is a very fast, extensible query engine for building high-quality dat
 [Rust](http://rustlang.org), using the [Apache Arrow](https://arrow.apache.org)
 in-memory format.
 
-DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet JSON, and Avro, extensive customization, and a great community.
+DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchmark.clickhouse.com/), built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and a great community.
 
 [![Coverage Status](https://codecov.io/gh/apache/arrow-datafusion/rust/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/arrow-datafusion?branch=master)
 
@@ -97,7 +97,7 @@ when DataFusion might be be suitable and unsuitable for your needs:
   it is written in C/C++ and does not include a SQL frontend or planning /optimization
   framework.
 
-- [DataBend](https://github.com/datafuselabs/databend) is a complete,
+- [DataBend](https://github.com/datafuselabs/databend) is a complete
   database system. Like DataFusion it is also written in Rust and
   utilizes the Apache Arrow memory model, but unlike DataFusion it
   targets end-users rather than developers of other database systems.
