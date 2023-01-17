@@ -334,10 +334,8 @@ fn group_aggregate_batch(
 ) -> Result<usize> {
     // Evaluate the grouping expressions:
     let group_by_values = evaluate_group_by(grouping_set, &batch)?;
-    // Memory allocated by row accumulators:
-    let mut row_allocated = 0usize;
-    // Memory allocated by normal accumulators:
-    let mut normal_allocated = 0usize;
+    // Keep track of memory allocated:
+    let mut allocated = 0usize;
     let RowAggregationState {
         map: row_map,
         group_states: row_group_states,
@@ -386,7 +384,7 @@ fn group_aggregate_batch(
 
                     group_state
                         .indices
-                        .push_accounted(row as u32, &mut row_allocated); // remember this row
+                        .push_accounted(row as u32, &mut allocated); // remember this row
                 }
                 //  1.2 Need to create new entry
                 None => {
@@ -403,14 +401,14 @@ fn group_aggregate_batch(
 
                     // NOTE: do NOT include the `RowGroupState` struct size in here because this is captured by
                     // `group_states` (see allocation down below)
-                    row_allocated += (std::mem::size_of::<u8>()
+                    allocated += (std::mem::size_of::<u8>()
                         * group_state.group_by_values.as_ref().len())
                         + (std::mem::size_of::<u8>()
                             * group_state.aggregation_buffer.capacity())
                         + (std::mem::size_of::<u32>() * group_state.indices.capacity());
 
                     // Allocation done by normal accumulators
-                    normal_allocated += (std::mem::size_of::<Box<dyn Accumulator>>()
+                    allocated += (std::mem::size_of::<Box<dyn Accumulator>>()
                         * group_state.accumulator_set.capacity())
                         + group_state
                             .accumulator_set
@@ -422,10 +420,10 @@ fn group_aggregate_batch(
                     row_map.insert_accounted(
                         (hash, group_idx),
                         |(hash, _group_index)| *hash,
-                        &mut row_allocated,
+                        &mut allocated,
                     );
 
-                    row_group_states.push_accounted(group_state, &mut row_allocated);
+                    row_group_states.push_accounted(group_state, &mut allocated);
 
                     groups_with_rows.push(group_idx);
                 }
@@ -517,7 +515,7 @@ fn group_aggregate_batch(
                             }
                         };
                         let size_post = accumulator.size();
-                        normal_allocated += size_post.saturating_sub(size_pre);
+                        allocated += size_post.saturating_sub(size_pre);
                         res
                     })
                     // 2.5
@@ -529,8 +527,8 @@ fn group_aggregate_batch(
                 Ok::<(), DataFusionError>(())
             })?;
     }
-    row_allocated += row_converter.size().saturating_sub(row_converter_size_pre);
-    Ok(row_allocated + normal_allocated)
+    allocated += row_converter.size().saturating_sub(row_converter_size_pre);
+    Ok(allocated)
 }
 
 /// The state that is built for each output group.
@@ -743,7 +741,6 @@ fn get_at_indices(
                     .unwrap()
                 })
                 .collect()
-            // 2.3
         })
         .collect()
 }
