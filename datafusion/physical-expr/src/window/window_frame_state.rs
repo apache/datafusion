@@ -159,7 +159,9 @@ impl<'a> WindowFrameContext<'a> {
 /// scan ranges of data while processing window frames. Currently we calculate
 /// things from scratch every time, but we will make this incremental in the future.
 #[derive(Debug, Default)]
-pub struct WindowFrameStateRange {}
+pub struct WindowFrameStateRange {
+    last_range: Range<usize>,
+}
 
 impl WindowFrameStateRange {
     /// This function calculates beginning/ending indices for the frame of the current row.
@@ -239,13 +241,15 @@ impl WindowFrameStateRange {
                 }
             }
         };
-        Ok(Range { start, end })
+        self.last_range = Range { start, end };
+        println!("self.last_range: {:?}", self.last_range);
+        Ok(self.last_range.clone())
     }
 
     /// This function does the heavy lifting when finding range boundaries. It is meant to be
-    /// called twice, in succession, to get window frame start and end indices (with `BISECT_SIDE`
-    /// supplied as false and true, respectively).
-    fn calculate_index_of_row<const BISECT_SIDE: bool, const SEARCH_SIDE: bool>(
+    /// called twice, in succession, to get window frame start and end indices (with `SIDE`
+    /// supplied as true and false, respectively).
+    fn calculate_index_of_row<const SIDE: bool, const SEARCH_SIDE: bool>(
         &mut self,
         range_columns: &[ArrayRef],
         sort_options: &[SortOptions],
@@ -286,12 +290,12 @@ impl WindowFrameStateRange {
             current_row_values
         };
         // `BISECT_SIDE` true means bisect_left, false means bisect_right
-        let linear =
-            linear_search::<BISECT_SIDE>(range_columns, &end_range, sort_options)?;
-        // `BISECT_SIDE` true means bisect_left, false means bisect_right
-        // let res = bisect::<BISECT_SIDE>(range_columns, &end_range, sort_options)?;
-        // println!("linear: {:?}", linear);
-        // println!("bisect: {:?}", res);
+        let linear = linear_search::<SIDE>(
+            range_columns,
+            &end_range,
+            sort_options,
+            &self.last_range,
+        )?;
         Ok(linear)
     }
 }

@@ -21,6 +21,7 @@ use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::ArrayRef;
 use arrow::compute::SortOptions;
 use std::cmp::Ordering;
+use std::ops::Range;
 
 /// This function compares two tuples depending on the given sort options.
 fn compare(
@@ -81,8 +82,13 @@ pub fn linear_search<const SIDE: bool>(
     item_columns: &[ArrayRef],
     target: &[ScalarValue],
     sort_options: &[SortOptions],
+    last_range: &Range<usize>,
 ) -> Result<usize> {
-    let low: usize = 0;
+    let low: usize = if SIDE {
+        last_range.start
+    } else {
+        last_range.end
+    };
     let high: usize = item_columns
         .get(0)
         .ok_or_else(|| {
