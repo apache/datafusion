@@ -34,6 +34,7 @@ use datafusion_common::{DFSchemaRef, DataFusionError};
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use log::debug;
+use log::trace;
 use log::warn;
 
 use super::{
@@ -43,6 +44,7 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution::context::TaskContext;
+use crate::physical_plan::displayable;
 use crate::{
     error::Result,
     physical_plan::{expressions, metrics::BaselineMetrics},
@@ -227,7 +229,53 @@ impl ExecutionPlan for UnionExec {
         // It might be too strict here in the case that the input ordering are compatible but not exactly the same.
         // For example one input ordering has the ordering spec SortExpr('a','b','c') and the other has the ordering
         // spec SortExpr('a'), It is safe to derive the out ordering with the spec SortExpr('a').
-        if !self.partition_aware
+        trace!("{}", displayable(self).indent());
+        let result = if !self.partition_aware
+            && first_input_ordering.is_some()
+            && self
+                .inputs
+                .iter()
+                .inspect(|plan| {
+                    trace!(
+                        "  considering input {}",
+                        displayable(plan.as_ref()).one_line()
+                    )
+                })
+                .map(|plan| plan.output_ordering())
+                .all(|ordering| {
+                    trace!("  ordering {ordering:?}");
+
+                    let strict_equal = ordering.is_some()
+                        && sort_expr_list_eq_strict_order(
+                            ordering.unwrap(),
+                            first_input_ordering.unwrap(),
+                        );
+                    trace!("  strict_equal {strict_equal:?}");
+
+                    ordering.is_some() && strict_equal
+                }) {
+            first_input_ordering
+        } else {
+            None
+        };
+
+        trace!("self.partition_aware: {}", self.partition_aware);
+        trace!("first_input_ordering: {:?}", first_input_ordering);
+        trace!("output ordering: {:?}", result);
+
+        result
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        let first_input_ordering = self.inputs[0].output_ordering();
+        // If the Union is not partition aware and all the input
+        // ordering spec strictly equal with the first_input_ordering,
+        // then the `UnionExec` maintains the input order
+        //
+        // It might be too strict here in the case that the input
+        // ordering are compatible but not exactly the same.  See
+        // comments in output_ordering
+        !self.partition_aware
             && first_input_ordering.is_some()
             && self
                 .inputs
@@ -240,11 +288,6 @@ impl ExecutionPlan for UnionExec {
                             first_input_ordering.unwrap(),
                         )
                 })
-        {
-            first_input_ordering
-        } else {
-            None
-        }
     }
 
     fn with_new_children(
