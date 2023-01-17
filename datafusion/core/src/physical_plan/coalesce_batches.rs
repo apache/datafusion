@@ -30,10 +30,9 @@ use crate::physical_plan::{
 };
 
 use crate::execution::context::TaskContext;
-use arrow::compute::kernels::concat::concat;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use arrow::record_batch::RecordBatch;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -281,28 +280,13 @@ pub fn concat_batches(
     batches: &[RecordBatch],
     row_count: usize,
 ) -> ArrowResult<RecordBatch> {
-    if batches.is_empty() {
-        return Ok(RecordBatch::new_empty(schema.clone()));
-    }
-    let mut arrays = Vec::with_capacity(schema.fields().len());
-    for i in 0..schema.fields().len() {
-        let array = concat(
-            &batches
-                .iter()
-                .map(|batch| batch.column(i).as_ref())
-                .collect::<Vec<_>>(),
-        )?;
-        arrays.push(array);
-    }
     trace!(
         "Combined {} batches containing {} rows",
         batches.len(),
         row_count
     );
-
-    let options = RecordBatchOptions::new().with_row_count(Some(row_count));
-
-    RecordBatch::try_new_with_options(schema.clone(), arrays, &options)
+    let b = arrow::compute::concat_batches(schema, batches)?;
+    Ok(b)
 }
 
 #[cfg(test)]
