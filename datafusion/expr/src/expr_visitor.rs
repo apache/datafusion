@@ -220,3 +220,36 @@ impl ExprVisitable for Expr {
         visitor.post_visit(self)
     }
 }
+
+struct VisitorAdapter<F, E> {
+    f: F,
+    err: std::result::Result<(), E>,
+}
+
+impl<F, E> ExpressionVisitor for VisitorAdapter<F, E>
+where
+    F: FnMut(&Expr) -> std::result::Result<(), E>,
+{
+    fn pre_visit(mut self, expr: &Expr) -> Result<Recursion<Self>> {
+        if let Err(e) = (self.f)(expr) {
+            // save the error for later (it may not be a DataFusionError
+            self.err = Err(e);
+            Ok(Recursion::Stop(self))
+        } else {
+            // keep going
+            Ok(Recursion::Continue(self))
+        }
+    }
+}
+
+/// Conveniece function for using a mutable function as an expression visiitor
+///
+/// TODO make this match names in physical plan
+pub fn walk_expr_down<F, E>(expr: &Expr, f: F) -> std::result::Result<(), E>
+where
+    F: FnMut(&Expr) -> std::result::Result<(), E>,
+{
+    // the visit is fallable, so unwrap here
+    let adapter = expr.accept(VisitorAdapter { f, err: Ok(()) }).unwrap();
+    adapter.err
+}
