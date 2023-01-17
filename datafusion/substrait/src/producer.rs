@@ -74,7 +74,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan) -> Result<Box<Plan>> {
 
     // Return parsed plan
     Ok(Box::new(Plan {
-        version: None, // TODO not sure what version should go here?
+        version: None, // TODO: https://github.com/apache/arrow-datafusion/issues/4949
         extension_uris: vec![],
         extensions: function_extensions,
         relations: plan_rels,

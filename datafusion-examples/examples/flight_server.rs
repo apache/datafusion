@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::ipc::writer::{DictionaryTracker, IpcDataGenerator};
 use std::sync::Arc;
 
 use arrow_flight::SchemaAsIpc;
@@ -105,30 +106,23 @@ impl FlightService for FlightServiceImpl {
 
                 // add an initial FlightData message that sends schema
                 let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
-                let schema_flight_data = SchemaAsIpc::new(&schema, &options).into();
+                let schema_flight_data = SchemaAsIpc::new(&schema, &options);
 
-                let mut flights: Vec<Result<FlightData, Status>> =
-                    vec![Ok(schema_flight_data)];
+                let mut flights = vec![FlightData::from(schema_flight_data)];
 
-                let mut batches: Vec<Result<FlightData, Status>> = results
-                    .iter()
-                    .flat_map(|batch| {
-                        let (flight_dictionaries, flight_batch) =
-                            arrow_flight::utils::flight_data_from_arrow_batch(
-                                batch, &options,
-                            );
-                        flight_dictionaries
-                            .into_iter()
-                            .chain(std::iter::once(flight_batch))
-                            .map(Ok)
-                    })
-                    .collect();
+                let encoder = IpcDataGenerator::default();
+                let mut tracker = DictionaryTracker::new(false);
 
-                // append batch vector to schema vector, so that the first message sent is the schema
-                flights.append(&mut batches);
+                for batch in &results {
+                    let (flight_dictionaries, flight_batch) = encoder
+                        .encoded_batch(batch, &mut tracker, &options)
+                        .map_err(|e: ArrowError| Status::internal(e.to_string()))?;
 
-                let output = futures::stream::iter(flights);
+                    flights.extend(flight_dictionaries.into_iter().map(Into::into));
+                    flights.push(flight_batch.into());
+                }
 
+                let output = futures::stream::iter(flights.into_iter().map(Ok));
                 Ok(Response::new(Box::pin(output) as Self::DoGetStream))
             }
             Err(e) => Err(Status::invalid_argument(format!("Invalid ticket: {e:?}"))),
