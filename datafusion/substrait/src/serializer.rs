@@ -19,6 +19,7 @@ use crate::producer;
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use datafusion::common::DataFusionError;
 
 use prost::Message;
 use substrait::protobuf::Plan;
@@ -29,7 +30,7 @@ use std::io::{Read, Write};
 pub async fn serialize(sql: &str, ctx: &SessionContext, path: &str) -> Result<()> {
     let protobuf_out = serialize_bytes(sql, ctx).await;
     let mut file = OpenOptions::new().create(true).write(true).open(path)?;
-    file.write_all(&protobuf_out.unwrap())?;
+    file.write_all(&protobuf_out?)?;
     Ok(())
 }
 
@@ -39,7 +40,9 @@ pub async fn serialize_bytes(sql: &str, ctx: &SessionContext) -> Result<Vec::<u8
     let proto = producer::to_substrait_plan(&plan)?;
 
     let mut protobuf_out = Vec::<u8>::new();
-    proto.encode(&mut protobuf_out).unwrap();
+    proto.encode(&mut protobuf_out).map_err(|e| {
+        DataFusionError::Internal(format!("Failed to encode substrait plan: {}", e))
+    })?;
     Ok(protobuf_out)
 }
 
@@ -53,5 +56,7 @@ pub async fn deserialize(path: &str) -> Result<Box<Plan>> {
 }
 
 pub async fn deserialize_bytes(proto_bytes: Vec<u8>) -> Result<Box<Plan>> {
-    Ok(Box::new(Message::decode(&*proto_bytes).unwrap()))
+    Ok(Box::new(Message::decode(&*proto_bytes).map_err(|e| {
+        DataFusionError::Internal(format!("Failed to decode substrait plan: {}", e))
+    })?))
 }
