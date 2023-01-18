@@ -86,24 +86,24 @@ async fn run_postgres_test_file(
     use sqllogictest::{default_validator, update_test_file};
     info!("Running postgres test: {}", path.display());
 
-    let docker = Docker::default();
-    let postgres_container = docker.run(postgres::image::postgres_docker_image());
-
-    let postgres_client = Postgres::connect_with_retry(
-        "127.0.0.1",
-        postgres_container.get_host_port_ipv4(PG_PORT),
-        PG_DB,
-        PG_USER,
-        PG_PASSWORD,
-    )
-    .await?;
-    let postgres_runner = sqllogictest::Runner::new(postgres_client);
+    // let docker = Docker::default();
+    // let postgres_container = docker.run(postgres::image::postgres_docker_image());
+    //
+    // let postgres_client = Postgres::connect_with_retry(
+    //     "127.0.0.1",
+    //     postgres_container.get_host_port_ipv4(PG_PORT),
+    //     PG_DB,
+    //     PG_USER,
+    //     PG_PASSWORD,
+    // )
+    // .await?;
+    // let postgres_runner = sqllogictest::Runner::new(postgres_client);
 
     // let temp_dir = tempdir()?;
     // let copy_path = temp_dir.path().join(&file_name);
 
     // copy(path, &copy_path)?;
-    update_test_file(&path, postgres_runner, " ", default_validator).await?;
+    // update_test_file(&path, postgres_runner, " ", default_validator).await?;
 
     let ctx = SessionContext::new();
     setup::register_aggregate_csv_by_sql(&ctx).await;

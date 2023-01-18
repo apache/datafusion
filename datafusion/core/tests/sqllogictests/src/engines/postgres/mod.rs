@@ -26,7 +26,8 @@ use testcontainers::core::WaitFor;
 use testcontainers::images::generic::GenericImage;
 use tokio::task::JoinHandle;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, offset::Utc};
+use futures::TryStreamExt;
 use postgres_types::Type;
 use tokio_postgres::{Column, Row};
 use rust_decimal::Decimal;
@@ -94,109 +95,24 @@ impl Drop for Postgres {
     }
 }
 
-macro_rules! array_process {
-    ($row:ident, $row_vec:ident, $idx:ident, $t:ty) => {
-        let value: Option<Vec<Option<$t>>> = $row.get($idx);
-        match value {
-            Some(value) => {
-                let mut output = String::new();
-                write!(output, "{{").unwrap();
-                for (i, v) in value.iter().enumerate() {
-                    match v {
-                        Some(v) => {
-                            write!(output, "{}", v).unwrap();
-                        }
-                        None => {
-                            write!(output, "NULL").unwrap();
-                        }
-                    }
-                    if i < value.len() - 1 {
-                        write!(output, ",").unwrap();
-                    }
-                }
-                write!(output, "}}").unwrap();
-                $row_vec.push(output);
-            }
-            None => {
-                $row_vec.push("NULL".to_string());
-            }
-        }
-    };
-    ($row:ident, $row_vec:ident, $idx:ident, $t:ty, $convert:ident) => {
-        let value: Option<Vec<Option<$t>>> = $row.get($idx);
-        match value {
-            Some(value) => {
-                let mut output = String::new();
-                write!(output, "{{").unwrap();
-                for (i, v) in value.iter().enumerate() {
-                    match v {
-                        Some(v) => {
-                            write!(output, "{}", $convert(v)).unwrap();
-                        }
-                        None => {
-                            write!(output, "NULL").unwrap();
-                        }
-                    }
-                    if i < value.len() - 1 {
-                        write!(output, ",").unwrap();
-                    }
-                }
-                write!(output, "}}").unwrap();
-                $row_vec.push(output);
-            }
-            None => {
-                $row_vec.push("NULL".to_string());
-            }
-        }
-    };
-    // ($self:ident, $row:ident, $row_vec:ident, $idx:ident, $t:ty, $ty_name:expr) => {
-    //     let value: Option<Vec<Option<$t>>> = $row.get($idx);
-    //     match value {
-    //         Some(value) => {
-    //             let mut output = String::new();
-    //             write!(output, "{{").unwrap();
-    //             for (i, v) in value.iter().enumerate() {
-    //                 match v {
-    //                     Some(v) => {
-    //                         let sql = format!("select ($1::{})::varchar", stringify!($ty_name));
-    //                         let tmp_rows = $self.client.query(&sql, &[&v]).await.unwrap();
-    //                         let value: &str = tmp_rows.get(0).unwrap().get(0);
-    //                         assert!(value.len() > 0);
-    //                         write!(output, "{}", value).unwrap();
-    //                     }
-    //                     None => {
-    //                         write!(output, "NULL").unwrap();
-    //                     }
-    //                 }
-    //                 if i < value.len() - 1 {
-    //                     write!(output, ",").unwrap();
-    //                 }
-    //             }
-    //             write!(output, "}}").unwrap();
-    //             $row_vec.push(output);
-    //         }
-    //         None => {
-    //             $row_vec.push("NULL".to_string());
-    //         }
-    //     }
-    // };
-}
-
 macro_rules! make_string {
     ($row:ident, $idx:ident, $t:ty) => {{
         let value:Option<$t> = $row.get($idx);
-        value.unwrap().to_string()
+         match value {
+            Some(value) => value.to_string(),
+            None => "NULL".to_string()
+         }
     }};
     ($row:ident, $idx:ident, $t:ty, $convert:ident) => {{
         let value: Option<$t> = $row.get($idx);
-        $convert(value.unwrap()).to_string()
+        match value {
+            Some(value) => $convert(value).to_string(),
+            None => "NULL".to_string()
+         }
     }};
 }
 
 fn cell_to_string(row: &Row, column: &Column, idx: usize) -> String {
-    if idx >= row.columns().len() {
-        return "NULL".to_string();
-    }
     match column.type_().clone() {
         Type::INT2 => make_string!(row, idx, i16),
         Type::INT4 => make_string!(row, idx, i32),
@@ -204,44 +120,17 @@ fn cell_to_string(row: &Row, column: &Column, idx: usize) -> String {
         Type::NUMERIC => make_string!(row, idx, Decimal, decimal_to_str),
         Type::DATE => make_string!(row, idx, NaiveDate),
         Type::TIME => make_string!(row, idx, NaiveTime),
-        Type::TIMESTAMP => make_string!(row, idx, NaiveDateTime),
-        Type::BOOL => make_string!(row, idx, bool, bool_to_str),
-        // Type::INT2_ARRAY => array_process!(row, row_vec, idx, i16),
-        // Type::INT4_ARRAY => array_process!(row, row_vec, idx, i32),
-        // Type::INT8_ARRAY => array_process!(row, row_vec, idx, i64),
-        // Type::BOOL_ARRAY => array_process!(row, row_vec, idx, bool, bool_to_str),
-        // Type::FLOAT4_ARRAY => array_process!(row, row_vec, idx, f32, float4_to_str),
-        // Type::FLOAT8_ARRAY => array_process!(row, row_vec, idx, f64, float8_to_str),
-        // Type::NUMERIC_ARRAY => array_process!(row, row_vec, idx, Decimal),
-        // Type::DATE_ARRAY => array_process!(row, row_vec, idx, NaiveDate),
-        // Type::TIME_ARRAY => array_process!(row, row_vec, idx, NaiveTime),
-        // Type::TIMESTAMP_ARRAY => array_process!(row, row_vec, idx, NaiveDateTime),
-        // Type::VARCHAR_ARRAY | Type::TEXT_ARRAY => array_process!(row, row_vec, idx, String, varchar_to_str),
-        Type::VARCHAR | Type::TEXT => make_string!(row, idx, &str, varchar_to_str),
-        Type::FLOAT4 => make_string!(row, idx, f32, float4_to_str),
-        Type::FLOAT8 => make_string!(row, idx, f64, float8_to_str),
-        // Type::INTERVAL => {
-        //     single_process!(self, row, row_vec, idx, Interval, INTERVAL);
-        // }
-        // Type::TIMESTAMPTZ => {
-        //     single_process!(
-        //                     self,
-        //                     row,
-        //                     row_vec,
-        //                     idx,
-        //                     DateTime<chrono::Utc>,
-        //                     TIMESTAMPTZ
-        //                 );
-        // }
-        // Type::INTERVAL_ARRAY => {
-        //     array_process!(self, row, row_vec, idx, Interval, INTERVAL);
-        // }
-        // Type::TIMESTAMPTZ_ARRAY => {
-        //     array_process!(self, row, row_vec, idx, DateTime<chrono::Utc>, TIMESTAMPTZ);
-        // }
-        _ => {
-            todo!("Unsupported type: {}", column.type_().name())
+        Type::TIMESTAMP => {
+            let value: Option<NaiveDateTime> = row.get(idx);
+            value
+                .map(|d| format!("{:?}", d))
+                .unwrap_or_else(|| "NULL".to_string())
         }
+        Type::BOOL => make_string!(row, idx, bool, bool_to_str),
+        Type::BPCHAR | Type::VARCHAR | Type::TEXT => make_string!(row, idx, &str, varchar_to_str),
+        Type::FLOAT4 => make_string!(row, idx, f32, f32_to_str),
+        Type::FLOAT8 => make_string!(row, idx, f64, f64_to_str),
+        _ => todo!("Unsupported type: {}", column.type_().name())
     }
 }
 

@@ -108,9 +108,14 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
     } else {
         match col.data_type() {
             DataType::Boolean => Ok(bool_to_str(get_row_value!(array::BooleanArray, col, row))),
-            DataType::Float16 => Ok(float2_to_str(get_row_value!(array::Float16Array, col, row))),
-            DataType::Float32 => Ok(float4_to_str(get_row_value!(array::Float32Array, col, row))),
-            DataType::Float64 => Ok(float8_to_str(get_row_value!(array::Float64Array, col, row))),
+            DataType::Float16 => Ok(f16_to_str(get_row_value!(array::Float16Array, col, row))),
+            DataType::Float32 => Ok(f32_to_str(get_row_value!(array::Float32Array, col, row))),
+            DataType::Float64 => Ok(f64_to_str(get_row_value!(array::Float64Array, col, row))),
+            DataType::Decimal128(_, scale) => {
+                let value = get_row_value!(array::Decimal128Array, col, row);
+                let decimal_scale = u32::try_from((*scale).max(0)).unwrap();
+                Ok(i128_to_str(value, decimal_scale))
+            }
             DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(array::LargeStringArray, col, row))),
             DataType::Utf8 => Ok(varchar_to_str(get_row_value!(array::StringArray, col, row))),
             _ => arrow::util::display::array_value_to_string(col, row)
