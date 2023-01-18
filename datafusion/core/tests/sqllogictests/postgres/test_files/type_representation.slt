@@ -101,4 +101,4 @@ select '2018-01-01 12:00:00'::TIMESTAMP
 query I
 select true::BOOLEAN, 'false'::BOOLEAN
 ----
-t f
+true false

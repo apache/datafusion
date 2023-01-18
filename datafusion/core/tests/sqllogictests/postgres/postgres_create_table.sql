@@ -10,7 +10,7 @@ CREATE TABLE aggregate_test_100_by_sql
     c8  integer           NOT NULL,
     c9  bigint            NOT NULL,
     c10 character varying NOT NULL,
-    c11 double precision  NOT NULL,
+    c11 real              NOT NULL,
     c12 double precision  NOT NULL,
     c13 character varying NOT NULL
 );

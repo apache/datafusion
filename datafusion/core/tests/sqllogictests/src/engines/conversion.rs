@@ -1,13 +1,15 @@
 use half::f16;
 use log::info;
-use rust_decimal::{Decimal, RoundingStrategy};
+use rust_decimal::Decimal;
 use sqlparser::ast::DataType::Dec;
+use rust_decimal::prelude::*;
+use bigdecimal::BigDecimal;
 
 pub fn bool_to_str(value: bool) -> String {
     if value {
-        "t".to_string()
+        "true".to_string()
     } else {
-        "f".to_string()
+        "false".to_string()
     }
 }
 
@@ -27,7 +29,7 @@ pub fn f16_to_str(value: f16) -> String {
     } else if value == f16::NEG_INFINITY {
         "-Infinity".to_string()
     } else {
-        decimal_to_str(Decimal::from_f32_retain(value.to_f32()).unwrap())
+        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
     }
 }
 
@@ -39,7 +41,7 @@ pub fn f32_to_str(value: f32) -> String {
     } else if value == f32::NEG_INFINITY {
         "-Infinity".to_string()
     } else {
-        decimal_to_str(Decimal::from_f32_retain(value).unwrap())
+        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
     }
 }
 
@@ -51,14 +53,18 @@ pub fn f64_to_str(value: f64) -> String {
     } else if value == f64::NEG_INFINITY {
         "-Infinity".to_string()
     } else {
-        decimal_to_str(Decimal::from_f64_retain(value).unwrap())
+        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
     }
 }
 
 pub fn i128_to_str(value: i128, scale: u32) -> String {
-    decimal_to_str(Decimal::from_i128_with_scale(value, scale))
+    big_decimal_to_str(BigDecimal::from_str(&Decimal::from_i128_with_scale(value, scale).to_string()).unwrap())
 }
 
 pub fn decimal_to_str(value: Decimal) -> String {
-    value.round_dp(8).normalize().to_string()
+    big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap())
+}
+
+pub fn big_decimal_to_str(value: BigDecimal) -> String {
+    value.round(20).normalized().to_string()
 }

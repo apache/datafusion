@@ -980,14 +980,14 @@ select max(c1) from d_table
 query R
 select sum(c1) from d_table
 ----
-100.000
+100
 
 # FIX: doesn't check datatype
 # aggregate_decimal_avg
 query R
 select avg(c1) from d_table
 ----
-5.0000000
+5
 
 # FIX: different test table
 # aggregate
