@@ -60,16 +60,14 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 
         if options.complete_mode {
             run_complete_file(&path, file_name, is_pg_compatibility_test).await?;
-        } else {
-            if options.postgres_runner {
-                if is_pg_compatibility_test {
-                    run_test_file_with_postgres(&path, file_name).await?;
-                } else {
-                    debug!("Skipping test file {:?}", path);
-                }
+        } else if options.postgres_runner {
+            if is_pg_compatibility_test {
+                run_test_file_with_postgres(&path, file_name).await?;
             } else {
-                run_test_file(&path, file_name, is_pg_compatibility_test).await?;
+                debug!("Skipping test file {:?}", path);
             }
+        } else {
+            run_test_file(&path, file_name, is_pg_compatibility_test).await?;
         }
     }
 

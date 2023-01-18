@@ -166,7 +166,7 @@ impl sqllogictest::AsyncDB for Postgres {
                 row.columns()
                     .iter()
                     .enumerate()
-                    .map(|(idx, column)| cell_to_string(&row, &column, idx))
+                    .map(|(idx, column)| cell_to_string(row, column, idx))
                     .collect::<Vec<String>>()
             })
             .collect::<Vec<_>>();

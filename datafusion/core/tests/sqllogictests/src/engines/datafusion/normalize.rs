@@ -101,23 +101,21 @@ pub fn cell_to_string(
     if !col.is_valid(row) {
         // represent any null value with the string "NULL"
         Ok(NULL_STR.to_string())
+    } else if is_pg_compatibility_test {
+        postgres_compatible_cell_to_string(col, row)
     } else {
-        if is_pg_compatibility_test {
-            postgres_compatible_cell_to_string(col, row)
-        } else {
-            match col.data_type() {
-                DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(
-                    array::LargeStringArray,
-                    col,
-                    row
-                ))),
-                DataType::Utf8 => {
-                    Ok(varchar_to_str(get_row_value!(array::StringArray, col, row)))
-                }
-                _ => arrow::util::display::array_value_to_string(col, row),
+        match col.data_type() {
+            DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(
+                array::LargeStringArray,
+                col,
+                row
+            ))),
+            DataType::Utf8 => {
+                Ok(varchar_to_str(get_row_value!(array::StringArray, col, row)))
             }
-            .map_err(DFSqlLogicTestError::Arrow)
+            _ => arrow::util::display::array_value_to_string(col, row),
         }
+        .map_err(DFSqlLogicTestError::Arrow)
     }
 }
 
