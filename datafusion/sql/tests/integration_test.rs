@@ -3430,6 +3430,36 @@ Dml: op=[Insert] table=[person]
 }
 
 #[test]
+#[should_panic(expected = "value: Plan(\"Column not found\")")]
+fn test_prepare_statement_insert_infer_gt() {
+    let sql = "insert into person (id, first_name, last_name) values ($1, $2, $3, $4)";
+
+    let expected_plan = r#""#.trim();
+    let expected_dt = "[Int32]";
+    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+}
+
+#[test]
+#[should_panic(expected = "value: Plan(\"Column count doesn't match insert query!\")")]
+fn test_prepare_statement_insert_infer_lt() {
+    let sql = "insert into person (id, first_name, last_name) values ($1, $2)";
+
+    let expected_plan = r#""#.trim();
+    let expected_dt = "[Int32]";
+    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+}
+
+#[test]
+#[should_panic(expected = "value: Plan(\"Placeholder type could not be resolved\")")]
+fn test_prepare_statement_insert_infer_gap() {
+    let sql = "insert into person (id, first_name, last_name) values ($2, $4, $6)";
+
+    let expected_plan = r#""#.trim();
+    let expected_dt = "[Int32]";
+    let _ = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+}
+
+#[test]
 fn test_prepare_statement_to_plan_one_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $1";
 
