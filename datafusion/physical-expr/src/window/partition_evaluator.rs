@@ -17,26 +17,54 @@
 
 //! partition evaluation module
 
+use crate::window::window_expr::BuiltinWindowState;
+use crate::window::WindowAggState;
 use arrow::array::ArrayRef;
 use datafusion_common::Result;
 use datafusion_common::{DataFusionError, ScalarValue};
+use std::fmt::Debug;
 use std::ops::Range;
 
 /// Partition evaluator
-pub trait PartitionEvaluator {
+pub trait PartitionEvaluator: Debug + Send {
     /// Whether the evaluator should be evaluated with rank
     fn include_rank(&self) -> bool {
         false
     }
 
-    fn uses_window_frame(&self) -> bool {
-        false
+    /// Returns state of the Built-in Window Function
+    fn state(&self) -> Result<BuiltinWindowState> {
+        // If we do not use state we just return Default
+        Ok(BuiltinWindowState::Default)
+    }
+
+    fn update_state(
+        &mut self,
+        _state: &WindowAggState,
+        _range_columns: &[ArrayRef],
+        _sort_partition_points: &[Range<usize>],
+    ) -> Result<()> {
+        // If we do not use state, update_state does nothing
+        Ok(())
+    }
+
+    fn get_range(&self, _state: &WindowAggState, _n_rows: usize) -> Result<Range<usize>> {
+        Err(DataFusionError::NotImplemented(
+            "get_range is not implemented for this window function".to_string(),
+        ))
     }
 
     /// evaluate the partition evaluator against the partition
     fn evaluate(&self, _values: &[ArrayRef], _num_rows: usize) -> Result<ArrayRef> {
         Err(DataFusionError::NotImplemented(
-            "evaluate_partition is not implemented by default".into(),
+            "evaluate is not implemented by default".into(),
+        ))
+    }
+
+    /// evaluate window function result inside given range
+    fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
+        Err(DataFusionError::NotImplemented(
+            "evaluate_stateful is not implemented by default".into(),
         ))
     }
 

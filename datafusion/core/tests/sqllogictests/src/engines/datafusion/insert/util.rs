@@ -16,7 +16,8 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{ScalarValue, TableReference};
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::TableReference;
 use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource};
 use datafusion_sql::planner::ContextProvider;
 use std::sync::Arc;
@@ -44,7 +45,7 @@ impl ContextProvider for LogicTestContextProvider {
         todo!()
     }
 
-    fn get_config_option(&self, _variable: &str) -> Option<ScalarValue> {
+    fn options(&self) -> &ConfigOptions {
         todo!()
     }
 }

@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_csv("t1", "testdata/test.csv", CsvReadOptions::default())
         .await?;
-    let dataframe = ctx.table("t1")?;
+    let dataframe = ctx.table("t1").await?;
     let physical_plan = dataframe.create_physical_plan().await?;
     let bytes = physical_plan_to_bytes(physical_plan.clone())?;
     let physical_round_trip = physical_plan_from_bytes(&bytes, &ctx)?;

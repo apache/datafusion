@@ -28,7 +28,7 @@ mod value;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::normalize_ident;
 use arrow_schema::DataType;
-use datafusion_common::{DFSchema, DataFusionError, Result, ScalarValue};
+use datafusion_common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     col, expr, lit, AggregateFunction, Between, BinaryExpr, BuiltinScalarFunction, Cast,
     Expr, ExprSchemable, GetIndexedField, Like, Operator, TryCast,
@@ -63,6 +63,47 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // since this function requires more space per frame
             // avoid calling it for binary ops
             _ => self.sql_expr_to_logical_expr_internal(sql, schema, planner_context),
+        }
+    }
+
+    /// Generate a relational expression from a SQL expression
+    pub fn sql_to_expr(
+        &self,
+        sql: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
+        expr = self.rewrite_partial_qualifier(expr, schema);
+        self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
+        Ok(expr)
+    }
+
+    /// Rewrite aliases which are not-complete (e.g. ones that only include only table qualifier in a schema.table qualified relation)
+    fn rewrite_partial_qualifier(&self, expr: Expr, schema: &DFSchema) -> Expr {
+        match expr {
+            Expr::Column(col) => match &col.relation {
+                Some(q) => {
+                    match schema
+                        .fields()
+                        .iter()
+                        .find(|field| match field.qualifier() {
+                            Some(field_q) => {
+                                field.name() == &col.name
+                                    && field_q.ends_with(&format!(".{q}"))
+                            }
+                            _ => false,
+                        }) {
+                        Some(df_field) => Expr::Column(Column {
+                            relation: df_field.qualifier().cloned(),
+                            name: df_field.name().clone(),
+                        }),
+                        None => Expr::Column(col),
+                    }
+                }
+                None => Expr::Column(col),
+            },
+            _ => expr,
         }
     }
 

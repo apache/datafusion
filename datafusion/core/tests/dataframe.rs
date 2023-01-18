@@ -64,11 +64,11 @@ async fn join() -> Result<()> {
 
     ctx.register_batch("aa", batch1)?;
 
-    let df1 = ctx.table("aa")?;
+    let df1 = ctx.table("aa").await?;
 
     ctx.register_batch("aaa", batch2)?;
 
-    let df2 = ctx.table("aaa")?;
+    let df2 = ctx.table("aaa").await?;
 
     let a = df1.join(df2, JoinType::Inner, &["a"], &["a"], None)?;
 
@@ -100,6 +100,7 @@ async fn sort_on_unprojected_columns() -> Result<()> {
 
     let df = ctx
         .table("t")
+        .await
         .unwrap()
         .select(vec![col("a")])
         .unwrap()
@@ -138,6 +139,7 @@ async fn filter_with_alias_overwrite() -> Result<()> {
 
     let df = ctx
         .table("t")
+        .await
         .unwrap()
         .select(vec![(col("a").eq(lit(10))).alias("a")])
         .unwrap()
@@ -174,6 +176,7 @@ async fn select_with_alias_overwrite() -> Result<()> {
 
     let df = ctx
         .table("t")
+        .await
         .unwrap()
         .select(vec![col("a").alias("a")])
         .unwrap()
@@ -208,7 +211,8 @@ async fn test_grouping_sets() -> Result<()> {
         vec![col("a"), col("b")],
     ]));
 
-    let df = create_test_table()?
+    let df = create_test_table()
+        .await?
         .aggregate(vec![grouping_set_expr], vec![count(col("a"))])?
         .sort(vec![
             Expr::Sort(Sort::new(Box::new(col("a")), false, true)),
@@ -354,8 +358,8 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
 #[tokio::test]
 async fn join_with_alias_filter() -> Result<()> {
     let join_ctx = create_join_context()?;
-    let t1 = join_ctx.table("t1")?;
-    let t2 = join_ctx.table("t2")?;
+    let t1 = join_ctx.table("t1").await?;
+    let t2 = join_ctx.table("t2").await?;
     let t1_schema = t1.schema().clone();
     let t2_schema = t2.schema().clone();
 
@@ -407,7 +411,7 @@ async fn join_with_alias_filter() -> Result<()> {
     Ok(())
 }
 
-fn create_test_table() -> Result<DataFrame> {
+async fn create_test_table() -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),
@@ -431,7 +435,7 @@ fn create_test_table() -> Result<DataFrame> {
 
     ctx.register_batch("test", batch)?;
 
-    ctx.table("test")
+    ctx.table("test").await
 }
 
 async fn aggregates_table(ctx: &SessionContext) -> Result<DataFrame> {

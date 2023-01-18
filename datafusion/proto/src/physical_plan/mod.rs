@@ -1212,6 +1212,7 @@ mod roundtrip_tests {
     use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
+    use datafusion::physical_plan::expressions::like;
     use datafusion::physical_plan::functions;
     use datafusion::physical_plan::functions::make_scalar_function;
     use datafusion::physical_plan::projection::ProjectionExec;
@@ -1562,5 +1563,26 @@ mod roundtrip_tests {
             Arc::new(EmptyExec::new(false, schema.clone())),
             schema,
         )?))
+    }
+
+    #[test]
+    fn roundtrip_like() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let input = Arc::new(EmptyExec::new(false, Arc::new(schema.clone())));
+        let like_expr = like(
+            false,
+            false,
+            col("a", &schema)?,
+            col("b", &schema)?,
+            &schema,
+        )?;
+        let plan = Arc::new(ProjectionExec::try_new(
+            vec![(like_expr, "result".to_string())],
+            input,
+        )?);
+        roundtrip_test(plan)
     }
 }

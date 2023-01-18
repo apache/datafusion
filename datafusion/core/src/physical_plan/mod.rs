@@ -136,30 +136,14 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     }
 
     /// Specifies the ordering requirements for all of the children
-    /// For each child, it's the local ordering requirement within each partition rather than the global ordering
+    /// For each child, it's the local ordering requirement within
+    /// each partition rather than the global ordering
+    ///
+    /// NOTE that checking `!is_empty()` does **not** check for a
+    /// required input ordering. Instead, the correct check is that at
+    /// least one entry must be `Some`
     fn required_input_ordering(&self) -> Vec<Option<&[PhysicalSortExpr]>> {
         vec![None; self.children().len()]
-    }
-
-    /// Returns `true` if this operator relies on its inputs being
-    /// produced in a certain order (for example that they are sorted
-    /// a particular way) for correctness.
-    ///
-    /// If `true` is returned, DataFusion will not apply certain
-    /// optimizations which might reorder the inputs (such as
-    /// repartitioning to increase concurrency).
-    ///
-    /// The default implementation checks the input ordering requirements
-    /// and if there is non empty ordering requirements to the input, the method will
-    /// return `true`.
-    ///
-    /// WARNING: if you override this default and return `false`, your
-    /// operator can not rely on DataFusion preserving the input order
-    /// as it will likely not.
-    fn relies_on_input_order(&self) -> bool {
-        self.required_input_ordering()
-            .iter()
-            .any(|ordering| matches!(ordering, Some(_)))
     }
 
     /// Returns `false` if this operator's implementation may reorder
@@ -321,7 +305,7 @@ pub fn with_new_children_if_necessary(
 ///   let mut ctx = SessionContext::with_config(config);
 ///
 ///   // register the a table
-///   ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await.unwrap();
+///   ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await.unwrap();
 ///
 ///   // create a plan to run a SQL query
 ///   let dataframe = ctx.sql("SELECT a FROM example WHERE a < 5").await.unwrap();
@@ -339,7 +323,7 @@ pub fn with_new_children_if_necessary(
 ///              \n  CoalesceBatchesExec: target_batch_size=8192\
 ///              \n    FilterExec: a@0 < 5\
 ///              \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
-///              \n        CsvExec: files={1 group: [[WORKING_DIR/tests/example.csv]]}, has_header=true, limit=None, projection=[a]",
+///              \n        CsvExec: files={1 group: [[WORKING_DIR/tests/data/example.csv]]}, has_header=true, limit=None, projection=[a]",
 ///               plan_string.trim());
 ///
 ///   let one_line = format!("{}", displayable_plan.one_line());

@@ -50,7 +50,43 @@ use crate::{
 use datafusion_physical_expr::sort_expr_list_eq_strict_order;
 use tokio::macros::support::thread_rng_n;
 
-/// UNION ALL execution plan
+/// `UnionExec`: `UNION ALL` execution plan.
+///
+/// `UnionExec` combines multiple inputs with the same schema by
+/// concatenating the partitions.  It does not mix or copy data within
+/// or across partitions. Thus if the input partitions are sorted, the
+/// output partitions of the union are also sorted.
+///
+/// For example, given a `UnionExec` of two inputs, with `N`
+/// partitions, and `M` partitions, there will be `N+M` output
+/// partitions. The first `N` output partitions are from Input 1
+/// partitions, and then next `M` output partitions are from Input 2.
+///
+/// ```text
+///                       ▲       ▲           ▲         ▲
+///                       │       │           │         │
+///     Output            │  ...  │           │         │
+///   Partitions          │0      │N-1        │ N       │N+M-1
+///(passes through   ┌────┴───────┴───────────┴─────────┴───┐
+/// the N+M input    │              UnionExec               │
+///  partitions)     │                                      │
+///                  └──────────────────────────────────────┘
+///                                      ▲
+///                                      │
+///                                      │
+///       Input           ┌────────┬─────┴────┬──────────┐
+///     Partitions        │ ...    │          │     ...  │
+///                    0  │        │ N-1      │ 0        │  M-1
+///                  ┌────┴────────┴───┐  ┌───┴──────────┴───┐
+///                  │                 │  │                  │
+///                  │                 │  │                  │
+///                  │                 │  │                  │
+///                  │                 │  │                  │
+///                  │                 │  │                  │
+///                  │                 │  │                  │
+///                  │Input 1          │  │Input 2           │
+///                  └─────────────────┘  └──────────────────┘
+/// ```
 #[derive(Debug)]
 pub struct UnionExec {
     /// Input execution plan
@@ -158,7 +194,7 @@ impl ExecutionPlan for UnionExec {
 
     /// Specifies whether this plan generates an infinite stream of records.
     /// If the plan does not support pipelining, but it its input(s) are
-    /// infinite, returns an error to indicate this.    
+    /// infinite, returns an error to indicate this.
     fn unbounded_output(&self, children: &[bool]) -> Result<bool> {
         Ok(children.iter().any(|x| *x))
     }
@@ -209,6 +245,30 @@ impl ExecutionPlan for UnionExec {
         } else {
             None
         }
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        let first_input_ordering = self.inputs[0].output_ordering();
+        // If the Union is not partition aware and all the input
+        // ordering spec strictly equal with the first_input_ordering,
+        // then the `UnionExec` maintains the input order
+        //
+        // It might be too strict here in the case that the input
+        // ordering are compatible but not exactly the same.  See
+        // comments in output_ordering
+        !self.partition_aware
+            && first_input_ordering.is_some()
+            && self
+                .inputs
+                .iter()
+                .map(|plan| plan.output_ordering())
+                .all(|ordering| {
+                    ordering.is_some()
+                        && sort_expr_list_eq_strict_order(
+                            ordering.unwrap(),
+                            first_input_ordering.unwrap(),
+                        )
+                })
     }
 
     fn with_new_children(

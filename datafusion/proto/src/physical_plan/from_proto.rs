@@ -29,6 +29,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
 use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
 use datafusion::physical_expr::{PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion::physical_plan::expressions::LikeExpr;
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
     expressions::{
@@ -217,6 +218,22 @@ pub(crate) fn parse_physical_expr(
                 &convert_required!(e.return_type)?,
             ))
         }
+        ExprType::LikeExpr(like_expr) => Arc::new(LikeExpr::new(
+            like_expr.negated,
+            like_expr.case_insensitive,
+            parse_required_physical_box_expr(
+                &like_expr.expr,
+                registry,
+                "expr",
+                input_schema,
+            )?,
+            parse_required_physical_box_expr(
+                &like_expr.pattern,
+                registry,
+                "pattern",
+                input_schema,
+            )?,
+        )),
     };
 
     Ok(pexpr)

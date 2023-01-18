@@ -22,6 +22,7 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::physical_plan::metrics::MemTrackingMetrics;
 use crate::physical_plan::{displayable, ColumnStatistics, ExecutionPlan, Statistics};
+use arrow::compute::concat;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
@@ -93,6 +94,47 @@ pub async fn collect(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatc
         .try_collect::<Vec<_>>()
         .await
         .map_err(DataFusionError::from)
+}
+
+/// Merge two record batch references into a single record batch.
+/// All the record batches inside the slice must have the same schema.
+pub fn merge_batches(
+    first: &RecordBatch,
+    second: &RecordBatch,
+    schema: SchemaRef,
+) -> ArrowResult<RecordBatch> {
+    let columns = (0..schema.fields.len())
+        .map(|index| {
+            let first_column = first.column(index).as_ref();
+            let second_column = second.column(index).as_ref();
+            concat(&[first_column, second_column])
+        })
+        .collect::<ArrowResult<Vec<_>>>()?;
+    RecordBatch::try_new(schema, columns)
+}
+
+/// Merge a slice of record batch references into a single record batch, or
+/// return None if the slice itself is empty. All the record batches inside the
+/// slice must have the same schema.
+pub fn merge_multiple_batches(
+    batches: &[&RecordBatch],
+    schema: SchemaRef,
+) -> ArrowResult<Option<RecordBatch>> {
+    Ok(if batches.is_empty() {
+        None
+    } else {
+        let columns = (0..schema.fields.len())
+            .map(|index| {
+                concat(
+                    &batches
+                        .iter()
+                        .map(|batch| batch.column(index).as_ref())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<ArrowResult<Vec<_>>>()?;
+        Some(RecordBatch::try_new(schema, columns)?)
+    })
 }
 
 /// Recursively builds a list of files in a directory with a given extension

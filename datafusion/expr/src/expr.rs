@@ -245,9 +245,6 @@ impl BinaryExpr {
         match self.op {
             Operator::Or => 5,
             Operator::And => 10,
-            Operator::Like | Operator::NotLike | Operator::ILike | Operator::NotILike => {
-                19
-            }
             Operator::NotEq
             | Operator::Eq
             | Operator::Lt
@@ -685,22 +682,22 @@ impl Expr {
 
     /// Return `self LIKE other`
     pub fn like(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::Like, other)
+        Expr::Like(Like::new(false, Box::new(self), Box::new(other), None))
     }
 
     /// Return `self NOT LIKE other`
     pub fn not_like(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::NotLike, other)
+        Expr::Like(Like::new(true, Box::new(self), Box::new(other), None))
     }
 
     /// Return `self ILIKE other`
     pub fn ilike(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::ILike, other)
+        Expr::ILike(Like::new(false, Box::new(self), Box::new(other), None))
     }
 
     /// Return `self NOT ILIKE other`
     pub fn not_ilike(self, other: Expr) -> Expr {
-        binary_expr(self, Operator::NotILike, other)
+        Expr::ILike(Like::new(true, Box::new(self), Box::new(other), None))
     }
 
     /// Return `self AS name` alias expression

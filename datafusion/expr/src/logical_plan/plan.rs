@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expr::BinaryExpr;
 use crate::expr_rewriter::{ExprRewritable, ExprRewriter};
+use crate::expr_visitor::inspect_expr_pre;
 ///! Logical plan types
 use crate::logical_plan::builder::validate_unique_names;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
@@ -118,6 +118,8 @@ pub enum LogicalPlan {
     SetVariable(SetVariable),
     /// Prepare a statement
     Prepare(Prepare),
+    /// Insert / Update / Delete
+    Dml(DmlStatement),
 }
 
 impl LogicalPlan {
@@ -158,6 +160,7 @@ impl LogicalPlan {
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
             LogicalPlan::DropView(DropView { schema, .. }) => schema,
             LogicalPlan::SetVariable(SetVariable { schema, .. }) => schema,
+            LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
         }
     }
 
@@ -218,6 +221,7 @@ impl LogicalPlan {
             LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::SetVariable(_) => vec![],
+            LogicalPlan::Dml(DmlStatement { table_schema, .. }) => vec![table_schema],
         }
     }
 
@@ -233,42 +237,71 @@ impl LogicalPlan {
     /// logical plan node. This does not include expressions in any
     /// children
     pub fn expressions(self: &LogicalPlan) -> Vec<Expr> {
+        let mut exprs = vec![];
+        self.inspect_expressions(|e| {
+            exprs.push(e.clone());
+            Ok(()) as Result<(), DataFusionError>
+        })
+        // closure always returns OK
+        .unwrap();
+        exprs
+    }
+
+    /// Calls `f` on all expressions (non-recursively) in the current
+    /// logical plan node. This does not include expressions in any
+    /// children.
+    pub fn inspect_expressions<F, E>(self: &LogicalPlan, mut f: F) -> Result<(), E>
+    where
+        F: FnMut(&Expr) -> Result<(), E>,
+    {
         match self {
-            LogicalPlan::Projection(Projection { expr, .. }) => expr.clone(),
-            LogicalPlan::Values(Values { values, .. }) => {
-                values.iter().flatten().cloned().collect()
+            LogicalPlan::Projection(Projection { expr, .. }) => {
+                expr.iter().try_for_each(f)
             }
-            LogicalPlan::Filter(Filter { predicate, .. }) => vec![predicate.clone()],
+            LogicalPlan::Values(Values { values, .. }) => {
+                values.iter().flatten().try_for_each(f)
+            }
+            LogicalPlan::Filter(Filter { predicate, .. }) => f(predicate),
             LogicalPlan::Repartition(Repartition {
                 partitioning_scheme,
                 ..
             }) => match partitioning_scheme {
-                Partitioning::Hash(expr, _) => expr.clone(),
-                Partitioning::DistributeBy(expr) => expr.clone(),
-                Partitioning::RoundRobinBatch(_) => vec![],
+                Partitioning::Hash(expr, _) => expr.iter().try_for_each(f),
+                Partitioning::DistributeBy(expr) => expr.iter().try_for_each(f),
+                Partitioning::RoundRobinBatch(_) => Ok(()),
             },
-            LogicalPlan::Window(Window { window_expr, .. }) => window_expr.clone(),
+            LogicalPlan::Window(Window { window_expr, .. }) => {
+                window_expr.iter().try_for_each(f)
+            }
             LogicalPlan::Aggregate(Aggregate {
                 group_expr,
                 aggr_expr,
                 ..
-            }) => group_expr.iter().chain(aggr_expr.iter()).cloned().collect(),
+            }) => group_expr.iter().chain(aggr_expr.iter()).try_for_each(f),
             // There are two part of expression for join, equijoin(on) and non-equijoin(filter).
             // 1. the first part is `on.len()` equijoin expressions, and the struct of each expr is `left-on = right-on`.
             // 2. the second part is non-equijoin(filter).
-            LogicalPlan::Join(Join { on, filter, .. }) => on
-                .iter()
-                .map(|(l, r)| Expr::eq(l.clone(), r.clone()))
-                .chain(
-                    filter
-                        .as_ref()
-                        .map(|expr| vec![expr.clone()])
-                        .unwrap_or_default(),
-                )
-                .collect(),
-            LogicalPlan::Sort(Sort { expr, .. }) => expr.clone(),
-            LogicalPlan::Extension(extension) => extension.node.expressions(),
-            LogicalPlan::TableScan(TableScan { filters, .. }) => filters.clone(),
+            LogicalPlan::Join(Join { on, filter, .. }) => {
+                on.iter()
+                    // it not ideal to create an expr here to analyze them, but could cache it on the Join itself
+                    .map(|(l, r)| Expr::eq(l.clone(), r.clone()))
+                    .try_for_each(|e| f(&e))?;
+
+                if let Some(filter) = filter.as_ref() {
+                    f(filter)
+                } else {
+                    Ok(())
+                }
+            }
+            LogicalPlan::Sort(Sort { expr, .. }) => expr.iter().try_for_each(f),
+            LogicalPlan::Extension(extension) => {
+                // would be nice to avoid this copy -- maybe can
+                // update extension to just observer Exprs
+                extension.node.expressions().iter().try_for_each(f)
+            }
+            LogicalPlan::TableScan(TableScan { filters, .. }) => {
+                filters.iter().try_for_each(f)
+            }
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Subquery(_)
@@ -287,9 +320,8 @@ impl LogicalPlan {
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Distinct(_)
-            | LogicalPlan::Prepare(_) => {
-                vec![]
-            }
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Prepare(_) => Ok(()),
         }
     }
 
@@ -315,6 +347,7 @@ impl LogicalPlan {
             LogicalPlan::Distinct(Distinct { input }) => vec![input],
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
+            LogicalPlan::Dml(write) => vec![&write.input],
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Prepare(Prepare { input, .. }) => {
@@ -376,7 +409,8 @@ impl LogicalPlan {
         from_plan(self, &self.expressions(), inputs)
     }
 
-    /// Convert a prepare logical plan into its inner logical plan with all params replaced with their corresponding values
+    /// Convert a prepared [`LogicalPlan`] into its inner logical plan
+    /// with all params replaced with their corresponding values
     pub fn with_param_values(
         self,
         param_values: Vec<ScalarValue>,
@@ -459,7 +493,7 @@ pub trait PlanVisitor {
 }
 
 impl LogicalPlan {
-    /// returns all inputs in the logical plan. Returns Ok(true) if
+    /// Visits all inputs in the logical plan. Returns Ok(true) if
     /// all nodes were visited, and Ok(false) if any call to
     /// `pre_visit` or `post_visit` returned Ok(false) and may have
     /// cut short the recursion
@@ -471,11 +505,12 @@ impl LogicalPlan {
             return Ok(false);
         }
 
+        // Now visit any subqueries in expressions
+        self.visit_subqueries(visitor)?;
+
         let recurse = match self {
-            LogicalPlan::Projection(Projection { .. }) => {
-                self.visit_all_inputs(visitor)?
-            }
-            LogicalPlan::Filter(Filter { .. }) => self.visit_all_inputs(visitor)?,
+            LogicalPlan::Projection(Projection { input, .. }) => input.accept(visitor)?,
+            LogicalPlan::Filter(Filter { input, .. }) => input.accept(visitor)?,
             LogicalPlan::Repartition(Repartition { input, .. }) => {
                 input.accept(visitor)?
             }
@@ -515,6 +550,7 @@ impl LogicalPlan {
             }
             LogicalPlan::Explain(explain) => explain.plan.accept(visitor)?,
             LogicalPlan::Analyze(analyze) => analyze.input.accept(visitor)?,
+            LogicalPlan::Dml(write) => write.input.accept(visitor)?,
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
@@ -537,52 +573,36 @@ impl LogicalPlan {
         Ok(true)
     }
 
-    /// Visit all inputs, including subqueries
-    pub fn visit_all_inputs<V>(&self, visitor: &mut V) -> Result<bool, V::Error>
+    /// applies visitor to any subqueries in the plan
+    fn visit_subqueries<V>(&self, v: &mut V) -> Result<bool, V::Error>
     where
         V: PlanVisitor,
     {
-        for input in self.all_inputs() {
-            if !input.accept(visitor)? {
-                return Ok(false);
-            }
-        }
-
+        self.inspect_expressions(|expr| {
+            // recursively look for subqueries
+            inspect_expr_pre(expr, |expr| {
+                match expr {
+                    Expr::Exists { subquery, .. }
+                    | Expr::InSubquery { subquery, .. }
+                    | Expr::ScalarSubquery(subquery) => {
+                        // use a synthetic plan so the visitor sees a
+                        // LogicalPlan::Subquery (even though it is
+                        // actually a Subquery alias)
+                        let synthetic_plan = LogicalPlan::Subquery(subquery.clone());
+                        synthetic_plan.accept(v)?;
+                    }
+                    _ => {}
+                }
+                Ok(())
+            })
+        })?;
+        // continue recursion
         Ok(true)
     }
 
-    /// Get all plan inputs, including subqueries from expressions
-    fn all_inputs(&self) -> Vec<Arc<LogicalPlan>> {
-        let mut inputs = vec![];
-        for expr in self.expressions() {
-            Self::collect_subqueries(&expr, &mut inputs);
-        }
-        for input in self.inputs() {
-            inputs.push(Arc::new(input.clone()));
-        }
-        inputs
-    }
-
-    fn collect_subqueries(expr: &Expr, sub: &mut Vec<Arc<LogicalPlan>>) {
-        match expr {
-            Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-                Self::collect_subqueries(left, sub);
-                Self::collect_subqueries(right, sub);
-            }
-            Expr::Exists { subquery, .. } => {
-                sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
-            }
-            Expr::InSubquery { subquery, .. } => {
-                sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
-            }
-            Expr::ScalarSubquery(subquery) => {
-                sub.push(Arc::new(LogicalPlan::Subquery(subquery.clone())));
-            }
-            _ => {}
-        }
-    }
-
-    /// Return a logical plan with all placeholders/params (e.g $1 $2, ...) replaced with corresponding values provided in the prams_values
+    /// Return a logical plan with all placeholders/params (e.g $1 $2,
+    /// ...) replaced with corresponding values provided in the
+    /// params_values
     pub fn replace_params_with_values(
         &self,
         param_values: &Vec<ScalarValue>,
@@ -603,7 +623,8 @@ impl LogicalPlan {
         Ok(new_plan)
     }
 
-    /// Return an Expr with all placeholders replaced with their corresponding values provided in the prams_values
+    /// Return an Expr with all placeholders replaced with their
+    /// corresponding values provided in the params_values
     fn replace_placeholders_with_values(
         expr: Expr,
         param_values: &Vec<ScalarValue>,
@@ -915,6 +936,9 @@ impl LogicalPlan {
                         }
                         Ok(())
                     }
+                    LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
+                        write!(f, "Dml: op=[{op}] table=[{table_name}]")
+                    }
                     LogicalPlan::Filter(Filter {
                         predicate: ref expr,
                         ..
@@ -1195,7 +1219,8 @@ pub struct DropView {
     pub schema: DFSchemaRef,
 }
 
-/// Set a Variable's value -- value in [`ConfigOptions`]
+/// Set a Variable's value -- value in
+/// [`ConfigOptions`](datafusion_common::config::ConfigOptions)
 #[derive(Clone)]
 pub struct SetVariable {
     /// The variable name
@@ -1488,6 +1513,38 @@ pub struct CreateExternalTable {
     pub file_compression_type: CompressionTypeVariant,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
+}
+
+#[derive(Clone)]
+pub enum WriteOp {
+    Insert,
+    Delete,
+    Update,
+    Ctas,
+}
+
+impl Display for WriteOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            WriteOp::Insert => write!(f, "Insert"),
+            WriteOp::Delete => write!(f, "Delete"),
+            WriteOp::Update => write!(f, "Update"),
+            WriteOp::Ctas => write!(f, "Ctas"),
+        }
+    }
+}
+
+/// The operator that modifies the content of a database (adapted from substrait WriteRel)
+#[derive(Clone)]
+pub struct DmlStatement {
+    /// The table name
+    pub table_name: OwnedTableReference,
+    /// The schema of the table (must align with Rel input)
+    pub table_schema: DFSchemaRef,
+    /// The type of operation to perform
+    pub op: WriteOp,
+    /// The relation that determines the tuples to add/remove/modify the schema must match with table_schema
+    pub input: Arc<LogicalPlan>,
 }
 
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more
@@ -1837,7 +1894,7 @@ pub trait ToStringifiedPlan {
 mod tests {
     use super::*;
     use crate::logical_plan::table_scan;
-    use crate::{col, in_subquery, lit};
+    use crate::{col, exists, in_subquery, lit};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::DFSchema;
     use datafusion_common::Result;
@@ -1888,6 +1945,26 @@ mod tests {
         \n    TableScan: employee_csv projection=[id, state] [id:Int32, state:Utf8]";
 
         assert_eq!(expected, format!("{}", plan.display_indent_schema()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_display_subquery_alias() -> Result<()> {
+        let plan1 = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3]))?
+            .build()?;
+        let plan1 = Arc::new(plan1);
+
+        let plan =
+            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
+                .project(vec![col("id"), exists(plan1).alias("exists")])?
+                .build();
+
+        let expected = "Projection: employee_csv.id, EXISTS (<subquery>) AS exists\
+        \n  Subquery:\
+        \n    TableScan: employee_csv projection=[state]\
+        \n  TableScan: employee_csv projection=[id, state]";
+
+        assert_eq!(expected, format!("{}", plan?.display_indent()));
         Ok(())
     }
 

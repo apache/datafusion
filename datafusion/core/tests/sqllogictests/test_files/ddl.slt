@@ -83,7 +83,7 @@ select * from "foo.bar";
 2 3
 
 # Can not select from non existent foo.bar table
-statement error failed to resolve schema: foo
+statement error DataFusion error: Error during planning: table 'datafusion.foo.bar' not found
 select * from foo.bar;
 
 # Error if wrong capitalization to select
@@ -125,7 +125,7 @@ select * from "foo.bar";
 2 3
 
 # Can not select from non existent foo.bar view
-statement error failed to resolve schema: foo
+statement error DataFusion error: Error during planning: table 'datafusion.foo.bar' not found
 select * from foo.bar;
 
 # Error if wrong capitalization to select
@@ -203,7 +203,7 @@ DROP VIEW non_existent_view
 ##########
 
 statement ok
-CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION 'tests/aggregate_simple.csv';
+CREATE external table aggregate_simple(c1 real, c2 double, c3 boolean) STORED as CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv';
 
 # create_table_as
 statement ok
@@ -403,7 +403,7 @@ DROP VIEW y;
 # create_pipe_delimited_csv_table()
 
 statement ok
-CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION 'tests/aggregate_simple_pipe.csv';
+CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION 'tests/data/aggregate_simple_pipe.csv';
 
 
 query CCC

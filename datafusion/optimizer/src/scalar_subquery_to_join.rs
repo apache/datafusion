@@ -678,7 +678,7 @@ mod tests {
                 .build()?,
         );
         /*
-        Error: SchemaError(FieldNotFound { qualifier: Some("orders"), name: "o_custkey", valid_fields: Some(["MAX(orders.o_custkey)"]) })
+        Error: SchemaError(FieldNotFound { qualifier: Some("orders"), name: "o_custkey", valid_fields: ["MAX(orders.o_custkey)"] })
          */
 
         let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))

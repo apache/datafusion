@@ -105,10 +105,6 @@ impl ExecutionPlan for GlobalLimitExec {
         Partitioning::UnknownPartitioning(1)
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        self.input.output_ordering().is_some()
-    }
-
     fn maintains_input_order(&self) -> bool {
         true
     }
@@ -193,6 +189,17 @@ impl ExecutionPlan for GlobalLimitExec {
     fn statistics(&self) -> Statistics {
         let input_stats = self.input.statistics();
         let skip = self.skip;
+        // the maximum row number needs to be fetched
+        let max_row_num = self
+            .fetch
+            .map(|fetch| {
+                if fetch >= usize::MAX - skip {
+                    usize::MAX
+                } else {
+                    fetch + skip
+                }
+            })
+            .unwrap_or(usize::MAX);
         match input_stats {
             Statistics {
                 num_rows: Some(nr), ..
@@ -204,22 +211,25 @@ impl ExecutionPlan for GlobalLimitExec {
                         is_exact: input_stats.is_exact,
                         ..Default::default()
                     }
-                } else if nr - skip <= self.fetch.unwrap_or(usize::MAX) {
+                } else if nr <= max_row_num {
                     // if the input does not reach the "fetch" globally, return input stats
                     input_stats
-                } else if nr - skip > self.fetch.unwrap_or(usize::MAX) {
+                } else {
                     // if the input is greater than the "fetch", the num_row will be the "fetch",
                     // but we won't be able to predict the other statistics
                     Statistics {
-                        num_rows: self.fetch,
+                        num_rows: Some(max_row_num),
                         is_exact: input_stats.is_exact,
                         ..Default::default()
                     }
-                } else {
-                    Statistics::default()
                 }
             }
-            _ => Statistics::default(),
+            _ => Statistics {
+                // the result output row number will always be no greater than the limit number
+                num_rows: Some(max_row_num),
+                is_exact: false,
+                ..Default::default()
+            },
         }
     }
 }
@@ -274,10 +284,6 @@ impl ExecutionPlan for LocalLimitExec {
         self.input.output_partitioning()
     }
 
-    fn relies_on_input_order(&self) -> bool {
-        self.input.output_ordering().is_some()
-    }
-
     fn benefits_from_input_partitioning(&self) -> bool {
         false
     }
@@ -285,6 +291,10 @@ impl ExecutionPlan for LocalLimitExec {
     // Local limit will not change the input plan's ordering
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         self.input.output_ordering()
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        true
     }
 
     fn equivalence_properties(&self) -> EquivalenceProperties {
@@ -357,8 +367,12 @@ impl ExecutionPlan for LocalLimitExec {
                 is_exact: input_stats.is_exact,
                 ..Default::default()
             },
-            // if we don't know the input size, we can't predict the limit's behaviour
-            _ => Statistics::default(),
+            _ => Statistics {
+                // the result output row number will always be no greater than the limit number
+                num_rows: Some(self.fetch * self.output_partitioning().partition_count()),
+                is_exact: false,
+                ..Default::default()
+            },
         }
     }
 }
@@ -626,5 +640,52 @@ mod tests {
         let row_count = skip_and_fetch(101, None).await?;
         assert_eq!(row_count, 0);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_row_number_statistics_for_global_limit() -> Result<()> {
+        let row_count = row_number_statistics_for_global_limit(0, Some(10)).await?;
+        assert_eq!(row_count, Some(10));
+
+        let row_count = row_number_statistics_for_global_limit(5, Some(10)).await?;
+        assert_eq!(row_count, Some(15));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_row_number_statistics_for_local_limit() -> Result<()> {
+        let row_count = row_number_statistics_for_local_limit(4, 10).await?;
+        assert_eq!(row_count, Some(40));
+
+        Ok(())
+    }
+
+    async fn row_number_statistics_for_global_limit(
+        skip: usize,
+        fetch: Option<usize>,
+    ) -> Result<Option<usize>> {
+        let num_partitions = 4;
+        let csv = test::scan_partitioned_csv(num_partitions)?;
+
+        assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
+
+        let offset =
+            GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
+
+        Ok(offset.statistics().num_rows)
+    }
+
+    async fn row_number_statistics_for_local_limit(
+        num_partitions: usize,
+        fetch: usize,
+    ) -> Result<Option<usize>> {
+        let csv = test::scan_partitioned_csv(num_partitions)?;
+
+        assert_eq!(csv.output_partitioning().partition_count(), num_partitions);
+
+        let offset = LocalLimitExec::new(csv, fetch);
+
+        Ok(offset.statistics().num_rows)
     }
 }

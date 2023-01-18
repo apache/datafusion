@@ -64,6 +64,7 @@ impl BuiltInWindowFunctionExpr for Ntile {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct NtileEvaluator {
     n: u64,
 }

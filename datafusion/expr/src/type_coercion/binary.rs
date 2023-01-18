@@ -45,10 +45,6 @@ pub fn binary_operator_data_type(
         | Operator::NotEq
         | Operator::And
         | Operator::Or
-        | Operator::Like
-        | Operator::NotLike
-        | Operator::ILike
-        | Operator::NotILike
         | Operator::Lt
         | Operator::Gt
         | Operator::GtEq
@@ -117,10 +113,6 @@ pub fn coerce_types(
         | Operator::Gt
         | Operator::GtEq
         | Operator::LtEq => comparison_coercion(lhs_type, rhs_type),
-        // "like" operators operate on strings and always return a boolean
-        Operator::Like | Operator::NotLike | Operator::ILike | Operator::NotILike => {
-            like_coercion(lhs_type, rhs_type)
-        }
         Operator::Plus | Operator::Minus
             if is_date(lhs_type) || is_timestamp(lhs_type) =>
         {
@@ -525,7 +517,7 @@ fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 
 /// coercion rules for like operations.
 /// This is a union of string coercion rules and dictionary coercion rules
-fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type, false))
         .or_else(|| null_coercion(lhs_type, rhs_type))
@@ -879,30 +871,10 @@ mod tests {
 
     #[test]
     fn test_type_coercion() -> Result<()> {
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8,
-            Operator::Like,
-            DataType::Utf8
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8,
-            Operator::NotLike,
-            DataType::Utf8
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8,
-            Operator::ILike,
-            DataType::Utf8
-        );
-        test_coercion_binary_rule!(
-            DataType::Utf8,
-            DataType::Utf8,
-            Operator::NotILike,
-            DataType::Utf8
-        );
+        // test like coercion rule
+        let result = like_coercion(&DataType::Utf8, &DataType::Utf8);
+        assert_eq!(result, Some(DataType::Utf8));
+
         test_coercion_binary_rule!(
             DataType::Utf8,
             DataType::Date32,

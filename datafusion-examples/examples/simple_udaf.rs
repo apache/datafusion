@@ -179,7 +179,7 @@ async fn main() -> Result<()> {
 
     // get a DataFrame from the context
     // this table has 1 column `a` f32 with values {2,4,8,64}, whose geometric mean is 8.0.
-    let df = ctx.table("t")?;
+    let df = ctx.table("t").await?;
 
     // perform the aggregation
     let df = df.aggregate(vec![], vec![geometric_mean.call(vec![col("a")])])?;

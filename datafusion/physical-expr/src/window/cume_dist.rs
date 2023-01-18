@@ -66,6 +66,7 @@ impl BuiltInWindowFunctionExpr for CumeDist {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct CumeDistEvaluator;
 
 impl PartitionEvaluator for CumeDistEvaluator {

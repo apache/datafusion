@@ -18,6 +18,7 @@
 //! Describes the interface and built-in implementations of schemas,
 //! representing collections of named tables.
 
+use async_trait::async_trait;
 use dashmap::DashMap;
 use std::any::Any;
 use std::sync::Arc;
@@ -26,6 +27,7 @@ use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 
 /// Represents a schema, comprising a number of named tables.
+#[async_trait]
 pub trait SchemaProvider: Sync + Send {
     /// Returns the schema provider as [`Any`](std::any::Any)
     /// so that it can be downcast to a specific implementation.
@@ -35,7 +37,7 @@ pub trait SchemaProvider: Sync + Send {
     fn table_names(&self) -> Vec<String>;
 
     /// Retrieves a specific table from the schema by name, provided it exists.
-    fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>>;
+    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>>;
 
     /// If supported by the implementation, adds a new table to this schema.
     /// If a table of the same name existed before, it returns "Table already exists" error.
@@ -85,6 +87,7 @@ impl Default for MemorySchemaProvider {
     }
 }
 
+#[async_trait]
 impl SchemaProvider for MemorySchemaProvider {
     fn as_any(&self) -> &dyn Any {
         self
@@ -97,7 +100,7 @@ impl SchemaProvider for MemorySchemaProvider {
             .collect()
     }
 
-    fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
         self.tables.get(name).map(|table| table.value().clone())
     }
 

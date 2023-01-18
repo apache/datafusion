@@ -18,12 +18,14 @@
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::BuiltInWindowFunctionExpr;
+use crate::window::window_expr::{BuiltinWindowState, NumRowsState};
+use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// row_number expression
@@ -62,12 +64,36 @@ impl BuiltInWindowFunctionExpr for RowNumber {
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::<NumRowsEvaluator>::default())
     }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
+    }
 }
 
-#[derive(Default)]
-pub(crate) struct NumRowsEvaluator {}
+#[derive(Default, Debug)]
+pub(crate) struct NumRowsEvaluator {
+    state: NumRowsState,
+}
 
 impl PartitionEvaluator for NumRowsEvaluator {
+    fn state(&self) -> Result<BuiltinWindowState> {
+        // If we do not use state we just return Default
+        Ok(BuiltinWindowState::NumRows(self.state.clone()))
+    }
+
+    fn get_range(&self, state: &WindowAggState, _n_rows: usize) -> Result<Range<usize>> {
+        Ok(Range {
+            start: state.last_calculated_index,
+            end: state.last_calculated_index + 1,
+        })
+    }
+
+    /// evaluate window function result inside given range
+    fn evaluate_stateful(&mut self, _values: &[ArrayRef]) -> Result<ScalarValue> {
+        self.state.n_rows += 1;
+        Ok(ScalarValue::UInt64(Some(self.state.n_rows as u64)))
+    }
+
     fn evaluate(&self, _values: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
         Ok(Arc::new(UInt64Array::from_iter_values(
             1..(num_rows as u64) + 1,

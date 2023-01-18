@@ -43,8 +43,12 @@ impl OptimizerRule for FilterNullJoinKeys {
     fn try_optimize(
         &self,
         plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
+        if !config.options().optimizer.filter_null_join_keys {
+            return Ok(None);
+        }
+
         match plan {
             LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
                 let mut join = join.clone();

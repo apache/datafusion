@@ -18,6 +18,7 @@
 pub mod bisect;
 pub mod cast;
 mod column;
+pub mod config;
 pub mod delta;
 mod dfschema;
 mod error;
