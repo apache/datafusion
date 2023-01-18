@@ -1,7 +1,7 @@
 CREATE TABLE aggregate_test_100_by_sql
 (
     c1  character varying NOT NULL,
-    c2  integer           NOT NULL,
+    c2  smallint          NOT NULL,
     c3  smallint          NOT NULL,
     c4  smallint,
     c5  integer,

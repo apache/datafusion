@@ -126,8 +126,8 @@ pub async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
         c6  BIGINT NOT NULL,
         c7  SMALLINT NOT NULL,
         c8  INT NOT NULL,
-        c9  INT UNSIGNED NOT NULL,
-        c10 BIGINT UNSIGNED NOT NULL,
+        c9  BIGINT UNSIGNED NOT NULL,
+        c10 VARCHAR NOT NULL,
         c11 FLOAT NOT NULL,
         c12 DOUBLE NOT NULL,
         c13 VARCHAR NOT NULL

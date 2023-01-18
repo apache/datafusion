@@ -17,3 +17,5 @@
 
 query I
 SELECT 1 as num;
+----
+1

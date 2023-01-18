@@ -100,20 +100,21 @@ macro_rules! make_string {
         let value:Option<$t> = $row.get($idx);
          match value {
             Some(value) => value.to_string(),
-            None => "NULL".to_string()
+            None => NULL_STR.to_string()
          }
     }};
     ($row:ident, $idx:ident, $t:ty, $convert:ident) => {{
         let value: Option<$t> = $row.get($idx);
         match value {
             Some(value) => $convert(value).to_string(),
-            None => "NULL".to_string()
+            None => NULL_STR.to_string()
          }
     }};
 }
 
 fn cell_to_string(row: &Row, column: &Column, idx: usize) -> String {
     match column.type_().clone() {
+        Type::CHAR => make_string!(row, idx, i8),
         Type::INT2 => make_string!(row, idx, i16),
         Type::INT4 => make_string!(row, idx, i32),
         Type::INT8 => make_string!(row, idx, i64),

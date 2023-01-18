@@ -17,3 +17,5 @@
 
 query I
 select length('ä');
+----
+2

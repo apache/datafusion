@@ -17,3 +17,6 @@
 
 query I
 SELECT 1 num UNION ALL SELECT 2 num ORDER BY num;
+----
+1
+2

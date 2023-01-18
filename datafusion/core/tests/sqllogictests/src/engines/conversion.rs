@@ -5,6 +5,8 @@ use sqlparser::ast::DataType::Dec;
 use rust_decimal::prelude::*;
 use bigdecimal::BigDecimal;
 
+pub const NULL_STR: &str = "NULL";
+
 pub fn bool_to_str(value: bool) -> String {
     if value {
         "true".to_string()
@@ -66,5 +68,5 @@ pub fn decimal_to_str(value: Decimal) -> String {
 }
 
 pub fn big_decimal_to_str(value: BigDecimal) -> String {
-    value.round(20).normalized().to_string()
+    value.round(12).normalized().to_string()
 }

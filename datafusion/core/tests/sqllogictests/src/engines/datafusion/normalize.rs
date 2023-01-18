@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
+use arrow::error::ArrowError;
 use sqllogictest::{ColumnType, DBOutput};
 use datafusion::error::DataFusionError;
 
@@ -26,7 +27,7 @@ use super::error::{DFSqlLogicTestError, Result};
 ///
 /// Assumes empty record batches are a successful statement completion
 ///
-pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DBOutput> {
+pub fn convert_batches(batches: Vec<RecordBatch>, postgres_compatible: bool) -> Result<DBOutput> {
     if batches.is_empty() {
         // DataFusion doesn't report number of rows complete
         return Ok(DBOutput::StatementComplete(0));
@@ -50,20 +51,20 @@ pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<DBOutput> {
                 ),
             )));
         }
-        rows.append(&mut convert_batch(batch)?);
+        rows.append(&mut convert_batch(batch, postgres_compatible)?);
     }
 
     Ok(DBOutput::Rows { types, rows })
 }
 
 /// Convert a single batch to a `Vec<Vec<String>>` for comparison
-fn convert_batch(batch: RecordBatch) -> Result<Vec<Vec<String>>> {
+fn convert_batch(batch: RecordBatch, postgres_compatible: bool) -> Result<Vec<Vec<String>>> {
     (0..batch.num_rows())
         .map(|row| {
             batch
                 .columns()
                 .iter()
-                .map(|col| cell_to_string(col, row))
+                .map(|col| cell_to_string(col, row, postgres_compatible))
                 .collect::<Result<Vec<String>>>()
         })
         .collect()
@@ -100,25 +101,37 @@ macro_rules! get_string_value {
 ///
 /// Floating numbers are rounded to have a consistent representation with the Postgres runner.
 ///
-pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
-    f64::max;
+pub fn cell_to_string(col: &ArrayRef, row: usize, postgres_compatible: bool) -> Result<String> {
     if !col.is_valid(row) {
         // represent any null value with the string "NULL"
-        Ok("NULL".to_string())
+        Ok(NULL_STR.to_string())
     } else {
-        match col.data_type() {
-            DataType::Boolean => Ok(bool_to_str(get_row_value!(array::BooleanArray, col, row))),
-            DataType::Float16 => Ok(f16_to_str(get_row_value!(array::Float16Array, col, row))),
-            DataType::Float32 => Ok(f32_to_str(get_row_value!(array::Float32Array, col, row))),
-            DataType::Float64 => Ok(f64_to_str(get_row_value!(array::Float64Array, col, row))),
-            DataType::Decimal128(_, scale) => {
-                let value = get_row_value!(array::Decimal128Array, col, row);
-                let decimal_scale = u32::try_from((*scale).max(0)).unwrap();
-                Ok(i128_to_str(value, decimal_scale))
-            }
-            DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(array::LargeStringArray, col, row))),
-            DataType::Utf8 => Ok(varchar_to_str(get_row_value!(array::StringArray, col, row))),
-            _ => arrow::util::display::array_value_to_string(col, row)
-        }.map_err(DFSqlLogicTestError::Arrow)
+        if postgres_compatible {
+            postgres_compatible_cell_to_string(col, row)
+        } else {
+            match col.data_type() {
+                DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(array::LargeStringArray, col, row))),
+                DataType::Utf8 => Ok(varchar_to_str(get_row_value!(array::StringArray, col, row))),
+                _ => arrow::util::display::array_value_to_string(col, row)
+            }.map_err(DFSqlLogicTestError::Arrow)
+        }
     }
+}
+
+/// Convert values to text representation that are the same as in Postgres client implementation.
+fn postgres_compatible_cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
+    match col.data_type() {
+        DataType::Boolean => Ok(bool_to_str(get_row_value!(array::BooleanArray, col, row))),
+        DataType::Float16 => Ok(f16_to_str(get_row_value!(array::Float16Array, col, row))),
+        DataType::Float32 => Ok(f32_to_str(get_row_value!(array::Float32Array, col, row))),
+        DataType::Float64 => Ok(f64_to_str(get_row_value!(array::Float64Array, col, row))),
+        DataType::Decimal128(_, scale) => {
+            let value = get_row_value!(array::Decimal128Array, col, row);
+            let decimal_scale = u32::try_from((*scale).max(0)).unwrap();
+            Ok(i128_to_str(value, decimal_scale))
+        }
+        DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(array::LargeStringArray, col, row))),
+        DataType::Utf8 => Ok(varchar_to_str(get_row_value!(array::StringArray, col, row))),
+        _ => arrow::util::display::array_value_to_string(col, row)
+    }.map_err(DFSqlLogicTestError::Arrow)
 }

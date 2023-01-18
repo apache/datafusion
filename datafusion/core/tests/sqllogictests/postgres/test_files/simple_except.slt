@@ -25,3 +25,7 @@ SELECT * FROM (
     WHERE c2 IN (3, 4)
 ) s
 ORDER BY c2
+----
+1
+2
+5

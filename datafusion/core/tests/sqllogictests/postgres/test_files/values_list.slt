@@ -15,15 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# values without casting
-# postgres
-#   1 2.0 -3 2
-#   10 20.0 -30 4
-# datafusion:
-#   1 2 -3 2
-#   10 20 -30 4
-
 query IRII
 SELECT * FROM
-(VALUES (1,2.0::real,-3,1+1),(10,20.0::real,-30,2+2))
+(VALUES (1,2.0,-3,1+1),(10,20.0,-30,2+2))
 AS tbl(int_col, float_col, negative_col, summation);
+----
+1 2 -3 2
+10 20 -30 4

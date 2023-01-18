@@ -74,7 +74,7 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
 async fn run_test_file(path: &PathBuf, file_name: String) -> Result<(), Box<dyn Error>> {
     println!("Running: {}", path.display());
     let ctx = context_for_test_file(&file_name).await;
-    let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name));
+    let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name, false));
     runner.run_file_async(path).await?;
     Ok(())
 }
@@ -96,20 +96,16 @@ async fn run_postgres_test_file(
         PG_USER,
         PG_PASSWORD,
     )
-    .await?;
-    let mut postgres_runner = sqllogictest::Runner::new(postgres_client);
+        .await?;
+    let postgres_runner = sqllogictest::Runner::new(postgres_client);
 
-    // let temp_dir = tempdir()?;
-    // let copy_path = temp_dir.path().join(&file_name);
+    update_test_file(&path, postgres_runner, " ", default_validator).await?;
 
-    // copy(path, &copy_path)?;
-    // update_test_file(&path, postgres_runner, " ", default_validator).await?;
+    let ctx = SessionContext::new();
+    setup::register_aggregate_csv_by_sql(&ctx).await;
+    let mut df_runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name, true));
 
-    // let ctx = SessionContext::new();
-    // setup::register_aggregate_csv_by_sql(&ctx).await;
-    // let mut df_runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name));
-
-    postgres_runner.run_file_async(path).await?;
+    df_runner.run_file_async(path).await?;
     Ok(())
 }
 
@@ -122,7 +118,7 @@ async fn run_complete_file(
     info!("Using complete mode to complete: {}", path.display());
 
     let ctx = context_for_test_file(&file_name).await;
-    let runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name));
+    let runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name, true));
 
     let col_separator = " ";
     let validator = default_validator;
