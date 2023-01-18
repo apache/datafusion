@@ -29,7 +29,7 @@ use datafusion::logical_expr::aggregate_function;
 use datafusion::logical_expr::expr::{BinaryExpr, Case, Sort};
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::{binary_expr, Expr};
-use substrait::protobuf::{
+use substrait::proto::{
     aggregate_function::AggregationInvocation,
     aggregate_rel::{Grouping, Measure},
     expression::{
@@ -49,9 +49,9 @@ use substrait::protobuf::{
     read_rel::{NamedTable, ReadType},
     rel::RelType,
     sort_field::{SortDirection, SortKind},
-    AggregateFunction, AggregateRel, Expression, FetchRel, FilterRel, FunctionArgument,
-    JoinRel, NamedStruct, Plan, PlanRel, ProjectRel, ReadRel, Rel, RelRoot, SortField,
-    SortRel,
+    AggregateFunction, AggregateRel, AggregationPhase, Expression, FetchRel, FilterRel,
+    FunctionArgument, JoinRel, NamedStruct, Plan, PlanRel, ProjectRel, ReadRel, Rel,
+    RelRoot, SortField, SortRel,
 };
 
 /// Convert DataFusion LogicalPlan to Substrait Plan
@@ -367,7 +367,7 @@ pub fn to_substrait_agg_measure(
                         true => AggregationInvocation::Distinct as i32,
                         false => AggregationInvocation::All as i32,
                     },
-                    phase: substrait::protobuf::AggregationPhase::Unspecified as i32,
+                    phase: AggregationPhase::Unspecified as i32,
                     args: vec![],
                     options: vec![],
                 }),

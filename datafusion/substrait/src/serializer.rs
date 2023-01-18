@@ -21,7 +21,7 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 
 use prost::Message;
-use substrait::protobuf::Plan;
+use substrait::proto::Plan;
 
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
