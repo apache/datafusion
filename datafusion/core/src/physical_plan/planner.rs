@@ -1183,7 +1183,7 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::Dml(_) => {
                     // DataFusion is a read-only query engine, but also a library, so consumers may implement this
                     Err(DataFusionError::Internal(
-                        "Unsupported logical plan: Write".to_string(),
+                        "Unsupported logical plan: Dml".to_string(),
                     ))
                 }
                 LogicalPlan::SetVariable(_) => {
