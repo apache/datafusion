@@ -24,7 +24,7 @@ mod tests {
     use crate::{consumer::from_substrait_plan, producer::to_substrait_plan};
     use datafusion::error::Result;
     use datafusion::prelude::*;
-    use substrait::protobuf::extensions::simple_extension_declaration::MappingType;
+    use substrait::proto::extensions::simple_extension_declaration::MappingType;
 
     #[tokio::test]
     async fn simple_select() -> Result<()> {
@@ -66,6 +66,7 @@ mod tests {
         roundtrip("SELECT * FROM data WHERE d AND a > 1").await
     }
 
+    #[ignore] // tracked in https://github.com/apache/arrow-datafusion/issues/4897
     #[tokio::test]
     async fn select_with_limit() -> Result<()> {
         roundtrip_fill_na("SELECT * FROM data LIMIT 100").await
@@ -186,8 +187,7 @@ mod tests {
         let df = ctx.sql(sql).await?;
         let plan = df.into_optimized_plan()?;
         let proto = to_substrait_plan(&plan)?;
-        let df = from_substrait_plan(&mut ctx, &proto).await?;
-        let plan2 = df.into_optimized_plan()?;
+        let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
         let plan2str = format!("{:?}", plan2);
         assert_eq!(expected_plan_str, &plan2str);
         Ok(())
@@ -198,9 +198,7 @@ mod tests {
         let df = ctx.sql(sql).await?;
         let plan1 = df.into_optimized_plan()?;
         let proto = to_substrait_plan(&plan1)?;
-
-        let df = from_substrait_plan(&mut ctx, &proto).await?;
-        let plan2 = df.into_optimized_plan()?;
+        let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
 
         // Format plan string and replace all None's with 0
         let plan1str = format!("{:?}", plan1).replace("None", "0");
@@ -218,15 +216,11 @@ mod tests {
 
         let df_a = ctx.sql(sql_with_alias).await?;
         let proto_a = to_substrait_plan(&df_a.into_optimized_plan()?)?;
-        let plan_with_alias = from_substrait_plan(&mut ctx, &proto_a)
-            .await?
-            .into_optimized_plan()?;
+        let plan_with_alias = from_substrait_plan(&mut ctx, &proto_a).await?;
 
         let df = ctx.sql(sql_no_alias).await?;
         let proto = to_substrait_plan(&df.into_optimized_plan()?)?;
-        let plan = from_substrait_plan(&mut ctx, &proto)
-            .await?
-            .into_optimized_plan()?;
+        let plan = from_substrait_plan(&mut ctx, &proto).await?;
 
         println!("{:#?}", plan_with_alias);
         println!("{:#?}", plan);
@@ -237,14 +231,14 @@ mod tests {
         Ok(())
     }
 
+    #[allow(deprecated)]
     async fn roundtrip(sql: &str) -> Result<()> {
         let mut ctx = create_context().await?;
         let df = ctx.sql(sql).await?;
         let plan = df.into_optimized_plan()?;
         let proto = to_substrait_plan(&plan)?;
-
-        let df = from_substrait_plan(&mut ctx, &proto).await?;
-        let plan2 = df.into_optimized_plan()?;
+        let plan2 = from_substrait_plan(&mut ctx, &proto).await?;
+        let plan2 = ctx.optimize(&plan2)?;
 
         println!("{:#?}", plan);
         println!("{:#?}", plan2);

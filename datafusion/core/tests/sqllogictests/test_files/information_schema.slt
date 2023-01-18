@@ -45,6 +45,9 @@ set datafusion.catalog.information_schema = false
 statement error DataFusion error: Error during planning: table 'datafusion.information_schema.tables' not found
 SELECT * from information_schema.tables
 
+statement error Error during planning: table 'datafusion.information_schema.columns' not found
+SELECT * from information_schema.columns;
+
 
 ############
 ## Enable information schema for the rest of the test
@@ -152,3 +155,213 @@ query R
 SHOW TIMEZONE
 ----
 datafusion.execution.time_zone +00:00
+
+
+# information_schema_describe_table
+
+## some_table
+statement ok
+CREATE OR REPLACE TABLE some_table AS VALUES (1,2),(3,4);
+
+query R
+DESCRIBE some_table
+----
+column1 Int64 YES
+column2 Int64 YES
+
+statement ok
+DROP TABLE public.some_table;
+
+## public.some_table
+
+statement ok
+CREATE OR REPLACE TABLE public.some_table AS VALUES (1,2),(3,4);
+
+query R
+DESCRIBE public.some_table
+----
+column1 Int64 YES
+column2 Int64 YES
+
+statement ok
+DROP TABLE public.some_table;
+
+## datafusion.public.some_table
+
+statement ok
+CREATE OR REPLACE TABLE datafusion.public.some_table AS VALUES (1,2),(3,4);
+
+query R
+DESCRIBE datafusion.public.some_table
+----
+column1 Int64 YES
+column2 Int64 YES
+
+statement ok
+DROP TABLE datafusion.public.some_table;
+
+# information_schema_describe_table_not_exists
+
+statement error Error during planning: table 'datafusion.public.table' not found
+describe table;
+
+
+# information_schema_show_tables
+query CCCC
+SHOW TABLES
+----
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+
+
+# information_schema_show_tables_no_information_schema
+
+statement ok
+set datafusion.catalog.information_schema = false;
+
+statement error Error during planning: SHOW TABLES is not supported unless information_schema is enabled
+SHOW TABLES
+
+statement ok
+set datafusion.catalog.information_schema = true;
+
+
+# information_schema_show_columns
+statement ok
+CREATE TABLE t AS SELECT 1::int as i;
+
+statement error Error during planning: SHOW COLUMNS with WHERE or LIKE is not supported
+SHOW COLUMNS FROM t LIKE 'f';
+
+statement error Error during planning: SHOW COLUMNS with WHERE or LIKE is not supported
+SHOW COLUMNS FROM t WHERE column_name = 'bar';
+
+query CCCCCC
+SHOW COLUMNS FROM t;
+----
+datafusion public t i Int32 NO
+
+# This isn't ideal but it is consistent behavior for `SELECT * from "T"`
+statement error Error during planning: table 'datafusion.public.T' not found
+SHOW columns from "T"
+
+# information_schema_show_columns_full_extended
+query CCCCCC
+SHOW FULL COLUMNS FROM t;
+----
+datafusion public t i 0 NULL NO Int32 NULL NULL 32 2 NULL NULL NULL
+
+# expect same as above
+query CCCCCC
+SHOW EXTENDED COLUMNS FROM t;
+----
+datafusion public t i 0 NULL NO Int32 NULL NULL 32 2 NULL NULL NULL
+
+# information_schema_show_columns_no_information_schema
+
+statement ok
+set datafusion.catalog.information_schema = false;
+
+statement error Error during planning: SHOW COLUMNS is not supported unless information_schema is enabled
+SHOW COLUMNS FROM t
+
+statement ok
+set datafusion.catalog.information_schema = true;
+
+
+# information_schema_show_columns_names()
+query CCCCCC
+SHOW columns from public.t
+----
+datafusion public t i Int32 NO
+
+query CCCCCC
+SHOW columns from datafusion.public.t
+----
+datafusion public t i Int32 NO
+
+statement error Error during planning: table 'datafusion.public.t2' not found
+SHOW columns from t2
+
+statement error Error during planning: table 'datafusion.public.t2' not found
+SHOW columns from datafusion.public.t2
+
+
+# show_non_existing_variable
+# FIXME
+# currently we cannot know whether a variable exists, this will output 0 row instead
+query C
+SHOW SOMETHING_UNKNOWN;
+----
+
+statement ok
+DROP TABLE t;
+
+# show_unsupported_when_information_schema_off
+
+statement ok
+set datafusion.catalog.information_schema = false;
+
+statement error Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
+SHOW SOMETHING
+
+statement ok
+set datafusion.catalog.information_schema = true;
+
+
+
+# show_create_view()
+statement ok
+CREATE TABLE abc AS VALUES (1,2,3), (4,5,6);
+
+statement ok
+CREATE VIEW xyz AS SELECT * FROM abc
+
+query CCCC
+SHOW CREATE TABLE xyz
+----
+datafusion public xyz CREATE VIEW xyz AS SELECT * FROM abc
+
+statement ok
+DROP TABLE abc;
+
+statement ok
+DROP VIEW xyz;
+
+# show_create_view_in_catalog
+statement ok
+CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)
+
+statement ok
+CREATE SCHEMA test;
+
+statement ok
+CREATE VIEW test.xyz AS SELECT * FROM abc;
+
+query CCCC
+SHOW CREATE TABLE test.xyz
+----
+datafusion test xyz CREATE VIEW test.xyz AS SELECT * FROM abc
+
+statement error DataFusion error: This feature is not implemented: Only `DROP TABLE/VIEW
+DROP SCHEMA test;
+
+statement ok
+DROP TABLE abc;
+
+statement ok
+DROP VIEW test.xyz
+
+
+# show_external_create_table()
+statement ok
+CREATE EXTERNAL TABLE abc
+STORED AS CSV
+WITH HEADER ROW LOCATION '../../testing/data/csv/aggregate_test_100.csv';
+
+query CCCC
+SHOW CREATE TABLE abc;
+----
+datafusion public abc CREATE EXTERNAL TABLE abc STORED AS CSV LOCATION ../../testing/data/csv/aggregate_test_100.csv
