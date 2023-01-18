@@ -22,7 +22,7 @@ use datafusion_common::Result;
 use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_expr::expr::{BinaryExpr, Sort};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
-use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
+use datafusion_expr::expr_visitor::inspect_expr_pre;
 use datafusion_expr::{
     and, col,
     logical_plan::{Filter, LogicalPlan},
@@ -232,28 +232,21 @@ pub fn unalias(expr: Expr) -> Expr {
 ///
 /// A PlanError if a disjunction is found
 pub fn verify_not_disjunction(predicates: &[&Expr]) -> Result<()> {
-    struct DisjunctionVisitor {}
-
-    impl ExpressionVisitor for DisjunctionVisitor {
-        fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
-            match expr {
-                Expr::BinaryExpr(BinaryExpr {
-                    left: _,
-                    op: Operator::Or,
-                    right: _,
-                }) => {
-                    plan_err!("Optimizing disjunctions not supported!")
-                }
-                _ => Ok(Recursion::Continue(self)),
+    // recursively check for unallowed predicates in expr
+    fn check(expr: &&Expr) -> Result<()> {
+        inspect_expr_pre(expr, |expr| match expr {
+            Expr::BinaryExpr(BinaryExpr {
+                left: _,
+                op: Operator::Or,
+                right: _,
+            }) => {
+                plan_err!("Optimizing disjunctions not supported!")
             }
-        }
+            _ => Ok(()),
+        })
     }
 
-    for predicate in predicates.iter() {
-        predicate.accept(DisjunctionVisitor {})?;
-    }
-
-    Ok(())
+    predicates.iter().try_for_each(check)
 }
 
 /// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
