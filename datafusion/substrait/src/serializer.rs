@@ -17,9 +17,9 @@
 
 use crate::producer;
 
+use datafusion::common::DataFusionError;
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion::common::DataFusionError;
 
 use prost::Message;
 use substrait::proto::Plan;
@@ -34,7 +34,7 @@ pub async fn serialize(sql: &str, ctx: &SessionContext, path: &str) -> Result<()
     Ok(())
 }
 
-pub async fn serialize_bytes(sql: &str, ctx: &SessionContext) -> Result<Vec::<u8>> {
+pub async fn serialize_bytes(sql: &str, ctx: &SessionContext) -> Result<Vec<u8>> {
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = producer::to_substrait_plan(&plan)?;
