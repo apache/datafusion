@@ -86,6 +86,9 @@ pub enum DataFusionError {
     JITError(ModuleError),
     /// Error with additional context
     Context(String, Box<DataFusionError>),
+    /// Errors originating from either mapping LogicalPlans to/from Substrait plans
+    /// or serializing/deserializing protobytes to Substrait plans
+    Substrait(String),
 }
 
 #[macro_export]
@@ -319,6 +322,9 @@ impl Display for DataFusionError {
             }
             DataFusionError::Context(ref desc, ref err) => {
                 write!(f, "{}\ncaused by\n{}", desc, *err)
+            }
+            DataFusionError::Substrait(ref desc) => {
+                write!(f, "Substrait error: {desc}")
             }
         }
     }
