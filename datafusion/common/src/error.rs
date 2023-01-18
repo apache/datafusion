@@ -125,7 +125,7 @@ pub enum SchemaError {
     /// No field with this name
     FieldNotFound {
         field: Column,
-        valid_fields: Option<Vec<Column>>,
+        valid_fields: Vec<Column>,
     },
 }
 
@@ -137,13 +137,11 @@ pub fn field_not_found(
 ) -> DataFusionError {
     DataFusionError::SchemaError(SchemaError::FieldNotFound {
         field: Column::new(qualifier, name),
-        valid_fields: Some(
-            schema
-                .fields()
-                .iter()
-                .map(|f| f.qualified_column())
-                .collect(),
-        ),
+        valid_fields: schema
+            .fields()
+            .iter()
+            .map(|f| f.qualified_column())
+            .collect(),
     })
 }
 
@@ -160,11 +158,11 @@ impl Display for SchemaError {
                 } else {
                     write!(f, "'{}'", field.name)?;
                 }
-                if let Some(fields) = valid_fields {
+                if !valid_fields.is_empty() {
                     write!(
                         f,
                         ". Valid fields are {}",
-                        fields
+                        valid_fields
                             .iter()
                             .map(|field| {
                                 if let Some(q) = &field.relation {

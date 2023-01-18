@@ -2788,7 +2788,7 @@ fn hive_aggregate_with_filter() -> Result<()> {
 fn order_by_unaliased_name() {
     // https://github.com/apache/arrow-datafusion/issues/3160
     // This query was failing with:
-    // SchemaError(FieldNotFound { qualifier: Some("p"), name: "state", valid_fields: Some(["z", "q"]) })
+    // SchemaError(FieldNotFound { qualifier: Some("p"), name: "state", valid_fields: ["z", "q"] })
     let sql =
         "select p.state z, sum(age) q from person p group by p.state order by p.state";
     let expected = "Projection: z, q\
@@ -3123,7 +3123,7 @@ fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
 
 #[test]
 #[should_panic(
-    expected = "value: SchemaError(FieldNotFound { field: Column { relation: None, name: \"id\" }, valid_fields: Some([]) })"
+    expected = "value: SchemaError(FieldNotFound { field: Column { relation: None, name: \"id\" }, valid_fields: [] })"
 )]
 fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id + $1";
