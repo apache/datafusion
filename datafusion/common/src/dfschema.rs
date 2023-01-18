@@ -826,6 +826,21 @@ mod tests {
     }
 
     #[test]
+    fn select_without_valid_fields() {
+        let schema = DFSchema::empty();
+
+        let err = schema
+            .index_of_column_by_name(Some("t1"), "c0")
+            .err()
+            .unwrap();
+        assert_eq!("Schema error: No field named 't1'.'c0'.", &format!("{err}"));
+
+        // the same check without qualifier
+        let err = schema.index_of_column_by_name(None, "c0").err().unwrap();
+        assert_eq!("Schema error: No field named 'c0'.", &format!("{err}"));
+    }
+
+    #[test]
     fn equivalent_names_and_types() {
         let field1_i16_t = DFField::from(Field::new("f1", DataType::Int16, true));
         let field1_i16_t_meta = DFField::from(
