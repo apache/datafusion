@@ -162,8 +162,8 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// WARNING: if you override this default, you *MUST* ensure that
     /// the operator's maintains the ordering invariant or else
     /// DataFusion may produce incorrect results.
-    fn maintains_input_order(&self) -> bool {
-        false
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![false; self.children().len()]
     }
 
     /// Returns `true` if this operator would benefit from

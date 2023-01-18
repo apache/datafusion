@@ -177,7 +177,8 @@ fn optimize_partitions(
         let children = plan
             .children()
             .iter()
-            .map(|child| {
+            .enumerate()
+            .map(|(idx, child)| {
                 // does plan itelf (not parent) require its input to
                 // be sorted in some way?
                 let required_input_ordering =
@@ -196,7 +197,7 @@ fn optimize_partitions(
 
                     // if `plan` doesn't maintain the input order and
                     // doesn't need the child's output order itself
-                    (!plan.maintains_input_order() &&  !required_input_ordering) ||
+                    (!plan.maintains_input_order()[idx] &&  !required_input_ordering) ||
                     // child has no ordering to preserve
                         child.output_ordering().is_none()
                 };

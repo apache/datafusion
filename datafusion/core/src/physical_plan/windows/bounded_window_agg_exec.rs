@@ -186,8 +186,8 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self.input().equivalence_properties()
     }
 
-    fn maintains_input_order(&self) -> bool {
-        true
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
     }
 
     fn with_new_children(

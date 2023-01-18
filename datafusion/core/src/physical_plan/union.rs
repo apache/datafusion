@@ -247,7 +247,7 @@ impl ExecutionPlan for UnionExec {
         }
     }
 
-    fn maintains_input_order(&self) -> bool {
+    fn maintains_input_order(&self) -> Vec<bool> {
         let first_input_ordering = self.inputs[0].output_ordering();
         // If the Union is not partition aware and all the input
         // ordering spec strictly equal with the first_input_ordering,
@@ -256,19 +256,19 @@ impl ExecutionPlan for UnionExec {
         // It might be too strict here in the case that the input
         // ordering are compatible but not exactly the same.  See
         // comments in output_ordering
-        !self.partition_aware
-            && first_input_ordering.is_some()
-            && self
-                .inputs
-                .iter()
-                .map(|plan| plan.output_ordering())
-                .all(|ordering| {
-                    ordering.is_some()
-                        && sort_expr_list_eq_strict_order(
-                            ordering.unwrap(),
-                            first_input_ordering.unwrap(),
-                        )
-                })
+        let res =
+            !self.partition_aware
+                && first_input_ordering.is_some()
+                && self.inputs.iter().map(|plan| plan.output_ordering()).all(
+                    |ordering| {
+                        ordering.is_some()
+                            && sort_expr_list_eq_strict_order(
+                                ordering.unwrap(),
+                                first_input_ordering.unwrap(),
+                            )
+                    },
+                );
+        vec![res; self.inputs.len()]
     }
 
     fn with_new_children(

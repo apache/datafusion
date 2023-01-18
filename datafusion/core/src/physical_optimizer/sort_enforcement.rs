@@ -230,7 +230,7 @@ fn ensure_sorting(
             (None, Some(_)) => {
                 // We have a SortExec whose effect may be neutralized by a order-imposing
                 // operator. In this case, remove this sort:
-                if !requirements.plan.maintains_input_order() {
+                if !requirements.plan.maintains_input_order()[idx] {
                     update_child_to_remove_unnecessary_sort(child, sort_onwards)?;
                 }
             }
@@ -248,7 +248,7 @@ fn ensure_sorting(
             .take(new_plan.children().len())
         {
             // TODO: When `maintains_input_order` returns a `Vec<bool>`, use corresponding index.
-            if new_plan.maintains_input_order()
+            if new_plan.maintains_input_order()[idx]
                 && required_ordering.is_none()
                 && !trace.is_empty()
             {
