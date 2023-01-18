@@ -48,6 +48,8 @@ DataFusion offers SQL and Dataframe APIs, excellent [performance](https://benchm
 - Written in [Rust](https://www.rust-lang.org/), a modern system language with development
   productivity similar to Java or Golang, the performance of C++, and
   [loved by programmers everywhere](https://insights.stackoverflow.com/survey/2021#technology-most-loved-dreaded-and-wanted).
+- Support for [Substrait](https://substrait.io/) for query plan serialization, making it easier to integrate DataFusion  
+  with other projects, and to pass plans across language boundaries.
 
 ## Use Cases
 
@@ -118,7 +120,6 @@ provide integrations with other systems.
 
 - [datafusion-bigtable](https://github.com/datafusion-contrib/datafusion-bigtable)
 - [datafusion-catalogprovider-glue](https://github.com/datafusion-contrib/datafusion-catalogprovider-glue)
-- [datafusion-substrait](https://github.com/datafusion-contrib/datafusion-substrait)
 
 ## Known Uses
 
