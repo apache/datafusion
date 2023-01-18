@@ -937,7 +937,7 @@ impl LogicalPlan {
                         Ok(())
                     }
                     LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
-                        write!(f, "Write: op=[{op}] table=[{table_name}]")
+                        write!(f, "Dml: op=[{op}] table=[{table_name}]")
                     }
                     LogicalPlan::Filter(Filter {
                         predicate: ref expr,

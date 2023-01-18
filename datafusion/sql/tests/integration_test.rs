@@ -162,7 +162,7 @@ fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
     let plan = r#"
-Write: op=[Insert] table=[person]
+Dml: op=[Insert] table=[person]
   Projection: column1 AS id, column2 AS first_name, column3 AS last_name
     Values: (Int64(1), Utf8("Alan"), Utf8("Turing"))
     "#
@@ -174,7 +174,7 @@ Write: op=[Insert] table=[person]
 fn plan_update() {
     let sql = "update person set last_name='Kay' where id=1";
     let plan = r#"
-Write: op=[Update] table=[person]
+Dml: op=[Update] table=[person]
   Projection: person.age AS age, person.birth_date AS birth_date, person.first_name AS first_name, person.id AS id, Utf8("Kay") AS last_name, person.salary AS salary, person.state AS state, person.😀 AS 😀
     Filter: id = Int64(1)
       TableScan: person
@@ -187,7 +187,7 @@ Write: op=[Update] table=[person]
 fn plan_delete() {
     let sql = "delete from person where id=1";
     let plan = r#"
-Write: op=[Delete] table=[person]
+Dml: op=[Delete] table=[person]
   Filter: id = Int64(1)
     TableScan: person
     "#
