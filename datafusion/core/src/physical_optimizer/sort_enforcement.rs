@@ -110,13 +110,12 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
                     if item.sort_onwards.is_empty() {
                         vec![]
                     } else {
-                        // TODO: When `maintains_input_order` returns Vec<bool>,
-                        //       pass the order-enforcing sort upwards.
-                        let mut res = item.sort_onwards[0].clone();
+                        let is_sort = item.plan.as_any().is::<SortExec>();
+                        let mut res = vec![];
                         for (idx, is_maintained) in
                             item.plan.maintains_input_order().into_iter().enumerate()
                         {
-                            if is_maintained {
+                            if is_maintained || is_sort {
                                 res = item.sort_onwards[idx].clone();
                                 break;
                             }
@@ -255,7 +254,6 @@ fn ensure_sorting(
             .enumerate()
             .take(new_plan.children().len())
         {
-            // TODO: When `maintains_input_order` returns a `Vec<bool>`, use corresponding index.
             if new_plan.maintains_input_order()[idx]
                 && required_ordering.is_none()
                 && !trace.is_empty()
