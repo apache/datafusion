@@ -3355,6 +3355,42 @@ Projection: person.id, person.age
 }
 
 #[test]
+fn test_prepare_statement_update_infer() {
+    let sql = "update person set age=$1 where id=$2";
+
+    let expected_plan = r#"
+Dml: op=[Update] table=[person]
+  Projection: $1 AS age, person.birth_date AS birth_date, person.first_name AS first_name, person.id AS id, person.last_name AS last_name, person.salary AS salary, person.state AS state, person.😀 AS 😀
+    Filter: id = $2
+      TableScan: person
+        "#
+        .trim();
+
+    let expected_dt = "[Int32]";
+    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
+
+    let actual_types = plan.get_parameter_types().unwrap();
+    let expected_types = HashMap::from([
+        ("$1".to_string(), Some(DataType::Int32)),
+        ("$2".to_string(), Some(DataType::UInt32)),
+    ]);
+    assert_eq!(actual_types, expected_types);
+
+    // replace params with values
+    let param_values = vec![ScalarValue::Int32(Some(42)), ScalarValue::UInt32(Some(1))];
+    let expected_plan = r#"
+Dml: op=[Update] table=[person]
+  Projection: Int32(42) AS age, person.birth_date AS birth_date, person.first_name AS first_name, person.id AS id, person.last_name AS last_name, person.salary AS salary, person.state AS state, person.😀 AS 😀
+    Filter: id = UInt32(1)
+      TableScan: person
+        "#
+        .trim();
+    let plan = plan.replace_params_with_values(&param_values).unwrap();
+
+    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
+}
+
+#[test]
 fn test_prepare_statement_to_plan_one_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age = $1";
 
