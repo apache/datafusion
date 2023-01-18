@@ -49,7 +49,7 @@ cargo test -p datafusion --test sqllogictests -- information
 In this mode, `sqllogictests` runs the statements and queries in a `.slt` file, comparing outputs of postgres and datafusion.
 
 ```
-cargo test -p datafusion --test sqllogictests -- --postgres          
+PG_COMPAT=true cargo test -p datafusion --test sqllogictests          
 ```
 
 #### Updating tests: Completion Mode

@@ -17,17 +17,13 @@
 
 use std::sync::Arc;
 use std::time::Duration;
-use std::fmt::Write;
 
 use async_trait::async_trait;
-use log::info;
+use log::debug;
 use sqllogictest::{ColumnType, DBOutput};
-use testcontainers::core::WaitFor;
-use testcontainers::images::generic::GenericImage;
 use tokio::task::JoinHandle;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, offset::Utc};
-use futures::TryStreamExt;
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use postgres_types::Type;
 use tokio_postgres::{Column, Row};
 use rust_decimal::Decimal;
@@ -38,10 +34,12 @@ pub mod image;
 pub struct Postgres {
     client: Arc<tokio_postgres::Client>,
     join_handle: JoinHandle<()>,
+    file_name: String,
 }
 
 impl Postgres {
     pub async fn connect_with_retry(
+        file_name: String,
         host: &str,
         port: u16,
         db: &str,
@@ -50,23 +48,24 @@ impl Postgres {
     ) -> Result<Self, tokio_postgres::error::Error> {
         let mut retry = 0;
         loop {
-            let connection_result = Postgres::connect(host, port, db, user, pass).await;
+            let connection_result = Postgres::connect(file_name.clone(), host, port, db, user, pass).await;
             match connection_result {
                 Err(e) if retry <= 3 => {
-                    info!("Retrying connection error '{:?}'", e);
+                    debug!("Retrying connection error '{:?}'", e);
                     retry += 1;
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
                 result => break result,
             }
         }
     }
 
-    pub async fn connect(host: &str,
-                         port: u16,
-                         db: &str,
-                         user: &str,
-                         pass: &str) -> Result<Self, tokio_postgres::error::Error> {
+    async fn connect(file_name: String,
+                     host: &str,
+                     port: u16,
+                     db: &str,
+                     user: &str,
+                     pass: &str) -> Result<Self, tokio_postgres::error::Error> {
         let (client, connection) = tokio_postgres::Config::new()
             .host(host)
             .port(port)
@@ -85,6 +84,7 @@ impl Postgres {
         Ok(Self {
             client: Arc::new(client),
             join_handle,
+            file_name,
         })
     }
 }
@@ -140,6 +140,8 @@ impl sqllogictest::AsyncDB for Postgres {
     type Error = tokio_postgres::error::Error;
 
     async fn run(&mut self, sql: &str) -> Result<DBOutput, Self::Error> {
+        println!("[{}] Running query: \"{}\"", self.file_name, sql);
+
         let is_query_sql = {
             let lower_sql = sql.trim_start().to_ascii_lowercase();
             lower_sql.starts_with("select")

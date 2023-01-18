@@ -19,6 +19,21 @@ query I
 SELECT * FROM (
     SELECT c2
     FROM aggregate_test_100_by_sql t1
+    EXCEPT
+    SELECT c2
+    FROM aggregate_test_100_by_sql t2
+    WHERE c2 IN (3, 4)
+) s
+ORDER BY c2
+----
+1
+2
+5
+
+query I
+SELECT * FROM (
+    SELECT c2
+    FROM aggregate_test_100_by_sql t1
     EXCEPT ALL
     SELECT c2
     FROM aggregate_test_100_by_sql t2
@@ -84,3 +99,81 @@ ORDER BY c2
 5
 5
 5
+
+
+query I
+SELECT * FROM (
+    SELECT c2
+    FROM aggregate_test_100_by_sql t1
+    INTERSECT
+    SELECT c2
+    FROM aggregate_test_100_by_sql t2
+    WHERE c2 IN (3, 4)
+) s
+ORDER BY c2
+----
+3
+4
+
+
+query I
+SELECT * FROM (
+    SELECT c2
+    FROM aggregate_test_100_by_sql t1
+    INTERSECT ALL
+    SELECT c2
+    FROM aggregate_test_100_by_sql t2
+    WHERE c2 IN (3, 4)
+) s
+ORDER BY c2
+----
+3
+3
+3
+3
+3
+3
+3
+3
+3
+3
+3
+3
+3
+3
+3
+3
+3
+3
+3
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+4
+
+
+query I
+SELECT 1 num UNION ALL SELECT 2 num ORDER BY num;
+----
+1
+2
+

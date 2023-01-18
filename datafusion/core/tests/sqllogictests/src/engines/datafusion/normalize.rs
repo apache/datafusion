@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
-use arrow::error::ArrowError;
 use sqllogictest::{ColumnType, DBOutput};
 use datafusion::error::DataFusionError;
 
@@ -27,7 +26,7 @@ use super::error::{DFSqlLogicTestError, Result};
 ///
 /// Assumes empty record batches are a successful statement completion
 ///
-pub fn convert_batches(batches: Vec<RecordBatch>, postgres_compatible: bool) -> Result<DBOutput> {
+pub fn convert_batches(batches: Vec<RecordBatch>, is_pg_compatibility_test: bool) -> Result<DBOutput> {
     if batches.is_empty() {
         // DataFusion doesn't report number of rows complete
         return Ok(DBOutput::StatementComplete(0));
@@ -51,20 +50,20 @@ pub fn convert_batches(batches: Vec<RecordBatch>, postgres_compatible: bool) -> 
                 ),
             )));
         }
-        rows.append(&mut convert_batch(batch, postgres_compatible)?);
+        rows.append(&mut convert_batch(batch, is_pg_compatibility_test)?);
     }
 
     Ok(DBOutput::Rows { types, rows })
 }
 
 /// Convert a single batch to a `Vec<Vec<String>>` for comparison
-fn convert_batch(batch: RecordBatch, postgres_compatible: bool) -> Result<Vec<Vec<String>>> {
+fn convert_batch(batch: RecordBatch, is_pg_compatibility_test: bool) -> Result<Vec<Vec<String>>> {
     (0..batch.num_rows())
         .map(|row| {
             batch
                 .columns()
                 .iter()
-                .map(|col| cell_to_string(col, row, postgres_compatible))
+                .map(|col| cell_to_string(col, row, is_pg_compatibility_test))
                 .collect::<Result<Vec<String>>>()
         })
         .collect()
@@ -78,19 +77,6 @@ macro_rules! get_row_value {
     }};
 }
 
-macro_rules! get_string_value {
-    ($array_type:ty, $column: ident, $row: ident) => {{
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-
-        let s = array.value($row);
-        if s.is_empty() {
-            "(empty)".to_string()
-        } else {
-            s.to_string()
-        }
-    }};
-}
-
 /// Normalizes the content of a single cell in RecordBatch prior to printing.
 ///
 /// This is to make the output comparable to the semi-standard .slt format
@@ -101,12 +87,12 @@ macro_rules! get_string_value {
 ///
 /// Floating numbers are rounded to have a consistent representation with the Postgres runner.
 ///
-pub fn cell_to_string(col: &ArrayRef, row: usize, postgres_compatible: bool) -> Result<String> {
+pub fn cell_to_string(col: &ArrayRef, row: usize, is_pg_compatibility_test: bool) -> Result<String> {
     if !col.is_valid(row) {
         // represent any null value with the string "NULL"
         Ok(NULL_STR.to_string())
     } else {
-        if postgres_compatible {
+        if is_pg_compatibility_test {
             postgres_compatible_cell_to_string(col, row)
         } else {
             match col.data_type() {

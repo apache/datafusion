@@ -1,7 +1,5 @@
 use half::f16;
-use log::info;
 use rust_decimal::Decimal;
-use sqlparser::ast::DataType::Dec;
 use rust_decimal::prelude::*;
 use bigdecimal::BigDecimal;
 
