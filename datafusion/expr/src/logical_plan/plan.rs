@@ -118,6 +118,8 @@ pub enum LogicalPlan {
     SetVariable(SetVariable),
     /// Prepare a statement
     Prepare(Prepare),
+    /// Insert / Update / Delete
+    Dml(DmlStatement),
 }
 
 impl LogicalPlan {
@@ -158,6 +160,7 @@ impl LogicalPlan {
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
             LogicalPlan::DropView(DropView { schema, .. }) => schema,
             LogicalPlan::SetVariable(SetVariable { schema, .. }) => schema,
+            LogicalPlan::Dml(DmlStatement { table_schema, .. }) => table_schema,
         }
     }
 
@@ -218,6 +221,7 @@ impl LogicalPlan {
             LogicalPlan::DropTable(_)
             | LogicalPlan::DropView(_)
             | LogicalPlan::SetVariable(_) => vec![],
+            LogicalPlan::Dml(DmlStatement { table_schema, .. }) => vec![table_schema],
         }
     }
 
@@ -316,6 +320,7 @@ impl LogicalPlan {
             | LogicalPlan::Explain(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Distinct(_)
+            | LogicalPlan::Dml(_)
             | LogicalPlan::Prepare(_) => Ok(()),
         }
     }
@@ -342,6 +347,7 @@ impl LogicalPlan {
             LogicalPlan::Distinct(Distinct { input }) => vec![input],
             LogicalPlan::Explain(explain) => vec![&explain.plan],
             LogicalPlan::Analyze(analyze) => vec![&analyze.input],
+            LogicalPlan::Dml(write) => vec![&write.input],
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::CreateView(CreateView { input, .. })
             | LogicalPlan::Prepare(Prepare { input, .. }) => {
@@ -544,6 +550,7 @@ impl LogicalPlan {
             }
             LogicalPlan::Explain(explain) => explain.plan.accept(visitor)?,
             LogicalPlan::Analyze(analyze) => analyze.input.accept(visitor)?,
+            LogicalPlan::Dml(write) => write.input.accept(visitor)?,
             // plans without inputs
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
@@ -928,6 +935,9 @@ impl LogicalPlan {
                             write!(f, "{expr_item:?}")?;
                         }
                         Ok(())
+                    }
+                    LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
+                        write!(f, "Dml: op=[{op}] table=[{table_name}]")
                     }
                     LogicalPlan::Filter(Filter {
                         predicate: ref expr,
@@ -1502,6 +1512,38 @@ pub struct CreateExternalTable {
     pub file_compression_type: CompressionTypeVariant,
     /// Table(provider) specific options
     pub options: HashMap<String, String>,
+}
+
+#[derive(Clone)]
+pub enum WriteOp {
+    Insert,
+    Delete,
+    Update,
+    Ctas,
+}
+
+impl Display for WriteOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            WriteOp::Insert => write!(f, "Insert"),
+            WriteOp::Delete => write!(f, "Delete"),
+            WriteOp::Update => write!(f, "Update"),
+            WriteOp::Ctas => write!(f, "Ctas"),
+        }
+    }
+}
+
+/// The operator that modifies the content of a database (adapted from substrait WriteRel)
+#[derive(Clone)]
+pub struct DmlStatement {
+    /// The table name
+    pub table_name: OwnedTableReference,
+    /// The schema of the table (must align with Rel input)
+    pub table_schema: DFSchemaRef,
+    /// The type of operation to perform
+    pub op: WriteOp,
+    /// The relation that determines the tuples to add/remove/modify the schema must match with table_schema
+    pub input: Arc<LogicalPlan>,
 }
 
 /// Prepare a statement but do not execute it. Prepare statements can have 0 or more

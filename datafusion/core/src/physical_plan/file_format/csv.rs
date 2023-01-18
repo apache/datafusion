@@ -448,7 +448,7 @@ mod tests {
         let err = it.next().await.unwrap().unwrap_err().to_string();
         assert_eq!(
             err,
-            "Csv error: incorrect number of fields, expected 14 got 13"
+            "Csv error: incorrect number of fields for line 1, expected 14 got 13"
         );
         Ok(())
     }
