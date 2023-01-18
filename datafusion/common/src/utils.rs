@@ -21,7 +21,14 @@ use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::ArrayRef;
 use arrow::compute::SortOptions;
 use std::cmp::Ordering;
-use std::ops::Range;
+
+/// Given column vectors, returns row at `idx`
+fn get_row_at_idx(item_columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
+    item_columns
+        .iter()
+        .map(|arr| ScalarValue::try_from_array(arr, idx))
+        .collect::<Result<Vec<ScalarValue>>>()
+}
 
 /// This function compares two tuples depending on the given sort options.
 fn compare(
@@ -75,60 +82,6 @@ pub fn bisect<const SIDE: bool>(
     find_bisect_point(item_columns, target, compare_fn, low, high)
 }
 
-/// This function implements both bisect_left and bisect_right, having the same
-/// semantics with the Python Standard Library. To use bisect_left, supply true
-/// as the template argument. To use bisect_right, supply false as the template argument.
-pub fn linear_search<const SIDE: bool>(
-    item_columns: &[ArrayRef],
-    target: &[ScalarValue],
-    sort_options: &[SortOptions],
-    last_range: &Range<usize>,
-) -> Result<usize> {
-    let low: usize = if SIDE {
-        last_range.start
-    } else {
-        last_range.end
-    };
-    let high: usize = item_columns
-        .get(0)
-        .ok_or_else(|| {
-            DataFusionError::Internal("Column array shouldn't be empty".to_string())
-        })?
-        .len();
-    let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
-        let cmp = compare(current, target, sort_options)?;
-        Ok(if SIDE { cmp.is_lt() } else { cmp.is_le() })
-    };
-    find_linear_point(item_columns, target, compare_fn, low, high)
-}
-
-/// This function searches for a tuple of target values among the given rows using the bisection algorithm.
-/// The boolean-valued function `compare_fn` specifies whether we bisect on the left (with return value `false`),
-/// or on the right (with return value `true`) as we compare the target value with the current value as we iteratively
-/// bisect the input.
-pub fn find_linear_point<F>(
-    item_columns: &[ArrayRef],
-    target: &[ScalarValue],
-    compare_fn: F,
-    mut low: usize,
-    mut high: usize,
-) -> Result<usize>
-where
-    F: Fn(&[ScalarValue], &[ScalarValue]) -> Result<bool>,
-{
-    while low < high {
-        let val = item_columns
-            .iter()
-            .map(|arr| ScalarValue::try_from_array(arr, low))
-            .collect::<Result<Vec<ScalarValue>>>()?;
-        if !compare_fn(&val, target)? {
-            break;
-        }
-        low += 1;
-    }
-    Ok(low)
-}
-
 /// This function searches for a tuple of target values among the given rows using the bisection algorithm.
 /// The boolean-valued function `compare_fn` specifies whether we bisect on the left (with return value `false`),
 /// or on the right (with return value `true`) as we compare the target value with the current value as we iteratively
@@ -145,15 +98,43 @@ where
 {
     while low < high {
         let mid = ((high - low) / 2) + low;
-        let val = item_columns
-            .iter()
-            .map(|arr| ScalarValue::try_from_array(arr, mid))
-            .collect::<Result<Vec<ScalarValue>>>()?;
+        let val = get_row_at_idx(item_columns, mid)?;
         if compare_fn(&val, target)? {
             low = mid + 1;
         } else {
             high = mid;
         }
+    }
+    Ok(low)
+}
+
+/// This function implements linear_search, It starts searching from row at `start` index
+/// of `item_columns` until last row of the `item_columns`. It assumes `item_columns` is sorted
+/// according to `sort_options` and returns would insertion position of the `target`.
+/// `SIDE` is `true` means left insertion is applied.
+/// `SIDE` is `false` means right insertion is applied.
+pub fn linear_search<const SIDE: bool>(
+    item_columns: &[ArrayRef],
+    target: &[ScalarValue],
+    sort_options: &[SortOptions],
+    mut low: usize,
+) -> Result<usize> {
+    let high: usize = item_columns
+        .get(0)
+        .ok_or_else(|| {
+            DataFusionError::Internal("Column array shouldn't be empty".to_string())
+        })?
+        .len();
+    let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
+        let cmp = compare(current, target, sort_options)?;
+        Ok::<bool, DataFusionError>(if SIDE { cmp.is_lt() } else { cmp.is_le() })
+    };
+    while low < high {
+        let val = get_row_at_idx(item_columns, low)?;
+        if !compare_fn(&val, target)? {
+            break;
+        }
+        low += 1;
     }
     Ok(low)
 }
@@ -170,7 +151,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_bisect_left_and_right() {
+    fn test_bisect_linear_left_and_right() {
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
             Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
@@ -204,6 +185,11 @@ mod tests {
         let res: usize = bisect::<true>(&arrays, &search_tuple, &ords).unwrap();
         assert_eq!(res, 2);
         let res: usize = bisect::<false>(&arrays, &search_tuple, &ords).unwrap();
+        assert_eq!(res, 3);
+        let res: usize = linear_search::<true>(&arrays, &search_tuple, &ords, 0).unwrap();
+        assert_eq!(res, 2);
+        let res: usize =
+            linear_search::<false>(&arrays, &search_tuple, &ords, 0).unwrap();
         assert_eq!(res, 3);
     }
 
@@ -241,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bisect_left_and_right_diff_sort() {
+    fn test_bisect_linear_left_and_right_diff_sort() {
         // Descending, left
         let arrays: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice([
             4.0, 3.0, 2.0, 1.0, 0.0,
@@ -310,6 +296,13 @@ mod tests {
         assert_eq!(res, 3);
 
         let res: usize = bisect::<true>(&arrays, &search_tuple, &ords).unwrap();
+        assert_eq!(res, 2);
+
+        let res: usize =
+            linear_search::<false>(&arrays, &search_tuple, &ords, 0).unwrap();
+        assert_eq!(res, 3);
+
+        let res: usize = linear_search::<true>(&arrays, &search_tuple, &ords, 0).unwrap();
         assert_eq!(res, 2);
     }
 }

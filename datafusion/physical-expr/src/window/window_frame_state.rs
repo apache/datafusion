@@ -20,7 +20,7 @@
 
 use arrow::array::ArrayRef;
 use arrow::compute::kernels::sort::SortOptions;
-use datafusion_common::bisect::{bisect, find_bisect_point, linear_search};
+use datafusion_common::utils::{find_bisect_point, linear_search};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use std::cmp::min;
@@ -69,6 +69,7 @@ impl<'a> WindowFrameContext<'a> {
         sort_options: &[SortOptions],
         length: usize,
         idx: usize,
+        last_range: &Range<usize>,
     ) -> Result<Range<usize>> {
         match *self {
             WindowFrameContext::Rows(window_frame) => {
@@ -85,6 +86,7 @@ impl<'a> WindowFrameContext<'a> {
                 sort_options,
                 length,
                 idx,
+                last_range,
             ),
             // sort_options is not used in GROUPS mode calculations as the inequality of two rows is the indicator
             // of a group change, and the ordering and the position of the nulls do not have impact on inequality.
@@ -159,9 +161,7 @@ impl<'a> WindowFrameContext<'a> {
 /// scan ranges of data while processing window frames. Currently we calculate
 /// things from scratch every time, but we will make this incremental in the future.
 #[derive(Debug, Default)]
-pub struct WindowFrameStateRange {
-    last_range: Range<usize>,
-}
+pub struct WindowFrameStateRange {}
 
 impl WindowFrameStateRange {
     /// This function calculates beginning/ending indices for the frame of the current row.
@@ -172,6 +172,7 @@ impl WindowFrameStateRange {
         sort_options: &[SortOptions],
         length: usize,
         idx: usize,
+        last_range: &Range<usize>,
     ) -> Result<Range<usize>> {
         let start = match window_frame.start_bound {
             WindowFrameBound::Preceding(ref n) => {
@@ -184,6 +185,7 @@ impl WindowFrameStateRange {
                         sort_options,
                         idx,
                         Some(n),
+                        last_range,
                     )?
                 }
             }
@@ -196,6 +198,7 @@ impl WindowFrameStateRange {
                         sort_options,
                         idx,
                         None,
+                        last_range,
                     )?
                 }
             }
@@ -205,6 +208,7 @@ impl WindowFrameStateRange {
                     sort_options,
                     idx,
                     Some(n),
+                    last_range,
                 )?,
         };
         let end = match window_frame.end_bound {
@@ -214,6 +218,7 @@ impl WindowFrameStateRange {
                     sort_options,
                     idx,
                     Some(n),
+                    last_range,
                 )?,
             WindowFrameBound::CurrentRow => {
                 if range_columns.is_empty() {
@@ -224,6 +229,7 @@ impl WindowFrameStateRange {
                         sort_options,
                         idx,
                         None,
+                        last_range,
                     )?
                 }
             }
@@ -237,13 +243,12 @@ impl WindowFrameStateRange {
                         sort_options,
                         idx,
                         Some(n),
+                        last_range,
                     )?
                 }
             }
         };
-        self.last_range = Range { start, end };
-        println!("self.last_range: {:?}", self.last_range);
-        Ok(self.last_range.clone())
+        Ok(Range { start, end })
     }
 
     /// This function does the heavy lifting when finding range boundaries. It is meant to be
@@ -255,6 +260,7 @@ impl WindowFrameStateRange {
         sort_options: &[SortOptions],
         idx: usize,
         delta: Option<&ScalarValue>,
+        last_range: &Range<usize>,
     ) -> Result<usize> {
         let current_row_values = range_columns
             .iter()
@@ -289,14 +295,15 @@ impl WindowFrameStateRange {
         } else {
             current_row_values
         };
-        // `BISECT_SIDE` true means bisect_left, false means bisect_right
-        let linear = linear_search::<SIDE>(
-            range_columns,
-            &end_range,
-            sort_options,
-            &self.last_range,
-        )?;
-        Ok(linear)
+        let search_start = if SIDE {
+            last_range.start
+        } else {
+            last_range.end
+        };
+        // `SIDE` true means from left insert, false means right insert
+        let res =
+            linear_search::<SIDE>(range_columns, &end_range, sort_options, search_start)?;
+        Ok(res)
     }
 }
 
