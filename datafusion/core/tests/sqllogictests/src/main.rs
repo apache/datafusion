@@ -192,7 +192,6 @@ impl Options {
         let args: Vec<_> = std::env::args().collect();
 
         let complete_mode = args.iter().any(|a| a == "--complete");
-        // std::env::var("PG_COMPAT").map_or()
         let postgres_runner = match std::env::var("PG_COMPAT") {
             Ok(value) => {
                 info!("PG_COMPAT value {}", value);
