@@ -1212,18 +1212,13 @@ impl DefaultPhysicalPlanner {
                         }
 
                         let logical_input = e.node.inputs();
-                        let plan = planner.plan_extension(
+                        maybe_plan = planner.plan_extension(
                             self,
                             e.node.as_ref(),
                             &logical_input,
                             &physical_inputs,
                             session_state,
-                        );
-                        let plan = plan.await;
-                        if plan.is_err() {
-                            continue;
-                        }
-                        maybe_plan = plan.unwrap();
+                        ).await?;
                     }
 
                     let plan = maybe_plan.ok_or_else(|| DataFusionError::Plan(format!(
@@ -1988,6 +1983,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn error_during_extension_planning() {
+        let session_state = make_session_state();
+        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+            ErrorExtensionPlanner {},
+        )]);
+
+        let logical_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoOpExtensionNode::default()),
+        });
+        match planner
+            .create_physical_plan(&logical_plan, &session_state)
+            .await
+        {
+            Ok(_) => panic!("Expected planning failure"),
+            Err(e) => assert!(e.to_string().contains("BOOM"),),
+        }
+    }
+
+    #[tokio::test]
     async fn test_with_zero_offset_plan() -> Result<()> {
         let logical_plan = test_csv_scan().await?.limit(0, None)?.build()?;
         let plan = plan(&logical_plan).await?;
@@ -2305,7 +2319,22 @@ mod tests {
             );
         }
     }
+    struct ErrorExtensionPlanner {}
 
+    #[async_trait]
+    impl ExtensionPlanner for ErrorExtensionPlanner {
+        /// Create a physical plan for an extension node
+        async fn plan_extension(
+            &self,
+            _planner: &dyn PhysicalPlanner,
+            _node: &dyn UserDefinedLogicalNode,
+            _logical_inputs: &[&LogicalPlan],
+            _physical_inputs: &[Arc<dyn ExecutionPlan>],
+            _session_state: &SessionState,
+        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+            Err(DataFusionError::Internal("BOOM".to_string()))
+        }
+    }
     /// An example extension node that doesn't do anything
     struct NoOpExtensionNode {
         schema: DFSchemaRef,
