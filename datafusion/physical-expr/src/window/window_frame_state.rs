@@ -186,6 +186,7 @@ impl WindowFrameStateRange {
                         idx,
                         Some(n),
                         last_range,
+                        length,
                     )?
                 }
             }
@@ -199,6 +200,7 @@ impl WindowFrameStateRange {
                         idx,
                         None,
                         last_range,
+                        length,
                     )?
                 }
             }
@@ -209,6 +211,7 @@ impl WindowFrameStateRange {
                     idx,
                     Some(n),
                     last_range,
+                    length,
                 )?,
         };
         let end = match window_frame.end_bound {
@@ -219,6 +222,7 @@ impl WindowFrameStateRange {
                     idx,
                     Some(n),
                     last_range,
+                    length,
                 )?,
             WindowFrameBound::CurrentRow => {
                 if range_columns.is_empty() {
@@ -230,6 +234,7 @@ impl WindowFrameStateRange {
                         idx,
                         None,
                         last_range,
+                        length,
                     )?
                 }
             }
@@ -244,6 +249,7 @@ impl WindowFrameStateRange {
                         idx,
                         Some(n),
                         last_range,
+                        length,
                     )?
                 }
             }
@@ -261,6 +267,7 @@ impl WindowFrameStateRange {
         idx: usize,
         delta: Option<&ScalarValue>,
         last_range: &Range<usize>,
+        length: usize,
     ) -> Result<usize> {
         let current_row_values = range_columns
             .iter()
@@ -301,8 +308,13 @@ impl WindowFrameStateRange {
             last_range.end
         };
         // `SIDE` true means from left insert, false means right insert
-        let res =
-            linear_search::<SIDE>(range_columns, &end_range, sort_options, search_start)?;
+        let res = linear_search::<SIDE>(
+            range_columns,
+            &end_range,
+            sort_options,
+            search_start,
+            length,
+        )?;
         Ok(res)
     }
 }

@@ -63,18 +63,14 @@ fn compare(
 /// This function implements both bisect_left and bisect_right, having the same
 /// semantics with the Python Standard Library. To use bisect_left, supply true
 /// as the template argument. To use bisect_right, supply false as the template argument.
+/// It searches `item_columns` between rows `low` and `high`.
 pub fn bisect<const SIDE: bool>(
     item_columns: &[ArrayRef],
     target: &[ScalarValue],
     sort_options: &[SortOptions],
+    low: usize,
+    high: usize,
 ) -> Result<usize> {
-    let low: usize = 0;
-    let high: usize = item_columns
-        .get(0)
-        .ok_or_else(|| {
-            DataFusionError::Internal("Column array shouldn't be empty".to_string())
-        })?
-        .len();
     let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
         let cmp = compare(current, target, sort_options)?;
         Ok(if SIDE { cmp.is_lt() } else { cmp.is_le() })
@@ -108,9 +104,9 @@ where
     Ok(low)
 }
 
-/// This function implements linear_search, It starts searching from row at `start` index
-/// of `item_columns` until last row of the `item_columns`. It assumes `item_columns` is sorted
-/// according to `sort_options` and returns would insertion position of the `target`.
+/// This function implements linear_search, It searches `item_columns` between rows `low` and `high`.
+/// It assumes `item_columns` is sorted according to `sort_options`
+/// and returns insertion position of the `target` in the `item_columns`.
 /// `SIDE` is `true` means left insertion is applied.
 /// `SIDE` is `false` means right insertion is applied.
 pub fn linear_search<const SIDE: bool>(
@@ -118,13 +114,8 @@ pub fn linear_search<const SIDE: bool>(
     target: &[ScalarValue],
     sort_options: &[SortOptions],
     mut low: usize,
+    high: usize,
 ) -> Result<usize> {
-    let high: usize = item_columns
-        .get(0)
-        .ok_or_else(|| {
-            DataFusionError::Internal("Column array shouldn't be empty".to_string())
-        })?
-        .len();
     let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
         let cmp = compare(current, target, sort_options)?;
         Ok::<bool, DataFusionError>(if SIDE { cmp.is_lt() } else { cmp.is_le() })
@@ -141,7 +132,7 @@ pub fn linear_search<const SIDE: bool>(
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::Float64Array;
+    use arrow::array::{Array, Float64Array};
     use std::sync::Arc;
 
     use crate::from_slice::FromSlice;
@@ -151,7 +142,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_bisect_linear_left_and_right() {
+    fn test_bisect_linear_left_and_right() -> Result<()> {
         let arrays: Vec<ArrayRef> = vec![
             Arc::new(Float64Array::from_slice([5.0, 7.0, 8.0, 9., 10.])),
             Arc::new(Float64Array::from_slice([2.0, 3.0, 3.0, 4.0, 5.0])),
@@ -182,15 +173,16 @@ mod tests {
                 nulls_first: true,
             },
         ];
-        let res: usize = bisect::<true>(&arrays, &search_tuple, &ords).unwrap();
+        let n_row = arrays[0].len();
+        let res: usize = bisect::<true>(&arrays, &search_tuple, &ords, 0, n_row)?;
         assert_eq!(res, 2);
-        let res: usize = bisect::<false>(&arrays, &search_tuple, &ords).unwrap();
+        let res: usize = bisect::<false>(&arrays, &search_tuple, &ords, 0, n_row)?;
         assert_eq!(res, 3);
-        let res: usize = linear_search::<true>(&arrays, &search_tuple, &ords, 0).unwrap();
+        let res: usize = linear_search::<true>(&arrays, &search_tuple, &ords, 0, n_row)?;
         assert_eq!(res, 2);
-        let res: usize =
-            linear_search::<false>(&arrays, &search_tuple, &ords, 0).unwrap();
+        let res: usize = linear_search::<false>(&arrays, &search_tuple, &ords, 0, n_row)?;
         assert_eq!(res, 3);
+        Ok(())
     }
 
     #[test]
@@ -227,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bisect_linear_left_and_right_diff_sort() {
+    fn test_bisect_linear_left_and_right_diff_sort() -> Result<()> {
         // Descending, left
         let arrays: Vec<ArrayRef> = vec![Arc::new(Float64Array::from_slice([
             4.0, 3.0, 2.0, 1.0, 0.0,
@@ -237,7 +229,11 @@ mod tests {
             descending: true,
             nulls_first: true,
         }];
-        let res: usize = bisect::<true>(&arrays, &search_tuple, &ords).unwrap();
+        let res: usize =
+            bisect::<true>(&arrays, &search_tuple, &ords, 0, arrays[0].len())?;
+        assert_eq!(res, 0);
+        let res: usize =
+            linear_search::<true>(&arrays, &search_tuple, &ords, 0, arrays[0].len())?;
         assert_eq!(res, 0);
 
         // Descending, right
@@ -249,7 +245,11 @@ mod tests {
             descending: true,
             nulls_first: true,
         }];
-        let res: usize = bisect::<false>(&arrays, &search_tuple, &ords).unwrap();
+        let res: usize =
+            bisect::<false>(&arrays, &search_tuple, &ords, 0, arrays[0].len())?;
+        assert_eq!(res, 1);
+        let res: usize =
+            linear_search::<false>(&arrays, &search_tuple, &ords, 0, arrays[0].len())?;
         assert_eq!(res, 1);
 
         // Ascending, left
@@ -260,7 +260,11 @@ mod tests {
             descending: false,
             nulls_first: true,
         }];
-        let res: usize = bisect::<true>(&arrays, &search_tuple, &ords).unwrap();
+        let res: usize =
+            bisect::<true>(&arrays, &search_tuple, &ords, 0, arrays[0].len())?;
+        assert_eq!(res, 1);
+        let res: usize =
+            linear_search::<true>(&arrays, &search_tuple, &ords, 0, arrays[0].len())?;
         assert_eq!(res, 1);
 
         // Ascending, right
@@ -271,7 +275,11 @@ mod tests {
             descending: false,
             nulls_first: true,
         }];
-        let res: usize = bisect::<false>(&arrays, &search_tuple, &ords).unwrap();
+        let res: usize =
+            bisect::<false>(&arrays, &search_tuple, &ords, 0, arrays[0].len())?;
+        assert_eq!(res, 2);
+        let res: usize =
+            linear_search::<false>(&arrays, &search_tuple, &ords, 0, arrays[0].len())?;
         assert_eq!(res, 2);
 
         let arrays: Vec<ArrayRef> = vec![
@@ -292,17 +300,19 @@ mod tests {
                 nulls_first: true,
             },
         ];
-        let res: usize = bisect::<false>(&arrays, &search_tuple, &ords).unwrap();
+        let res: usize =
+            bisect::<false>(&arrays, &search_tuple, &ords, 0, arrays[0].len())?;
         assert_eq!(res, 3);
-
-        let res: usize = bisect::<true>(&arrays, &search_tuple, &ords).unwrap();
-        assert_eq!(res, 2);
+        let res: usize =
+            linear_search::<false>(&arrays, &search_tuple, &ords, 0, arrays[0].len())?;
+        assert_eq!(res, 3);
 
         let res: usize =
-            linear_search::<false>(&arrays, &search_tuple, &ords, 0).unwrap();
-        assert_eq!(res, 3);
-
-        let res: usize = linear_search::<true>(&arrays, &search_tuple, &ords, 0).unwrap();
+            bisect::<true>(&arrays, &search_tuple, &ords, 0, arrays[0].len())?;
         assert_eq!(res, 2);
+        let res: usize =
+            linear_search::<true>(&arrays, &search_tuple, &ords, 0, arrays[0].len())?;
+        assert_eq!(res, 2);
+        Ok(())
     }
 }
