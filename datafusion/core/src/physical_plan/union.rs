@@ -47,7 +47,7 @@ use crate::{
     error::Result,
     physical_plan::{expressions, metrics::BaselineMetrics},
 };
-use datafusion_physical_expr::sort_expr_list_eq_strict_order;
+use datafusion_physical_expr::utils::ordering_satisfy;
 use tokio::macros::support::thread_rng_n;
 
 /// `UnionExec`: `UNION ALL` execution plan.
@@ -220,55 +220,60 @@ impl ExecutionPlan for UnionExec {
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        let first_input_ordering = self.inputs[0].output_ordering();
-        // If the Union is not partition aware and all the input ordering spec strictly equal with the first_input_ordering
-        // Return the first_input_ordering as the output_ordering
-        //
-        // It might be too strict here in the case that the input ordering are compatible but not exactly the same.
-        // For example one input ordering has the ordering spec SortExpr('a','b','c') and the other has the ordering
-        // spec SortExpr('a'), It is safe to derive the out ordering with the spec SortExpr('a').
-        if !self.partition_aware
-            && first_input_ordering.is_some()
-            && self
-                .inputs
-                .iter()
-                .map(|plan| plan.output_ordering())
-                .all(|ordering| {
-                    ordering.is_some()
-                        && sort_expr_list_eq_strict_order(
-                            ordering.unwrap(),
-                            first_input_ordering.unwrap(),
-                        )
-                })
-        {
-            first_input_ordering
-        } else {
-            None
+        // Return the output ordering of first child where maintains_input_order is `true`.
+        // If none of the children preserves ordering. Return `None`.
+        let mut res = None;
+        for (idx, is_maintained) in self.maintains_input_order().into_iter().enumerate() {
+            if is_maintained {
+                res = self.inputs[idx].output_ordering();
+                break;
+            }
         }
+        res
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        let first_input_ordering = self.inputs[0].output_ordering();
-        // If the Union is not partition aware and all the input
-        // ordering spec strictly equal with the first_input_ordering,
-        // then the `UnionExec` maintains the input order
-        //
-        // It might be too strict here in the case that the input
-        // ordering are compatible but not exactly the same.  See
-        // comments in output_ordering
-        let res =
-            !self.partition_aware
-                && first_input_ordering.is_some()
-                && self.inputs.iter().map(|plan| plan.output_ordering()).all(
-                    |ordering| {
-                        ordering.is_some()
-                            && sort_expr_list_eq_strict_order(
-                                ordering.unwrap(),
-                                first_input_ordering.unwrap(),
-                            )
-                    },
-                );
-        vec![res; self.inputs.len()]
+        // If the Union is not partition aware and output is sorted at least one of the children
+        // maintains ordering.
+        // For instance assume: child1 is SortExpr('a','b','c'), child2 is SortExpr('a','b') and
+        // child3 is SortExpr('a','b'). Output ordering would be
+        // SortExpr('a','b') (Common subset of all input orderings). In this scheme, this function will return
+        // vec![false, true, true]. Indicating ordering for 2nd and 3rd child is preserved but 1st child is not.
+        let mut smallest: Option<&[PhysicalSortExpr]> = None;
+        for elem in self.inputs.iter() {
+            match (elem.output_ordering(), smallest) {
+                (Some(elem_ordering), Some(smallest_ordering)) => {
+                    if elem_ordering.len() < smallest_ordering.len() {
+                        smallest = Some(elem_ordering);
+                    }
+                }
+                (Some(elem_ordering), None) => {
+                    smallest = Some(elem_ordering);
+                }
+                (None, _) => {
+                    smallest = None;
+                    break;
+                }
+            }
+        }
+        if !self.partition_aware
+            && self.inputs.iter().all(|child| {
+                ordering_satisfy(child.output_ordering(), smallest, || {
+                    child.equivalence_properties()
+                })
+            })
+        {
+            // smallest is the output_ordering
+            let mut res = vec![];
+            for child in &self.inputs {
+                res.push(ordering_satisfy(smallest, child.output_ordering(), || {
+                    child.equivalence_properties()
+                }))
+            }
+            res
+        } else {
+            vec![false; self.inputs.len()]
+        }
     }
 
     fn with_new_children(
