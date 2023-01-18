@@ -27,8 +27,8 @@ use crate::logical_plan::{
     SubqueryAlias, Union, Values, Window,
 };
 use crate::{
-    BinaryExpr, Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator,
-    TableScan, TryCast,
+    BinaryExpr, Cast, DmlStatement, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
+    Operator, TableScan, TryCast,
 };
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{
@@ -489,6 +489,17 @@ pub fn from_plan(
                 schema.clone(),
             )?))
         }
+        LogicalPlan::Dml(DmlStatement {
+            table_name,
+            table_schema,
+            op,
+            ..
+        }) => Ok(LogicalPlan::Dml(DmlStatement {
+            table_name: table_name.clone(),
+            table_schema: table_schema.clone(),
+            op: op.clone(),
+            input: Arc::new(inputs[0].clone()),
+        })),
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {
             schema: schema.clone(),
             values: expr
@@ -965,7 +976,10 @@ pub fn can_hash(data_type: &DataType) -> bool {
 }
 
 /// Check whether all columns are from the schema.
-fn check_all_column_from_schema(columns: &HashSet<Column>, schema: DFSchemaRef) -> bool {
+pub fn check_all_column_from_schema(
+    columns: &HashSet<Column>,
+    schema: DFSchemaRef,
+) -> bool {
     columns
         .iter()
         .all(|column| schema.index_of_column(column).is_ok())

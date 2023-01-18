@@ -431,11 +431,22 @@ fn reorder_aggregate_keys(
                     None
                 };
                 if let Some(partial_agg) = new_partial_agg {
-                    let mut new_group_exprs = vec![];
-                    for idx in positions.into_iter() {
-                        new_group_exprs.push(group_by.expr()[idx].clone());
-                    }
-                    let new_group_by = PhysicalGroupBy::new_single(new_group_exprs);
+                    // Build new group expressions that correspond to the output of partial_agg
+                    let new_final_group: Vec<Arc<dyn PhysicalExpr>> =
+                        partial_agg.output_group_expr();
+                    let new_group_by = PhysicalGroupBy::new_single(
+                        new_final_group
+                            .iter()
+                            .enumerate()
+                            .map(|(i, expr)| {
+                                (
+                                    expr.clone(),
+                                    partial_agg.group_expr().expr()[i].1.clone(),
+                                )
+                            })
+                            .collect(),
+                    );
+
                     let new_final_agg = Arc::new(AggregateExec::try_new(
                         AggregateMode::FinalPartitioned,
                         new_group_by,
@@ -1494,7 +1505,7 @@ mod tests {
         let expected = &[
             "HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"b1\", index: 1 }, Column { name: \"b\", index: 0 }), (Column { name: \"a1\", index: 0 }, Column { name: \"a\", index: 1 })]",
             "ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
-            "AggregateExec: mode=FinalPartitioned, gby=[b1@1 as b1, a1@0 as a1], aggr=[]",
+            "AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 0 }, Column { name: \"a1\", index: 1 }], 10)",
             "AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
@@ -2057,7 +2068,7 @@ mod tests {
             "SortExec: [b3@1 ASC,a3@0 ASC]",
             "ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]",
             "ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]",
-            "AggregateExec: mode=FinalPartitioned, gby=[b1@1 as b1, a1@0 as a1], aggr=[]",
+            "AggregateExec: mode=FinalPartitioned, gby=[b1@0 as b1, a1@1 as a1], aggr=[]",
             "RepartitionExec: partitioning=Hash([Column { name: \"b1\", index: 0 }, Column { name: \"a1\", index: 1 }], 10)",
             "AggregateExec: mode=Partial, gby=[b@1 as b1, a@0 as a1], aggr=[]",
             "ParquetExec: limit=None, partitions={1 group: [[x]]}, projection=[a, b, c, d, e]",
