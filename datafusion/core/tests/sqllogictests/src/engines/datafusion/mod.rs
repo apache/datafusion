@@ -38,8 +38,16 @@ pub struct DataFusion {
 }
 
 impl DataFusion {
-    pub fn new(ctx: SessionContext, file_name: String, postgres_compatible: bool) -> Self {
-        Self { ctx, file_name, is_pg_compatibility_test: postgres_compatible }
+    pub fn new(
+        ctx: SessionContext,
+        file_name: String,
+        postgres_compatible: bool,
+    ) -> Self {
+        Self {
+            ctx,
+            file_name,
+            is_pg_compatibility_test: postgres_compatible,
+        }
     }
 }
 
@@ -68,7 +76,11 @@ impl sqllogictest::AsyncDB for DataFusion {
     }
 }
 
-async fn run_query(ctx: &SessionContext, sql: impl Into<String>, is_pg_compatibility_test: bool) -> Result<DBOutput> {
+async fn run_query(
+    ctx: &SessionContext,
+    sql: impl Into<String>,
+    is_pg_compatibility_test: bool,
+) -> Result<DBOutput> {
     let sql = sql.into();
     // Check if the sql is `insert`
     if let Ok(mut statements) = DFParser::parse_sql(&sql) {
@@ -82,6 +94,7 @@ async fn run_query(ctx: &SessionContext, sql: impl Into<String>, is_pg_compatibi
     }
     let df = ctx.sql(sql.as_str()).await?;
     let results: Vec<RecordBatch> = df.collect().await?;
-    let formatted_batches = normalize::convert_batches(results, is_pg_compatibility_test)?;
+    let formatted_batches =
+        normalize::convert_batches(results, is_pg_compatibility_test)?;
     Ok(formatted_batches)
 }

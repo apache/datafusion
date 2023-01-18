@@ -103,22 +103,22 @@ xz2 = { version = "0.1", optional = true }
 [dev-dependencies]
 arrow = { version = "29.0.0", features = ["prettyprint", "dyn_cmp_dict"] }
 async-trait = "0.1.53"
+bigdecimal = "0.3.0"
 criterion = "0.4"
 csv = "1.1.6"
 ctor = "0.1.22"
 doc-comment = "0.3"
 env_logger = "0.10"
+half = "2.2.1"
 parquet-test-utils = { path = "../../parquet-test-utils" }
 postgres-types = { version = "0.2.4", features = ["derive", "with-chrono-0_4"] }
 rstest = "0.16.0"
 rust_decimal = { version = "1.27.0", features = ["tokio-pg"] }
-bigdecimal = "0.3.0"
-half = "2.2.1"
 sqllogictest = "0.10.0"
 test-utils = { path = "../../test-utils" }
-tokio-postgres = "0.7.7"
-thiserror = "1.0.37"
 testcontainers = "0.14.0"
+thiserror = "1.0.37"
+tokio-postgres = "0.7.7"
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = "0.26.1"
 

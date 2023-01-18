@@ -25,8 +25,8 @@ use datafusion::prelude::SessionContext;
 
 use crate::engines::datafusion::DataFusion;
 use crate::engines::postgres;
-use crate::engines::postgres::{Postgres};
 use crate::engines::postgres::image::{PG_DB, PG_PASSWORD, PG_PORT, PG_USER};
+use crate::engines::postgres::Postgres;
 
 mod engines;
 mod setup;
@@ -76,10 +76,18 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn run_test_file(path: &PathBuf, file_name: String, is_pg_compatibility_test: bool) -> Result<(), Box<dyn Error>> {
+async fn run_test_file(
+    path: &PathBuf,
+    file_name: String,
+    is_pg_compatibility_test: bool,
+) -> Result<(), Box<dyn Error>> {
     println!("Running with DataFusion runner: {}", path.display());
     let ctx = context_for_test_file(&file_name, is_pg_compatibility_test).await;
-    let mut runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name, is_pg_compatibility_test));
+    let mut runner = sqllogictest::Runner::new(DataFusion::new(
+        ctx,
+        file_name,
+        is_pg_compatibility_test,
+    ));
     runner.run_file_async(path).await?;
     Ok(())
 }
@@ -101,7 +109,7 @@ async fn run_test_file_with_postgres(
         PG_USER,
         PG_PASSWORD,
     )
-        .await?;
+    .await?;
     let mut postgres_runner = sqllogictest::Runner::new(postgres_client);
 
     postgres_runner.run_file_async(path).await?;
@@ -118,7 +126,11 @@ async fn run_complete_file(
     info!("Using complete mode to complete: {}", path.display());
 
     let ctx = context_for_test_file(&file_name, is_pg_compatibility_test).await;
-    let runner = sqllogictest::Runner::new(DataFusion::new(ctx, file_name, is_pg_compatibility_test));
+    let runner = sqllogictest::Runner::new(DataFusion::new(
+        ctx,
+        file_name,
+        is_pg_compatibility_test,
+    ));
 
     let col_separator = " ";
     let validator = default_validator;
@@ -138,7 +150,10 @@ fn read_test_files(options: &Options) -> Vec<PathBuf> {
 }
 
 /// Create a SessionContext, configured for the specific test
-async fn context_for_test_file(file_name: &str, is_pg_compatibility_test: bool) -> SessionContext {
+async fn context_for_test_file(
+    file_name: &str,
+    is_pg_compatibility_test: bool,
+) -> SessionContext {
     if is_pg_compatibility_test {
         info!("Registering pg compatibility tables");
         let ctx = SessionContext::new();
@@ -185,7 +200,7 @@ impl Options {
                 info!("PG_COMPAT value {}", value);
                 true
             }
-            Err(_) => false
+            Err(_) => false,
         };
 
         // treat args after the first as filters to run (substring matching)

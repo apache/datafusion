@@ -23,11 +23,11 @@ use log::debug;
 use sqllogictest::{ColumnType, DBOutput};
 use tokio::task::JoinHandle;
 
+use super::conversion::*;
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use postgres_types::Type;
-use tokio_postgres::{Column, Row};
 use rust_decimal::Decimal;
-use super::conversion::*;
+use tokio_postgres::{Column, Row};
 
 pub mod image;
 
@@ -48,7 +48,8 @@ impl Postgres {
     ) -> Result<Self, tokio_postgres::error::Error> {
         let mut retry = 0;
         loop {
-            let connection_result = Postgres::connect(file_name.clone(), host, port, db, user, pass).await;
+            let connection_result =
+                Postgres::connect(file_name.clone(), host, port, db, user, pass).await;
             match connection_result {
                 Err(e) if retry <= 3 => {
                     debug!("Retrying connection error '{:?}'", e);
@@ -60,12 +61,14 @@ impl Postgres {
         }
     }
 
-    async fn connect(file_name: String,
-                     host: &str,
-                     port: u16,
-                     db: &str,
-                     user: &str,
-                     pass: &str) -> Result<Self, tokio_postgres::error::Error> {
+    async fn connect(
+        file_name: String,
+        host: &str,
+        port: u16,
+        db: &str,
+        user: &str,
+        pass: &str,
+    ) -> Result<Self, tokio_postgres::error::Error> {
         let (client, connection) = tokio_postgres::Config::new()
             .host(host)
             .port(port)
@@ -97,18 +100,18 @@ impl Drop for Postgres {
 
 macro_rules! make_string {
     ($row:ident, $idx:ident, $t:ty) => {{
-        let value:Option<$t> = $row.get($idx);
-         match value {
+        let value: Option<$t> = $row.get($idx);
+        match value {
             Some(value) => value.to_string(),
-            None => NULL_STR.to_string()
-         }
+            None => NULL_STR.to_string(),
+        }
     }};
     ($row:ident, $idx:ident, $t:ty, $convert:ident) => {{
         let value: Option<$t> = $row.get($idx);
         match value {
             Some(value) => $convert(value).to_string(),
-            None => NULL_STR.to_string()
-         }
+            None => NULL_STR.to_string(),
+        }
     }};
 }
 
@@ -128,10 +131,12 @@ fn cell_to_string(row: &Row, column: &Column, idx: usize) -> String {
                 .unwrap_or_else(|| "NULL".to_string())
         }
         Type::BOOL => make_string!(row, idx, bool, bool_to_str),
-        Type::BPCHAR | Type::VARCHAR | Type::TEXT => make_string!(row, idx, &str, varchar_to_str),
+        Type::BPCHAR | Type::VARCHAR | Type::TEXT => {
+            make_string!(row, idx, &str, varchar_to_str)
+        }
         Type::FLOAT4 => make_string!(row, idx, f32, f32_to_str),
         Type::FLOAT8 => make_string!(row, idx, f64, f64_to_str),
-        _ => todo!("Unsupported type: {}", column.type_().name())
+        _ => unimplemented!("Unsupported type: {}", column.type_().name()),
     }
 }
 
@@ -155,13 +160,16 @@ impl sqllogictest::AsyncDB for Postgres {
             return Ok(DBOutput::StatementComplete(0));
         }
         let rows = self.client.query(sql, &[]).await?;
-        let output = rows.iter().map(|row| {
-            row.columns().iter().enumerate()
-                .map(|(idx, column)| {
-                    cell_to_string(&row, &column, idx)
-                })
-                .collect::<Vec<String>>()
-        }).collect::<Vec<_>>();
+        let output = rows
+            .iter()
+            .map(|row| {
+                row.columns()
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, column)| cell_to_string(&row, &column, idx))
+                    .collect::<Vec<String>>()
+            })
+            .collect::<Vec<_>>();
 
         if output.is_empty() {
             let stmt = self.client.prepare(sql).await?;
