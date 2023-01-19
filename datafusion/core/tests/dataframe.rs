@@ -411,6 +411,95 @@ async fn join_with_alias_filter() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn right_semi_with_alias_filter() -> Result<()> {
+    let join_ctx = create_join_context()?;
+    let t1 = join_ctx.table("t1").await?;
+    let t2 = join_ctx.table("t2").await?;
+
+    // t1.a = t2.a and t1.c > 1 and t2.c > 1
+    let filter = col("t1.a")
+        .eq(col("t2.a"))
+        .and(col("t1.c").gt(lit(1u32)))
+        .and(col("t2.c").gt(lit(1u32)));
+
+    let df = t1
+        .join(t2, JoinType::RightSemi, &[], &[], Some(filter))?
+        .select(vec![col("t2.a"), col("t2.b"), col("t2.c")])?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+    let expected = vec![
+        "Projection: t2.a, t2.b, t2.c [a:UInt32, b:Utf8, c:Int32]",
+        "  RightSemi Join: t1.a = t2.a [a:UInt32, b:Utf8, c:Int32]",
+        "    Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
+        "      TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
+        "    Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
+        "      TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
+    ];
+
+    let formatted = optimized_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let results = df.collect().await?;
+    let expected: Vec<&str> = vec![
+        "+-----+---+---+",
+        "| a   | b | c |",
+        "+-----+---+---+",
+        "| 10  | b | 2 |",
+        "| 100 | d | 4 |",
+        "+-----+---+---+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn right_anti_filter_push_down() -> Result<()> {
+    let join_ctx = create_join_context()?;
+    let t1 = join_ctx.table("t1").await?;
+    let t2 = join_ctx.table("t2").await?;
+
+    // t1.a = t2.a and t1.c > 1 and t2.c > 1
+    let filter = col("t1.a")
+        .eq(col("t2.a"))
+        .and(col("t1.c").gt(lit(1u32)))
+        .and(col("t2.c").gt(lit(1u32)));
+
+    let df = t1
+        .join(t2, JoinType::RightAnti, &[], &[], Some(filter))?
+        .select(vec![col("t2.a"), col("t2.b"), col("t2.c")])?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+    let expected = vec![
+        "Projection: t2.a, t2.b, t2.c [a:UInt32, b:Utf8, c:Int32]",
+        "  RightAnti Join: t1.a = t2.a Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]",
+        "    Filter: t1.c > Int32(1) [a:UInt32, c:Int32]",
+        "      TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]",
+        "    TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]",
+    ];
+
+    let formatted = optimized_plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+
+    let results = df.collect().await?;
+    let expected: Vec<&str> = vec![
+        "+----+---+---+",
+        "| a  | b | c |",
+        "+----+---+---+",
+        "| 13 | c | 3 |",
+        "| 3  | a | 1 |",
+        "+----+---+---+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
 async fn create_test_table() -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
