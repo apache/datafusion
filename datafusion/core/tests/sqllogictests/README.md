@@ -52,7 +52,7 @@ Datafusion runs these test files during normal sqllogictest runs.
 In order to run sqllogictests with Postgres execute:
 
 ```shell
-PG_COMPAT=true cargo test -p datafusion --test sqllogictests    
+PG_COMPAT=true cargo test -p datafusion --test sqllogictests
 ```
 
 This command requires a docker binary. Check that docker is properly installed with `which docker`.
