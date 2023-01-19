@@ -23,7 +23,7 @@ use arrow::compute::SortOptions;
 use std::cmp::Ordering;
 
 /// Given column vectors, returns row at `idx`.
-fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
+pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
     columns
         .iter()
         .map(|arr| ScalarValue::try_from_array(arr, idx))
@@ -151,6 +151,26 @@ where
     while low < high {
         let val = get_row_at_idx(item_columns, low)?;
         if !compare_fn(&val, target)? {
+            break;
+        }
+        low += 1;
+    }
+    Ok(low)
+}
+
+/// This function searches for a tuple of given values (`target`) among a slice of
+/// the given rows (`item_columns`) via a linear scan. The slice starts at the index
+/// `low` and ends at the index `high`. The boolean-valued function `compare_fn`
+/// specifies the stopping criterion.
+pub fn search_till_change(
+    item_columns: &[ArrayRef],
+    mut low: usize,
+    high: usize,
+) -> Result<usize> {
+    let start_row = get_row_at_idx(item_columns, low)?;
+    while low < high {
+        let val = get_row_at_idx(item_columns, low)?;
+        if !start_row.eq(&val) {
             break;
         }
         low += 1;
