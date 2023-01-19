@@ -17,7 +17,7 @@
 
 //! DataFusion error types
 
-use std::error;
+use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::result;
@@ -37,7 +37,7 @@ use sqlparser::parser::ParserError;
 pub type Result<T> = result::Result<T, DataFusionError>;
 
 /// Error type for generic operations that could result in DataFusionError::External
-pub type GenericError = Box<dyn error::Error + Send + Sync>;
+pub type GenericError = Box<dyn Error + Send + Sync>;
 
 /// DataFusion error
 #[derive(Debug)]
@@ -203,6 +203,9 @@ impl Display for SchemaError {
     }
 }
 
+impl Error for SchemaError {}
+
+
 impl From<io::Error> for DataFusionError {
     fn from(e: io::Error) -> Self {
         DataFusionError::IoError(e)
@@ -328,7 +331,34 @@ impl Display for DataFusionError {
     }
 }
 
-impl error::Error for DataFusionError {}
+impl Error for DataFusionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            DataFusionError::ArrowError(e) => Some(e),
+            #[cfg(feature = "parquet")]
+            DataFusionError::ParquetError(e) => Some(e),
+            #[cfg(feature = "avro")]
+            AvroError(e) => Some(e),
+            #[cfg(feature = "object_store")]
+            DataFusionError::ObjectStore(e) => Some(e),
+            DataFusionError::IoError(e) => Some(e),
+            DataFusionError::SQL(e) => Some(e),
+            DataFusionError::NotImplemented(_) => None,
+            DataFusionError::Internal(_) => None,
+            DataFusionError::Plan(_) => None,
+            DataFusionError::SchemaError(e) => Some(e),
+            DataFusionError::Execution(_) => None,
+            DataFusionError::ResourcesExhausted(_) => None,
+            DataFusionError::External(e) => Some(e.as_ref()),
+            #[cfg(feature = "jit")]
+            DataFusionError::JITError(e) => Some(e),
+            DataFusionError::Context(_, e) => Some(e.as_ref()),
+            DataFusionError::Substrait(_) => None,
+        }
+    }
+}
+
+
 
 impl From<DataFusionError> for io::Error {
     fn from(e: DataFusionError) -> Self {
