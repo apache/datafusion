@@ -445,7 +445,12 @@ impl ExecutionPlan for RepartitionExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(f, "RepartitionExec: partitioning={:?}", self.partitioning)
+                write!(
+                    f,
+                    "RepartitionExec: partitioning={:?}, input_partitions={}",
+                    self.partitioning,
+                    self.input.output_partitioning().partition_count()
+                )
             }
         }
     }
