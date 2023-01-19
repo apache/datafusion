@@ -247,15 +247,14 @@ impl Stream for GroupedHashAggregateStream {
                             // allocate memory
                             // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
                             // overshooting a bit. Also this means we either store the whole record batch or not.
-                            match result.and_then(|allocated| {
+                            let result = result.and_then(|allocated| {
                                 self.row_aggr_state.reservation.try_grow(allocated)
-                            }) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    return Poll::Ready(Some(Err(
-                                        ArrowError::ExternalError(Box::new(e)),
-                                    )))
-                                }
+                            });
+
+                            if let Err(e) = result {
+                                return Poll::Ready(Some(Err(ArrowError::ExternalError(
+                                    Box::new(e),
+                                ))));
                             }
                         }
                         // inner had error, return to caller
