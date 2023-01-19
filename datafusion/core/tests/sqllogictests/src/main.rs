@@ -107,7 +107,7 @@ async fn run_test_file_with_postgres(
         PG_USER,
         PG_PASSWORD,
     )
-        .await?;
+    .await?;
     let mut postgres_runner = sqllogictest::Runner::new(postgres_client);
 
     postgres_runner.run_file_async(path).await?;
@@ -192,10 +192,7 @@ impl Options {
         let args: Vec<_> = std::env::args().collect();
 
         let complete_mode = args.iter().any(|a| a == "--complete");
-        let postgres_runner = match std::env::var("PG_COMPAT") {
-            Ok(value) => true,
-            Err(_) => false,
-        };
+        let postgres_runner = std::env::var("PG_COMPAT").map_or(false, |_| true);
 
         // treat args after the first as filters to run (substring matching)
         let filters = if !args.is_empty() {
