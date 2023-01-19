@@ -31,10 +31,9 @@ use datafusion_expr::{Accumulator, WindowFrame, WindowFrameUnits};
 
 use crate::window::window_expr::{reverse_order_bys, AggregateWindowExpr};
 use crate::window::{
-    PartitionBatches, PartitionWindowAggStates, SlidingAggregateWindowExpr,
+    PartitionBatches, PartitionWindowAggStates, SlidingAggregateWindowExpr, WindowExpr,
 };
-use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
-use crate::{window::WindowExpr, AggregateExpr};
+use crate::{expressions::PhysicalSortExpr, AggregateExpr, PhysicalExpr};
 
 /// A window expr that takes the form of an aggregate function
 #[derive(Debug)]
@@ -46,7 +45,7 @@ pub struct NonSlidingAggregateWindowExpr {
 }
 
 impl NonSlidingAggregateWindowExpr {
-    /// create a new aggregate window function expression
+    /// Create a new aggregate window function expression
     pub fn new(
         aggregate: Arc<dyn AggregateExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
@@ -99,11 +98,11 @@ impl WindowExpr for NonSlidingAggregateWindowExpr {
     ) -> Result<()> {
         self.aggregate_evaluate_stateful(partition_batches, window_agg_state)?;
 
-        // Update `window_frame_range.start` point for each partition. We are sure that
-        // `NonSlidingAggregateWindowExpr` never calls `retract_batch`. Hence `window_frame_range.start`
-        // can be increased (as long as it is small )
-        // Also we are sure that we will never call retract. They can be removed
-        // from state safely. (Enables us to run queries involving UNBOUNDED PRECEDING with bounded memory)
+        // Update window frame range for each partition. As we know that
+        // non-sliding aggregations will never call `retract_batch`, this value
+        // can safely increase, and we can remove "old" parts of the state.
+        // This enables us to run queries involving UNBOUNDED PRECEDING frames
+        // using bounded memory for suitable aggregations.
         for partition_row in partition_batches.keys() {
             let window_state =
                 window_agg_state.get_mut(partition_row).ok_or_else(|| {
@@ -167,8 +166,8 @@ impl AggregateWindowExpr for NonSlidingAggregateWindowExpr {
         self.aggregate.create_accumulator()
     }
 
-    /// For given range calculate accumulator result inside range on value_slice and
-    /// update accumulator state
+    /// For a given range, calculate accumulation result inside the range on
+    /// `value_slice` and update accumulator state.
     fn get_aggregate_result_inside_range(
         &self,
         last_range: &Range<usize>,
@@ -182,9 +181,10 @@ impl AggregateWindowExpr for NonSlidingAggregateWindowExpr {
         } else {
             // Accumulate any new rows that have entered the window:
             let update_bound = cur_range.end - last_range.end;
-            // NonSlidingAggregateWindowExpr only needs to update forward direction
-            // since its starting is always same point (the beginning of the table)
-            // Hence no call to the retract_batch.
+            // A non-sliding aggregation only processes new data, it never
+            // deals with expiring data as its starting point is always the
+            // same point (i.e. the beginning of the table/frame). Hence, we
+            // do not call `retract_batch`.
             if update_bound > 0 {
                 let update: Vec<ArrayRef> = value_slice
                     .iter()

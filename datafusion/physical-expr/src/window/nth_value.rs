@@ -118,7 +118,7 @@ impl BuiltInWindowFunctionExpr for NthValue {
     fn create_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
         let state = NthValueState {
             range: Default::default(),
-            finalized_res: None,
+            finalized_result: None,
             kind: self.kind,
         };
         Ok(Box::new(NthValueEvaluator { state }))
@@ -166,27 +166,24 @@ impl PartitionEvaluator for NthValueEvaluator {
         _sort_partition_points: &[Range<usize>],
     ) -> Result<()> {
         // If we do not use state, update_state does nothing
-        self.state.range = state.window_frame_range.clone();
+        self.state.range.clone_from(&state.window_frame_range);
         if let WindowFunctionState::BuiltinWindowState(BuiltinWindowState::NthValue(
             nth_value_state,
         )) = &state.window_function_state
         {
-            if let Some(res) = &nth_value_state.finalized_res {
-                // println!("cur res: {:?}", self.state.res);
-                // println!("res updated:{:?}", res);
-                self.state.finalized_res = Some(res.clone())
+            if let Some(result) = &nth_value_state.finalized_result {
+                self.state.finalized_result = Some(result.clone())
             }
         }
         Ok(())
     }
 
     fn evaluate_stateful(&mut self, values: &[ArrayRef]) -> Result<ScalarValue> {
-        if let Some(res) = &self.state.finalized_res {
-            // println!("early return");
-            return Ok(res.clone());
+        if let Some(result) = &self.state.finalized_result {
+            Ok(result.clone())
+        } else {
+            self.evaluate_inside_range(values, self.state.range.clone())
         }
-
-        self.evaluate_inside_range(values, self.state.range.clone())
     }
 
     fn evaluate_inside_range(
@@ -194,7 +191,7 @@ impl PartitionEvaluator for NthValueEvaluator {
         values: &[ArrayRef],
         range: Range<usize>,
     ) -> Result<ScalarValue> {
-        // FIRST_VALUE, LAST_VALUE, NTH_VALUE window functions take single column, values will have size 1
+        // FIRST_VALUE, LAST_VALUE, NTH_VALUE window functions take a single column, values will have size 1.
         let arr = &values[0];
         let n_range = range.end - range.start;
         if n_range == 0 {

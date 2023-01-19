@@ -21,20 +21,18 @@ use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
-use arrow::array::Array;
+use arrow::array::{Array, ArrayRef};
+use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, datatypes::Field};
 
-use datafusion_common::Result;
-use datafusion_common::ScalarValue;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame, WindowFrameUnits};
 
 use crate::window::window_expr::{reverse_order_bys, AggregateWindowExpr};
 use crate::window::{
-    NonSlidingAggregateWindowExpr, PartitionBatches, PartitionWindowAggStates,
+    NonSlidingAggregateWindowExpr, PartitionBatches, PartitionWindowAggStates, WindowExpr,
 };
-use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
-use crate::{window::WindowExpr, AggregateExpr};
+use crate::{expressions::PhysicalSortExpr, AggregateExpr, PhysicalExpr};
 
 /// A window expr that takes the form of an aggregate function
 #[derive(Debug)]
@@ -46,7 +44,7 @@ pub struct SlidingAggregateWindowExpr {
 }
 
 impl SlidingAggregateWindowExpr {
-    /// create a new aggregate window function expression
+    /// Create a new (sliding) aggregate window function expression.
     pub fn new(
         aggregate: Arc<dyn AggregateExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
@@ -61,7 +59,7 @@ impl SlidingAggregateWindowExpr {
         }
     }
 
-    /// Get aggregate expr of AggregateWindowExpr
+    /// Get the [AggregateExpr] of this object.
     pub fn get_aggregate_expr(&self) -> &Arc<dyn AggregateExpr> {
         &self.aggregate
     }
@@ -147,8 +145,8 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
         self.aggregate.create_sliding_accumulator()
     }
 
-    /// For given range calculate accumulator result inside range on value_slice and
-    /// update accumulator state
+    /// Given current range and the last range, calculates the accumulator
+    /// result for the range of interest.
     fn get_aggregate_result_inside_range(
         &self,
         last_range: &Range<usize>,
@@ -156,9 +154,9 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
         value_slice: &[ArrayRef],
         accumulator: &mut Box<dyn Accumulator>,
     ) -> Result<ScalarValue> {
-        let value = if cur_range.start == cur_range.end {
+        if cur_range.start == cur_range.end {
             // We produce None if the window is empty.
-            ScalarValue::try_from(self.aggregate.field()?.data_type())?
+            ScalarValue::try_from(self.aggregate.field()?.data_type())
         } else {
             // Accumulate any new rows that have entered the window:
             let update_bound = cur_range.end - last_range.end;
@@ -178,8 +176,7 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
                     .collect();
                 accumulator.retract_batch(&retract)?
             }
-            accumulator.evaluate()?
-        };
-        Ok(value)
+            accumulator.evaluate()
+        }
     }
 }

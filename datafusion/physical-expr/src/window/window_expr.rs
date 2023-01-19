@@ -18,11 +18,12 @@
 use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::window_frame_state::WindowFrameContext;
 use crate::{PhysicalExpr, PhysicalSortExpr};
+use arrow::array::{new_empty_array, ArrayRef};
 use arrow::compute::kernels::partition::lexicographical_partition_ranges;
 use arrow::compute::kernels::sort::SortColumn;
 use arrow::compute::{concat, SortOptions};
+use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, datatypes::Field};
 use arrow_schema::DataType;
 use datafusion_common::{reverse_sort_options, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
@@ -66,7 +67,8 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// evaluate the window function values against the batch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef>;
 
-    /// evaluate the window function values against the batch
+    /// Evaluate the window function against the batch. This function facilitates
+    /// stateful, bounded-memory implementations.
     fn evaluate_stateful(
         &self,
         _partition_batches: &PartitionBatches,
@@ -143,17 +145,25 @@ pub trait WindowExpr: Send + Sync + Debug {
 
 /// Trait for different `AggregateWindowExpr`s (`NonSlidingAggregateWindowExpr`, `SlidingAggregateWindowExpr`)
 pub trait AggregateWindowExpr: WindowExpr {
-    /// Get accumulator for the window expression
-    /// different window expressions may return different accumulator
-    // For example sliding expressions will return sliding accumulators
-    // non-sliding expressions will return normal accumulators
+    /// Get the accumulator for the window expression. Note that distinct
+    /// window expressions may return distinct accumulators; e.g. sliding
+    /// (non-sliding) expressions will return sliding (normal) accumulators.
     fn get_accumulator(&self) -> Result<Box<dyn Accumulator>>;
 
-    /// evaluate the window function values against the batch
-    fn aggregate_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        let mut accumulator = self.get_accumulator()?;
+    /// Given current range and the last range, calculates the accumulator
+    /// result for the range of interest.
+    fn get_aggregate_result_inside_range(
+        &self,
+        last_range: &Range<usize>,
+        cur_range: &Range<usize>,
+        value_slice: &[ArrayRef],
+        accumulator: &mut Box<dyn Accumulator>,
+    ) -> Result<ScalarValue>;
 
+    /// Evaluates the window function against the batch.
+    fn aggregate_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let mut window_frame_ctx = WindowFrameContext::new(self.get_window_frame());
+        let mut accumulator = self.get_accumulator()?;
         let mut last_range = Range { start: 0, end: 0 };
         let mut idx = 0;
         self.get_result_column(
@@ -162,11 +172,12 @@ pub trait AggregateWindowExpr: WindowExpr {
             &mut window_frame_ctx,
             &mut last_range,
             &mut idx,
-            true,
+            false,
         )
     }
 
-    /// evaluate the window function values against the batch (can work on chunk by chunk data)
+    /// Statefully evaluates the window function against the batch. Maintains
+    /// state so that it can work incrementally over multiple chunks.
     fn aggregate_evaluate_stateful(
         &self,
         partition_batches: &PartitionBatches,
@@ -197,44 +208,29 @@ pub trait AggregateWindowExpr: WindowExpr {
                 _ => unreachable!(),
             };
             let mut state = &mut window_state.state;
-            state.is_end = partition_batch_state.is_end;
 
-            let mut idx = state.last_calculated_index;
-            let mut last_range = state.window_frame_range.clone();
+            let record_batch = &partition_batch_state.record_batch;
             let mut window_frame_ctx = WindowFrameContext::new(self.get_window_frame());
             let out_col = self.get_result_column(
                 accumulator,
-                &partition_batch_state.record_batch,
+                record_batch,
                 &mut window_frame_ctx,
-                &mut last_range,
-                &mut idx,
-                state.is_end,
+                &mut state.window_frame_range,
+                &mut state.last_calculated_index,
+                !partition_batch_state.is_end,
             )?;
-            state.last_calculated_index = idx;
-            state.window_frame_range = last_range.clone();
-
+            state.is_end = partition_batch_state.is_end;
             state.out_col = concat(&[&state.out_col, &out_col])?;
-            let num_rows = partition_batch_state.record_batch.num_rows();
-            state.n_row_result_missing = num_rows - state.last_calculated_index;
-
+            state.n_row_result_missing =
+                record_batch.num_rows() - state.last_calculated_index;
             state.window_function_state =
                 WindowFunctionState::AggregateState(accumulator.state()?);
         }
         Ok(())
     }
 
-    /// Given current range and last range calculate accumulator result
-    /// for the range of interest
-    fn get_aggregate_result_inside_range(
-        &self,
-        last_range: &Range<usize>,
-        cur_range: &Range<usize>,
-        value_slice: &[ArrayRef],
-        accumulator: &mut Box<dyn Accumulator>,
-    ) -> Result<ScalarValue>;
-
-    /// For a record batch calculate window expression result
-    // Assumes that record_batch belongs to single partition
+    /// Calculates the window expression result for the given record batch.
+    /// Assumes that `record_batch` belongs to a single partition.
     fn get_result_column(
         &self,
         accumulator: &mut Box<dyn Accumulator>,
@@ -242,7 +238,7 @@ pub trait AggregateWindowExpr: WindowExpr {
         window_frame_ctx: &mut WindowFrameContext,
         last_range: &mut Range<usize>,
         idx: &mut usize,
-        is_end: bool,
+        not_end: bool,
     ) -> Result<ArrayRef> {
         let (values, order_bys) = self.get_values_orderbys(record_batch)?;
         // We iterate on each row to perform a running calculation.
@@ -250,8 +246,6 @@ pub trait AggregateWindowExpr: WindowExpr {
         let sort_options: Vec<SortOptions> =
             self.order_by().iter().map(|o| o.options).collect();
         let mut row_wise_results: Vec<ScalarValue> = vec![];
-        let field = self.field()?;
-        let out_type = field.data_type();
         while *idx < length {
             let cur_range = window_frame_ctx.calculate_range(
                 &order_bys,
@@ -259,8 +253,8 @@ pub trait AggregateWindowExpr: WindowExpr {
                 length,
                 *idx,
             )?;
-            // Exit if range end index is length, need kind of flag to stop
-            if cur_range.end == length && !is_end {
+            // Exit if the range extends all the way:
+            if cur_range.end == length && not_end {
                 break;
             }
             let value = self.get_aggregate_result_inside_range(
@@ -269,16 +263,17 @@ pub trait AggregateWindowExpr: WindowExpr {
                 &values,
                 accumulator,
             )?;
+            last_range.clone_from(&cur_range);
             row_wise_results.push(value);
-            last_range.start = cur_range.start;
-            last_range.end = cur_range.end;
             *idx += 1;
         }
-        Ok(if row_wise_results.is_empty() {
-            ScalarValue::try_from(out_type)?.to_array_of_size(0)
+        if row_wise_results.is_empty() {
+            let field = self.field()?;
+            let out_type = field.data_type();
+            Ok(new_empty_array(out_type))
         } else {
-            ScalarValue::iter_to_array(row_wise_results.into_iter())?
-        })
+            ScalarValue::iter_to_array(row_wise_results.into_iter())
+        }
     }
 }
 
@@ -301,8 +296,7 @@ pub enum WindowFn {
     Aggregate(Box<dyn Accumulator>),
 }
 
-/// State for RANK(percent_rank, rank, dense_rank)
-/// builtin window function
+/// State for the RANK(percent_rank, rank, dense_rank) built-in window function.
 #[derive(Debug, Clone, Default)]
 pub struct RankState {
     /// The last values for rank as these values change, we increase n_rank
@@ -313,13 +307,13 @@ pub struct RankState {
     pub n_rank: usize,
 }
 
-/// State for 'ROW_NUMBER' builtin window function
+/// State for the 'ROW_NUMBER' built-in window function.
 #[derive(Debug, Clone, Default)]
 pub struct NumRowsState {
     pub n_rows: usize,
 }
 
-/// nth_value kind
+/// Tag to differentiate special use cases of the NTH_VALUE built-in window function.
 #[derive(Debug, Copy, Clone)]
 pub enum NthValueKind {
     First,
@@ -330,12 +324,15 @@ pub enum NthValueKind {
 #[derive(Debug, Clone)]
 pub struct NthValueState {
     pub range: Range<usize>,
-    // In certain cases we can finalize the result
-    // For instance, result of `FIRST_VALUE(inc_col) OVER(ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) as first_value1`
-    // is the first entry in the table. We can store it then just use this result instead of recalculating
-    // This enable us to prune table.
-    pub finalized_res: Option<ScalarValue>,
-    // pub is_prunable: bool,
+    // In certain cases, we can finalize the result early. Consider this usage:
+    // ```
+    //  FIRST_VALUE(increasing_col) OVER window AS my_first_value
+    //  WINDOW (ORDER BY ts ASC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) AS window
+    // ```
+    // The result will always be the first entry in the table. We can store such
+    // early-finalizing results and then just reuse them as necessary. This opens
+    // opportunities to prune our datasets.
+    pub finalized_result: Option<ScalarValue>,
     pub kind: NthValueKind,
 }
 

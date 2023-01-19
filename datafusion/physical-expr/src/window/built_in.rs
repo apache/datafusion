@@ -17,6 +17,9 @@
 
 //! Physical exec for built-in window function expressions.
 
+use std::any::Any;
+use std::sync::Arc;
+
 use super::window_frame_state::WindowFrameContext;
 use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
@@ -28,15 +31,12 @@ use crate::window::{
     PartitionBatches, PartitionWindowAggStates, WindowAggState, WindowState,
 };
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
-use arrow::array::Array;
+use arrow::array::{new_empty_array, Array, ArrayRef};
 use arrow::compute::{concat, SortOptions};
+use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{WindowFrame, WindowFrameUnits};
-use std::any::Any;
-use std::sync::Arc;
 
 /// A window expr that takes the form of a built in window function
 #[derive(Debug)]
@@ -170,16 +170,17 @@ impl WindowExpr for BuiltInWindowExpr {
                 self.get_values_orderbys(&partition_batch_state.record_batch)?;
 
             // We iterate on each row to perform a running calculation.
-            let num_rows = partition_batch_state.record_batch.num_rows();
-            let mut last_range = state.window_frame_range.clone();
+            let record_batch = &partition_batch_state.record_batch;
+            let num_rows = record_batch.num_rows();
             let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
             let sort_partition_points = if evaluator.include_rank() {
-                let columns = self.sort_columns(&partition_batch_state.record_batch)?;
+                let columns = self.sort_columns(record_batch)?;
                 self.evaluate_partition_points(num_rows, &columns)?
             } else {
                 vec![]
             };
             let mut row_wise_results: Vec<ScalarValue> = vec![];
+            let mut last_range = state.window_frame_range.clone();
             for idx in state.last_calculated_index..num_rows {
                 state.window_frame_range = if self.expr.uses_window_frame() {
                     window_frame_ctx.calculate_range(
@@ -193,26 +194,23 @@ impl WindowExpr for BuiltInWindowExpr {
                 }?;
                 evaluator.update_state(state, &order_bys, &sort_partition_points)?;
 
-                // Exit if range end index is length, need kind of flag to stop
-                if state.window_frame_range.end == num_rows
-                    && !partition_batch_state.is_end
-                {
-                    state.window_frame_range = last_range.clone();
+                let frame_range = &state.window_frame_range;
+                // Exit if the range extends all the way:
+                if frame_range.end == num_rows && !state.is_end {
                     break;
                 }
-                let frame_range = &state.window_frame_range;
                 row_wise_results.push(if frame_range.start == frame_range.end {
                     // We produce None if the window is empty.
                     ScalarValue::try_from(out_type)
                 } else {
                     evaluator.evaluate_stateful(&values)
                 }?);
-                last_range = frame_range.clone();
-                state.last_calculated_index = idx + 1;
+                last_range.clone_from(frame_range);
+                state.last_calculated_index += 1;
             }
             state.window_frame_range = last_range;
             let out_col = if row_wise_results.is_empty() {
-                ScalarValue::try_from(out_type)?.to_array_of_size(0)
+                new_empty_array(out_type)
             } else {
                 ScalarValue::iter_to_array(row_wise_results.into_iter())?
             };
@@ -228,10 +226,11 @@ impl WindowExpr for BuiltInWindowExpr {
                     state.window_function_state =
                         WindowFunctionState::BuiltinWindowState(evaluator_state);
                     evaluator.update_state(state, &order_bys, &sort_partition_points)?;
+                    continue;
                 }
             }
             state.window_function_state =
-                WindowFunctionState::BuiltinWindowState(evaluator.state()?);
+                WindowFunctionState::BuiltinWindowState(evaluator_state);
         }
         Ok(())
     }
@@ -260,38 +259,32 @@ impl WindowExpr for BuiltInWindowExpr {
     }
 }
 
-// When window frame start_bound is static (e.g UNBOUNDED PRECEDING)
-// we can prune record_batch for FIRST_VALUE, LAST_VALUE and NTH_VALUE functions.
-// Once the result is materialized the result will be always same. Hence we do not need
-// to keep corresponding record_batch to calculate answer.
+// When the window frame has a fixed beginning (e.g UNBOUNDED PRECEDING), we
+// can prune our datasets for FIRST_VALUE, LAST_VALUE and NTH_VALUE functions.
+// Once the result is final, it will be always stay the same. Hence, we do not
+// need to keep past data as we process the entire dataset.
 fn prune_nth_value(
     state: &mut WindowAggState,
     nth_value_state: &mut NthValueState,
 ) -> Result<()> {
-    let is_prunable = match nth_value_state.kind {
+    let out = &state.out_col;
+    let size = out.len();
+    let (is_prunable, new_prunable) = match nth_value_state.kind {
         NthValueKind::First => {
             let n_range = state.window_frame_range.end - state.window_frame_range.start;
-            n_range > 0 && state.out_col.len() > 0
+            (n_range > 0 && size > 0, true)
         }
-        NthValueKind::Last => true,
+        NthValueKind::Last => (true, false),
         NthValueKind::Nth(n) => {
             let n_range = state.window_frame_range.end - state.window_frame_range.start;
-            n_range >= (n as usize) && state.out_col.len() >= (n as usize)
+            (n_range >= (n as usize) && size >= (n as usize), true)
         }
     };
     if is_prunable {
-        if nth_value_state.finalized_res.is_none()
-            && matches!(
-                nth_value_state.kind,
-                NthValueKind::First | NthValueKind::Nth(_)
-            )
-        {
-            // get last value
-            let res =
-                ScalarValue::try_from_array(&state.out_col, state.out_col.len() - 1)?;
-            nth_value_state.finalized_res = Some(res);
+        if nth_value_state.finalized_result.is_none() && new_prunable {
+            let result = ScalarValue::try_from_array(out, size - 1)?;
+            nth_value_state.finalized_result = Some(result);
         }
-
         if state.window_frame_range.end > 0 {
             state.window_frame_range.start = state.window_frame_range.end - 1;
         }
