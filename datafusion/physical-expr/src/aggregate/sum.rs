@@ -94,8 +94,8 @@ impl AggregateExpr for Sum {
                 self.nullable,
             ),
             Field::new(
-                format_state_name(&self.name, "is_empty"),
-                DataType::Boolean,
+                format_state_name(&self.name, "count"),
+                DataType::Int64,
                 self.nullable,
             ),
         ])
@@ -139,7 +139,7 @@ impl AggregateExpr for Sum {
 #[derive(Debug)]
 struct SumAccumulator {
     sum: ScalarValue,
-    is_empty: bool,
+    count: i64,
 }
 
 impl SumAccumulator {
@@ -147,7 +147,7 @@ impl SumAccumulator {
     pub fn try_new(data_type: &DataType) -> Result<Self> {
         Ok(Self {
             sum: ScalarValue::try_from(data_type)?,
-            is_empty: true,
+            count: 0,
         })
     }
 }
@@ -242,12 +242,12 @@ pub(crate) fn add_to_row(
 
 impl Accumulator for SumAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.sum.clone(), ScalarValue::from(self.is_empty)])
+        Ok(vec![self.sum.clone(), ScalarValue::from(self.count)])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        self.is_empty = self.is_empty && (values.len() - values.data().null_count()) == 0;
+        self.count += (values.len() - values.data().null_count()) as i64;
         let delta = sum_batch(values, &self.sum.get_datatype())?;
         self.sum = self.sum.add(&delta)?;
         Ok(())
@@ -255,12 +255,8 @@ impl Accumulator for SumAccumulator {
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
+        self.count -= (values.len() - values.data().null_count()) as i64;
         let delta = sum_batch(values, &self.sum.get_datatype())?;
-
-        if self.sum == delta {
-            self.is_empty = true;
-        }
-
         self.sum = self.sum.sub(&delta)?;
         Ok(())
     }
@@ -273,7 +269,7 @@ impl Accumulator for SumAccumulator {
     fn evaluate(&self) -> Result<ScalarValue> {
         // TODO: add the checker for overflow
         // For the decimal(precision,_) data type, the absolute of value must be less than 10^precision.
-        if self.is_empty {
+        if self.count == 0 {
             ScalarValue::try_from(&self.sum.get_datatype())
         } else {
             Ok(self.sum.clone())
