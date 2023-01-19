@@ -252,9 +252,9 @@ impl Stream for GroupedHashAggregateStream {
                             });
 
                             if let Err(e) = result {
-                                return Poll::Ready(Some(Err(ArrowError::ExternalError(
-                                    Box::new(e),
-                                ))));
+                                return Poll::Ready(Some(Err(
+                                    ArrowError::ExternalError(Box::new(e)),
+                                )));
                             }
                         }
                         // inner had error, return to caller
