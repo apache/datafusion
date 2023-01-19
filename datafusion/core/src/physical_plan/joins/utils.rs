@@ -438,7 +438,7 @@ impl<T: 'static> OnceAsync<T> {
 }
 
 /// The shared future type used internally within [`OnceAsync`]
-type OnceFutPending<T> = Shared<BoxFuture<'static, Arc<SharedResult<T>>>>;
+type OnceFutPending<T> = Shared<BoxFuture<'static, SharedResult<Arc<T>>>>;
 
 /// A [`OnceFut`] represents a shared asynchronous computation, that will be evaluated
 /// once for all [`Clone`]'s, with [`OnceFut::get`] providing a non-consuming interface
@@ -653,7 +653,7 @@ fn get_int_range(min: ScalarValue, max: ScalarValue) -> Option<usize> {
 
 enum OnceFutState<T> {
     Pending(OnceFutPending<T>),
-    Ready(Arc<SharedResult<T>>),
+    Ready(SharedResult<Arc<T>>),
 }
 
 impl<T> Clone for OnceFutState<T> {
@@ -673,7 +673,7 @@ impl<T: 'static> OnceFut<T> {
     {
         Self {
             state: OnceFutState::Pending(
-                fut.map(|res| Arc::new(res.map_err(Arc::new)))
+                fut.map(|res| res.map(Arc::new).map_err(Arc::new))
                     .boxed()
                     .shared(),
             ),
@@ -695,7 +695,7 @@ impl<T: 'static> OnceFut<T> {
             OnceFutState::Pending(_) => unreachable!(),
             OnceFutState::Ready(r) => Poll::Ready(
                 r.as_ref()
-                    .as_ref()
+                    .map(|r| r.as_ref())
                     .map_err(|e| ArrowError::ExternalError(Box::new(e.clone()))),
             ),
         }
