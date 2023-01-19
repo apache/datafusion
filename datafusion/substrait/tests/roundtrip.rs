@@ -24,7 +24,7 @@ mod tests {
     use crate::{consumer::from_substrait_plan, producer::to_substrait_plan};
     use datafusion::error::Result;
     use datafusion::prelude::*;
-    use substrait::protobuf::extensions::simple_extension_declaration::MappingType;
+    use substrait::proto::extensions::simple_extension_declaration::MappingType;
 
     #[tokio::test]
     async fn simple_select() -> Result<()> {

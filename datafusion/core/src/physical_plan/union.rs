@@ -247,6 +247,30 @@ impl ExecutionPlan for UnionExec {
         }
     }
 
+    fn maintains_input_order(&self) -> bool {
+        let first_input_ordering = self.inputs[0].output_ordering();
+        // If the Union is not partition aware and all the input
+        // ordering spec strictly equal with the first_input_ordering,
+        // then the `UnionExec` maintains the input order
+        //
+        // It might be too strict here in the case that the input
+        // ordering are compatible but not exactly the same.  See
+        // comments in output_ordering
+        !self.partition_aware
+            && first_input_ordering.is_some()
+            && self
+                .inputs
+                .iter()
+                .map(|plan| plan.output_ordering())
+                .all(|ordering| {
+                    ordering.is_some()
+                        && sort_expr_list_eq_strict_order(
+                            ordering.unwrap(),
+                            first_input_ordering.unwrap(),
+                        )
+                })
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,

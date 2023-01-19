@@ -30,7 +30,7 @@ use datafusion::{
     prelude::{Column, SessionContext},
     scalar::ScalarValue,
 };
-use substrait::protobuf::{
+use substrait::proto::{
     aggregate_function::AggregationInvocation,
     expression::{
         field_reference::ReferenceType::DirectReference, literal::LiteralType,
@@ -38,6 +38,7 @@ use substrait::protobuf::{
     },
     extensions::simple_extension_declaration::MappingType,
     function_argument::ArgType,
+    plan_rel,
     read_rel::ReadType,
     rel::RelType,
     sort_field::{SortDirection, SortKind::*},
@@ -112,10 +113,10 @@ pub async fn from_substrait_plan(
         1 => {
             match plan.relations[0].rel_type.as_ref() {
                 Some(rt) => match rt {
-                    substrait::protobuf::plan_rel::RelType::Rel(rel) => {
+                    plan_rel::RelType::Rel(rel) => {
                         Ok(from_substrait_rel(ctx, rel, &function_extension).await?)
                     },
-                    substrait::protobuf::plan_rel::RelType::Root(root) => {
+                    plan_rel::RelType::Root(root) => {
                         Ok(from_substrait_rel(ctx, root.input.as_ref().unwrap(), &function_extension).await?)
                     }
                 },

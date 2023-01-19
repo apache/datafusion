@@ -546,9 +546,9 @@ impl OptimizerRule for PushDownFilter {
                     )
                     .map(|e| (*e).clone())
                     .collect::<Vec<_>>();
-                let new_predicate = conjunction(new_predicates).ok_or(
-                    DataFusionError::Plan("at least one expression exists".to_string()),
-                )?;
+                let new_predicate = conjunction(new_predicates).ok_or_else(|| {
+                    DataFusionError::Plan("at least one expression exists".to_string())
+                })?;
                 let new_plan = LogicalPlan::Filter(Filter::try_new(
                     new_predicate,
                     child_filter.input.clone(),

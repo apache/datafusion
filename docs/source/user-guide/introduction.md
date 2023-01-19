@@ -23,10 +23,10 @@ DataFusion is an extensible query execution framework, written in
 Rust, that uses [Apache Arrow](https://arrow.apache.org) as its
 in-memory format.
 
-DataFusion supports both an SQL and a DataFrame API for building
-logical query plans as well as a query optimizer and execution engine
-capable of parallel execution against partitioned data sources (CSV
-and Parquet) using threads.
+DataFusion supports SQL and a DataFrame API for building logical query
+plans, an extensive query optimizer, and a multi-threaded parallel
+execution execution engine for processing partitioned data sources
+such as CSV and Parquet files extremely quickly.
 
 ## Use Cases
 
@@ -37,7 +37,7 @@ the convenience of an SQL interface or a DataFrame API.
 
 ## Why DataFusion?
 
-- _High Performance_: Leveraging Rust and Arrow's memory model, DataFusion achieves very high performance
+- _High Performance_: Leveraging Rust and Arrow's memory model, DataFusion is very fast.
 - _Easy to Connect_: Being part of the Apache Arrow ecosystem (Arrow, Parquet and Flight), DataFusion works well with the rest of the big data ecosystem
 - _Easy to Embed_: Allowing extension at almost any point in its design, DataFusion can be tailored for your specific usecase
 - _High Quality_: Extensively tested, both by itself and with the rest of the Arrow ecosystem, DataFusion can be used as the foundation for production systems.
