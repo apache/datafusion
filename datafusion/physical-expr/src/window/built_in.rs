@@ -199,12 +199,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 if frame_range.end == num_rows && !state.is_end {
                     break;
                 }
-                row_wise_results.push(if frame_range.start == frame_range.end {
-                    // We produce None if the window is empty.
-                    ScalarValue::try_from(out_type)
-                } else {
-                    evaluator.evaluate_stateful(&values)
-                }?);
+                row_wise_results.push(evaluator.evaluate_stateful(&values)?);
                 last_range.clone_from(frame_range);
                 state.last_calculated_index += 1;
             }

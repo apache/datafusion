@@ -195,6 +195,7 @@ impl PartitionEvaluator for NthValueEvaluator {
         let arr = &values[0];
         let n_range = range.end - range.start;
         if n_range == 0 {
+            // We produce None if the window is empty.
             return ScalarValue::try_from(arr.data_type());
         }
         match self.state.kind {
