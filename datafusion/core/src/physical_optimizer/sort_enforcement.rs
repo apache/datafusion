@@ -112,10 +112,10 @@ impl TreeNodeRewritable for PlanWithCorrespondingSort {
                     } else {
                         let is_sort = item.plan.as_any().is::<SortExec>();
                         let mut res = vec![];
-                        for (idx, is_maintained) in
+                        for (idx, maintains) in
                             item.plan.maintains_input_order().into_iter().enumerate()
                         {
-                            if is_maintained || is_sort {
+                            if maintains || is_sort {
                                 res = item.sort_onwards[idx].clone();
                                 break;
                             }

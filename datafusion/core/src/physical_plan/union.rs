@@ -222,14 +222,12 @@ impl ExecutionPlan for UnionExec {
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         // Return the output ordering of first child where maintains_input_order is `true`.
         // If none of the children preserves ordering. Return `None`.
-        let mut res = None;
-        for (idx, is_maintained) in self.maintains_input_order().into_iter().enumerate() {
-            if is_maintained {
-                res = self.inputs[idx].output_ordering();
-                break;
+        for (idx, maintains) in self.maintains_input_order().into_iter().enumerate() {
+            if maintains {
+                return self.inputs[idx].output_ordering();
             }
         }
-        res
+        None
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -241,19 +239,15 @@ impl ExecutionPlan for UnionExec {
         // vec![false, true, true]. Indicating ordering for 2nd and 3rd child is preserved but 1st child is not.
         let mut smallest: Option<&[PhysicalSortExpr]> = None;
         for elem in self.inputs.iter() {
-            match (elem.output_ordering(), smallest) {
-                (Some(elem_ordering), Some(smallest_ordering)) => {
-                    if elem_ordering.len() < smallest_ordering.len() {
-                        smallest = Some(elem_ordering);
-                    }
-                }
-                (Some(elem_ordering), None) => {
+            if let Some(elem_ordering) = elem.output_ordering() {
+                if smallest.is_none()
+                    || smallest.is_some() && elem_ordering.len() < smallest.unwrap().len()
+                {
                     smallest = Some(elem_ordering);
                 }
-                (None, _) => {
-                    smallest = None;
-                    break;
-                }
+            } else {
+                smallest = None;
+                break;
             }
         }
         if !self.partition_aware
