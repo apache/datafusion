@@ -138,7 +138,7 @@ impl OptimizerRule for DecorrelateWhereExists {
 ///
 /// # Arguments
 ///
-/// * subqry_info - The subquery and exists info(exists/not exists).
+/// * subqry_info - The subquery and negated(exists/not exists) info.
 /// * outer_input - The non-subquery portion (relation t1)
 fn optimize_exists(
     query_info: &SubqueryInfo,
