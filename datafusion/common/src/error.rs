@@ -205,7 +205,6 @@ impl Display for SchemaError {
 
 impl Error for SchemaError {}
 
-
 impl From<io::Error> for DataFusionError {
     fn from(e: io::Error) -> Self {
         DataFusionError::IoError(e)
@@ -358,18 +357,10 @@ impl Error for DataFusionError {
     }
 }
 
-
-
 impl From<DataFusionError> for io::Error {
     fn from(e: DataFusionError) -> Self {
         io::Error::new(io::ErrorKind::Other, e)
     }
-}
-
-/// Helper for [`DataFusionError::find_root`].
-enum OtherErr<'a> {
-    Arrow(&'a ArrowError),
-    Dyn(&'a (dyn std::error::Error + Send + Sync + 'static)),
 }
 
 impl DataFusionError {
@@ -389,84 +380,49 @@ impl DataFusionError {
     ///
     /// This may be the same as `self`.
     pub fn find_root(&self) -> &Self {
-        // Note: This is a non-recursive algorithm so we do not run out of stack space, even for long error chains. The
-        //       algorithm will always terminate because all steps access the next error through "converging" ownership,
-        //       i.e. there can be a fan-in by multiple parents (e.g. via `Arc`), but never a fan-out by multiple
-        //       children (e.g. via `Weak` or interior mutability via `Mutex`).
+        // Note: This is a non-recursive algorithm so we do not run
+        // out of stack space, even for long error chains.
 
-        // last error in the chain that was a DataFusionError
-        let mut checkpoint: &Self = self;
-
-        // current non-DataFusion error
-        let mut other_e: Option<OtherErr<'_>> = None;
-
-        loop {
-            // do we have another error type to explore?
-            if let Some(inner) = other_e {
-                // `other_e` is now bound to `inner`, so we can clear this path
-                other_e = None;
-
-                match inner {
-                    OtherErr::Arrow(inner) => {
-                        if let ArrowError::ExternalError(inner) = inner {
-                            other_e = Some(OtherErr::Dyn(inner.as_ref()));
-                            continue;
-                        }
-                    }
-                    OtherErr::Dyn(inner) => {
-                        if let Some(inner) = inner.downcast_ref::<Self>() {
-                            checkpoint = inner;
-                            continue;
-                        }
-
-                        if let Some(inner) = inner.downcast_ref::<ArrowError>() {
-                            other_e = Some(OtherErr::Arrow(inner));
-                            continue;
-                        }
-
-                        // some errors are wrapped into `Arc`s to share them with multiple receivers
-                        if let Some(inner) = inner.downcast_ref::<Arc<Self>>() {
-                            checkpoint = inner.as_ref();
-                            continue;
-                        }
-
-                        if let Some(inner) = inner.downcast_ref::<Arc<ArrowError>>() {
-                            other_e = Some(OtherErr::Arrow(inner.as_ref()));
-                            continue;
-                        }
-                    }
-                }
-
-                // dead end?
-                break;
+        let mut last_datafusion_error = self;
+        let mut root_error: &dyn Error = self;
+        while let Some(source) = find_source(root_error) {
+            // walk the next level
+            root_error = source;
+            // remember the lowest datafusion error so far
+            if let Some(e) = root_error.downcast_ref::<DataFusionError>() {
+                last_datafusion_error = e;
             }
-
-            // traverse context chain
-            if let Self::Context(_msg, inner) = checkpoint {
-                checkpoint = inner;
-                continue;
-            }
-
-            // The Arrow error may itself contain a datafusion error again
-            // See https://github.com/apache/arrow-datafusion/issues/4172
-            if let Self::ArrowError(inner) = checkpoint {
-                other_e = Some(OtherErr::Arrow(inner));
-                continue;
-            }
-
-            // also try to introspect direct external errors
-            if let Self::External(inner) = checkpoint {
-                other_e = Some(OtherErr::Dyn(inner.as_ref()));
-                continue;
-            }
-
-            // no more traversal
-            break;
         }
-
         // return last checkpoint (which may be the original error)
-        checkpoint
+        last_datafusion_error
     }
+}
+
+fn find_source<'a>(e: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 'static)> {
+    // workaround until https://github.com/apache/arrow-rs/issues/3566 is released
+    if let Some(e) = e.downcast_ref::<ArrowError>() {
+        return if let ArrowError::ExternalError(e) = e {
+            Some(e.as_ref())
+        } else {
+            None
+        };
+    }
+    // some errors are wrapped into `Arc`s to share them with multiple
+    // receivers, so handle that specially here
+    if let Some(e) = e.downcast_ref::<Arc<dyn Error + 'static>>() {
+        return Some(e.as_ref());
+    }
+
+    // For some reason the above doesn't capture works for
+    // Arc<DataFusionError> or Arc<ArrowError>
+    if let Some(e) = e.downcast_ref::<Arc<ArrowError>>() {
+        return Some(e.as_ref());
+    }
+    if let Some(e) = e.downcast_ref::<Arc<DataFusionError>>() {
+        return Some(e.as_ref());
+    }
+
+    e.source()
 }
 
 #[cfg(test)]
