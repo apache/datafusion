@@ -20,7 +20,7 @@
 
 use arrow::array::ArrayRef;
 use arrow::compute::kernels::sort::SortOptions;
-use datafusion_common::utils::{find_bisect_point, linear_search};
+use datafusion_common::utils::{compare_rows, find_bisect_point, search_in_slice};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use std::cmp::min;
@@ -307,15 +307,11 @@ impl WindowFrameStateRange {
         } else {
             last_range.end
         };
-        // `SIDE` true means from left insert, false means right insert
-        let res = linear_search::<SIDE>(
-            range_columns,
-            &end_range,
-            sort_options,
-            search_start,
-            length,
-        )?;
-        Ok(res)
+        let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
+            let cmp = compare_rows(current, target, sort_options)?;
+            Ok(if SIDE { cmp.is_lt() } else { cmp.is_le() })
+        };
+        search_in_slice(range_columns, &end_range, compare_fn, search_start, length)
     }
 }
 
