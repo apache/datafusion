@@ -19,6 +19,15 @@
 
 # Changelog
 
+## [16.1.0](https://github.com/apache/arrow-datafusion/tree/16.1.0) (2023-01-19)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/16.1.0-rc1...16.0.0)
+
+**Merged pull requests:**
+
+- Fix column indices in EnforceDistribution optimizer in Partial AggregateMode \(\#4878\) [\#4959](https://github.com/apache/arrow-datafusion/pull/4959)
+- Make it able to specify a session id for SessionState \(\#4933\) [\#4951](https://github.com/apache/arrow-datafusion/pull/4951)
+
 ## [16.0.0](https://github.com/apache/arrow-datafusion/tree/16.0.0) (2023-01-12)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/16.0.0-rc1...16.0.0)
