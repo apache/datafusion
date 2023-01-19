@@ -2118,7 +2118,7 @@ async fn left_semi_join_pushdown() -> Result<()> {
         .unwrap();
 
     // assert logical plan
-    let sql = "SELECT t1.t1_id, t1.t1_name FROM t1 left semi join t2 on (t1.t1_id = t2.t2_id and t2.t2_int > 1)";
+    let sql = "SELECT t1.t1_id, t1.t1_name FROM t1 LEFT SEMI JOIN t2 ON (t1.t1_id = t2.t2_id and t2.t2_int > 1)";
     let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.into_optimized_plan()?;
