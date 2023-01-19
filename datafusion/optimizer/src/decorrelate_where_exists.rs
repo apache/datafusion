@@ -122,18 +122,24 @@ impl OptimizerRule for DecorrelateWhereExists {
 
 /// Takes a query like:
 ///
-/// ```select c.id from customers c where exists (select * from orders o where o.c_id = c.id)```
+/// SELECT t1.id
+/// FROM t1
+/// WHERE exists
+/// (
+///    SELECT t2.id FROM t2 WHERE t1.id = t2.id
+/// )
 ///
 /// and optimizes it into:
 ///
-/// ```select c.id from customers c
-/// inner join (select o.c_id from orders o group by o.c_id) o on o.c_id = c.c_id```
+/// SELECT t1.id
+/// FROM t1 LEFT SEMI
+/// JOIN t2
+/// ON t1.id = t2.id
 ///
 /// # Arguments
 ///
-/// * subqry - The subquery portion of the `where exists` (select * from orders)
-/// * negated - True if the subquery is a `where not exists`
-/// * filter_input - The non-subquery portion (from customers)
+/// * subqry_info - The subquery and exists info(exists/not exists).
+/// * outer_input - The non-subquery portion (relation t1)
 fn optimize_exists(
     query_info: &SubqueryInfo,
     outer_input: &LogicalPlan,
