@@ -337,7 +337,7 @@ impl Error for DataFusionError {
             #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(e) => Some(e),
             #[cfg(feature = "avro")]
-            AvroError(e) => Some(e),
+            DataFusionError::AvroError(e) => Some(e),
             #[cfg(feature = "object_store")]
             DataFusionError::ObjectStore(e) => Some(e),
             DataFusionError::IoError(e) => Some(e),
