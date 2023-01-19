@@ -30,7 +30,7 @@ use datafusion_expr::{Accumulator, WindowFrame, WindowFrameUnits};
 
 use crate::window::window_expr::{reverse_order_bys, AggregateWindowExpr};
 use crate::window::{
-    NonSlidingAggregateWindowExpr, PartitionBatches, PartitionWindowAggStates, WindowExpr,
+    PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
 use crate::{expressions::PhysicalSortExpr, AggregateExpr, PhysicalExpr};
 
@@ -115,7 +115,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         self.aggregate.reverse_expr().map(|reverse_expr| {
             let reverse_window_frame = self.window_frame.reverse();
             if reverse_window_frame.start_bound.is_unbounded() {
-                Arc::new(NonSlidingAggregateWindowExpr::new(
+                Arc::new(PlainAggregateWindowExpr::new(
                     reverse_expr,
                     &self.partition_by.clone(),
                     &reverse_order_bys(&self.order_by),

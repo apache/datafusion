@@ -37,14 +37,14 @@ use crate::{expressions::PhysicalSortExpr, AggregateExpr, PhysicalExpr};
 
 /// A window expr that takes the form of an aggregate function
 #[derive(Debug)]
-pub struct NonSlidingAggregateWindowExpr {
+pub struct PlainAggregateWindowExpr {
     aggregate: Arc<dyn AggregateExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
 }
 
-impl NonSlidingAggregateWindowExpr {
+impl PlainAggregateWindowExpr {
     /// Create a new aggregate window function expression
     pub fn new(
         aggregate: Arc<dyn AggregateExpr>,
@@ -69,7 +69,7 @@ impl NonSlidingAggregateWindowExpr {
 /// peer based evaluation based on the fact that batch is pre-sorted given the sort columns
 /// and then per partition point we'll evaluate the peer group (e.g. SUM or MAX gives the same
 /// results for peers) and concatenate the results.
-impl WindowExpr for NonSlidingAggregateWindowExpr {
+impl WindowExpr for PlainAggregateWindowExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -136,7 +136,7 @@ impl WindowExpr for NonSlidingAggregateWindowExpr {
         self.aggregate.reverse_expr().map(|reverse_expr| {
             let reverse_window_frame = self.window_frame.reverse();
             if reverse_window_frame.start_bound.is_unbounded() {
-                Arc::new(NonSlidingAggregateWindowExpr::new(
+                Arc::new(PlainAggregateWindowExpr::new(
                     reverse_expr,
                     &self.partition_by.clone(),
                     &reverse_order_bys(&self.order_by),
@@ -161,7 +161,7 @@ impl WindowExpr for NonSlidingAggregateWindowExpr {
     }
 }
 
-impl AggregateWindowExpr for NonSlidingAggregateWindowExpr {
+impl AggregateWindowExpr for PlainAggregateWindowExpr {
     fn get_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         self.aggregate.create_accumulator()
     }

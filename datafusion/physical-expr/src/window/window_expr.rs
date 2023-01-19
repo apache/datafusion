@@ -143,7 +143,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>>;
 }
 
-/// Trait for different `AggregateWindowExpr`s (`NonSlidingAggregateWindowExpr`, `SlidingAggregateWindowExpr`)
+/// Trait for different `AggregateWindowExpr`s (`PlainAggregateWindowExpr`, `SlidingAggregateWindowExpr`)
 pub trait AggregateWindowExpr: WindowExpr {
     /// Get the accumulator for the window expression. Note that distinct
     /// window expressions may return distinct accumulators; e.g. sliding

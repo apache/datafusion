@@ -44,7 +44,7 @@ mod window_agg_exec;
 
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
 pub use datafusion_physical_expr::window::{
-    BuiltInWindowExpr, NonSlidingAggregateWindowExpr, WindowExpr,
+    BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
 };
 pub use window_agg_exec::WindowAggExec;
 
@@ -70,7 +70,7 @@ pub fn create_window_expr(
                     window_frame,
                 ))
             } else {
-                Arc::new(NonSlidingAggregateWindowExpr::new(
+                Arc::new(PlainAggregateWindowExpr::new(
                     aggregate,
                     partition_by,
                     order_by,
@@ -84,14 +84,12 @@ pub fn create_window_expr(
             order_by,
             window_frame,
         )),
-        WindowFunction::AggregateUDF(fun) => {
-            Arc::new(NonSlidingAggregateWindowExpr::new(
-                udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?,
-                partition_by,
-                order_by,
-                window_frame,
-            ))
-        }
+        WindowFunction::AggregateUDF(fun) => Arc::new(PlainAggregateWindowExpr::new(
+            udaf::create_aggregate_expr(fun.as_ref(), args, input_schema, name)?,
+            partition_by,
+            order_by,
+            window_frame,
+        )),
     })
 }
 
