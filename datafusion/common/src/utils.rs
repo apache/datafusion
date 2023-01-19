@@ -23,7 +23,7 @@ use arrow::compute::SortOptions;
 use std::cmp::Ordering;
 
 /// Given column vectors, returns row at `idx`.
-fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
+pub fn get_row_at_idx(columns: &[ArrayRef], idx: usize) -> Result<Vec<ScalarValue>> {
     columns
         .iter()
         .map(|arr| ScalarValue::try_from_array(arr, idx))

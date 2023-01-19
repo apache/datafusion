@@ -20,7 +20,9 @@
 
 use arrow::array::ArrayRef;
 use arrow::compute::kernels::sort::SortOptions;
-use datafusion_common::utils::{compare_rows, find_bisect_point, search_in_slice};
+use datafusion_common::utils::{
+    compare_rows, find_bisect_point, get_row_at_idx, search_in_slice,
+};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 use std::cmp::min;
@@ -269,10 +271,7 @@ impl WindowFrameStateRange {
         last_range: &Range<usize>,
         length: usize,
     ) -> Result<usize> {
-        let current_row_values = range_columns
-            .iter()
-            .map(|col| ScalarValue::try_from_array(col, idx))
-            .collect::<Result<Vec<ScalarValue>>>()?;
+        let current_row_values = get_row_at_idx(range_columns, idx)?;
         let end_range = if let Some(delta) = delta {
             let is_descending: bool = sort_options
                 .first()
