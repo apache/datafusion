@@ -2075,10 +2075,7 @@ mod tests {
     impl PlanVisitor for OkVisitor {
         type Error = String;
 
-        fn pre_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "pre_visit Projection",
                 LogicalPlan::Filter { .. } => "pre_visit Filter",
@@ -2090,10 +2087,7 @@ mod tests {
             Ok(true)
         }
 
-        fn post_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             let s = match plan {
                 LogicalPlan::Projection { .. } => "post_visit Projection",
                 LogicalPlan::Filter { .. } => "post_visit Filter",
@@ -2160,20 +2154,14 @@ mod tests {
     impl PlanVisitor for StoppingVisitor {
         type Error = String;
 
-        fn pre_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             if self.return_false_from_pre_in.dec() {
                 return Ok(false);
             }
             self.inner.pre_visit(plan)
         }
 
-        fn post_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             if self.return_false_from_post_in.dec() {
                 return Ok(false);
             }
@@ -2233,10 +2221,7 @@ mod tests {
     impl PlanVisitor for ErrorVisitor {
         type Error = String;
 
-        fn pre_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             if self.return_error_from_pre_in.dec() {
                 return Err("Error in pre_visit".into());
             }
@@ -2244,10 +2229,7 @@ mod tests {
             self.inner.pre_visit(plan)
         }
 
-        fn post_visit(
-            &mut self,
-            plan: &LogicalPlan,
-        ) -> std::result::Result<bool, Self::Error> {
+        fn post_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
             if self.return_error_from_post_in.dec() {
                 return Err("Error in post_visit".into());
             }

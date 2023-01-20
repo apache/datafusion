@@ -2431,7 +2431,7 @@ impl From<Option<&str>> for ScalarValue {
 impl FromStr for ScalarValue {
     type Err = Infallible;
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(s.into())
     }
 }

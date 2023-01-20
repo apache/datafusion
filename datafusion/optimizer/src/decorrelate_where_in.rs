@@ -19,7 +19,7 @@ use crate::alias::AliasGenerator;
 use crate::optimizer::ApplyOrder;
 use crate::utils::{conjunction, only_or_err, split_conjunction};
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{context, Column, Result};
+use datafusion_common::{context, Column, DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{replace_col, unnormalize_col};
 use datafusion_expr::logical_plan::{JoinType, Projection, Subquery};
 use datafusion_expr::utils::check_all_column_from_schema;
@@ -171,7 +171,7 @@ fn optimize_where_in(
                     .collect::<_>();
 
                 cols.extend(using_cols);
-                Result::Ok(cols)
+                Result::<_, DataFusionError>::Ok(cols)
             })?;
     let join_filter = conjunction(join_filters).map_or(Ok(None), |filter| {
         replace_qualified_name(filter, &subquery_cols, &subquery_alias).map(Option::Some)
