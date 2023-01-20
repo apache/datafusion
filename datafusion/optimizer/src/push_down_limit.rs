@@ -81,37 +81,57 @@ impl OptimizerRule for PushDownLimit {
         plan: &LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
+        use std::cmp::min;
+
         let limit = match plan {
             LogicalPlan::Limit(limit) => limit,
             _ => return Ok(None),
         };
 
-        if let LogicalPlan::Limit(child_limit) = &*limit.input {
-            let parent_skip = limit.skip;
-            let parent_fetch = limit.fetch;
+        if let LogicalPlan::Limit(child) = &*limit.input {
+            // Merge the Parent Limit and the Child Limit.
 
-            // Merge limit
-            // Parent range [child_skip + skip, child_skip + skip + fetch)
-            // Child range [child_skip, child_skip + child_fetch)
-            // Merge -> [child_skip + skip, min(child_skip + skip + fetch, child_skip + child_fetch) )
-            // Merge LimitPlan -> [child_skip + skip, min(fetch, child_fetch - skip) )
-            let new_fetch = match parent_fetch {
-                Some(fetch) => match child_limit.fetch {
-                    Some(child_fetch) => Some(std::cmp::min(
-                        fetch,
-                        fetch_minus_skip(child_fetch, parent_skip),
-                    )),
-                    None => Some(fetch),
-                },
-                _ => child_limit
-                    .fetch
-                    .map(|child_fetch| fetch_minus_skip(child_fetch, parent_skip)),
+            //  Case 0: Parent and Child are disjoint. (child_fetch <= skip)
+            //   Before merging:
+            //                     |........skip........|---fetch-->|              Parent Limit
+            //    |...child_skip...|---child_fetch-->|                             Child Limit
+            //   After merging:
+            //    |.........(child_skip + skip).........|      
+            //   Before merging:
+            //                     |...skip...|------------fetch------------>|     Parent Limit
+            //    |...child_skip...|-------------child_fetch------------>|         Child Limit
+            //   After merging:          
+            //    |....(child_skip + skip)....|---(child_fetch - skip)-->|
+
+            //  Case 1: Parent is beyond the range of Child. (skip < child_fetch <= skip + fetch)
+            //   Before merging:
+            //                     |...skip...|------------fetch------------>|     Parent Limit
+            //    |...child_skip...|-------------child_fetch------------>|         Child Limit
+            //   After merging:          
+            //    |....(child_skip + skip)....|---(child_fetch - skip)-->|
+
+            //  Case 2: Parent is in the range of Child. (skip + fetch < child_fetch)
+            //   Before merging:
+            //                     |...skip...|---fetch-->|                        Parent Limit
+            //    |...child_skip...|-------------child_fetch------------>|         Child Limit
+            //   After merging:          
+            //    |....(child_skip + skip)....|---fetch-->|
+            let parent_skip = limit.skip;
+            let new_fetch = match (limit.fetch, child.fetch) {
+                (Some(fetch), Some(child_fetch)) => Some(min(
+                    fetch,
+                    child_fetch.saturating_sub(parent_skip),
+
+                )),
+                (Some(fetch), None) => Some(fetch),
+                (None, Some(child_fetch)) => Some(child_fetch.saturating_sub(parent_skip)),
+                (None, None) => None, 
             };
 
             let plan = LogicalPlan::Limit(Limit {
-                skip: child_limit.skip + limit.skip,
+                skip: child.skip + parent_skip,
                 fetch: new_fetch,
-                input: Arc::new((*child_limit.input).clone()),
+                input: Arc::new((*child.input).clone()),
             });
             return self.try_optimize(&plan, _config);
         }
@@ -131,7 +151,7 @@ impl OptimizerRule for PushDownLimit {
                     source: scan.source.clone(),
                     projection: scan.projection.clone(),
                     filters: scan.filters.clone(),
-                    fetch: scan.fetch.map(|x| std::cmp::min(x, limit)).or(Some(limit)),
+                    fetch: scan.fetch.map(|x| min(x, limit)).or(Some(limit)),
                     projected_schema: scan.projected_schema.clone(),
                 });
                 plan.with_new_inputs(&[new_input])?
@@ -235,14 +255,6 @@ impl OptimizerRule for PushDownLimit {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::TopDown)
-    }
-}
-
-fn fetch_minus_skip(fetch: usize, skip: usize) -> usize {
-    if skip > fetch {
-        0
-    } else {
-        fetch - skip
     }
 }
 
