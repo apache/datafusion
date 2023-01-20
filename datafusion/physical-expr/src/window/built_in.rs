@@ -25,7 +25,6 @@ use super::BuiltInWindowFunctionExpr;
 use super::WindowExpr;
 use crate::window::window_expr::{
     reverse_order_bys, BuiltinWindowState, NthValueKind, NthValueState, WindowFn,
-    WindowFunctionState,
 };
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, WindowAggState, WindowState,
@@ -145,12 +144,7 @@ impl WindowExpr for BuiltInWindowExpr {
                 window_agg_state.insert(
                     partition_row.clone(),
                     WindowState {
-                        state: WindowAggState::new(
-                            out_type,
-                            WindowFunctionState::BuiltinWindowState(
-                                BuiltinWindowState::Default,
-                            ),
-                        )?,
+                        state: WindowAggState::new(out_type)?,
                         window_fn: WindowFn::Builtin(evaluator),
                     },
                 );
@@ -218,14 +212,10 @@ impl WindowExpr for BuiltInWindowExpr {
                     &mut evaluator_state
                 {
                     prune_nth_value(state, nth_value_state)?;
-                    state.window_function_state =
-                        WindowFunctionState::BuiltinWindowState(evaluator_state);
-                    evaluator.update_state(state, &order_bys, &sort_partition_points)?;
+                    evaluator.set_state(&evaluator_state)?;
                     continue;
                 }
             }
-            state.window_function_state =
-                WindowFunctionState::BuiltinWindowState(evaluator_state);
         }
         Ok(())
     }

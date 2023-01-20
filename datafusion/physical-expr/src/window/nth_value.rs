@@ -19,9 +19,7 @@
 //! that can evaluated at runtime during query execution
 
 use crate::window::partition_evaluator::PartitionEvaluator;
-use crate::window::window_expr::{
-    BuiltinWindowState, NthValueKind, NthValueState, WindowFunctionState,
-};
+use crate::window::window_expr::{BuiltinWindowState, NthValueKind, NthValueState};
 use crate::window::{BuiltInWindowFunctionExpr, WindowAggState};
 use crate::PhysicalExpr;
 use arrow::array::{Array, ArrayRef};
@@ -167,13 +165,12 @@ impl PartitionEvaluator for NthValueEvaluator {
     ) -> Result<()> {
         // If we do not use state, update_state does nothing
         self.state.range.clone_from(&state.window_frame_range);
-        if let WindowFunctionState::BuiltinWindowState(BuiltinWindowState::NthValue(
-            nth_value_state,
-        )) = &state.window_function_state
-        {
-            if let Some(result) = &nth_value_state.finalized_result {
-                self.state.finalized_result = Some(result.clone())
-            }
+        Ok(())
+    }
+
+    fn set_state(&mut self, state: &BuiltinWindowState) -> Result<()> {
+        if let BuiltinWindowState::NthValue(nth_value_state) = state {
+            self.state = nth_value_state.clone()
         }
         Ok(())
     }

@@ -191,10 +191,7 @@ pub trait AggregateWindowExpr: WindowExpr {
                 window_agg_state.insert(
                     partition_row.clone(),
                     WindowState {
-                        state: WindowAggState::new(
-                            out_type,
-                            WindowFunctionState::AggregateState(vec![]),
-                        )?,
+                        state: WindowAggState::new(out_type)?,
                         window_fn: WindowFn::Aggregate(accumulator),
                     },
                 );
@@ -223,8 +220,6 @@ pub trait AggregateWindowExpr: WindowExpr {
             state.out_col = concat(&[&state.out_col, &out_col])?;
             state.n_row_result_missing =
                 record_batch.num_rows() - state.last_calculated_index;
-            state.window_function_state =
-                WindowFunctionState::AggregateState(accumulator.state()?);
         }
         Ok(())
     }
@@ -350,15 +345,6 @@ pub enum BuiltinWindowState {
     #[default]
     Default,
 }
-#[derive(Debug)]
-pub enum WindowFunctionState {
-    /// Different Aggregate functions may have different state definitions
-    /// In [Accumulator] trait, [fn state(&self) -> Result<Vec<ScalarValue>>] implementation
-    /// dictates that.
-    AggregateState(Vec<ScalarValue>),
-    /// BuiltinWindowState
-    BuiltinWindowState(BuiltinWindowState),
-}
 
 #[derive(Debug)]
 pub struct WindowAggState {
@@ -368,9 +354,6 @@ pub struct WindowAggState {
     pub last_calculated_index: usize,
     /// The offset of the deleted row number
     pub offset_pruned_rows: usize,
-    /// State of the window function, required to calculate its result
-    // For instance, for ROW_NUMBER we keep the row index counter to generate correct result
-    pub window_function_state: WindowFunctionState,
     /// Stores the results calculated by window frame
     pub out_col: ArrayRef,
     /// Keeps track of how many rows should be generated to be in sync with input record_batch.
@@ -405,16 +388,12 @@ pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState>;
 pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState>;
 
 impl WindowAggState {
-    pub fn new(
-        out_type: &DataType,
-        window_function_state: WindowFunctionState,
-    ) -> Result<Self> {
+    pub fn new(out_type: &DataType) -> Result<Self> {
         let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0);
         Ok(Self {
             window_frame_range: Range { start: 0, end: 0 },
             last_calculated_index: 0,
             offset_pruned_rows: 0,
-            window_function_state,
             out_col: empty_out_col,
             n_row_result_missing: 0,
             is_end: false,
