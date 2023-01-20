@@ -109,7 +109,7 @@ pub async fn main() -> Result<()> {
             info!("Using complete mode to complete {}", path.display());
             let col_separator = " ";
             let validator = default_validator;
-            update_test_file(path, runner, col_separator, validator)
+            update_test_file(path, &mut runner, col_separator, validator)
                 .await
                 .map_err(|e| e.to_string())?;
         } else {
