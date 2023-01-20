@@ -82,7 +82,7 @@ impl OptimizerRule for EliminateCrossJoin {
                         )?;
                     }
                     _ => {
-                        return Ok(Some(utils::optimize_children(self, plan, config)?));
+                        return utils::optimize_children(self, plan, config);
                     }
                 }
 
@@ -102,7 +102,7 @@ impl OptimizerRule for EliminateCrossJoin {
                     )?;
                 }
 
-                left = utils::optimize_children(self, &left, config)?;
+                left = utils::optimize_children(self, &left, config)?.unwrap_or(left);
 
                 if plan.schema() != left.schema() {
                     left = LogicalPlan::Projection(Projection::new_from_schema(
@@ -128,7 +128,7 @@ impl OptimizerRule for EliminateCrossJoin {
                 }
             }
 
-            _ => Ok(Some(utils::optimize_children(self, plan, config)?)),
+            _ => utils::optimize_children(self, plan, config),
         }
     }
 

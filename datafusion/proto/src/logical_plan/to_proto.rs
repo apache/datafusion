@@ -892,8 +892,17 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Self::Error>>()?,
                 })),
             },
-            Expr::Placeholder{ id, data_type } => Self {
-                expr_type: Some(ExprType::Placeholder(PlaceholderNode { id: id.clone(), data_type: Some(data_type.try_into()?) })),
+            Expr::Placeholder{ id, data_type } => {
+                let data_type = match data_type {
+                    Some(data_type) => Some(data_type.try_into()?),
+                    None => None,
+                };
+                Self {
+                    expr_type: Some(ExprType::Placeholder(PlaceholderNode {
+                        id: id.clone(),
+                        data_type,
+                    })),
+                }
             },
 
             Expr::QualifiedWildcard { .. } | Expr::TryCast { .. } =>

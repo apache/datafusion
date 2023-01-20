@@ -16,4 +16,4 @@
 // under the License.
 
 //! DataFusion error types
-pub use datafusion_common::{DataFusionError, Result};
+pub use datafusion_common::{DataFusionError, Result, SharedResult};

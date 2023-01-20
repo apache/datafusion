@@ -23,7 +23,6 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::usize;
-
 use arrow::array::{
     new_null_array, Array, BooleanBufferBuilder, PrimitiveArray, UInt32Array,
     UInt32Builder, UInt64Array,
@@ -453,7 +452,7 @@ impl<T: 'static> OnceAsync<T> {
 }
 
 /// The shared future type used internally within [`OnceAsync`]
-type OnceFutPending<T> = Shared<BoxFuture<'static, Arc<Result<T>>>>;
+type OnceFutPending<T> = Shared<BoxFuture<'static, SharedResult<Arc<T>>>>;
 
 /// A [`OnceFut`] represents a shared asynchronous computation, that will be evaluated
 /// once for all [`Clone`]'s, with [`OnceFut::get`] providing a non-consuming interface
@@ -668,7 +667,7 @@ fn get_int_range(min: ScalarValue, max: ScalarValue) -> Option<usize> {
 
 enum OnceFutState<T> {
     Pending(OnceFutPending<T>),
-    Ready(Arc<Result<T>>),
+    Ready(SharedResult<Arc<T>>),
 }
 
 impl<T> Clone for OnceFutState<T> {
@@ -687,7 +686,11 @@ impl<T: 'static> OnceFut<T> {
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
         Self {
-            state: OnceFutState::Pending(fut.map(Arc::new).boxed().shared()),
+            state: OnceFutState::Pending(
+                fut.map(|res| res.map(Arc::new).map_err(Arc::new))
+                    .boxed()
+                    .shared(),
+            ),
         }
     }
 
@@ -706,8 +709,8 @@ impl<T: 'static> OnceFut<T> {
             OnceFutState::Pending(_) => unreachable!(),
             OnceFutState::Ready(r) => Poll::Ready(
                 r.as_ref()
-                    .as_ref()
-                    .map_err(|e| ArrowError::ExternalError(e.to_string().into())),
+                    .map(|r| r.as_ref())
+                    .map_err(|e| ArrowError::ExternalError(Box::new(e.clone()))),
             ),
         }
     }
@@ -951,6 +954,7 @@ mod tests {
     use arrow::datatypes::DataType;
 
     use datafusion_common::ScalarValue;
+    use std::pin::Pin;
 
     use super::*;
 
@@ -983,6 +987,41 @@ mod tests {
         let on = &[(Column::new("a", 0), Column::new("a", 0))];
 
         assert!(check(&left, &right, on).is_err());
+    }
+
+    #[tokio::test]
+    async fn check_error_nesting() {
+        let once_fut = OnceFut::<()>::new(async {
+            Err(DataFusionError::ArrowError(ArrowError::CsvError(
+                "some error".to_string(),
+            )))
+        });
+
+        struct TestFut(OnceFut<()>);
+        impl Future for TestFut {
+            type Output = ArrowResult<()>;
+
+            fn poll(
+                mut self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+            ) -> Poll<Self::Output> {
+                match ready!(self.0.get(cx)) {
+                    Ok(()) => Poll::Ready(Ok(())),
+                    Err(e) => Poll::Ready(Err(e)),
+                }
+            }
+        }
+
+        let res = TestFut(once_fut).await;
+        let arrow_err_from_fut = res.expect_err("once_fut always return error");
+
+        let wrapped_err = DataFusionError::from(arrow_err_from_fut);
+        let root_err = wrapped_err.find_root();
+
+        assert!(matches!(
+            root_err,
+            DataFusionError::ArrowError(ArrowError::CsvError(_))
+        ))
     }
 
     #[test]
