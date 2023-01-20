@@ -206,14 +206,13 @@ impl WindowExpr for BuiltInWindowExpr {
 
             state.out_col = concat(&[&state.out_col, &out_col])?;
             state.n_row_result_missing = num_rows - state.last_calculated_index;
-            let mut evaluator_state = evaluator.state()?;
             if self.window_frame.start_bound.is_unbounded() {
+                let mut evaluator_state = evaluator.state()?;
                 if let BuiltinWindowState::NthValue(nth_value_state) =
                     &mut evaluator_state
                 {
                     prune_nth_value(state, nth_value_state)?;
                     evaluator.set_state(&evaluator_state)?;
-                    continue;
                 }
             }
         }
