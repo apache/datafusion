@@ -106,8 +106,13 @@ impl WindowExpr for AggregateWindowExpr {
         // We iterate on each row to perform a running calculation.
         // First, cur_range is calculated, then it is compared with last_range.
         for i in 0..length {
-            let cur_range =
-                window_frame_ctx.calculate_range(&order_bys, &sort_options, length, i)?;
+            let cur_range = window_frame_ctx.calculate_range(
+                &order_bys,
+                &sort_options,
+                length,
+                i,
+                &last_range,
+            )?;
             let value = if cur_range.end == cur_range.start {
                 // We produce None if the window is empty.
                 ScalarValue::try_from(self.aggregate.field()?.data_type())?
