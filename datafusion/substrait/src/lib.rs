@@ -18,3 +18,6 @@
 pub mod consumer;
 pub mod producer;
 pub mod serializer;
+
+// Re-export substrait crate
+pub use substrait;
