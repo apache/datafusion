@@ -47,13 +47,59 @@ async fn sql_create_table_if_not_exists() -> Result<()> {
         .collect()
         .await?;
 
-    // Create external table
+    // Create external table again
     let result = ctx.sql("CREATE EXTERNAL TABLE IF NOT EXISTS aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'")
         .await?
         .collect()
         .await?;
 
     assert_eq!(result, Vec::new());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sql_create_table_exists() -> Result<()> {
+    // the information schema used to introduce cyclic Arcs
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
+    // Create table
+    ctx.sql("CREATE TABLE y AS VALUES (1,2,3)")
+        .await?
+        .collect()
+        .await?;
+
+    // Create table again without if not exist
+    let result = ctx.sql("CREATE TABLE y AS VALUES (1,2,3)").await;
+
+    match result {
+        Err(DataFusionError::Execution(err_msg)) => {
+            assert_eq!(err_msg, "Table 'y' already exists");
+        }
+        _ => {
+            panic!("expect create table failed");
+        }
+    }
+
+    // Create external table
+    ctx.sql("CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'")
+        .await?
+        .collect()
+        .await?;
+
+    // Create external table again without if not exist
+    let result = ctx.sql("CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/data/aggregate_simple.csv'")
+        .await;
+
+    match result {
+        Err(DataFusionError::Execution(err_msg)) => {
+            assert_eq!(err_msg, "Table 'aggregate_simple' already exists");
+        }
+        _ => {
+            panic!("expect create table failed");
+        }
+    }
 
     Ok(())
 }
