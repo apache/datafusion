@@ -43,6 +43,9 @@ avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 compression = ["xz2", "bzip2", "flate2", "async-compression"]
 crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions", "compression"]
+# Enables support for non-scalar, binary operations on dictionaries
+# Note: this results in significant additional codegen
+dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 # Used to enable JIT code generation
@@ -53,8 +56,6 @@ regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 scheduler = ["rayon"]
 simd = ["arrow/simd"]
 unicode_expressions = ["datafusion-physical-expr/regex_expressions", "datafusion-sql/unicode_expressions"]
-# Enables support for non scalar, binary operations on dictionaries (note this results in significant additional codegen)
-dictionary_expressions = ["datafusion-physical-expr/dictionary_expressions"]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }

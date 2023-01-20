@@ -35,11 +35,11 @@ path = "src/lib.rs"
 [features]
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
-regex_expressions = ["regex"]
-unicode_expressions = ["unicode-segmentation"]
 # Enables support for non-scalar, binary operations on dictionaries
 # Note: this results in significant additional codegen
 dictionary_expressions = ["arrow/dyn_cmp_dict", "arrow/dyn_arith_dict"]
+regex_expressions = ["regex"]
+unicode_expressions = ["unicode-segmentation"]
 
 [dependencies]
 ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] }
