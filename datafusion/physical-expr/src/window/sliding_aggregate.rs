@@ -268,6 +268,7 @@ impl SlidingAggregateWindowExpr {
                 &sort_options,
                 length,
                 *idx,
+                last_range,
             )?;
             // Exit if range end index is length, need kind of flag to stop
             if cur_range.end == length && !is_end {

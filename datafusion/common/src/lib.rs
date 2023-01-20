@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod bisect;
 pub mod cast;
 mod column;
 pub mod config;
@@ -30,6 +29,7 @@ pub mod scalar;
 pub mod stats;
 mod table_reference;
 pub mod test_util;
+pub mod utils;
 
 use arrow::compute::SortOptions;
 pub use column::Column;

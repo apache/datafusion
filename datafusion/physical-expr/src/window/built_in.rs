@@ -34,6 +34,7 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{WindowFrame, WindowFrameUnits};
 use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// A window expr that takes the form of a built in window function
@@ -101,18 +102,19 @@ impl WindowExpr for BuiltInWindowExpr {
                 self.order_by.iter().map(|o| o.options).collect();
             let mut row_wise_results = vec![];
 
-            let length = batch.num_rows();
             let (values, order_bys) = self.get_values_orderbys(batch)?;
             let mut window_frame_ctx = WindowFrameContext::new(&self.window_frame);
+            let range = Range { start: 0, end: 0 };
             // We iterate on each row to calculate window frame range and and window function result
-            for idx in 0..length {
+            for idx in 0..num_rows {
                 let range = window_frame_ctx.calculate_range(
                     &order_bys,
                     &sort_options,
                     num_rows,
                     idx,
+                    &range,
                 )?;
-                let value = evaluator.evaluate_inside_range(&values, range)?;
+                let value = evaluator.evaluate_inside_range(&values, &range)?;
                 row_wise_results.push(value);
             }
             ScalarValue::iter_to_array(row_wise_results.into_iter())
@@ -185,6 +187,7 @@ impl WindowExpr for BuiltInWindowExpr {
                         &sort_options,
                         num_rows,
                         idx,
+                        &state.window_frame_range,
                     )
                 } else {
                     evaluator.get_range(state, num_rows)
