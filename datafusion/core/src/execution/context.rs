@@ -551,6 +551,9 @@ impl SessionContext {
     }
 
     /// Creates a [`DataFrame`] for reading an Avro data source.
+    ///
+    /// For more control such as reading multiple files, you can use
+    /// [`read_table`](Self::read_table) with a [`ListingTable`].
     pub async fn read_avro(
         &self,
         table_path: impl AsRef<str>,
@@ -584,6 +587,9 @@ impl SessionContext {
     }
 
     /// Creates a [`DataFrame`] for reading an Json data source.
+    ///
+    /// For more control such as reading multiple files, you can use
+    /// [`read_table`](Self::read_table) with a [`ListingTable`].
     pub async fn read_json(
         &self,
         table_path: impl AsRef<str>,
@@ -625,6 +631,9 @@ impl SessionContext {
     }
 
     /// Creates a [`DataFrame`] for reading a CSV data source.
+    ///
+    /// For more control such as reading multiple files, you can use
+    /// [`read_table`](Self::read_table) with a [`ListingTable`].
     pub async fn read_csv(
         &self,
         table_path: impl AsRef<str>,
@@ -656,6 +665,9 @@ impl SessionContext {
     }
 
     /// Creates a [`DataFrame`] for reading a Parquet data source.
+    ///
+    /// For more control such as reading multiple files, you can use
+    /// [`read_table`](Self::read_table) with a [`ListingTable`].
     pub async fn read_parquet(
         &self,
         table_path: impl AsRef<str>,
@@ -677,7 +689,8 @@ impl SessionContext {
         self.read_table(Arc::new(provider))
     }
 
-    /// Creates a [`DataFrame`] for reading a custom [`TableProvider`].
+    /// Creates a [`DataFrame`] for a [`TableProvider`] such as a
+    /// [`ListingTable`] or a custom user defined provider.
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<DataFrame> {
         Ok(DataFrame::new(
             self.state(),
