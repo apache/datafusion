@@ -218,7 +218,7 @@ pub enum Expr {
         /// The identifier of the parameter (e.g, $1 or $foo)
         id: String,
         /// The type the parameter will be filled in with
-        data_type: DataType,
+        data_type: Option<DataType>,
     },
 }
 

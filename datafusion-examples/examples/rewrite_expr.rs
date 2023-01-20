@@ -79,10 +79,9 @@ impl OptimizerRule for MyRule {
         config: &dyn OptimizerConfig,
     ) -> Result<Option<LogicalPlan>> {
         // recurse down and optimize children first
-        let plan = utils::optimize_children(self, plan, config)?;
-
-        match plan {
-            LogicalPlan::Filter(filter) => {
+        let optimized_plan = utils::optimize_children(self, plan, config)?;
+        match optimized_plan {
+            Some(LogicalPlan::Filter(filter)) => {
                 let mut expr_rewriter = MyExprRewriter {};
                 let predicate = filter.predicate.clone();
                 let predicate = predicate.rewrite(&mut expr_rewriter)?;
@@ -91,7 +90,19 @@ impl OptimizerRule for MyRule {
                     filter.input,
                 )?)))
             }
-            _ => Ok(Some(plan.clone())),
+            Some(optimized_plan) => Ok(Some(optimized_plan)),
+            None => match plan {
+                LogicalPlan::Filter(filter) => {
+                    let mut expr_rewriter = MyExprRewriter {};
+                    let predicate = filter.predicate.clone();
+                    let predicate = predicate.rewrite(&mut expr_rewriter)?;
+                    Ok(Some(LogicalPlan::Filter(Filter::try_new(
+                        predicate,
+                        filter.input.clone(),
+                    )?)))
+                }
+                _ => Ok(None),
+            },
         }
     }
 }

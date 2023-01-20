@@ -25,21 +25,27 @@ use crate::planner::{
 use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result, TableReference,
-    ToDFSchema,
+    Column, DFSchema, DFSchemaRef, DataFusionError, ExprSchema, OwnedTableReference,
+    Result, TableReference, ToDFSchema,
 };
+use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
+use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::{Analyze, Prepare};
+use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, CreateView,
-    DropTable, DropView, Explain, LogicalPlan, LogicalPlanBuilder, PlanType, SetVariable,
-    ToStringifiedPlan,
+    DmlStatement, DropTable, DropView, Explain, Filter, LogicalPlan, LogicalPlanBuilder,
+    PlanType, SetVariable, ToStringifiedPlan, WriteOp,
 };
+use sqlparser::ast;
 use sqlparser::ast::{
-    Expr as SQLExpr, Ident, ObjectName, ObjectType, ShowCreateObject,
-    ShowStatementFilter, Statement, UnaryOperator, Value,
+    Assignment, Expr as SQLExpr, Expr, Ident, ObjectName, ObjectType, Query,
+    ShowCreateObject, ShowStatementFilter, Statement, TableFactor, TableWithJoins,
+    UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -253,6 +259,93 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 table_name,
                 filter,
             } => self.show_columns_to_plan(extended, full, table_name, filter),
+
+            Statement::Insert {
+                or,
+                into,
+                table_name,
+                columns,
+                overwrite,
+                source,
+                partitioned,
+                after_columns,
+                table,
+                on,
+                returning,
+            } => {
+                if or.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Inserts with or clauses not supported".to_owned(),
+                    ))?;
+                }
+                if overwrite {
+                    Err(DataFusionError::Plan(
+                        "Insert overwrite is not supported".to_owned(),
+                    ))?;
+                }
+                if partitioned.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Partitioned inserts not yet supported".to_owned(),
+                    ))?;
+                }
+                if !after_columns.is_empty() {
+                    Err(DataFusionError::Plan(
+                        "After-columns clause not supported".to_owned(),
+                    ))?;
+                }
+                if table {
+                    Err(DataFusionError::Plan(
+                        "Table clause not supported".to_owned(),
+                    ))?;
+                }
+                if on.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Insert-on clause not supported".to_owned(),
+                    ))?;
+                }
+                if returning.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Insert-returning clause not yet supported".to_owned(),
+                    ))?;
+                }
+                let _ = into; // optional keyword doesn't change behavior
+                self.insert_to_plan(table_name, columns, source)
+            }
+
+            Statement::Update {
+                table,
+                assignments,
+                from,
+                selection,
+                returning,
+            } => {
+                if returning.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Update-returning clause not yet supported".to_owned(),
+                    ))?;
+                }
+                self.update_to_plan(table, assignments, from, selection)
+            }
+
+            Statement::Delete {
+                table_name,
+                using,
+                selection,
+                returning,
+            } => {
+                if using.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Using clause not supported".to_owned(),
+                    ))?;
+                }
+                if returning.is_some() {
+                    Err(DataFusionError::Plan(
+                        "Delete-returning clause not yet supported".to_owned(),
+                    ))?;
+                }
+                self.delete_to_plan(table_name, selection)
+            }
+
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL statement: {sql:?}"
             ))),
@@ -503,6 +596,197 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             value: value_string,
             schema: DFSchemaRef::new(DFSchema::empty()),
         }))
+    }
+
+    fn delete_to_plan(
+        &self,
+        table_factor: TableFactor,
+        predicate_expr: Option<Expr>,
+    ) -> Result<LogicalPlan> {
+        let table_name = match &table_factor {
+            TableFactor::Table { name, .. } => name.clone(),
+            _ => Err(DataFusionError::Plan(
+                "Cannot delete from non-table relations!".to_string(),
+            ))?,
+        };
+
+        // Do a table lookup to verify the table exists
+        let table_ref = object_name_to_table_reference(table_name.clone())?;
+        let provider = self
+            .schema_provider
+            .get_table_provider((&table_ref).into())?;
+        let schema = (*provider.schema()).clone();
+        let schema = DFSchema::try_from(schema)?;
+        let scan =
+            LogicalPlanBuilder::scan(table_name.to_string(), provider, None)?.build()?;
+        let mut planner_context = PlannerContext::new();
+
+        let source = match predicate_expr {
+            None => scan,
+            Some(predicate_expr) => {
+                let filter_expr =
+                    self.sql_to_expr(predicate_expr, &schema, &mut planner_context)?;
+                let schema = Arc::new(schema.clone());
+                let mut using_columns = HashSet::new();
+                expr_to_columns(&filter_expr, &mut using_columns)?;
+                let filter_expr = normalize_col_with_schemas(
+                    filter_expr,
+                    &[&schema],
+                    &[using_columns],
+                )?;
+                LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
+            }
+        };
+
+        let plan = LogicalPlan::Dml(DmlStatement {
+            table_name: table_ref,
+            table_schema: schema.into(),
+            op: WriteOp::Delete,
+            input: Arc::new(source),
+        });
+        Ok(plan)
+    }
+
+    fn update_to_plan(
+        &self,
+        table: TableWithJoins,
+        assignments: Vec<Assignment>,
+        from: Option<TableWithJoins>,
+        predicate_expr: Option<Expr>,
+    ) -> Result<LogicalPlan> {
+        let table_name = match &table.relation {
+            TableFactor::Table { name, .. } => name.clone(),
+            _ => Err(DataFusionError::Plan(
+                "Cannot update non-table relation!".to_string(),
+            ))?,
+        };
+
+        // Do a table lookup to verify the table exists
+        let table_name = object_name_to_table_reference(table_name)?;
+        let provider = self
+            .schema_provider
+            .get_table_provider((&table_name).into())?;
+        let arrow_schema = (*provider.schema()).clone();
+        let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
+        let mut values: BTreeMap<_, _> = table_schema
+            .fields()
+            .iter()
+            .map(|f| {
+                (
+                    f.name().clone(),
+                    ast::Expr::Identifier(ast::Ident::from(f.name().as_str())),
+                )
+            })
+            .collect();
+
+        // Overwrite with assignment expressions
+        let mut planner_context = PlannerContext::new();
+        for assign in assignments.iter() {
+            let col_name: &Ident = assign
+                .id
+                .iter()
+                .last()
+                .ok_or(DataFusionError::Plan("Empty column id".to_string()))?;
+            let _ = values.insert(col_name.value.clone(), assign.value.clone());
+        }
+
+        // Build scan
+        let from = from.unwrap_or(table);
+        let scan = self.plan_from_tables(vec![from], &mut planner_context)?;
+
+        // Filter
+        let source = match predicate_expr {
+            None => scan,
+            Some(predicate_expr) => {
+                let filter_expr = self.sql_to_expr(
+                    predicate_expr,
+                    &table_schema,
+                    &mut planner_context,
+                )?;
+                let mut using_columns = HashSet::new();
+                expr_to_columns(&filter_expr, &mut using_columns)?;
+                let filter_expr = normalize_col_with_schemas(
+                    filter_expr,
+                    &[&table_schema],
+                    &[using_columns],
+                )?;
+                LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
+            }
+        };
+
+        // Projection
+        let mut exprs = vec![];
+        for (col_name, expr) in values.into_iter() {
+            let expr = self.sql_to_expr(expr, &table_schema, &mut planner_context)?;
+            let expr = match expr {
+                datafusion_expr::Expr::Placeholder {
+                    ref id,
+                    ref data_type,
+                } => match data_type {
+                    None => {
+                        let dt = table_schema.data_type(&Column::from_name(&col_name))?;
+                        datafusion_expr::Expr::Placeholder {
+                            id: id.clone(),
+                            data_type: Some(dt.clone()),
+                        }
+                    }
+                    Some(_) => expr,
+                },
+                _ => expr,
+            };
+            let expr = expr.alias(col_name);
+            exprs.push(expr);
+        }
+        let source = project(source, exprs)?;
+
+        let plan = LogicalPlan::Dml(DmlStatement {
+            table_name,
+            table_schema,
+            op: WriteOp::Update,
+            input: Arc::new(source),
+        });
+        Ok(plan)
+    }
+
+    fn insert_to_plan(
+        &self,
+        table_name: ObjectName,
+        columns: Vec<Ident>,
+        source: Box<Query>,
+    ) -> Result<LogicalPlan> {
+        // Do a table lookup to verify the table exists
+        let table_name = object_name_to_table_reference(table_name)?;
+        let provider = self
+            .schema_provider
+            .get_table_provider((&table_name).into())?;
+        let arrow_schema = (*provider.schema()).clone();
+        let table_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
+
+        // Projection
+        let mut planner_context = PlannerContext::new();
+        let source = self.query_to_plan(*source, &mut planner_context)?;
+        if columns.len() != source.schema().fields().len() {
+            Err(DataFusionError::Plan(
+                "Column count doesn't match insert query!".to_owned(),
+            ))?;
+        }
+        let exprs: Vec<_> = columns
+            .iter()
+            .zip(source.schema().fields().iter())
+            .map(|(c, f)| {
+                datafusion_expr::Expr::Column(Column::from(f.name().clone()))
+                    .alias(c.value.clone())
+            })
+            .collect();
+        let source = project(source, exprs)?;
+
+        let plan = LogicalPlan::Dml(DmlStatement {
+            table_name,
+            table_schema,
+            op: WriteOp::Insert,
+            input: Arc::new(source),
+        });
+        Ok(plan)
     }
 
     fn show_columns_to_plan(

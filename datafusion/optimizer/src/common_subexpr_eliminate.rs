@@ -102,7 +102,7 @@ impl OptimizerRule for CommonSubexprEliminate {
         let mut expr_set = ExprSet::new();
 
         let original_schema = plan.schema().clone();
-        let mut optimized_plan = match plan {
+        let optimized_plan = match plan {
             LogicalPlan::Projection(Projection {
                 expr,
                 input,
@@ -115,11 +115,11 @@ impl OptimizerRule for CommonSubexprEliminate {
                 let (mut new_expr, new_input) =
                     self.rewrite_expr(&[expr], &[&arrays], input, &mut expr_set, config)?;
 
-                LogicalPlan::Projection(Projection::try_new_with_schema(
+                Some(LogicalPlan::Projection(Projection::try_new_with_schema(
                     pop_expr(&mut new_expr)?,
                     Arc::new(new_input),
                     schema.clone(),
-                )?)
+                )?))
             }
             LogicalPlan::Filter(filter) => {
                 let input = &filter.input;
@@ -142,7 +142,10 @@ impl OptimizerRule for CommonSubexprEliminate {
                 )?;
 
                 if let Some(predicate) = pop_expr(&mut new_expr)?.pop() {
-                    LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(new_input))?)
+                    Some(LogicalPlan::Filter(Filter::try_new(
+                        predicate,
+                        Arc::new(new_input),
+                    )?))
                 } else {
                     return Err(DataFusionError::Internal(
                         "Failed to pop predicate expr".to_string(),
@@ -165,11 +168,11 @@ impl OptimizerRule for CommonSubexprEliminate {
                     config,
                 )?;
 
-                LogicalPlan::Window(Window {
+                Some(LogicalPlan::Window(Window {
                     input: Arc::new(new_input),
                     window_expr: pop_expr(&mut new_expr)?,
                     schema: schema.clone(),
-                })
+                }))
             }
             LogicalPlan::Aggregate(Aggregate {
                 group_expr,
@@ -194,12 +197,12 @@ impl OptimizerRule for CommonSubexprEliminate {
                 let new_aggr_expr = pop_expr(&mut new_expr)?;
                 let new_group_expr = pop_expr(&mut new_expr)?;
 
-                LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
+                Some(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
                     Arc::new(new_input),
                     new_group_expr,
                     new_aggr_expr,
                     schema.clone(),
-                )?)
+                )?))
             }
             LogicalPlan::Sort(Sort { expr, input, fetch }) => {
                 let input_schema = Arc::clone(input.schema());
@@ -208,11 +211,11 @@ impl OptimizerRule for CommonSubexprEliminate {
                 let (mut new_expr, new_input) =
                     self.rewrite_expr(&[expr], &[&arrays], input, &mut expr_set, config)?;
 
-                LogicalPlan::Sort(Sort {
+                Some(LogicalPlan::Sort(Sort {
                     expr: pop_expr(&mut new_expr)?,
                     input: Arc::new(new_input),
                     fetch: *fetch,
-                })
+                }))
             }
             LogicalPlan::Join(_)
             | LogicalPlan::CrossJoin(_)
@@ -236,18 +239,23 @@ impl OptimizerRule for CommonSubexprEliminate {
             | LogicalPlan::SetVariable(_)
             | LogicalPlan::Distinct(_)
             | LogicalPlan::Extension(_)
+            | LogicalPlan::Dml(_)
             | LogicalPlan::Prepare(_) => {
                 // apply the optimization to all inputs of the plan
                 utils::optimize_children(self, plan, config)?
             }
         };
 
-        // add an additional projection if the output schema changed.
-        if optimized_plan.schema() != &original_schema {
-            optimized_plan = build_recover_project_plan(&original_schema, optimized_plan);
+        match optimized_plan {
+            Some(optimized_plan) if optimized_plan.schema() != &original_schema => {
+                // add an additional projection if the output schema changed.
+                Ok(Some(build_recover_project_plan(
+                    &original_schema,
+                    optimized_plan,
+                )))
+            }
+            plan => Ok(plan),
         }
-
-        Ok(Some(optimized_plan))
     }
 
     fn name(&self) -> &str {

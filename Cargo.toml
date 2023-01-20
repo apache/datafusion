@@ -27,6 +27,7 @@ members = [
     "datafusion/proto",
     "datafusion/row",
     "datafusion/sql",
+    "datafusion/substrait",
     "datafusion-examples",
     "test-utils",
     "parquet-test-utils",

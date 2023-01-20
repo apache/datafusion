@@ -22,7 +22,7 @@ use datafusion_common::Result;
 use datafusion_common::{plan_err, Column, DFSchemaRef};
 use datafusion_expr::expr::{BinaryExpr, Sort};
 use datafusion_expr::expr_rewriter::{ExprRewritable, ExprRewriter};
-use datafusion_expr::expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
+use datafusion_expr::expr_visitor::inspect_expr_pre;
 use datafusion_expr::{
     and, col,
     logical_plan::{Filter, LogicalPlan},
@@ -37,18 +37,26 @@ use std::sync::Arc;
 /// type. Useful for optimizer rules which want to leave the type
 /// of plan unchanged but still apply to the children.
 /// This also handles the case when the `plan` is a [`LogicalPlan::Explain`].
+///
+/// Returning `Ok(None)` indicates that the plan can't be optimized by the `optimizer`.
 pub fn optimize_children(
     optimizer: &impl OptimizerRule,
     plan: &LogicalPlan,
     config: &dyn OptimizerConfig,
-) -> Result<LogicalPlan> {
+) -> Result<Option<LogicalPlan>> {
     let new_exprs = plan.expressions();
     let mut new_inputs = Vec::with_capacity(plan.inputs().len());
+    let mut plan_is_changed = false;
     for input in plan.inputs() {
         let new_input = optimizer.try_optimize(input, config)?;
+        plan_is_changed = plan_is_changed || new_input.is_some();
         new_inputs.push(new_input.unwrap_or_else(|| input.clone()))
     }
-    from_plan(plan, &new_exprs, &new_inputs)
+    if plan_is_changed {
+        Ok(Some(from_plan(plan, &new_exprs, &new_inputs)?))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
@@ -224,28 +232,21 @@ pub fn unalias(expr: Expr) -> Expr {
 ///
 /// A PlanError if a disjunction is found
 pub fn verify_not_disjunction(predicates: &[&Expr]) -> Result<()> {
-    struct DisjunctionVisitor {}
-
-    impl ExpressionVisitor for DisjunctionVisitor {
-        fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
-            match expr {
-                Expr::BinaryExpr(BinaryExpr {
-                    left: _,
-                    op: Operator::Or,
-                    right: _,
-                }) => {
-                    plan_err!("Optimizing disjunctions not supported!")
-                }
-                _ => Ok(Recursion::Continue(self)),
+    // recursively check for unallowed predicates in expr
+    fn check(expr: &&Expr) -> Result<()> {
+        inspect_expr_pre(expr, |expr| match expr {
+            Expr::BinaryExpr(BinaryExpr {
+                left: _,
+                op: Operator::Or,
+                right: _,
+            }) => {
+                plan_err!("Optimizing disjunctions not supported!")
             }
-        }
+            _ => Ok(()),
+        })
     }
 
-    for predicate in predicates.iter() {
-        predicate.accept(DisjunctionVisitor {})?;
-    }
-
-    Ok(())
+    predicates.iter().try_for_each(check)
 }
 
 /// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
