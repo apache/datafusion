@@ -1207,8 +1207,8 @@ NULL 2
 query II
 SELECT avg(column1), column2 from the_nulls group by column2 order by column2;
 ----
-0 1
-0 2
+NULL 1
+NULL 2
 
 # min should be null
 query II
