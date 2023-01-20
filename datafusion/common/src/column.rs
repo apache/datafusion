@@ -179,7 +179,7 @@ impl From<String> for Column {
 impl FromStr for Column {
     type Err = Infallible;
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(s.into())
     }
 }
