@@ -452,7 +452,7 @@ impl From<&DFSchema> for Schema {
 /// Create a `DFSchema` from an Arrow schema
 impl TryFrom<Schema> for DFSchema {
     type Error = DataFusionError;
-    fn try_from(schema: Schema) -> std::result::Result<Self, Self::Error> {
+    fn try_from(schema: Schema) -> Result<Self, Self::Error> {
         Self::new_with_metadata(
             schema
                 .fields()
@@ -823,6 +823,21 @@ mod tests {
             .to_string()
             .contains(expected_err_msg));
         Ok(())
+    }
+
+    #[test]
+    fn select_without_valid_fields() {
+        let schema = DFSchema::empty();
+
+        let err = schema
+            .index_of_column_by_name(Some("t1"), "c0")
+            .err()
+            .unwrap();
+        assert_eq!("Schema error: No field named 't1'.'c0'.", &format!("{err}"));
+
+        // the same check without qualifier
+        let err = schema.index_of_column_by_name(None, "c0").err().unwrap();
+        assert_eq!("Schema error: No field named 'c0'.", &format!("{err}"));
     }
 
     #[test]

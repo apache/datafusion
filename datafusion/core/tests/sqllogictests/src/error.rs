@@ -21,7 +21,7 @@ use sqllogictest::TestError;
 use sqlparser::parser::ParserError;
 use thiserror::Error;
 
-pub type Result<T> = std::result::Result<T, DFSqlLogicTestError>;
+pub type Result<T, E = DFSqlLogicTestError> = std::result::Result<T, E>;
 
 /// DataFusion sql-logicaltest error
 #[derive(Debug, Error)]
