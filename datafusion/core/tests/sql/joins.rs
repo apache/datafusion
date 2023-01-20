@@ -1883,13 +1883,13 @@ async fn sort_merge_join_on_date32() -> Result<()> {
         "  SortMergeJoin: join_type=Inner, on=[(Column { name: \"c1\", index: 0 }, Column { name: \"c1\", index: 0 })]",
         "    SortExec: [c1@0 ASC]",
         "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2)",
-        "          RepartitionExec: partitioning=RoundRobinBatch(2)",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
+        "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
         "            MemoryExec: partitions=1, partition_sizes=[1]",
         "    SortExec: [c1@0 ASC]",
         "      CoalesceBatchesExec: target_batch_size=4096",
-        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2)",
-        "          RepartitionExec: partitioning=RoundRobinBatch(2)",
+        "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 2), input_partitions=2",
+        "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
         "            MemoryExec: partitions=1, partition_sizes=[1]",
     ];
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -1929,14 +1929,14 @@ async fn sort_merge_join_on_decimal() -> Result<()> {
         "    SortMergeJoin: join_type=Right, on=[(Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }, Column { name: \"c3\", index: 2 })]",
         "      SortExec: [CAST(t1.c3 AS Decimal128(10, 2))@4 ASC]",
         "        CoalesceBatchesExec: target_batch_size=4096",
-        "          RepartitionExec: partitioning=Hash([Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }], 2)",
+        "          RepartitionExec: partitioning=Hash([Column { name: \"CAST(t1.c3 AS Decimal128(10, 2))\", index: 4 }], 2), input_partitions=2",
         "            ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, CAST(c3@2 AS Decimal128(10, 2)) as CAST(t1.c3 AS Decimal128(10, 2))]",
-        "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+        "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
         "                MemoryExec: partitions=1, partition_sizes=[1]",
         "      SortExec: [c3@2 ASC]",
         "        CoalesceBatchesExec: target_batch_size=4096",
-        "          RepartitionExec: partitioning=Hash([Column { name: \"c3\", index: 2 }], 2)",
-        "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+        "          RepartitionExec: partitioning=Hash([Column { name: \"c3\", index: 2 }], 2), input_partitions=2",
+        "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
         "              MemoryExec: partitions=1, partition_sizes=[1]",
     ];
     let formatted = displayable(physical_plan.as_ref()).indent().to_string();
@@ -1986,13 +1986,13 @@ async fn left_semi_join() -> Result<()> {
                 "      CoalesceBatchesExec: target_batch_size=4096",
                 "        HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
                 "          CoalesceBatchesExec: target_batch_size=4096",
-                "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "          CoalesceBatchesExec: target_batch_size=4096",
-                "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2)",
+                "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
                 "              ProjectionExec: expr=[t2_id@0 as t2_id]",
-                "                RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "                RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                  MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         } else {
@@ -2004,7 +2004,7 @@ async fn left_semi_join() -> Result<()> {
                 "        HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
                 "          MemoryExec: partitions=1, partition_sizes=[1]",
                 "          ProjectionExec: expr=[t2_id@0 as t2_id]",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
@@ -2068,12 +2068,12 @@ async fn left_semi_join() -> Result<()> {
                 "      CoalesceBatchesExec: target_batch_size=4096",
                 "        HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
                 "          CoalesceBatchesExec: target_batch_size=4096",
-                "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "          CoalesceBatchesExec: target_batch_size=4096",
-                "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2)",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         } else {
@@ -2081,7 +2081,7 @@ async fn left_semi_join() -> Result<()> {
                 "SortExec: [t1_id@0 ASC NULLS LAST]",
                 "  CoalescePartitionsExec",
                 "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name]",
-                "      RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "        CoalesceBatchesExec: target_batch_size=4096",
                 "          HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2_id\", index: 0 })]",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
@@ -2108,6 +2108,34 @@ async fn left_semi_join() -> Result<()> {
         ];
         assert_batches_eq!(expected, &actual);
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_semi_join_pushdown() -> Result<()> {
+    let ctx = create_left_semi_anti_join_context_with_null_ids("t1_id", "t2_id", false)
+        .unwrap();
+
+    // assert logical plan
+    let sql = "SELECT t1.t1_id, t1.t1_name FROM t1 LEFT SEMI JOIN t2 ON (t1.t1_id = t2.t2_id and t2.t2_int > 1)";
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan()?;
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "    LeftSemi Join: t1.t1_id = t2.t2_id [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "      TableScan: t1 projection=[t1_id, t1_name] [t1_id:UInt32;N, t1_name:Utf8;N]",
+        "      Filter: t2.t2_int > UInt32(1) [t2_id:UInt32;N, t2_int:UInt32;N]",
+        "        TableScan: t2 projection=[t2_id, t2_int] [t2_id:UInt32;N, t2_int:UInt32;N]", 
+    ];
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
 
     Ok(())
 }
@@ -2237,12 +2265,12 @@ async fn right_semi_join() -> Result<()> {
                   "      CoalesceBatchesExec: target_batch_size=4096",
                   "        HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
                   "          CoalesceBatchesExec: target_batch_size=4096",
-                  "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2)",
-                  "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                  "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                  "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                   "                MemoryExec: partitions=1, partition_sizes=[1]",
                   "          CoalesceBatchesExec: target_batch_size=4096",
-                  "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
-                  "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                  "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                  "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                   "                MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         } else {
@@ -2250,7 +2278,7 @@ async fn right_semi_join() -> Result<()> {
                 "SortExec: [t1_id@0 ASC NULLS LAST]",
                 "  CoalescePartitionsExec",
                 "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
-                "      RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "        CoalesceBatchesExec: target_batch_size=4096",
                 "          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 1 }, op: NotEq, right: Column { name: \"t1_name\", index: 0 } }",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
@@ -2285,12 +2313,12 @@ async fn right_semi_join() -> Result<()> {
                   "      CoalesceBatchesExec: target_batch_size=4096",
                   "        HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
                   "          CoalesceBatchesExec: target_batch_size=4096",
-                  "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2)",
-                  "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                  "            RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                  "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                   "                MemoryExec: partitions=1, partition_sizes=[1]",
                   "          CoalesceBatchesExec: target_batch_size=4096",
-                  "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
-                  "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                  "            RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                  "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                   "                MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         } else {
@@ -2298,7 +2326,7 @@ async fn right_semi_join() -> Result<()> {
                 "SortExec: [t1_id@0 ASC NULLS LAST]",
                 "  CoalescePartitionsExec",
                 "    ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int]",
-                "      RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "      RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "        CoalesceBatchesExec: target_batch_size=4096",
                 "          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(Column { name: \"t2_id\", index: 0 }, Column { name: \"t1_id\", index: 0 })], filter=BinaryExpr { left: Column { name: \"t2_name\", index: 0 }, op: NotEq, right: Column { name: \"t1_name\", index: 1 } }",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
@@ -2474,14 +2502,14 @@ async fn reduce_cross_join_with_wildcard_and_expr() -> Result<()> {
                 "    CoalesceBatchesExec: target_batch_size=4096",
                 "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + Int64(11)\", index: 3 }, Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 })]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + Int64(11)\", index: 3 }], 2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + Int64(11)\", index: 3 }], 2), input_partitions=2",
                 "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as t1.t1_id + Int64(11)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 }], 2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 }], 2), input_partitions=2",
                 "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(t2.t2_id AS Int64)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
            ]
         } else {
@@ -2492,10 +2520,10 @@ async fn reduce_cross_join_with_wildcard_and_expr() -> Result<()> {
                 "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + Int64(11)\", index: 3 }, Column { name: \"CAST(t2.t2_id AS Int64)\", index: 3 })]",
                 "        CoalescePartitionsExec",
                 "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as t1.t1_id + Int64(11)]",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
                 "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(t2.t2_id AS Int64)]",
-                "          RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
@@ -2546,14 +2574,14 @@ async fn both_side_expr_key_inner_join() -> Result<()> {
                 "    CoalesceBatchesExec: target_batch_size=4096",
                 "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }, Column { name: \"t2.t2_id + UInt32(1)\", index: 1 })]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }], 2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }], 2), input_partitions=2",
                 "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as t1.t1_id + UInt32(12)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id + UInt32(1)\", index: 1 }], 2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id + UInt32(1)\", index: 1 }], 2), input_partitions=2",
                 "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as t2.t2_id + UInt32(1)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         } else {
@@ -2564,10 +2592,10 @@ async fn both_side_expr_key_inner_join() -> Result<()> {
                 "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(12)\", index: 2 }, Column { name: \"t2.t2_id + UInt32(1)\", index: 1 })]",
                 "        CoalescePartitionsExec",
                 "          ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as t1.t1_id + UInt32(12)]",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
                 "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as t2.t2_id + UInt32(1)]",
-                "          RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
@@ -2617,25 +2645,25 @@ async fn left_side_expr_key_inner_join() -> Result<()> {
                 "    CoalesceBatchesExec: target_batch_size=4096",
                 "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }], 2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }], 2), input_partitions=2",
                 "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as t1.t1_id + UInt32(11)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2)",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
            ]
         } else {
             vec![
                 "ProjectionExec: expr=[t1_id@0 as t1_id, t2_id@2 as t2_id, t1_name@1 as t1_name]",
                 "  ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t2_id@3 as t2_id]",
-                "    RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "    RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "      CoalesceBatchesExec: target_batch_size=4096",
                 "        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1.t1_id + UInt32(11)\", index: 2 }, Column { name: \"t2_id\", index: 0 })]",
                 "          CoalescePartitionsExec",
                 "            ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as t1.t1_id + UInt32(11)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
                 "          MemoryExec: partitions=1, partition_sizes=[1]",
             ]
@@ -2686,13 +2714,13 @@ async fn right_side_expr_key_inner_join() -> Result<()> {
                 "    CoalesceBatchesExec: target_batch_size=4096",
                 "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 1 })]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - UInt32(11)\", index: 1 }], 2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - UInt32(11)\", index: 1 }], 2), input_partitions=2",
                 "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
            ]
         } else {
@@ -2703,7 +2731,7 @@ async fn right_side_expr_key_inner_join() -> Result<()> {
                 "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 1 })]",
                 "        MemoryExec: partitions=1, partition_sizes=[1]",
                 "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
-                "          RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
@@ -2753,13 +2781,13 @@ async fn select_wildcard_with_expr_key_inner_join() -> Result<()> {
                 "    CoalesceBatchesExec: target_batch_size=4096",
                 "      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 3 })]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2)",
-                "            RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t1_id\", index: 0 }], 2), input_partitions=2",
+                "            RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "              MemoryExec: partitions=1, partition_sizes=[1]",
                 "        CoalesceBatchesExec: target_batch_size=4096",
-                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - UInt32(11)\", index: 3 }], 2)",
+                "          RepartitionExec: partitioning=Hash([Column { name: \"t2.t2_id - UInt32(11)\", index: 3 }], 2), input_partitions=2",
                 "            ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
-                "              RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "              RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "                MemoryExec: partitions=1, partition_sizes=[1]",
            ]
         } else {
@@ -2770,7 +2798,7 @@ async fn select_wildcard_with_expr_key_inner_join() -> Result<()> {
                 "      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(Column { name: \"t1_id\", index: 0 }, Column { name: \"t2.t2_id - UInt32(11)\", index: 3 })]",
                 "        MemoryExec: partitions=1, partition_sizes=[1]",
                 "        ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as t2.t2_id - UInt32(11)]",
-                "          RepartitionExec: partitioning=RoundRobinBatch(2)",
+                "          RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
                 "            MemoryExec: partitions=1, partition_sizes=[1]",
             ]
         };
@@ -3126,12 +3154,41 @@ async fn in_subquery_to_join_with_correlated_outer_filter() -> Result<()> {
     let msg = format!("Creating logical plan for '{sql}'");
     let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
     let plan = dataframe.into_optimized_plan().unwrap();
-
-    // The `t1.t1_int > UInt32(0)` should be pushdown by `filter push down rule`.
     let expected = vec![
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
-        "    LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) Filter: t1.t1_int > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    LeftSemi Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      Filter: t1.t1_int > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "        TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "      SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "        Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1) [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
+        "          TableScan: t2 projection=[t2_id] [t2_id:UInt32;N]",
+    ];
+
+    let formatted = plan.display_indent_schema().to_string();
+    let actual: Vec<&str> = formatted.trim().lines().collect();
+    assert_eq!(
+        expected, actual,
+        "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn not_in_subquery_to_join_with_correlated_outer_filter() -> Result<()> {
+    let ctx = create_join_context("t1_id", "t2_id", false)?;
+
+    let sql = "select t1.t1_id, t1.t1_name, t1.t1_int from t1 where t1.t1_id + 12 not in 
+                         (select t2.t2_id + 1 from t2 where t1.t1_int > 0)";
+
+    // assert logical plan
+    let msg = format!("Creating logical plan for '{sql}'");
+    let dataframe = ctx.sql(&("explain ".to_owned() + sql)).await.expect(&msg);
+    let plan = dataframe.into_optimized_plan().unwrap();
+    let expected = vec![
+        "Explain [plan_type:Utf8, plan:Utf8]",
+        "  Projection: t1.t1_id, t1.t1_name, t1.t1_int [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
+        "    LeftAnti Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.CAST(t2_id AS Int64) + Int64(1) Filter: t1.t1_int > UInt32(0) [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
         "      TableScan: t1 projection=[t1_id, t1_name, t1_int] [t1_id:UInt32;N, t1_name:Utf8;N, t1_int:UInt32;N]",
         "      SubqueryAlias: __correlated_sq_1 [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
         "        Projection: CAST(t2.t2_id AS Int64) + Int64(1) AS CAST(t2_id AS Int64) + Int64(1) [CAST(t2_id AS Int64) + Int64(1):Int64;N]",
@@ -3144,20 +3201,6 @@ async fn in_subquery_to_join_with_correlated_outer_filter() -> Result<()> {
         expected, actual,
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
-
-    let expected = vec![
-        "+-------+---------+--------+",
-        "| t1_id | t1_name | t1_int |",
-        "+-------+---------+--------+",
-        "| 11    | a       | 1      |",
-        "| 33    | c       | 3      |",
-        "| 44    | d       | 4      |",
-        "+-------+---------+--------+",
-    ];
-
-    let results = execute_to_batches(&ctx, sql).await;
-    assert_batches_sorted_eq!(expected, &results);
-
     Ok(())
 }
 

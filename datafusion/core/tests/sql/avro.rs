@@ -150,7 +150,7 @@ async fn avro_explain() {
             \n  AggregateExec: mode=Final, gby=[], aggr=[COUNT(UInt8(1))]\
             \n    CoalescePartitionsExec\
             \n      AggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
-            \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
+            \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES), input_partitions=1\
             \n          AvroExec: files={1 group: [[ARROW_TEST_DATA/avro/alltypes_plain.avro]]}, limit=None\
             \n",
         ],

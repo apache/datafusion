@@ -25,8 +25,8 @@ use crate::planner::{
 use arrow_schema::DataType;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, DataFusionError, OwnedTableReference, Result,
-    TableReference, ToDFSchema,
+    Column, DFSchema, DFSchemaRef, DataFusionError, ExprSchema, OwnedTableReference,
+    Result, TableReference, ToDFSchema,
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas;
 use datafusion_expr::logical_plan::builder::project;
@@ -718,6 +718,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut exprs = vec![];
         for (col_name, expr) in values.into_iter() {
             let expr = self.sql_to_expr(expr, &table_schema, &mut planner_context)?;
+            let expr = match expr {
+                datafusion_expr::Expr::Placeholder {
+                    ref id,
+                    ref data_type,
+                } => match data_type {
+                    None => {
+                        let dt = table_schema.data_type(&Column::from_name(&col_name))?;
+                        datafusion_expr::Expr::Placeholder {
+                            id: id.clone(),
+                            data_type: Some(dt.clone()),
+                        }
+                    }
+                    Some(_) => expr,
+                },
+                _ => expr,
+            };
             let expr = expr.alias(col_name);
             exprs.push(expr);
         }

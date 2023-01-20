@@ -124,15 +124,16 @@ async fn run_complete_file(
     info!("Using complete mode to complete: {}", path.display());
 
     let ctx = context_for_test_file(&file_name, is_pg_compatibility_test).await;
-    let runner = sqllogictest::Runner::new(DataFusion::new(
+    let mut runner = sqllogictest::Runner::new(DataFusion::new(
         ctx,
         file_name,
         is_pg_compatibility_test,
     ));
 
+    info!("Using complete mode to complete {}", path.display());
     let col_separator = " ";
     let validator = default_validator;
-    update_test_file(path, runner, col_separator, validator)
+    update_test_file(path, &mut runner, col_separator, validator)
         .await
         .map_err(|e| e.to_string())?;
 

@@ -34,7 +34,10 @@ use parquet::errors::ParquetError;
 use sqlparser::parser::ParserError;
 
 /// Result type for operations that could result in an [DataFusionError]
-pub type Result<T> = result::Result<T, DataFusionError>;
+pub type Result<T, E = DataFusionError> = result::Result<T, E>;
+
+/// Result type for operations that could result in an [DataFusionError] and needs to be shared (wrapped into `Arc`).
+pub type SharedResult<T> = result::Result<T, Arc<DataFusionError>>;
 
 /// Error type for generic operations that could result in DataFusionError::External
 pub type GenericError = Box<dyn error::Error + Send + Sync>;

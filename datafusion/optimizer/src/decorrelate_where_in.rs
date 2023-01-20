@@ -19,11 +19,11 @@ use crate::alias::AliasGenerator;
 use crate::optimizer::ApplyOrder;
 use crate::utils::{conjunction, only_or_err, split_conjunction};
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{context, Column, Result};
+use datafusion_common::{context, Column, DataFusionError, Result};
 use datafusion_expr::expr_rewriter::{replace_col, unnormalize_col};
 use datafusion_expr::logical_plan::{JoinType, Projection, Subquery};
 use datafusion_expr::utils::check_all_column_from_schema;
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{Expr, Filter, LogicalPlan, LogicalPlanBuilder};
 use log::debug;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -97,16 +97,17 @@ impl OptimizerRule for DecorrelateWhereIn {
                 }
 
                 // iterate through all exists clauses in predicate, turning each into a join
-                // iterate through all exists clauses in predicate, turning each into a join
                 let mut cur_input = filter.input.as_ref().clone();
                 for subquery in subqueries {
-                    cur_input = optimize_where_in(
-                        &subquery,
-                        &cur_input,
-                        &other_exprs,
-                        &self.alias,
-                    )?;
+                    cur_input = optimize_where_in(&subquery, &cur_input, &self.alias)?;
                 }
+
+                let expr = conjunction(other_exprs);
+                if let Some(expr) = expr {
+                    let new_filter = Filter::try_new(expr, Arc::new(cur_input))?;
+                    cur_input = LogicalPlan::Filter(new_filter);
+                }
+
                 Ok(Some(cur_input))
             }
             _ => Ok(None),
@@ -141,7 +142,6 @@ impl OptimizerRule for DecorrelateWhereIn {
 fn optimize_where_in(
     query_info: &SubqueryInfo,
     left: &LogicalPlan,
-    outer_other_exprs: &[Expr],
     alias: &AliasGenerator,
 ) -> Result<LogicalPlan> {
     let projection = Projection::try_from_plan(&query_info.query.subquery)
@@ -171,7 +171,7 @@ fn optimize_where_in(
                     .collect::<_>();
 
                 cols.extend(using_cols);
-                Result::Ok(cols)
+                Result::<_, DataFusionError>::Ok(cols)
             })?;
     let join_filter = conjunction(join_filters).map_or(Ok(None), |filter| {
         replace_qualified_name(filter, &subquery_cols, &subquery_alias).map(Option::Some)
@@ -207,17 +207,14 @@ fn optimize_where_in(
         .map(|filter| in_predicate.clone().and(filter))
         .unwrap_or_else(|| in_predicate);
 
-    let mut new_plan = LogicalPlanBuilder::from(left.clone()).join(
-        right,
-        join_type,
-        (Vec::<Column>::new(), Vec::<Column>::new()),
-        Some(join_filter),
-    )?;
-
-    if let Some(expr) = conjunction(outer_other_exprs.to_vec()) {
-        new_plan = new_plan.filter(expr)? // if the main query had additional expressions, restore them
-    }
-    let new_plan = new_plan.build()?;
+    let new_plan = LogicalPlanBuilder::from(left.clone())
+        .join(
+            right,
+            join_type,
+            (Vec::<Column>::new(), Vec::<Column>::new()),
+            Some(join_filter),
+        )?
+        .build()?;
 
     debug!("where in optimized:\n{}", new_plan.display_indent());
     Ok(new_plan)
@@ -1162,17 +1159,14 @@ mod tests {
             .project(vec![col("test.b")])?
             .build()?;
 
-        // Filter: test.c > UInt32(1) happen twice.
-        // issue: https://github.com/apache/arrow-datafusion/issues/4914
         let expected = "Projection: test.b [b:UInt32]\
         \n  Filter: test.c > UInt32(1) [a:UInt32, b:UInt32, c:UInt32]\
         \n    LeftSemi Join:  Filter: test.c * UInt32(2) = __correlated_sq_2.c * UInt32(2) AND test.a > __correlated_sq_2.a [a:UInt32, b:UInt32, c:UInt32]\
-        \n      Filter: test.c > UInt32(1) [a:UInt32, b:UInt32, c:UInt32]\
-        \n        LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.c * UInt32(2) AND test.a > __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]\
-        \n          TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
-        \n          SubqueryAlias: __correlated_sq_1 [c * UInt32(2):UInt32, a:UInt32]\
-        \n            Projection: sq1.c * UInt32(2) AS c * UInt32(2), sq1.a [c * UInt32(2):UInt32, a:UInt32]\
-        \n              TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]\
+        \n      LeftSemi Join:  Filter: test.c + UInt32(1) = __correlated_sq_1.c * UInt32(2) AND test.a > __correlated_sq_1.a [a:UInt32, b:UInt32, c:UInt32]\
+        \n        TableScan: test [a:UInt32, b:UInt32, c:UInt32]\
+        \n        SubqueryAlias: __correlated_sq_1 [c * UInt32(2):UInt32, a:UInt32]\
+        \n          Projection: sq1.c * UInt32(2) AS c * UInt32(2), sq1.a [c * UInt32(2):UInt32, a:UInt32]\
+        \n            TableScan: sq1 [a:UInt32, b:UInt32, c:UInt32]\
         \n      SubqueryAlias: __correlated_sq_2 [c * UInt32(2):UInt32, a:UInt32]\
         \n        Projection: sq2.c * UInt32(2) AS c * UInt32(2), sq2.a [c * UInt32(2):UInt32, a:UInt32]\
         \n          TableScan: sq2 [a:UInt32, b:UInt32, c:UInt32]";
